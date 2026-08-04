@@ -33,13 +33,24 @@ fn displayed_session_targets(
     let mut segments = parse_conflict_markers(current);
     let applied = apply_session_region_resolutions_with_index_map(&mut segments, &session.regions);
     let region_ranges = conflict_nav_region_aligned_ranges(session, &[]);
-    let display_ranges = merge_plan_aligned_conflict_ranges(session, &applied.block_region_indices)
-        .expect("plan-backed display ranges");
+    let display_plan_blocks = session
+        .merge_plan
+        .as_ref()
+        .expect("plan")
+        .unresolved_blocks
+        .clone();
+    let display_ranges = merge_plan_aligned_conflict_ranges(
+        session,
+        &applied.block_region_indices,
+        &display_plan_blocks,
+    )
+    .expect("plan-backed display ranges");
     let display_ranges: Vec<_> = display_ranges.into_iter().map(Some).collect();
     let targets = build_conflict_nav_targets(
         Some(session),
         &region_ranges,
         &applied.block_region_indices,
+        &display_plan_blocks,
         &display_ranges,
         &segments,
     );
@@ -221,6 +232,7 @@ fn planless_sessions_use_all_regions_and_display_only_is_the_final_fallback() {
         Some(&session),
         &region_ranges,
         &display_region_indices,
+        &[],
         &[Some(2..4), Some(8..11)],
         &segments,
     );
@@ -249,6 +261,7 @@ fn planless_sessions_use_all_regions_and_display_only_is_the_final_fallback() {
         Some(&materialized),
         &region_ranges,
         &applied.block_region_indices,
+        &[],
         &[Some(8..11)],
         &materialized_segments,
     );
@@ -269,6 +282,7 @@ fn planless_sessions_use_all_regions_and_display_only_is_the_final_fallback() {
         None,
         &[],
         &display_region_indices,
+        &[],
         &[Some(2..4), Some(8..11)],
         &segments,
     );

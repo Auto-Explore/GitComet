@@ -25,6 +25,7 @@ fn make_session(regions: Vec<ConflictRegion>) -> ConflictSession {
         merge_plan_fallback: None,
         region_plan_blocks: Vec::new(),
         has_pending_structural_edits: false,
+        manual_alignments: ManualAlignmentList::new(),
     }
 }
 
@@ -853,6 +854,71 @@ fn auto_resolve_whitespace_only_diff_resolves_when_enabled() {
     let (rule, content) = result.unwrap();
     assert_eq!(rule, AutosolveRule::WhitespaceOnly);
     assert_eq!(content, "let  x = 1;\n");
+}
+
+#[test]
+fn whitespace_only_diff_removes_whitespace_instead_of_collapsing_runs() {
+    assert!(is_whitespace_only_diff("foo( 1 );", "foo(1) ;"));
+    assert!(!is_whitespace_only_diff("foo(1);", "foo(2);"));
+    assert!(!is_whitespace_only_diff("foo(1);", "foo(1);"));
+}
+
+#[test]
+fn stage_session_autosolve_uses_kdiff3_whitespace_classification() {
+    let mut session = ConflictSession::from_stage_inputs(
+        PathBuf::from("whitespace.rs"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("foo(1);\n".into()),
+        ConflictPayload::Text("foo( 1 );\n".into()),
+        ConflictPayload::Text("foo(1) ;\n".into()),
+    );
+    let block_index = session.region_plan_blocks[0];
+    assert!(
+        session.merge_plan.as_ref().unwrap().blocks[block_index].whitespace_conflict,
+        "the planner classifies all three spellings with its strip-all rule"
+    );
+
+    assert_eq!(session.auto_resolve_safe_with_options(true), 1);
+    assert!(matches!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::AutoResolved {
+            rule: AutosolveRule::WhitespaceOnly,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn stage_session_does_not_override_a_negative_plan_classification() {
+    let options = MergeOptions::default();
+    let base = "bar();\n";
+    let ours = "foo( 1 );\n";
+    let theirs = "foo(1) ;\n";
+    let mut session = ConflictSession::from_stage_merge_plan(
+        PathBuf::from("semantic-change.rs"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+        &options,
+    );
+    let block_index = session.region_plan_blocks[0];
+    let plan = session.merge_plan.as_ref().unwrap();
+    assert!(!plan.blocks[block_index].whitespace_conflict);
+    assert!(
+        is_whitespace_only_diff(ours, theirs),
+        "the marker-only fallback cannot account for the base classification"
+    );
+    assert!(
+        try_autosolve_merge_plan(plan, &options).is_none(),
+        "plan autosolve must not reclassify the block from contributor text alone"
+    );
+
+    assert_eq!(session.auto_resolve_safe_with_options(true), 0);
+    assert!(matches!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::Unresolved
+    ));
 }
 
 #[test]
@@ -2360,4 +2426,191 @@ fn inserted_duplicate_leaves_duplicates_unresolved_but_restores_unique_conflict(
         ConflictRegionResolution::Sources(unique),
         "an unambiguous conflict should still restore across the same refresh",
     );
+}
+
+// -- manual alignment tests --
+
+fn repeated_line_session(options: &MergeOptions) -> ConflictSession {
+    // `ours` drops one of the two `x` lines; which one the automatic alignment
+    // keeps is exactly the guess a manual alignment exists to override.
+    let base = "a\nx\nb\nx\nc\n";
+    ConflictSession::from_stage_merge_plan(
+        PathBuf::from("repeat.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text("a\nx\nb\nc\n".into()),
+        ConflictPayload::Text(base.into()),
+        options,
+    )
+}
+
+/// Which base line the surviving `ours` copy of `x` is aligned against.
+fn base_line_matching_ours_x(session: &ConflictSession) -> Option<usize> {
+    session
+        .merge_plan
+        .as_ref()
+        .expect("the session should carry a merge plan")
+        .rows
+        .iter()
+        .find(|row| row.b == Some(1))
+        .and_then(|row| row.a)
+}
+
+#[test]
+fn a_manual_alignment_replans_the_session() {
+    let options = MergeOptions::default();
+    let mut session = repeated_line_session(&options);
+    assert_eq!(base_line_matching_ours_x(&session), Some(1));
+
+    assert!(session.add_manual_alignment(ManualAlignment::new(3..4, 1..2, 3..4), &options));
+    assert_eq!(session.manual_alignments.len(), 1);
+    assert_eq!(
+        base_line_matching_ours_x(&session),
+        Some(3),
+        "the pin moves which occurrence the surviving line is matched against"
+    );
+}
+
+#[test]
+fn clearing_manual_alignments_restores_the_automatic_plan() {
+    let options = MergeOptions::default();
+    let mut session = repeated_line_session(&options);
+    let automatic = session.merge_plan.clone().expect("plan");
+    assert!(session.add_manual_alignment(ManualAlignment::new(3..4, 1..2, 3..4), &options));
+
+    assert!(session.clear_manual_alignments(&options));
+    assert!(session.manual_alignments.is_empty());
+    assert_eq!(
+        session.merge_plan.as_ref().expect("plan").rows,
+        automatic.rows
+    );
+    assert!(
+        !session.clear_manual_alignments(&options),
+        "clearing an empty list reports that nothing changed"
+    );
+}
+
+#[test]
+fn a_rejected_manual_alignment_leaves_the_session_untouched() {
+    let options = MergeOptions::default();
+    let mut session = repeated_line_session(&options);
+    assert!(session.add_manual_alignment(ManualAlignment::new(3..4, 1..2, 3..4), &options));
+    let pinned = session.merge_plan.clone().expect("plan");
+
+    assert!(
+        !session.add_manual_alignment(ManualAlignment::new(3..4, 1..2, 3..4), &options),
+        "an entry overlapping an existing pin is rejected"
+    );
+    assert_eq!(session.manual_alignments.len(), 1);
+    assert_eq!(session.merge_plan.as_ref().expect("plan").rows, pinned.rows);
+}
+
+#[test]
+fn removing_a_manual_alignment_by_line_replans_the_session() {
+    let options = MergeOptions::default();
+    let mut session = repeated_line_session(&options);
+    assert!(session.add_manual_alignment(ManualAlignment::new(3..4, 1..2, 3..4), &options));
+
+    assert!(
+        !session.remove_manual_alignment_at(MergeSource::A, 0, &options),
+        "no pin covers that line"
+    );
+    assert!(session.remove_manual_alignment_at(MergeSource::A, 3, &options));
+    assert!(session.manual_alignments.is_empty());
+    assert_eq!(base_line_matching_ours_x(&session), Some(1));
+}
+
+#[test]
+fn a_replan_carries_region_decisions_across() {
+    let options = MergeOptions::default();
+    let mut session = ConflictSession::from_stage_merge_plan(
+        PathBuf::from("conflict.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("one\ntwo\nthree\n".into()),
+        ConflictPayload::Text("one\nOURS\nthree\n".into()),
+        ConflictPayload::Text("one\nTHEIRS\nthree\n".into()),
+        &options,
+    );
+    assert_eq!(session.regions.len(), 1);
+    assert!(session.replace_region_selection(0, MergeSource::B.into()));
+
+    assert!(session.add_manual_alignment(ManualAlignment::new(0..1, 0..1, 0..1), &options));
+    assert_eq!(session.regions.len(), 1);
+    assert_eq!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::Sources(MergeSource::B.into()),
+        "pinning an unrelated line should not throw away the user's pick"
+    );
+}
+
+fn session_with_automatic_and_conflicting_deltas() -> ConflictSession {
+    ConflictSession::from_stage_inputs(
+        PathBuf::from("deltas.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("start\nold-local\nmiddle\nold-conflict\nend\n".into()),
+        ConflictPayload::Text("start\nnew-local\nmiddle\nours-conflict\nend\n".into()),
+        ConflictPayload::Text("start\nold-local\nmiddle\ntheirs-conflict\nend\n".into()),
+    )
+}
+
+#[test]
+fn automatic_delta_can_be_overridden_by_stable_plan_block_identity() {
+    let mut session = session_with_automatic_and_conflicting_deltas();
+    let plan = session.merge_plan.as_ref().expect("plan");
+    let automatic = plan
+        .blocks
+        .iter()
+        .find(|block| block.is_delta && !block.original_conflict)
+        .expect("automatic delta");
+    let block_id = automatic.id;
+    assert_eq!(automatic.selection.as_slice(), [MergeSource::B]);
+
+    assert!(session.replace_plan_block_selection(block_id, MergeSource::C.into()));
+    let plan = session.merge_plan.as_ref().expect("plan");
+    let overridden = plan
+        .blocks
+        .iter()
+        .find(|block| block.id == block_id)
+        .unwrap();
+    assert_eq!(overridden.selection.as_slice(), [MergeSource::C]);
+    assert_eq!(
+        session.regions.len(),
+        1,
+        "marker regions stay conflict-only"
+    );
+    assert!(
+        render_merge_plan(plan, &MergeOptions::default())
+            .output
+            .contains("old-local\n"),
+        "the remote/base-side text replaces the automatic local pick"
+    );
+}
+
+#[test]
+fn choose_everywhere_rewrites_automatic_and_conflicting_deltas() {
+    let mut session = session_with_automatic_and_conflicting_deltas();
+    let delta_count = session
+        .merge_plan
+        .as_ref()
+        .expect("plan")
+        .delta_block_indices()
+        .len();
+
+    assert_eq!(
+        session.replace_all_delta_selections(MergeSource::C.into()),
+        delta_count
+    );
+    let plan = session.merge_plan.as_ref().expect("plan");
+    assert!(
+        plan.blocks
+            .iter()
+            .filter(|block| block.is_delta)
+            .all(|block| block.selection.as_slice() == [MergeSource::C])
+    );
+    assert_eq!(
+        session.regions[0].resolution,
+        ConflictRegionResolution::Sources(MergeSource::C.into()),
+        "the marker-backed compatibility model follows its plan block"
+    );
+    assert_eq!(plan.unresolved_count(), 0);
 }

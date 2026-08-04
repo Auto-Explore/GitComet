@@ -1468,6 +1468,7 @@ impl ResolvedOutputRecomputeIncrementalFixture {
                     ConflictSegment::Block(ConflictBlock {
                         choice: ConflictChoice::Both,
                         ..
+                        whitespace_only: false,
                     })
                 )
             })
@@ -2933,6 +2934,7 @@ fn build_synthetic_three_way_segments(
                 theirs: format!("let shared_{slot_ix} = compute_remote({slot_ix});\n").into(),
                 choice,
                 resolved: slot_ix % 5 == 0,
+                whitespace_only: false,
             }));
         }
     }
@@ -3001,6 +3003,7 @@ fn build_synthetic_two_way_segments(
                 theirs: theirs.into(),
                 choice,
                 resolved: slot_ix % 7 == 0,
+                whitespace_only: false,
             }));
         }
     }
@@ -3185,5 +3188,6 @@ fn build_synthetic_whole_file_conflict_segments(total_lines: usize) -> Vec<Confl
         theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })]
 }

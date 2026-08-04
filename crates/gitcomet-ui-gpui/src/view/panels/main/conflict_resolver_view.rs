@@ -99,6 +99,7 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
+        let active_pick_state = self.conflict_resolver_active_pick_state();
         controls = controls
             .when_some(prev_file_btn, |d, btn| d.child(btn))
             .when(!conflict_rendered_preview_active, |d| {
@@ -213,23 +214,14 @@ impl MainPaneView {
                 )
             })
             .when(
-                !conflict_rendered_preview_active
-                    && self.conflict_resolver.active_conflict.is_some(),
+                !conflict_rendered_preview_active && active_pick_state.is_some(),
                 |d| {
-                    // section 30: visible pick affordances for the active conflict,
-                    // mirroring the A/B/C/D quick-pick keys.
-                    let active_ix = self
-                        .conflict_resolver
-                        .active_conflict
-                        .expect("pick controls require an active displayed conflict");
-                    let has_base = self
-                        .conflict_resolver
-                        .conflict_has_base
-                        .get(active_ix)
-                        .copied()
-                        .unwrap_or(false);
-                    let selected =
-                        self.conflict_resolver_selected_choices_for_conflict_ix(active_ix);
+                    // Pick affordances follow the semantic current delta, not
+                    // just visible marker blocks. This keeps an automatically
+                    // selected plan block overridable after delta navigation.
+                    let (has_base, selected) = active_pick_state
+                        .clone()
+                        .expect("pick controls require an active semantic delta");
                     let is_three_way =
                         self.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
                     let output_actions_enabled = !self.conflict_resolver.output_is_protected;
@@ -444,10 +436,18 @@ impl MainPaneView {
         can_reset_from_markers: bool,
         cx: &mut gpui::Context<Self>,
     ) -> impl gpui::IntoElement {
-        let total = self.conflict_resolver_conflict_count();
-        let resolved = self.conflict_resolver_resolved_count();
-        let unresolved = total.saturating_sub(resolved);
-        let auto_solved = self.conflict_resolver_auto_resolved_count().min(total);
+        let counts = self.conflict_resolver_summary_counts().unwrap_or_else(|| {
+            let total = self.conflict_resolver_conflict_count();
+            let resolved = self.conflict_resolver_resolved_count().min(total);
+            conflict_resolver::ConflictSummaryCounts {
+                total,
+                auto_solved: self.conflict_resolver_auto_resolved_count().min(resolved),
+                unsolved: total.saturating_sub(resolved),
+                whitespace_conflicts: None,
+            }
+        });
+        let total = counts.total;
+        let unresolved = counts.unsolved.min(total);
 
         // The footer only needs the marker-presence bit. Scan the editor text
         // in place (`text()` borrows a `&str`) instead of cloning the whole
@@ -458,13 +458,8 @@ impl MainPaneView {
                 conflict_resolver::text_contains_conflict_markers(i.text())
             });
 
-        let progress_label = (total > 0).then(|| {
-            let mut label = format!("{resolved}/{total} resolved");
-            if auto_solved > 0 {
-                label.push_str(&format!(" · {auto_solved} auto-solved"));
-            }
-            SharedString::from(label)
-        });
+        let progress_label = (total > 0)
+            .then(|| SharedString::from(conflict_resolver::format_conflict_summary(counts)));
 
         let status: AnyElement = if total == 0 {
             div()
@@ -519,6 +514,19 @@ impl MainPaneView {
                     .gap_2()
                     .pl_1()
                     .child(status)
+                    .when_some(counts.whitespace_conflicts, |d, whitespace| {
+                        let noun = if whitespace == 1 {
+                            "whitespace conflict"
+                        } else {
+                            "whitespace conflicts"
+                        };
+                        d.child(
+                            div()
+                                .text_xs()
+                                .text_color(theme.colors.text_muted)
+                                .child(format!("{whitespace} {noun}")),
+                        )
+                    })
                     .when(has_conflict_markers, |d| {
                         d.child(
                             div()
@@ -540,68 +548,6 @@ impl MainPaneView {
 
     /// The main conflict resolver pane body: three-way / two-way source
     /// columns plus the merged output section.
-    /// Segmented control for the overview column's comparison mode, matching
-    /// kdiff3's Normal / A-B / A-C / B-C overview modes.
-    fn conflict_overview_mode_selector(
-        &self,
-        theme: AppTheme,
-        ui_scale_percent: u32,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        use gitcomet_core::merge::OverviewMode;
-
-        let active = self.conflict_resolver.overview_mode;
-        let selected_bg = theme.colors.active;
-        let mut row = div()
-            .id("conflict_overview_mode")
-            .flex()
-            .items_center()
-            .h(components::control_height(ui_scale_percent))
-            .rounded(px(theme.radii.row))
-            .border_1()
-            .border_color(theme.colors.border)
-            .bg(gpui::rgba(0x00000000))
-            .overflow_hidden()
-            .p(px(1.0));
-
-        for (ix, mode) in OverviewMode::ALL.into_iter().enumerate() {
-            if ix > 0 {
-                row = row.child(div().h_full().w(px(1.0)).bg(theme.colors.border));
-            }
-            let id = match mode {
-                OverviewMode::Merge => "conflict_overview_merge",
-                OverviewMode::BaseVsLocal => "conflict_overview_ab",
-                OverviewMode::BaseVsRemote => "conflict_overview_ac",
-                OverviewMode::LocalVsRemote => "conflict_overview_bc",
-            };
-            let tooltip = match mode {
-                OverviewMode::Merge => {
-                    "Overview: the merge — each side's changes and the conflicts"
-                }
-                OverviewMode::BaseVsLocal => "Overview: every line where Local differs from Base",
-                OverviewMode::BaseVsRemote => "Overview: every line where Remote differs from Base",
-                OverviewMode::LocalVsRemote => {
-                    "Overview: every line where Local differs from Remote"
-                }
-            };
-            row = row.child(
-                components::Button::new(id, mode.label())
-                    .borderless()
-                    .style(components::ButtonStyle::Subtle)
-                    .selected(active == mode)
-                    .selected_bg(selected_bg)
-                    .on_click(theme, cx, move |this, _e, _w, cx| {
-                        this.conflict_resolver.overview_mode = mode;
-                        this.conflict_resolver.rebuild_overview_bands();
-                        cx.notify();
-                    })
-                    .gitcomet_tooltip(theme, tooltip.into()),
-            );
-        }
-
-        row.into_any_element()
-    }
-
     pub(super) fn render_conflict_resolver_pane(
         &mut self,
         conflict_target_path: Option<std::path::PathBuf>,
@@ -774,12 +720,6 @@ impl MainPaneView {
                             } else {
                                 px(0.0)
                             };
-                            let overview_mode_selector = (overview_w > px(0.0)
-                                && !self.conflict_resolver.three_way_text.base.is_empty())
-                            .then(|| {
-                                self.conflict_overview_mode_selector(theme, ui_scale_percent, cx)
-                            });
-
                             let preview_toggle = show_preview_toggle.then(|| {
                                 let view_toggle_border = theme.colors.border;
                                 let view_toggle_selected_bg = theme.colors.active;
@@ -832,24 +772,13 @@ impl MainPaneView {
                                     )
                             });
 
-                            let top_header = (preview_toggle.is_some()
-                                || overview_mode_selector.is_some())
-                            .then(|| {
+                            let top_header = preview_toggle.map(|toggle| {
                                 div()
                                     .flex()
                                     .items_center()
-                                    .justify_between()
+                                    .justify_end()
                                     .gap_2()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .gap_1()
-                                            .when_some(overview_mode_selector, |d, selector| {
-                                                d.child(selector)
-                                            }),
-                                    )
-                                    .when_some(preview_toggle, |d, toggle| d.child(toggle))
+                                    .child(toggle)
                             });
 
                             // Compute three-way column widths

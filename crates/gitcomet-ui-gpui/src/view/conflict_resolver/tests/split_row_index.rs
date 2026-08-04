@@ -9,6 +9,7 @@ fn split_row_index_single_block_plain_rows() {
         theirs: "x\ny\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     // Row count = max(3, 2) = 3
@@ -48,6 +49,7 @@ fn split_row_index_context_plus_block() {
             theirs: "b\nc\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 2);
@@ -94,6 +96,7 @@ fn split_row_index_equal_block_rows_share_old_new_arc() {
         theirs: "shared\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 1);
 
@@ -129,6 +132,7 @@ fn split_row_index_row_range_matches_row_at_across_page_boundary() {
             theirs: theirs.into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -179,6 +183,7 @@ fn split_row_index_shared_slice_context_rows_reuse_conflict_backing() {
         theirs: ConflictText::shared_slice(Arc::clone(&shared), 0..shared.len()),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
@@ -202,6 +207,7 @@ fn split_row_index_shared_slice_modify_rows_reuse_conflict_backing() {
         theirs: ConflictText::shared_slice(Arc::clone(&theirs), 0..theirs.len()),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
@@ -227,6 +233,7 @@ fn split_row_index_conflict_ix_lookup() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -235,6 +242,7 @@ fn split_row_index_conflict_ix_lookup() {
             theirs: "d\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -261,6 +269,7 @@ fn split_row_index_page_cache_reuses_requested_page() {
         theirs: text.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
@@ -296,6 +305,7 @@ fn split_row_index_page_cache_stays_bounded() {
         theirs: text.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
@@ -332,6 +342,7 @@ fn split_row_index_matches_eager_for_small_segments() {
             theirs: "same\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("footer\n".into()),
     ];
@@ -358,6 +369,7 @@ fn two_way_split_projection_no_hide() {
             theirs: "x\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -383,6 +395,7 @@ fn two_way_split_projection_hide_resolved() {
             theirs: "x\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true, // resolved!
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -406,6 +419,7 @@ fn widest_source_rows_ignore_hidden_middle_context_lines() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -435,6 +449,7 @@ fn widest_source_rows_skip_hidden_resolved_blocks() {
             theirs: "THIS_RESOLVED_ROW_IS_HIDDEN_AND_VERY_WIDE\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("visible_tail_is_widest\n".into()),
     ];
@@ -465,6 +480,7 @@ fn two_way_split_projection_visible_ix_for_conflict() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -473,6 +489,7 @@ fn two_way_split_projection_visible_ix_for_conflict() {
             theirs: "d\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 1);
@@ -509,6 +526,7 @@ fn split_row_index_large_block_no_diff_computation() {
         theirs: big_theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     assert_eq!(index.total_rows(), 1000); // max(1000, 800)
@@ -539,6 +557,7 @@ fn split_row_index_positional_alignment_handles_shifted_insertions() {
         theirs: "header\ninserted\nbody\ntail\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     assert_eq!(index.total_rows(), 4);
@@ -582,6 +601,7 @@ fn split_row_index_positional_alignment_keeps_repeated_lines_reviewable() {
         theirs: "x\nrepeat\na\nrepeat\na\nrepeat\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     assert_eq!(index.total_rows(), 6);
@@ -670,6 +690,7 @@ fn split_row_index_classifies_modify_vs_context_kinds() {
         theirs: "same\ndiff_b\nsame2\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     assert_eq!(index.total_rows(), 3);
@@ -698,6 +719,7 @@ fn split_row_index_positional_alignment_keeps_inserted_block_reviewable() {
         theirs: "alpha\nnew1\nnew2\nbeta\ngamma\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
 
@@ -739,6 +761,7 @@ fn split_row_index_gap_diff_no_common_lines_falls_back_to_positional() {
         theirs: "xxx\nyyy\nzzz\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
 
@@ -771,6 +794,7 @@ fn split_row_index_gap_diff_produces_more_rows_than_positional() {
         theirs: "ctx\nnew_only\nctx2\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
 
@@ -801,6 +825,7 @@ fn split_row_index_gap_diff_with_anchors_refines_each_gap() {
         theirs: "added_before\nstart\nunique_anchor\nadded_after\nend\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
 
@@ -894,6 +919,7 @@ fn split_row_index_modify_rows_get_word_highlights() {
         theirs: "let x = 99;\nlet y = 2;\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
 
@@ -921,6 +947,7 @@ fn search_matching_rows_finds_text_in_block() {
         theirs: "delta\nepsilon\nzeta\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 3);
     assert_eq!(index.total_rows(), 3);
@@ -949,6 +976,7 @@ fn search_matching_rows_finds_text_in_context() {
             theirs: "theirs\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, 2);
@@ -976,6 +1004,7 @@ fn search_matching_rows_equivalence_with_row_at() {
             theirs: "plain\nneedle_theirs\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("ctx_c\nctx_d\n".into()),
     ];
@@ -1016,6 +1045,7 @@ fn search_matching_rows_does_not_materialize_split_pages() {
         theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, line_count);
 
@@ -1059,6 +1089,7 @@ fn search_text_matching_rows_matches_predicate_path() {
             theirs: theirs.into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, line_count);
@@ -1099,6 +1130,7 @@ fn search_ascii_case_insensitive_matching_rows_matches_predicate_path() {
             theirs: theirs.into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let index = ConflictSplitRowIndex::new(&segments, line_count);
@@ -1138,6 +1170,7 @@ fn split_row_index_sparse_checkpoint_rows_resolve_far_from_start() {
         theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
@@ -1167,6 +1200,7 @@ fn split_row_index_metadata_stays_sparse_for_large_block() {
         theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let index = ConflictSplitRowIndex::new(&segments, 0);
 
@@ -1200,6 +1234,7 @@ fn resolved_output_projection_matches_generated_text_lines() {
             theirs: "theirs middle\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("suffix\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1208,6 +1243,7 @@ fn resolved_output_projection_matches_generated_text_lines() {
             theirs: "right\n".into(),
             choice: ConflictChoice::Both,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
 
@@ -1232,6 +1268,7 @@ fn resolved_output_projection_uses_one_non_source_row_for_unresolved_block() {
             theirs: "remote one\nremote two\n".into(),
             choice: ConflictChoice::empty(),
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".into()),
     ];
@@ -1262,6 +1299,7 @@ fn resolved_output_projection_merges_adjacent_segments_without_newlines() {
             theirs: "remote".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text(" suffix\nnext".into()),
     ];
@@ -1286,6 +1324,7 @@ fn resolved_output_projection_tracks_conflict_line_ranges() {
             theirs: "x\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("middle\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1294,6 +1333,7 @@ fn resolved_output_projection_tracks_conflict_line_ranges() {
             theirs: "b-right\n".into(),
             choice: ConflictChoice::Both,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1302,6 +1342,7 @@ fn resolved_output_projection_tracks_conflict_line_ranges() {
             theirs: "ignored\n".into(),
             choice: ConflictChoice::Base,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
 
@@ -1335,6 +1376,7 @@ fn resolved_output_projection_keeps_large_fragment_line_access() {
             theirs: "theirs-choice\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text(trailing.into()),
     ];
@@ -1380,6 +1422,7 @@ fn resolved_output_projection_range_walk_matches_point_lookups() {
             theirs: "remote".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text(" suffix\nbody\n".into()),
     ];
@@ -1431,6 +1474,7 @@ fn resolved_output_projection_deep_range_walk_matches_point_lookups() {
             theirs: "theirs-only\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text(tail.into()),
     ];
@@ -1470,6 +1514,7 @@ fn derive_region_resolution_updates_from_segments_uses_block_choices() {
             theirs: "theirs unresolved\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("between\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1478,6 +1523,7 @@ fn derive_region_resolution_updates_from_segments_uses_block_choices() {
             theirs: "right\n".into(),
             choice: ConflictChoice::Both,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".into()),
@@ -1485,6 +1531,7 @@ fn derive_region_resolution_updates_from_segments_uses_block_choices() {
             theirs: "theirs\n".into(),
             choice: ConflictChoice::Base,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
 

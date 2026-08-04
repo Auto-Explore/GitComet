@@ -74,6 +74,8 @@ impl ConflictAutosolveMode {
     }
 }
 
+/// A KDiff3-style source choice applied everywhere: every merge-plan delta,
+/// not only unresolved marker regions.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictBulkChoice {
     Base,
@@ -728,6 +730,22 @@ pub enum Msg {
         region_index: usize,
         selection: gitcomet_core::merge::OrderedSelection,
     },
+    /// Toggle one source on a semantic merge-plan block. Unlike region
+    /// actions, this also addresses automatically selected deltas that do not
+    /// render conflict markers.
+    ConflictTogglePlanBlockSource {
+        repo_id: RepoId,
+        path: RepoPath,
+        block_id: gitcomet_core::merge::MergeBlockId,
+        source: gitcomet_core::merge::MergeSource,
+    },
+    /// Replace a semantic merge-plan block's complete ordered selection.
+    ConflictReplacePlanBlockSelection {
+        repo_id: RepoId,
+        path: RepoPath,
+        block_id: gitcomet_core::merge::MergeBlockId,
+        selection: gitcomet_core::merge::OrderedSelection,
+    },
     ConflictSyncRegionResolutions {
         repo_id: RepoId,
         path: RepoPath,
@@ -752,6 +770,22 @@ pub enum Msg {
         boundaries: gitcomet_core::conflict_session::ConflictRegionSplitBoundaries,
         /// Resolver revision from which the region index and boundaries were
         /// calculated. Stale requests are rejected before editing the session.
+        expected_conflict_rev: u64,
+    },
+    /// KDiff3 manual diff help: pin one line range per source so the planner
+    /// must align them, then replan the file around that constraint.
+    ConflictAddManualAlignment {
+        repo_id: RepoId,
+        path: RepoPath,
+        alignment: gitcomet_core::merge::ManualAlignment,
+        /// Resolver revision the pinned ranges were read from. Stale requests
+        /// are rejected before replanning.
+        expected_conflict_rev: u64,
+    },
+    /// Drop every manual alignment and replan from the automatic one.
+    ConflictClearManualAlignments {
+        repo_id: RepoId,
+        path: RepoPath,
         expected_conflict_rev: u64,
     },
     /// section 30 join: merge conflict blocks `region_index` and `region_index + 1`,

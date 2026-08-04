@@ -32,6 +32,21 @@ pub(super) struct ConflictChunkContext {
     pub(super) selected_choices: Vec<conflict_resolver::ConflictChoice>,
 }
 
+/// KDiff3 manual diff help: what one source-column row offers to a manual
+/// alignment. Alt+click marks the line; Alt+Shift+click extends the mark.
+///
+/// Marking works on context rows too, not just inside conflict blocks — the
+/// whole point of a manual alignment is to pin lines the automatic alignment
+/// placed apart.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct AlignmentMarkContext {
+    pub(super) column: ThreeWayColumn,
+    /// Line in this column's own file. Padding rows have none and cannot be
+    /// marked, since there is no line there to pin.
+    pub(super) side_line: Option<usize>,
+    pub(super) marked: bool,
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn split_conflict_row_canvas(
     theme: AppTheme,
@@ -282,13 +297,17 @@ pub(super) fn single_column_conflict_canvas(
     chunk_context: Option<ConflictChunkContext>,
     chunk_menu_prefix: &'static str,
     is_three_way: bool,
+    semantic_nav_target: Option<usize>,
     active_conflict_marker: bool,
     // section 30 split: `Some(selected)` enables drag selection on this row
     // (`selected` paints the highlight); `None` disables it.
     row_selection: Option<bool>,
+    // kdiff3 manual diff help: `Some` enables Alt+click marking on this row.
+    alignment_mark: Option<AlignmentMarkContext>,
 ) -> AnyElement {
     let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
     let row_selected = row_selection == Some(true);
+    let alignment_marked = alignment_mark.is_some_and(|mark| mark.marked);
 
     keyed_canvas(
         (id_prefix, visible_row_ix),
@@ -308,6 +327,19 @@ pub(super) fn single_column_conflict_canvas(
                 window.paint_quad(fill(
                     bounds,
                     with_alpha(theme.colors.accent, if theme.is_dark { 0.20 } else { 0.14 }),
+                ));
+            }
+
+            // kdiff3 manual diff help: marked lines use the warning hue so they
+            // stay distinguishable from an accent-tinted split selection, which
+            // can be active in the same columns at the same time.
+            if alignment_marked {
+                window.paint_quad(fill(
+                    bounds,
+                    with_alpha(
+                        theme.colors.warning,
+                        if theme.is_dark { 0.22 } else { 0.16 },
+                    ),
                 ));
             }
 
@@ -363,6 +395,52 @@ pub(super) fn single_column_conflict_canvas(
                 },
             );
 
+            // kdiff3 manual diff help: Alt+click marks this line for the next
+            // Ctrl+Y. Registered outside the conflict-block handler below so
+            // context rows can be marked too.
+            if let Some(mark) = alignment_mark
+                && let Some(side_line) = mark.side_line
+            {
+                let visible = bounds.intersect(&clip_bounds);
+                let view = view.clone();
+                window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, _window, cx| {
+                    if phase != DispatchPhase::Bubble
+                        || event.button != gpui::MouseButton::Left
+                        || !event.modifiers.alt
+                        || !visible.contains(&event.position)
+                    {
+                        return;
+                    }
+                    view.update(cx, |this, cx| {
+                        this.conflict_resolver_mark_alignment_line(
+                            mark.column,
+                            side_line,
+                            event.modifiers.shift,
+                            cx,
+                        );
+                    });
+                });
+            }
+
+            if chunk_context.is_none()
+                && let Some(target_index) = semantic_nav_target
+            {
+                let visible = bounds.intersect(&clip_bounds);
+                let view = view.clone();
+                window.on_mouse_event(move |event: &gpui::MouseDownEvent, phase, _window, cx| {
+                    if phase != DispatchPhase::Bubble
+                        || event.button != gpui::MouseButton::Left
+                        || event.modifiers.alt
+                        || !visible.contains(&event.position)
+                    {
+                        return;
+                    }
+                    view.update(cx, |this, cx| {
+                        this.conflict_jump_to_nav_target(target_index, cx);
+                    });
+                });
+            }
+
             if let Some(chunk_context) = chunk_context.clone() {
                 let visible = bounds.intersect(&clip_bounds);
                 if row_selection.is_some() {
@@ -398,6 +476,11 @@ pub(super) fn single_column_conflict_canvas(
                             return;
                         }
                         if event.button == gpui::MouseButton::Left {
+                            // Alt+click belongs to the manual-alignment handler
+                            // above; it must not also start a split drag.
+                            if event.modifiers.alt {
+                                return;
+                            }
                             let conflict_ix = chunk_context.conflict_ix;
                             view.update(cx, |this, cx| {
                                 if row_selection.is_some() {

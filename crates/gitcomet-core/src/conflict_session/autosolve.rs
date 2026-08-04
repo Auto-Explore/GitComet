@@ -4,6 +4,7 @@ use super::{
     AutosolvePickSide, AutosolveRule, ConflictRegion, ConflictRegionResolution,
     RegexAutosolveOptions,
 };
+use crate::merge::{MergeOptions, MergePlan, normalized_without_whitespace, render_merge_plan};
 use regex::{Regex, RegexBuilder};
 
 const USER_REGEX_SIZE_LIMIT: usize = 1_048_576; // 1 MiB
@@ -26,7 +27,12 @@ pub(super) struct CompiledRegexAutosolvePattern {
 /// 4. Subchunk splitting (line-level re-merge) when base is available.
 ///
 /// Returns `Some(resolved_text)` if the block can be auto-resolved.
-fn try_resolve_single_block(base: Option<&str>, ours: &str, theirs: &str) -> Option<String> {
+fn try_resolve_single_block(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    resolve_whitespace: bool,
+) -> Option<String> {
     // Rule 1: identical sides.
     if ours == theirs {
         return Some(ours.to_string());
@@ -44,7 +50,7 @@ fn try_resolve_single_block(base: Option<&str>, ours: &str, theirs: &str) -> Opt
     }
 
     // Rule 4: whitespace-only difference.
-    if is_whitespace_only_diff(ours, theirs) {
+    if resolve_whitespace && is_whitespace_only_diff(ours, theirs) {
         return Some(ours.to_string());
     }
 
@@ -85,10 +91,17 @@ fn try_resolve_single_block(base: Option<&str>, ours: &str, theirs: &str) -> Opt
 ///
 /// Returns `Some(clean_text)` if ALL conflicts were resolved, `None` otherwise.
 ///
-/// This is designed for use in headless mergetool `--auto` mode, matching
-/// KDiff3's auto-resolve behavior: attempt to resolve all conflicts automatically,
-/// write clean output and exit 0 if successful, otherwise leave markers and exit 1.
+/// This is the fallback for callers that only have marker text. Callers that
+/// retain a [`MergePlan`] should use [`try_autosolve_merge_plan`] so whitespace
+/// decisions come from the planner's exact KDiff3-compatible classification.
 pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
+    try_autosolve_merged_text_with_whitespace(text, true)
+}
+
+fn try_autosolve_merged_text_with_whitespace(
+    text: &str,
+    resolve_whitespace: bool,
+) -> Option<String> {
     let segments = parse_conflict_marker_segments(text);
 
     let has_conflicts = segments
@@ -105,8 +118,12 @@ pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
         match segment {
             ParsedConflictSegment::Text(text) => output.push_str(&text),
             ParsedConflictSegment::Conflict(block) => {
-                let resolved =
-                    try_resolve_single_block(block.base.as_deref(), &block.ours, &block.theirs)?;
+                let resolved = try_resolve_single_block(
+                    block.base.as_deref(),
+                    &block.ours,
+                    &block.theirs,
+                    resolve_whitespace,
+                )?;
                 output.push_str(&resolved);
             }
         }
@@ -115,14 +132,38 @@ pub fn try_autosolve_merged_text(text: &str) -> Option<String> {
     Some(output)
 }
 
-/// Normalize a string by collapsing all whitespace runs into a single space.
-fn normalize_whitespace(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
+/// Auto-resolve a rendered merge plan using its KDiff3 block classification.
+///
+/// Whitespace conflicts pick the local side. Remaining marker blocks still go
+/// through the non-whitespace safe rules and subchunk merge, but are not
+/// reclassified with a second whitespace predicate.
+pub fn try_autosolve_merge_plan(plan: &MergePlan, options: &MergeOptions) -> Option<String> {
+    let mut autosolved = plan.clone();
+    let local_source = autosolved.local_source();
+    let whitespace_blocks: Vec<usize> = autosolved
+        .unresolved_block_indices()
+        .iter()
+        .copied()
+        .filter(|index| autosolved.blocks[*index].whitespace_conflict)
+        .collect();
+    for block_index in whitespace_blocks {
+        autosolved.replace_selection(block_index, local_source.into());
+    }
+
+    let rendered = render_merge_plan(&autosolved, options);
+    if rendered.is_clean() {
+        Some(rendered.output)
+    } else {
+        try_autosolve_merged_text_with_whitespace(&rendered.output, false)
+    }
 }
 
 /// Returns `true` if `a` and `b` differ only in whitespace.
+///
+/// This deliberately removes every whitespace character with the same
+/// normalizer used for whole-line equivalence by the alignment planner.
 pub fn is_whitespace_only_diff(a: &str, b: &str) -> bool {
-    a != b && normalize_whitespace(a) == normalize_whitespace(b)
+    a != b && normalized_without_whitespace(a) == normalized_without_whitespace(b)
 }
 
 /// Pass 1 safe auto-resolve decision helper.
@@ -133,6 +174,20 @@ pub fn safe_auto_resolve_pick(
     ours: &str,
     theirs: &str,
     whitespace_normalize: bool,
+) -> Option<(AutosolveRule, AutosolvePickSide)> {
+    safe_auto_resolve_pick_with_classification(
+        base,
+        ours,
+        theirs,
+        whitespace_normalize && is_whitespace_only_diff(ours, theirs),
+    )
+}
+
+fn safe_auto_resolve_pick_with_classification(
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    whitespace_conflict: bool,
 ) -> Option<(AutosolveRule, AutosolvePickSide)> {
     // Rule 1: both sides identical.
     if ours == theirs {
@@ -154,7 +209,7 @@ pub fn safe_auto_resolve_pick(
 
     // Rule 4 (optional): whitespace-only difference between sides.
     // This rule does not require a base.
-    if whitespace_normalize && is_whitespace_only_diff(ours, theirs) {
+    if whitespace_conflict {
         return Some((AutosolveRule::WhitespaceOnly, AutosolvePickSide::Ours));
     }
 
@@ -177,6 +232,24 @@ pub(super) fn safe_auto_resolve(
         &region.ours,
         &region.theirs,
         whitespace_normalize,
+    )?;
+    let content = match pick {
+        AutosolvePickSide::Ours => region.ours.to_string(),
+        AutosolvePickSide::Theirs => region.theirs.to_string(),
+    };
+    Some((rule, content))
+}
+
+/// Apply the safe rules while trusting a planner-provided whitespace verdict.
+pub(super) fn safe_auto_resolve_with_classification(
+    region: &ConflictRegion,
+    whitespace_conflict: bool,
+) -> Option<(AutosolveRule, String)> {
+    let (rule, pick) = safe_auto_resolve_pick_with_classification(
+        region.base.as_deref(),
+        &region.ours,
+        &region.theirs,
+        whitespace_conflict,
     )?;
     let content = match pick {
         AutosolvePickSide::Ours => region.ours.to_string(),

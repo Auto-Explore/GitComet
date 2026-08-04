@@ -14,10 +14,12 @@ mod overview;
 mod plan;
 
 pub use overview::{OverviewMode, OverviewRowKind, overview_row_kind, overview_rows};
+pub(crate) use plan::normalized_without_whitespace;
 pub use plan::{
-    AlignedRow, InteractiveMergePlanBudget, MergeBlock, MergeBlockClassification, MergeBlockId,
-    MergePlan, MergeSource, OrderedSelection, build_merge_plan,
-    build_merge_plan_with_optional_base, interactive_merge_plan_is_practical,
+    AlignedRow, InteractiveMergePlanBudget, ManualAlignment, ManualAlignmentList, MergeBlock,
+    MergeBlockClassification, MergeBlockId, MergePlan, MergeSource, OrderedSelection,
+    build_merge_plan, build_merge_plan_with_alignments, build_merge_plan_with_optional_base,
+    interactive_merge_plan_is_practical, try_build_interactive_merge_plan_with_alignments,
     try_build_interactive_merge_plan_with_optional_base,
 };
 
@@ -157,6 +159,20 @@ pub fn merge_file_bytes_with_optional_base(
     theirs: &[u8],
     options: &MergeOptions,
 ) -> Result<MergeResult, MergeError> {
+    let plan = build_merge_plan_bytes_with_optional_base(base, ours, theirs, options)?;
+    Ok(render_merge_plan(&plan, options))
+}
+
+/// Build a shared merge plan from raw byte inputs after binary detection.
+///
+/// This exposes the same plan used by [`merge_file_bytes_with_optional_base`]
+/// to callers that need its KDiff3-compatible block metadata before rendering.
+pub fn build_merge_plan_bytes_with_optional_base(
+    base: Option<&[u8]>,
+    ours: &[u8],
+    theirs: &[u8],
+    options: &MergeOptions,
+) -> Result<MergePlan, MergeError> {
     fn check_binary(data: &[u8]) -> Result<&str, MergeError> {
         if data.contains(&0) {
             return Err(MergeError::BinaryContent);
@@ -167,7 +183,9 @@ pub fn merge_file_bytes_with_optional_base(
     let base = base.map(check_binary).transpose()?;
     let ours = check_binary(ours)?;
     let theirs = check_binary(theirs)?;
-    Ok(merge_file_with_optional_base(base, ours, theirs, options))
+    Ok(build_merge_plan_with_optional_base(
+        base, ours, theirs, options,
+    ))
 }
 
 /// Alias for [`merge_file_bytes_with_optional_base`].

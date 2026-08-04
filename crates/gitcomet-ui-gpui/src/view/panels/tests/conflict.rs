@@ -5262,7 +5262,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
                 "path={:?} announced={} auto={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.open_summary_announced,
-                pane.conflict_resolver.auto_solved_on_open,
+                pane.conflict_resolver.open_summary_counts,
             )
         },
     );
@@ -5337,7 +5337,7 @@ fn conflict_resolver_fresh_open_uses_persisted_view_mode_and_toasts_once(
                 "path={:?} announced={} auto={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.open_summary_announced,
-                pane.conflict_resolver.auto_solved_on_open,
+                pane.conflict_resolver.open_summary_counts,
             )
         },
     );

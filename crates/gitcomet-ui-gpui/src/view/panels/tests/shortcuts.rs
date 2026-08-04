@@ -4061,9 +4061,40 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
             )
         });
     assert_eq!(anchor.unwrap().order_hint, 0);
-    assert_eq!(
-        active, None,
-        "automatic deltas are not actionable conflicts"
+    assert_eq!(active, None, "automatic deltas have no marker block");
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let (has_base, selected) = pane
+            .conflict_resolver_active_pick_state()
+            .expect("the semantic automatic delta remains actionable");
+        assert!(has_base);
+        assert!(selected.contains(&crate::view::conflict_resolver::ConflictChoice::Ours));
+    });
+
+    // Ctrl+3 reaches the semantic plan block even though navigation left no
+    // displayed marker selected. KDiff3-style source picks toggle, so the
+    // automatic local selection becomes an ordered Local+Remote selection.
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("ctrl-3");
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "automatic delta Ctrl+3 override",
+        |pane| {
+            pane.conflict_resolver_active_pick_state()
+                .is_some_and(|(_, selected)| {
+                    selected.contains(&crate::view::conflict_resolver::ConflictChoice::Ours)
+                        && selected
+                            .contains(&crate::view::conflict_resolver::ConflictChoice::Theirs)
+                })
+        },
+        |pane| {
+            format!(
+                "active pick state={:?}",
+                pane.conflict_resolver_active_pick_state()
+            )
+        },
     );
     assert!(!can_prev_conflict);
     assert!(can_next_conflict);
@@ -4144,6 +4175,47 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
         "auto-advance wraps from the last resolved conflict to the first unresolved conflict"
     );
     assert_eq!(conflict_navigation_anchor(cx, &view), Some(1));
+
+    // Ctrl+Shift+3 is Choose C Everywhere, not "all unresolved conflicts".
+    // It must replace both original conflicts and both automatic deltas.
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+        });
+    });
+    cx.simulate_keystrokes("ctrl-shift-3");
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "Choose C Everywhere",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+                .and_then(|session| session.merge_plan.as_ref())
+                .is_some_and(|plan| {
+                    plan.blocks
+                        .iter()
+                        .filter(|block| block.is_delta)
+                        .all(|block| {
+                            block.selection.as_slice() == [gitcomet_core::merge::MergeSource::C]
+                        })
+                })
+        },
+        |pane| {
+            format!(
+                "plan={:?}",
+                pane.active_repo()
+                    .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+                    .and_then(|session| session.merge_plan.as_ref())
+                    .map(|plan| plan
+                        .blocks
+                        .iter()
+                        .filter(|block| block.is_delta)
+                        .map(|block| block.selection.as_slice().to_vec())
+                        .collect::<Vec<_>>())
+            )
+        },
+    );
 }
 
 #[gpui::test]

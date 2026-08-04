@@ -29,7 +29,8 @@ pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u3
 
 #[derive(Default)]
 pub(super) struct ResolvedOutputSyntaxState {
-    /// Fallback highlights used when full-document syntax is unsupported.
+    /// Materialized syntax and unresolved-conflict highlights used when there
+    /// is no prepared-document provider.
     pub(super) highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
     pub(super) prepared_document: Option<rows::PreparedDiffSyntaxDocument>,
     /// Lazy provider backed by a prepared document.
@@ -60,29 +61,140 @@ fn build_resolved_output_syntax_fallback_highlights(
     highlights
 }
 
+fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        color: Some(theme.colors.danger.into()),
+        ..gpui::HighlightStyle::default()
+    }
+}
+
+/// Replace syntax styles inside unresolved output ranges with one plain danger
+/// style. The returned ranges are non-overlapping with the unresolved spans, so
+/// the text input's later-highlight precedence cannot reveal syntax colours
+/// through the conflict treatment.
+fn apply_resolved_output_unresolved_highlights(
+    mut syntax_highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    unresolved_ranges: &[Range<usize>],
+    requested_range: Range<usize>,
+    unresolved_style: gpui::HighlightStyle,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    if unresolved_ranges.is_empty() || requested_range.is_empty() {
+        return syntax_highlights;
+    }
+
+    let mut highlights = Vec::with_capacity(
+        syntax_highlights
+            .len()
+            .saturating_add(unresolved_ranges.len()),
+    );
+    for (syntax_range, style) in syntax_highlights.drain(..) {
+        if syntax_range.is_empty() {
+            continue;
+        }
+
+        let mut cursor = syntax_range.start;
+        let first_unresolved =
+            unresolved_ranges.partition_point(|range| range.end <= syntax_range.start);
+        for unresolved in unresolved_ranges.iter().skip(first_unresolved) {
+            let unresolved_start = unresolved.start.max(requested_range.start);
+            let unresolved_end = unresolved.end.min(requested_range.end);
+            if unresolved_start >= syntax_range.end {
+                break;
+            }
+            if unresolved_end <= cursor || unresolved_start >= unresolved_end {
+                continue;
+            }
+            if cursor < unresolved_start {
+                highlights.push((cursor..unresolved_start.min(syntax_range.end), style));
+            }
+            cursor = cursor.max(unresolved_end);
+            if cursor >= syntax_range.end {
+                break;
+            }
+        }
+        if cursor < syntax_range.end {
+            highlights.push((cursor..syntax_range.end, style));
+        }
+    }
+
+    for unresolved in unresolved_ranges {
+        let start = unresolved.start.max(requested_range.start);
+        let end = unresolved.end.min(requested_range.end);
+        if start < end {
+            highlights.push((start..end, unresolved_style));
+        }
+    }
+    highlights.sort_by(|(left, _), (right, _)| {
+        left.start.cmp(&right.start).then(left.end.cmp(&right.end))
+    });
+
+    let mut merged: Vec<(Range<usize>, gpui::HighlightStyle)> =
+        Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        if let Some((previous_range, previous_style)) = merged.last_mut()
+            && previous_range.end == range.start
+            && *previous_style == style
+        {
+            previous_range.end = range.end;
+        } else {
+            merged.push((range, style));
+        }
+    }
+    merged
+}
+
+fn resolved_output_unresolved_highlights(
+    theme: AppTheme,
+    unresolved_ranges: &[Range<usize>],
+    text_len: usize,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    apply_resolved_output_unresolved_highlights(
+        Vec::new(),
+        unresolved_ranges,
+        0..text_len,
+        resolved_output_unresolved_highlight_style(theme),
+    )
+}
+
 fn resolved_output_highlight_provider(
     theme: AppTheme,
     output_text: SharedString,
     line_starts: Arc<[usize]>,
     language: rows::DiffSyntaxLanguage,
     document: rows::PreparedDiffSyntaxDocument,
+    unresolved_ranges: Arc<[Range<usize>]>,
 ) -> HighlightProvider {
     let shared_text: Arc<str> = output_text.into();
+    let unresolved_style = resolved_output_unresolved_highlight_style(theme);
     HighlightProvider::with_pending(
         move |byte_range: Range<usize>| {
-            rows::request_syntax_highlights_for_prepared_document_byte_range(
+            match rows::request_syntax_highlights_for_prepared_document_byte_range(
                 theme,
                 &shared_text,
                 line_starts.as_ref(),
                 document,
                 language,
-                byte_range,
-            )
-            .map(|result| HighlightProviderResult {
-                highlights: result.highlights,
-                pending: result.pending,
-            })
-            .unwrap_or_default()
+                byte_range.clone(),
+            ) {
+                Some(result) => HighlightProviderResult {
+                    highlights: apply_resolved_output_unresolved_highlights(
+                        result.highlights,
+                        unresolved_ranges.as_ref(),
+                        byte_range,
+                        unresolved_style,
+                    ),
+                    pending: result.pending,
+                },
+                None => HighlightProviderResult {
+                    highlights: apply_resolved_output_unresolved_highlights(
+                        Vec::new(),
+                        unresolved_ranges.as_ref(),
+                        byte_range,
+                        unresolved_style,
+                    ),
+                    pending: false,
+                },
+            }
         },
         move || rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document),
         move || rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document),
@@ -95,12 +207,30 @@ fn pending_resolved_output_syntax_state(
     line_starts: Arc<[usize]>,
     language: rows::DiffSyntaxLanguage,
     old_document: Option<rows::PreparedDiffSyntaxDocument>,
+    unresolved_ranges: Arc<[Range<usize>]>,
 ) -> ResolvedOutputSyntaxState {
+    let highlights = old_document
+        .is_none()
+        .then(|| {
+            resolved_output_unresolved_highlights(
+                theme,
+                unresolved_ranges.as_ref(),
+                output_text.len(),
+            )
+        })
+        .unwrap_or_default();
     ResolvedOutputSyntaxState {
-        highlights: Vec::new(),
+        highlights,
         prepared_document: old_document,
         highlight_provider: old_document.map(|document| {
-            resolved_output_highlight_provider(theme, output_text, line_starts, language, document)
+            resolved_output_highlight_provider(
+                theme,
+                output_text,
+                line_starts,
+                language,
+                document,
+                unresolved_ranges,
+            )
         }),
         needs_background_prepare: true,
     }
@@ -114,9 +244,17 @@ fn build_resolved_output_syntax_state_with_source(
     old_document: Option<rows::PreparedDiffSyntaxDocument>,
     edit_hint: Option<rows::DiffSyntaxEdit>,
     budget: rows::DiffSyntaxBudget,
+    unresolved_ranges: Arc<[Range<usize>]>,
 ) -> ResolvedOutputSyntaxState {
     let Some(language) = language else {
-        return ResolvedOutputSyntaxState::default();
+        return ResolvedOutputSyntaxState {
+            highlights: resolved_output_unresolved_highlights(
+                theme,
+                unresolved_ranges.as_ref(),
+                output_text.len(),
+            ),
+            ..ResolvedOutputSyntaxState::default()
+        };
     };
     if output_text.is_empty() {
         return ResolvedOutputSyntaxState::default();
@@ -133,6 +271,7 @@ fn build_resolved_output_syntax_state_with_source(
             line_starts,
             language,
             old_document,
+            unresolved_ranges,
         );
     }
 
@@ -154,6 +293,7 @@ fn build_resolved_output_syntax_state_with_source(
                 line_starts,
                 language,
                 document,
+                unresolved_ranges,
             )),
             needs_background_prepare: false,
         },
@@ -163,18 +303,27 @@ fn build_resolved_output_syntax_state_with_source(
             line_starts,
             language,
             old_document,
+            unresolved_ranges,
         ),
-        rows::PrepareDiffSyntaxDocumentResult::Unsupported => ResolvedOutputSyntaxState {
-            highlights: build_resolved_output_syntax_fallback_highlights(
+        rows::PrepareDiffSyntaxDocumentResult::Unsupported => {
+            let syntax_highlights = build_resolved_output_syntax_fallback_highlights(
                 theme,
                 output_text.as_ref(),
                 language,
                 rows::DiffSyntaxMode::HeuristicOnly,
-            ),
-            prepared_document: None,
-            highlight_provider: None,
-            needs_background_prepare: false,
-        },
+            );
+            ResolvedOutputSyntaxState {
+                highlights: apply_resolved_output_unresolved_highlights(
+                    syntax_highlights,
+                    unresolved_ranges.as_ref(),
+                    0..output_text.len(),
+                    resolved_output_unresolved_highlight_style(theme),
+                ),
+                prepared_document: None,
+                highlight_provider: None,
+                needs_background_prepare: false,
+            }
+        }
     }
 }
 
@@ -194,6 +343,7 @@ pub(super) fn build_resolved_output_syntax_state_for_snapshot(
         old_document,
         edit_hint,
         rows::DiffSyntaxBudget::default(),
+        Arc::default(),
     )
 }
 
@@ -204,6 +354,7 @@ pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
     old_document: Option<rows::PreparedDiffSyntaxDocument>,
     edit_hint: Option<rows::DiffSyntaxEdit>,
     budget: rows::DiffSyntaxBudget,
+    unresolved_ranges: Arc<[Range<usize>]>,
 ) -> ResolvedOutputSyntaxState {
     build_resolved_output_syntax_state_with_source(
         theme,
@@ -213,6 +364,7 @@ pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
         old_document,
         edit_hint,
         budget,
+        unresolved_ranges,
     )
 }
 
@@ -1183,6 +1335,39 @@ pub(super) fn resolved_output_markers_for_text(
     build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count)
 }
 
+/// Byte ranges whose output rows are still unresolved. Derive these from the
+/// current segments instead of the asynchronously refreshed outline so syntax
+/// styling never briefly wins while outline metadata catches up.
+pub(super) fn resolved_output_unresolved_byte_ranges(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &str,
+    line_starts: &[usize],
+) -> Arc<[Range<usize>]> {
+    if !marker_segments.iter().any(|segment| {
+        matches!(segment, conflict_resolver::ConflictSegment::Block(block) if !block.resolved)
+    }) {
+        return Arc::default();
+    }
+    let markers = resolved_output_markers_for_text(marker_segments, output_text);
+    let mut ranges = Vec::new();
+    for (line_ix, marker) in markers.iter().enumerate() {
+        if !marker.is_some_and(|marker| marker.unresolved) {
+            continue;
+        }
+        let Some(mut range) = indexed_line_byte_range(line_starts, output_text.len(), line_ix)
+        else {
+            continue;
+        };
+        while range.end > range.start && output_text.as_bytes().get(range.end - 1) == Some(&b'\r') {
+            range.end -= 1;
+        }
+        if !range.is_empty() {
+            ranges.push(range);
+        }
+    }
+    ranges.into()
+}
+
 pub(super) fn resolved_output_marker_for_line(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
@@ -1353,6 +1538,9 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                                     theirs: theirs.clone().into(),
                                                     choice: target_block.choice,
                                                     resolved: false,
+                                                    // Subchunks of a whitespace-only
+                                                    // block are whitespace-only too.
+                                                    whitespace_only: target_block.whitespace_only,
                                                 },
                                             ),
                                         );
@@ -1399,6 +1587,7 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                         theirs: theirs.into(),
                                         choice: target_block.choice,
                                         resolved: false,
+                                        whitespace_only: target_block.whitespace_only,
                                     },
                                 ));
                                 next_region_indices.push(region_ix);
@@ -2848,6 +3037,7 @@ mod tests {
             theirs: "added line\n".into(),
             choice: conflict_resolver::ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         };
 
         let regions =

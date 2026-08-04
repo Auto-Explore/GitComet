@@ -528,6 +528,13 @@ pub struct ConflictBlock {
     /// Whether this block has been explicitly resolved (by user pick or auto-resolve).
     /// Blocks start unresolved; becomes `true` when the user picks a side or auto-resolve runs.
     pub resolved: bool,
+    /// Whether every aligned row in this block differs only in whitespace
+    /// (kdiff3 `MergeBlock::bWhiteSpaceConflict`).
+    ///
+    /// Set from the merge plan's classification, which applies kdiff3's
+    /// per-row rule; marker-only sessions have no aligned rows to classify and
+    /// leave this `false`. Drives the `(Whitespace only)` placeholder variant.
+    pub whitespace_only: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -585,7 +592,15 @@ impl ResolvedOutputGutterRow {
     const IS_START_FLAG: u32 = 1 << 2;
     const IS_END_FLAG: u32 = 1 << 3;
     const UNRESOLVED_FLAG: u32 = 1 << 4;
-    const CONFLICT_SHIFT: u32 = 5;
+    /// The row renders an unresolved-conflict placeholder.
+    ///
+    /// kdiff3 reads the `?`, the conflict color and the placeholder string off
+    /// one field (`srcSelect`, `mergeresultwindow.cpp:1515`), so its gutter can
+    /// never disagree with its text. Our marker array is built separately and
+    /// can go stale across incremental edits, so this flag lets the row fall
+    /// back to the text's own verdict.
+    const PLACEHOLDER_FLAG: u32 = 1 << 5;
+    const CONFLICT_SHIFT: u32 = 6;
     const CONFLICT_VALUE_MASK: u32 = u32::MAX >> Self::CONFLICT_SHIFT;
 
     pub(in crate::view) fn new(
@@ -623,6 +638,21 @@ impl ResolvedOutputGutterRow {
         Self(bits)
     }
 
+    /// Mark the row as rendering an unresolved-conflict placeholder.
+    ///
+    /// A placeholder is a whole one-line block, so it reads as an unresolved
+    /// marker that both starts and ends on this row even when the marker array
+    /// has no entry for it.
+    #[inline(always)]
+    pub(in crate::view) fn with_unresolved_placeholder(self) -> Self {
+        Self(self.0 | Self::PLACEHOLDER_FLAG)
+    }
+
+    #[inline(always)]
+    fn is_placeholder(self) -> bool {
+        (self.0 & Self::PLACEHOLDER_FLAG) != 0
+    }
+
     #[inline(always)]
     pub(in crate::view) fn source(self) -> ResolvedLineSource {
         match self.0 & Self::SOURCE_MASK {
@@ -648,7 +678,7 @@ impl ResolvedOutputGutterRow {
 
     #[inline(always)]
     pub(in crate::view) fn has_marker(self) -> bool {
-        (self.0 >> Self::CONFLICT_SHIFT) != 0
+        self.is_placeholder() || (self.0 >> Self::CONFLICT_SHIFT) != 0
     }
 
     #[inline(always)]
@@ -659,17 +689,17 @@ impl ResolvedOutputGutterRow {
 
     #[inline(always)]
     pub(in crate::view) fn is_start(self) -> bool {
-        (self.0 & Self::IS_START_FLAG) != 0
+        self.is_placeholder() || (self.0 & Self::IS_START_FLAG) != 0
     }
 
     #[inline(always)]
     pub(in crate::view) fn is_end(self) -> bool {
-        (self.0 & Self::IS_END_FLAG) != 0
+        self.is_placeholder() || (self.0 & Self::IS_END_FLAG) != 0
     }
 
     #[inline(always)]
     pub(in crate::view) fn unresolved(self) -> bool {
-        (self.0 & Self::UNRESOLVED_FLAG) != 0
+        self.is_placeholder() || (self.0 & Self::UNRESOLVED_FLAG) != 0
     }
 
     #[inline(always)]
@@ -891,33 +921,81 @@ pub fn format_autosolve_trace_summary(
     }
 }
 
-/// Build the one-shot toast message pushed when a conflict file's resolver
-/// opens fresh (kdiff3-style open summary: total / auto-solved / remaining).
-pub fn format_open_summary_toast(
-    total: usize,
-    auto_solved: usize,
-    resolved: usize,
-) -> Option<String> {
-    if total == 0 {
-        return None;
-    }
-    let auto_solved = auto_solved.min(total);
-    let resolved = resolved.min(total);
-    let remaining = total.saturating_sub(resolved);
-    let noun = if total == 1 { "conflict" } else { "conflicts" };
-    Some(format!(
-        "{total} {noun}: {auto_solved} auto-solved, {remaining} remaining"
-    ))
+/// KDiff3-style accounting for a merge session.
+///
+/// Plan-backed sessions count every block classified as a conflict or delta,
+/// not just the subset that still needs a user decision. The whitespace count
+/// is optional because marker-only fallback sessions do not have KDiff3's
+/// exact aligned-row classification available.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictSummaryCounts {
+    pub total: usize,
+    pub auto_solved: usize,
+    pub unsolved: usize,
+    pub whitespace_conflicts: Option<usize>,
 }
 
-/// Total, auto-solved, and resolved region counts for the open summary.
-/// Counts come from the session rather than rendered blocks because a custom
-/// manual/auto result may materialize as plain text and disappear from the
-/// block projection.
+impl ConflictSummaryCounts {
+    fn normalized(self) -> Self {
+        let unsolved = self.unsolved.min(self.total);
+        Self {
+            auto_solved: self.auto_solved.min(self.total.saturating_sub(unsolved)),
+            unsolved,
+            whitespace_conflicts: self.whitespace_conflicts.map(|count| count.min(self.total)),
+            ..self
+        }
+    }
+}
+
+/// Format the shared total / auto-solved / unsolved report used by the toast
+/// and resolver status bar.
+pub fn format_conflict_summary(counts: ConflictSummaryCounts) -> String {
+    let counts = counts.normalized();
+    format!(
+        "Total {} / auto-solved {} / unsolved {}",
+        counts.total, counts.auto_solved, counts.unsolved
+    )
+}
+
+/// Build the one-shot toast message pushed when a conflict file's resolver
+/// opens fresh.
+pub fn format_open_summary_toast(counts: ConflictSummaryCounts) -> Option<String> {
+    if counts.total == 0 {
+        return None;
+    }
+    Some(format_conflict_summary(counts))
+}
+
+/// Count a session using KDiff3's conflict-reporting convention.
+///
+/// With a merge plan, `total` is every stable conflict-or-delta block,
+/// `unsolved` is the currently unresolved subset, and `auto_solved` is their
+/// difference. Marker-only sessions retain region-based fallback accounting.
 pub fn conflict_session_summary_counts(
     session: &gitcomet_core::conflict_session::ConflictSession,
-) -> (usize, usize, usize) {
+) -> ConflictSummaryCounts {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    if let Some(plan) = session.merge_plan.as_ref() {
+        let mut total = 0usize;
+        let mut unsolved = 0usize;
+        let mut whitespace_conflicts = 0usize;
+        for block in plan
+            .blocks
+            .iter()
+            .filter(|block| block.original_conflict || block.is_delta)
+        {
+            total += 1;
+            unsolved += usize::from(!block.is_resolved());
+            whitespace_conflicts += usize::from(block.whitespace_conflict);
+        }
+        return ConflictSummaryCounts {
+            total,
+            auto_solved: total.saturating_sub(unsolved),
+            unsolved,
+            whitespace_conflicts: Some(whitespace_conflicts),
+        };
+    }
 
     let auto_solved = session
         .regions
@@ -929,7 +1007,12 @@ pub fn conflict_session_summary_counts(
             )
         })
         .count();
-    (session.total_regions(), auto_solved, session.solved_count())
+    ConflictSummaryCounts {
+        total: session.total_regions(),
+        auto_solved,
+        unsolved: session.unsolved_count(),
+        whitespace_conflicts: None,
+    }
 }
 
 /// Summarize the on-open autosolve pass from session region resolutions.
@@ -1025,6 +1108,7 @@ pub fn parse_conflict_markers_shared(text: Arc<str>) -> Vec<ConflictSegment> {
                     theirs: ConflictText::shared_slice(Arc::clone(&text), block.theirs),
                     choice: ConflictChoice::empty(),
                     resolved: false,
+                    whitespace_only: false,
                 })
             }
         })
@@ -1121,7 +1205,7 @@ fn resolution_for_choice(
     }
 }
 
-fn choice_for_selection(
+pub(in crate::view) fn choice_for_selection(
     selection: &gitcomet_core::merge::OrderedSelection,
     has_base: bool,
 ) -> Option<ConflictChoice> {
@@ -1400,6 +1484,77 @@ pub struct SessionRegionApplyResult {
     pub block_region_indices: Vec<usize>,
 }
 
+/// Result of applying ConflictRegion choices to a plan projection while
+/// retaining exact semantic block identities for every visible marker.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PlanSessionRegionApplyResult {
+    pub block_region_indices: Vec<usize>,
+    pub block_plan_indices: Vec<usize>,
+}
+
+/// Apply marker-backed region choices to a projection whose marker blocks are
+/// identified by merge-plan block index.
+///
+/// A plan-only automatic delta can become unresolved after a source toggle.
+/// Such a block has no ConflictRegion, so it is retained untouched and given a
+/// synthetic, out-of-range grouping key while its plan identity remains exact.
+pub fn apply_plan_session_region_resolutions_with_index_map(
+    segments: &mut Vec<ConflictSegment>,
+    session: &gitcomet_core::conflict_session::ConflictSession,
+    projected_plan_blocks: &[usize],
+) -> Option<PlanSessionRegionApplyResult> {
+    if conflict_count(segments) != projected_plan_blocks.len() {
+        return None;
+    }
+
+    let mut marker_index = 0usize;
+    let mut block_region_indices = Vec::new();
+    let mut block_plan_indices = Vec::new();
+    let mut synced = Vec::with_capacity(segments.len());
+    for segment in segments.drain(..) {
+        match segment {
+            ConflictSegment::Text(text) => append_text_segment(&mut synced, text),
+            ConflictSegment::Block(mut block) => {
+                let block_index = projected_plan_blocks[marker_index];
+                marker_index += 1;
+                // Only the plan applies kdiff3's per-row whitespace rule, so
+                // carry its verdict onto the display block here rather than
+                // re-deriving a weaker one from the block text.
+                block.whitespace_only = session
+                    .merge_plan
+                    .as_ref()
+                    .and_then(|plan| plan.blocks.get(block_index))
+                    .is_some_and(|plan_block| plan_block.whitespace_conflict);
+                let region_index = session
+                    .region_plan_blocks
+                    .iter()
+                    .position(|candidate| *candidate == block_index);
+                if let Some(region_index) = region_index
+                    && let Some(region) = session.regions.get(region_index)
+                    && let Some(materialized) =
+                        apply_region_resolution_to_block(&mut block, &region.resolution)
+                {
+                    append_text_segment(&mut synced, materialized);
+                    continue;
+                }
+
+                synced.push(ConflictSegment::Block(block));
+                block_plan_indices.push(block_index);
+                block_region_indices.push(region_index.unwrap_or_else(|| {
+                    // Real regions occupy 0..len. Plan-only keys start at len
+                    // and stay unique by semantic block index.
+                    session.regions.len().saturating_add(block_index)
+                }));
+            }
+        }
+    }
+    *segments = synced;
+    Some(PlanSessionRegionApplyResult {
+        block_region_indices,
+        block_plan_indices,
+    })
+}
+
 /// Build a default visible block -> region index mapping by position.
 pub fn sequential_conflict_region_indices(segments: &[ConflictSegment]) -> Vec<usize> {
     let mut out = Vec::new();
@@ -1609,6 +1764,7 @@ pub(in crate::view) fn build_conflict_nav_targets(
     session: Option<&gitcomet_core::conflict_session::ConflictSession>,
     region_aligned_ranges: &[Option<Range<usize>>],
     display_region_indices: &[usize],
+    display_plan_block_indices: &[usize],
     display_aligned_ranges: &[Option<Range<usize>>],
     segments: &[ConflictSegment],
 ) -> Vec<ConflictNavTarget> {
@@ -1636,7 +1792,10 @@ pub(in crate::view) fn build_conflict_nav_targets(
                     .region_plan_blocks
                     .iter()
                     .position(|candidate| *candidate == block_index);
-                let display_conflict_index = region_index.and_then(display_for_region);
+                let display_conflict_index = display_plan_block_indices
+                    .iter()
+                    .position(|candidate| *candidate == block_index)
+                    .or_else(|| region_index.and_then(display_for_region));
                 let unresolved = display_conflict_index
                     .and_then(|index| display_resolved.get(index))
                     .map_or_else(|| !block.is_resolved(), |resolved| !resolved);
@@ -2024,6 +2183,12 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
                                     theirs: theirs.into(),
                                     choice: ConflictChoice::empty(),
                                     resolved: false,
+                                    // Every row of a whitespace-only block is
+                                    // whitespace-only, so each subchunk of it
+                                    // is too. kdiff3 clears the flag the same
+                                    // way when a split lands a real change in
+                                    // a block (MergeEditLine.h join/append).
+                                    whitespace_only: block.whitespace_only,
                                 }));
                                 new_block_region_indices.push(region_ix);
                             }
@@ -2048,9 +2213,30 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
 /// KDiff3-compatible text shown for a merge block with no selected sources.
 pub(in crate::view) const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER: &str = "<Merge Conflict>";
 
+/// Same, for a block whose sides differ only in whitespace.
+pub(in crate::view) const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER: &str =
+    "<Merge Conflict (Whitespace only)>";
+
 const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_LF: &str = "<Merge Conflict>\n";
 const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CRLF: &str = "<Merge Conflict>\r\n";
 const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CR: &str = "<Merge Conflict>\r";
+
+const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_LF: &str = "<Merge Conflict (Whitespace only)>\n";
+const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CRLF: &str =
+    "<Merge Conflict (Whitespace only)>\r\n";
+const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CR: &str = "<Merge Conflict (Whitespace only)>\r";
+
+/// Whether one output line is an unresolved-conflict placeholder row.
+///
+/// The resolved output is a text document, so a placeholder row is identified
+/// by its own content — the same fact the reader sees. This keeps the gutter
+/// marker in step with the text however the marker array was built, mirroring
+/// how kdiff3 derives both from a single `srcSelect`.
+pub(in crate::view) fn line_is_unresolved_conflict_placeholder(line: &str) -> bool {
+    let line = line.trim_end_matches(['\r', '\n']);
+    line == UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER
+        || line == UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER
+}
 
 fn uses_unresolved_merge_conflict_placeholder(block: &ConflictBlock) -> bool {
     !block.resolved && block.choice.is_empty()
@@ -2068,6 +2254,16 @@ fn unresolved_merge_conflict_placeholder_text(block: &ConflictBlock) -> &'static
         choice: block.choice,
         resolved: block.resolved,
     });
+    // kdiff3 mergeresultwindow.cpp: a block whose sides differ only in
+    // whitespace names itself, so the trivial ones can be told apart from real
+    // clashes without opening them.
+    if block.whitespace_only {
+        return match line_ending {
+            "\r\n" => UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CRLF,
+            "\r" => UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CR,
+            _ => UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_LF,
+        };
+    }
     match line_ending {
         "\r\n" => UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CRLF,
         "\r" => UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CR,
@@ -4163,8 +4359,19 @@ pub(in crate::view) fn project_conflict_ranges_to_aligned_rows(
 pub(super) fn merge_plan_aligned_conflict_ranges(
     session: &gitcomet_core::conflict_session::ConflictSession,
     visible_region_indices: &[usize],
+    visible_plan_block_indices: &[usize],
 ) -> Option<Vec<Range<usize>>> {
     let plan = session.merge_plan.as_ref()?;
+    if !visible_plan_block_indices.is_empty() {
+        return visible_plan_block_indices
+            .iter()
+            .map(|block_index| {
+                plan.blocks
+                    .get(*block_index)
+                    .map(|block| block.rows.clone())
+            })
+            .collect();
+    }
     visible_region_indices
         .iter()
         .map(|region_index| {

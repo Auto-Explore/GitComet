@@ -716,12 +716,30 @@ impl MainPaneView {
                         show_line_numbers,
                     );
 
-                    let is_active_conflict = range_ix == this.conflict_resolver.active_conflict;
+                    let semantic_nav_target =
+                        this.conflict_resolver.nav_target_index_for_aligned_row(ix);
+                    let is_active_conflict = range_ix == this.conflict_resolver.active_conflict
+                        || this
+                            .conflict_resolver
+                            .selected_nav_target_contains_aligned_row(ix);
                     // section 30 split: highlight rows in the drag selection; the
                     // begin/extend handlers only fire when split is available.
                     let row_selected = this.conflict_resolver.conflict_row_is_selected(ix);
                     let row_selection_enabled =
                         this.conflict_resolver.conflict_row_selection_enabled();
+                    // kdiff3 manual diff help: only the three-way source columns
+                    // sit in the shared aligned space that a pin is expressed in.
+                    let alignment_mark =
+                        this.conflict_resolver.manual_alignment_enabled().then(|| {
+                            conflict_canvas::AlignmentMarkContext {
+                                column,
+                                side_line,
+                                marked: side_line.is_some_and(|line| {
+                                    this.conflict_resolver
+                                        .alignment_line_is_selected(column, line)
+                                }),
+                            }
+                        });
                     if this.conflict_canvas_rows_enabled {
                         let chunk_context = range_ix.map(|conflict_ix| ConflictChunkContext {
                             conflict_ix,
@@ -751,8 +769,10 @@ impl MainPaneView {
                             chunk_context,
                             chunk_menu_prefix,
                             true,
+                            semantic_nav_target,
                             is_active_conflict,
                             row_selection_enabled.then_some(row_selected),
+                            alignment_mark,
                         ));
                         continue;
                     }
@@ -881,6 +901,13 @@ impl MainPaneView {
                                         cx,
                                     );
                                 }
+                            }),
+                        );
+                    } else if let Some(target_index) = semantic_nav_target {
+                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                this.conflict_jump_to_nav_target(target_index, cx);
                             }),
                         );
                     }
@@ -1083,9 +1110,12 @@ impl MainPaneView {
                         chunk_context_data,
                         chunk_menu_prefix,
                         false,
+                        None,
                         is_active_conflict,
                         // Block-local two-way rows are not in the shared aligned
-                        // space, so split selection is unavailable here.
+                        // space, so split selection and manual alignment are
+                        // both unavailable here.
+                        None,
                         None,
                     );
                 }
@@ -1465,7 +1495,12 @@ impl MainPaneView {
                     let conflict_ix = this
                         .conflict_resolver
                         .conflict_index_for_side_line(column, row);
-                    let is_active_conflict = conflict_ix == this.conflict_resolver.active_conflict;
+                    let semantic_nav_target =
+                        this.conflict_resolver.nav_target_index_for_aligned_row(row);
+                    let is_active_conflict = conflict_ix == this.conflict_resolver.active_conflict
+                        || this
+                            .conflict_resolver
+                            .selected_nav_target_contains_aligned_row(row);
                     let row_selected = this.conflict_resolver.conflict_row_is_selected(row);
                     let row_selection_enabled =
                         this.conflict_resolver.conflict_row_selection_enabled();
@@ -1499,8 +1534,12 @@ impl MainPaneView {
                             chunk_context,
                             chunk_menu_prefix,
                             false,
+                            semantic_nav_target,
                             is_active_conflict,
                             row_selection_enabled.then_some(row_selected),
+                            // The two-way split shows ours/theirs only; a pin
+                            // needs all three source columns to place it.
+                            None,
                         ));
                         continue;
                     }
@@ -1628,6 +1667,13 @@ impl MainPaneView {
                                         cx,
                                     );
                                 }
+                            }),
+                        );
+                    } else if let Some(target_index) = semantic_nav_target {
+                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                this.conflict_jump_to_nav_target(target_index, cx);
                             }),
                         );
                     }
@@ -1761,6 +1807,21 @@ impl MainPaneView {
         if this.conflict_resolver.resolved_outline_gutter_rows.len() != line_count {
             let meta = &this.conflict_resolver.resolved_outline.meta;
             let markers = &this.conflict_resolver.resolved_outline.markers;
+            let line_starts = &this.conflict_resolved_preview_line_starts;
+            // A placeholder row is unresolved by definition, so read that off
+            // the row's own text rather than trusting the marker array, which
+            // is rebuilt incrementally and can lag a resolve/unresolve.
+            let placeholder_rows: Vec<bool> =
+                this.conflict_resolver_input.read_with(cx, |input, _| {
+                    let text = input.text();
+                    (0..line_count)
+                        .map(|ix| {
+                            conflict_resolver::line_is_unresolved_conflict_placeholder(
+                                resolved_output_line_text(text, line_starts, ix),
+                            )
+                        })
+                        .collect()
+                });
             let mut gutter_rows = Vec::with_capacity(line_count);
             for ix in 0..line_count {
                 let source = meta
@@ -1768,13 +1829,19 @@ impl MainPaneView {
                     .map(|entry| entry.source)
                     .unwrap_or(conflict_resolver::ResolvedLineSource::Manual);
                 let marker = markers.get(ix).copied().flatten();
-                gutter_rows.push(conflict_resolver::ResolvedOutputGutterRow::new(
+                let row = conflict_resolver::ResolvedOutputGutterRow::new(
                     source,
                     marker.map(|entry| entry.conflict_ix),
                     marker.is_some_and(|entry| entry.is_start),
                     marker.is_some_and(|entry| entry.is_end),
                     marker.is_some_and(|entry| entry.unresolved),
-                ));
+                );
+                let is_placeholder = placeholder_rows.get(ix).copied().unwrap_or(false);
+                gutter_rows.push(if is_placeholder {
+                    row.with_unresolved_placeholder()
+                } else {
+                    row
+                });
             }
             this.conflict_resolver.resolved_outline_gutter_rows = gutter_rows;
         }
@@ -2215,7 +2282,19 @@ impl MainPaneView {
                     editor_font_family.as_str(),
                 );
 
-                let row_content = if syntax_language.is_some() && !line_text.is_empty() {
+                let conflict_marker = this
+                    .conflict_resolver
+                    .resolved_outline
+                    .markers
+                    .get(ix)
+                    .copied()
+                    .flatten();
+                let unresolved = conflict_marker.is_some_and(|marker| marker.unresolved);
+
+                let row_content = if syntax_language.is_some()
+                    && !line_text.is_empty()
+                    && !unresolved
+                {
                     let prepared_line_highlight = highlight_start
                         .and_then(|start| {
                             ix.checked_sub(start)
@@ -2304,14 +2383,6 @@ impl MainPaneView {
                         .child(display_line_text)
                         .into_any_element()
                 };
-
-                let conflict_marker = this
-                    .conflict_resolver
-                    .resolved_outline
-                    .markers
-                    .get(ix)
-                    .copied()
-                    .flatten();
                 let row_bg = conflict_marker.map(|marker| {
                     if marker.unresolved {
                         unresolved_row_bg
@@ -2330,7 +2401,11 @@ impl MainPaneView {
                     .items_center()
                     .text_xs()
                     .font_family(editor_font_family.clone())
-                    .text_color(theme.colors.text)
+                    .text_color(if unresolved {
+                        theme.colors.danger
+                    } else {
+                        theme.colors.text
+                    })
                     .whitespace_nowrap()
                     .when_some(row_bg, |d, bg| d.bg(bg))
                     .on_mouse_down(

@@ -929,7 +929,7 @@ fn conflict_set_hide_resolved_updates_repo_state() {
 }
 
 #[test]
-fn conflict_apply_bulk_choice_updates_unresolved_session_regions_only() {
+fn conflict_apply_bulk_choice_rewrites_every_marker_region() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1005,11 +1005,67 @@ theirs two\n\
         .expect("session exists");
     assert_eq!(
         session.regions[0].resolution,
-        gitcomet_core::conflict_session::ConflictRegionResolution::PickTheirs
+        gitcomet_core::conflict_session::ConflictRegionResolution::Sources(
+            gitcomet_core::merge::MergeSource::B.into()
+        )
     );
     assert_eq!(
         session.regions[1].resolution,
-        gitcomet_core::conflict_session::ConflictRegionResolution::PickOurs
+        gitcomet_core::conflict_session::ConflictRegionResolution::Sources(
+            gitcomet_core::merge::MergeSource::B.into()
+        )
+    );
+    assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
+}
+
+#[test]
+fn conflict_apply_bulk_choice_rewrites_automatic_plan_deltas_too() {
+    use gitcomet_core::merge::MergeSource;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_repo_with_conflict(
+        &mut state,
+        &mut repos,
+        &id_alloc,
+        "file.txt",
+        FileConflictKind::BothModified,
+    );
+    let session = ConflictSession::from_stage_inputs(
+        PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("start\nold-local\nmiddle\nold-conflict\nend\n".into()),
+        ConflictPayload::Text("start\nnew-local\nmiddle\nours-conflict\nend\n".into()),
+        ConflictPayload::Text("start\nold-local\nmiddle\ntheirs-conflict\nend\n".into()),
+    );
+    assert!(session.merge_plan.as_ref().is_some_and(|plan| {
+        plan.blocks
+            .iter()
+            .any(|block| block.is_delta && !block.original_conflict)
+    }));
+    state.repos[0].conflict_state.conflict_session = Some(session);
+    let before_rev = state.repos[0].conflict_state.conflict_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictApplyBulkChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            choice: crate::msg::ConflictBulkChoice::Theirs,
+        },
+    );
+
+    let repo_state = &state.repos[0];
+    let session = repo_state.conflict_state.conflict_session.as_ref().unwrap();
+    let plan = session.merge_plan.as_ref().unwrap();
+    assert!(
+        plan.blocks
+            .iter()
+            .filter(|block| block.is_delta)
+            .all(|block| block.selection.as_slice() == [MergeSource::C])
     );
     assert_eq!(repo_state.conflict_state.conflict_rev, before_rev + 1);
 }
@@ -3870,4 +3926,98 @@ fn clearing_conflict_context_drops_pending_restore_session() {
             .session_pending_restore
             .is_none()
     );
+}
+
+#[test]
+fn conflict_manual_alignment_replans_in_memory_and_clears_back() {
+    use gitcomet_core::merge::ManualAlignment;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+
+    let before_rev = state.repos[0].conflict_state.conflict_rev;
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictAddManualAlignment {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            alignment: ManualAlignment::new(0..1, 0..1, 1..2),
+            expected_conflict_rev: before_rev,
+        },
+    );
+    assert!(
+        effects.is_empty(),
+        "a manual alignment defers all disk writes until Save"
+    );
+
+    let repo_state = &state.repos[0];
+    let session = repo_state.conflict_state.conflict_session.as_ref().unwrap();
+    assert_eq!(session.manual_alignments.len(), 1);
+    assert!(
+        session
+            .merge_plan
+            .as_ref()
+            .expect("plan")
+            .rows
+            .iter()
+            .any(|row| row.a == Some(0) && row.b == Some(0) && row.c == Some(1)),
+        "the pinned lines share one aligned row"
+    );
+    let pinned_rev = repo_state.conflict_state.conflict_rev;
+    assert_ne!(pinned_rev, before_rev, "the resolver must rebuild");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictClearManualAlignments {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            expected_conflict_rev: pinned_rev,
+        },
+    );
+    let session = state.repos[0]
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .unwrap();
+    assert!(session.manual_alignments.is_empty());
+}
+
+#[test]
+fn conflict_manual_alignment_rejects_a_stale_revision() {
+    use gitcomet_core::merge::ManualAlignment;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
+
+    let current_rev = state.repos[0].conflict_state.conflict_rev;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictAddManualAlignment {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            alignment: ManualAlignment::new(0..1, 0..1, 1..2),
+            expected_conflict_rev: current_rev.wrapping_add(1),
+        },
+    );
+
+    let session = state.repos[0]
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .unwrap();
+    assert!(
+        session.manual_alignments.is_empty(),
+        "a request built against a stale plan must not repin anything"
+    );
+    assert_eq!(state.repos[0].conflict_state.conflict_rev, current_rev);
 }

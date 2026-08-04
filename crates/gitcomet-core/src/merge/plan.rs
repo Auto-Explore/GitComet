@@ -22,6 +22,156 @@ pub enum MergeSource {
     C,
 }
 
+/// A user-supplied alignment constraint over one line range per source.
+///
+/// KDiff3 calls this a "manual diff help" entry: the escape hatch for when the
+/// automatic alignment pairs the wrong blocks. The planner must line the pinned
+/// ranges up with one another, and diffs the text between consecutive entries
+/// independently. An empty range is meaningful — it says the other sources'
+/// lines align against nothing at that position.
+///
+/// Ranges are half-open, zero-based line indices. Without a base the `base`
+/// range is unused and should be left empty.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ManualAlignment {
+    pub base: Range<usize>,
+    pub local: Range<usize>,
+    pub remote: Range<usize>,
+}
+
+impl ManualAlignment {
+    /// Build an entry, normalizing any inverted range to an empty one.
+    pub fn new(base: Range<usize>, local: Range<usize>, remote: Range<usize>) -> Self {
+        Self {
+            base: normalize_range(base),
+            local: normalize_range(local),
+            remote: normalize_range(remote),
+        }
+    }
+
+    /// Build a two-input entry, leaving the unused base range empty.
+    pub fn two_input(local: Range<usize>, remote: Range<usize>) -> Self {
+        Self::new(0..0, local, remote)
+    }
+
+    /// The range pinned for `source`, in the plan's A/B/C space.
+    pub fn source_range(&self, source: MergeSource, three_way: bool) -> Range<usize> {
+        let (a, b, c) = self.plan_ranges(three_way);
+        match source {
+            MergeSource::A => a,
+            MergeSource::B => b,
+            MergeSource::C => c,
+        }
+    }
+
+    /// An entry that pins nothing constrains nothing.
+    pub fn is_empty(&self) -> bool {
+        self.base.is_empty() && self.local.is_empty() && self.remote.is_empty()
+    }
+
+    /// The A/B/C ranges this entry pins, following the plan's source mapping.
+    fn plan_ranges(&self, three_way: bool) -> (Range<usize>, Range<usize>, Range<usize>) {
+        if three_way {
+            (self.base.clone(), self.local.clone(), self.remote.clone())
+        } else {
+            (self.local.clone(), self.remote.clone(), 0..0)
+        }
+    }
+
+    /// Whether every range of `self` ends at or before the matching range of
+    /// `other` starts, with at least one source strictly separated.
+    fn strictly_precedes(&self, other: &Self) -> bool {
+        let pairs = [
+            (&self.base, &other.base),
+            (&self.local, &other.local),
+            (&self.remote, &other.remote),
+        ];
+        pairs.iter().all(|(left, right)| left.end <= right.start)
+            && pairs.iter().any(|(left, right)| left.end < right.start)
+    }
+}
+
+fn normalize_range(range: Range<usize>) -> Range<usize> {
+    if range.start <= range.end {
+        range
+    } else {
+        range.start..range.start
+    }
+}
+
+/// An ordered, non-overlapping set of manual alignment constraints.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct ManualAlignmentList {
+    entries: Vec<ManualAlignment>,
+}
+
+impl ManualAlignmentList {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn as_slice(&self) -> &[ManualAlignment] {
+        &self.entries
+    }
+
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = &ManualAlignment> {
+        self.entries.iter()
+    }
+
+    pub fn clear(&mut self) {
+        self.entries.clear();
+    }
+
+    /// Add an entry, keeping the list ordered.
+    ///
+    /// Rejects an entry that pins nothing, or that overlaps or interleaves with
+    /// an existing one — those cannot be satisfied by a segmented diff.
+    pub fn insert(&mut self, entry: ManualAlignment) -> bool {
+        if entry.is_empty() {
+            return false;
+        }
+        let before = self
+            .entries
+            .iter()
+            .take_while(|existing| existing.strictly_precedes(&entry))
+            .count();
+        if self.entries[before..]
+            .iter()
+            .any(|existing| !entry.strictly_precedes(existing))
+        {
+            return false;
+        }
+        self.entries.insert(before, entry);
+        true
+    }
+
+    /// Drop the entry whose `source` range contains or abuts `line`.
+    ///
+    /// Returns whether anything was removed. An empty pinned range matches the
+    /// line it sits at, so a pin against nothing stays removable.
+    pub fn remove_at(&mut self, source: MergeSource, three_way: bool, line: usize) -> bool {
+        let found = self.entries.iter().position(|entry| {
+            let range = entry.source_range(source, three_way);
+            range.contains(&line) || (range.is_empty() && range.start == line)
+        });
+        match found {
+            Some(index) => {
+                self.entries.remove(index);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 /// Conservative preflight limits for an interactive merge plan.
 ///
 /// The regular plan builders remain available to callers that explicitly
@@ -105,8 +255,27 @@ pub fn try_build_interactive_merge_plan_with_optional_base(
     options: &MergeOptions,
     budget: InteractiveMergePlanBudget,
 ) -> Option<MergePlan> {
+    try_build_interactive_merge_plan_with_alignments(
+        base,
+        local,
+        remote,
+        options,
+        budget,
+        &ManualAlignmentList::new(),
+    )
+}
+
+/// Build a budgeted interactive plan honoring manual alignment constraints.
+pub fn try_build_interactive_merge_plan_with_alignments(
+    base: Option<&str>,
+    local: &str,
+    remote: &str,
+    options: &MergeOptions,
+    budget: InteractiveMergePlanBudget,
+    alignments: &ManualAlignmentList,
+) -> Option<MergePlan> {
     interactive_merge_plan_is_practical(base, local, remote, budget)
-        .then(|| build_merge_plan_with_optional_base(base, local, remote, options))
+        .then(|| build_merge_plan_with_alignments(base, local, remote, options, alignments))
 }
 
 /// A unique, ordered set of selected merge sources.
@@ -792,6 +961,140 @@ fn diff_chunks<'a>(
     chunks
 }
 
+/// Split a source pair into the segments a manual alignment forces on it.
+///
+/// Each pinned range becomes its own segment, and the text between consecutive
+/// pins becomes another. Diffing those segments independently is what makes the
+/// pinned ranges line up: no match can ever cross a segment boundary. An empty
+/// result means nothing constrains this pair, so the caller diffs it whole.
+fn alignment_segments(
+    entries: &[ManualAlignment],
+    three_way: bool,
+    left: MergeSource,
+    left_len: usize,
+    right: MergeSource,
+    right_len: usize,
+) -> Vec<(Range<usize>, Range<usize>)> {
+    let mut segments = Vec::new();
+    let mut left_cursor = 0usize;
+    let mut right_cursor = 0usize;
+    for entry in entries {
+        let pinned_left = entry.source_range(left, three_way);
+        let pinned_right = entry.source_range(right, three_way);
+        // A stale entry — recorded against text that has since changed, or one
+        // this pair happens to order inconsistently — constrains nothing rather
+        // than truncating the inputs.
+        if pinned_left.end > left_len
+            || pinned_right.end > right_len
+            || pinned_left.start < left_cursor
+            || pinned_right.start < right_cursor
+        {
+            continue;
+        }
+        push_segment(
+            &mut segments,
+            left_cursor..pinned_left.start,
+            right_cursor..pinned_right.start,
+        );
+        left_cursor = pinned_left.end;
+        right_cursor = pinned_right.end;
+        push_segment(&mut segments, pinned_left, pinned_right);
+    }
+    if segments.is_empty() {
+        return segments;
+    }
+    push_segment(
+        &mut segments,
+        left_cursor..left_len,
+        right_cursor..right_len,
+    );
+    segments
+}
+
+fn push_segment(
+    segments: &mut Vec<(Range<usize>, Range<usize>)>,
+    left: Range<usize>,
+    right: Range<usize>,
+) {
+    if !left.is_empty() || !right.is_empty() {
+        segments.push((left, right));
+    }
+}
+
+fn diff_chunks_segmented<'a>(
+    left: &[&'a str],
+    right: &[&'a str],
+    algorithm: DiffAlgorithm,
+    segments: &[(Range<usize>, Range<usize>)],
+) -> Vec<PairChunk> {
+    if segments.is_empty() {
+        return diff_chunks(left, right, algorithm);
+    }
+    segments
+        .iter()
+        .flat_map(|(left_range, right_range)| {
+            diff_chunks(
+                &left[left_range.clone()],
+                &right[right_range.clone()],
+                algorithm,
+            )
+        })
+        .collect()
+}
+
+/// Per-source segment index for every line, used to keep later passes from
+/// undoing what the segmented diff established.
+#[derive(Clone, Debug, Default)]
+struct AlignmentBarriers {
+    a: Vec<usize>,
+    b: Vec<usize>,
+    c: Vec<usize>,
+}
+
+impl AlignmentBarriers {
+    fn new(entries: &[ManualAlignment], three_way: bool) -> Self {
+        let mut barriers = Self::default();
+        for entry in entries {
+            for (source, bounds) in [
+                (MergeSource::A, &mut barriers.a),
+                (MergeSource::B, &mut barriers.b),
+                (MergeSource::C, &mut barriers.c),
+            ] {
+                let range = entry.source_range(source, three_way);
+                bounds.push(range.start);
+                bounds.push(range.end);
+            }
+        }
+        barriers
+    }
+
+    fn is_empty(&self) -> bool {
+        self.a.is_empty() && self.b.is_empty() && self.c.is_empty()
+    }
+
+    fn segment(&self, source: MergeSource, line: usize) -> usize {
+        let bounds = match source {
+            MergeSource::A => &self.a,
+            MergeSource::B => &self.b,
+            MergeSource::C => &self.c,
+        };
+        bounds.partition_point(|bound| *bound <= line)
+    }
+
+    fn row_segment(&self, row: &AlignedRow) -> usize {
+        [MergeSource::A, MergeSource::B, MergeSource::C]
+            .into_iter()
+            .filter_map(|source| row.line(source).map(|line| self.segment(source, line)))
+            .min()
+            .unwrap_or(0)
+    }
+
+    /// Segment index of every row, captured before a pass starts moving lines.
+    fn row_segments(&self, rows: &[AlignedRow]) -> Vec<usize> {
+        rows.iter().map(|row| self.row_segment(row)).collect()
+    }
+}
+
 #[derive(Clone, Debug)]
 struct RowNode {
     row: AlignedRow,
@@ -1125,7 +1428,7 @@ fn integrate_bc(
     }
 }
 
-fn normalized_without_whitespace(text: &str) -> String {
+pub(crate) fn normalized_without_whitespace(text: &str) -> String {
     text.chars()
         .filter(|character| !character.is_whitespace())
         .collect()
@@ -1192,6 +1495,7 @@ fn trim_rows(
     a_lines: &[&str],
     b_lines: &[&str],
     c_lines: &[&str],
+    barriers: &AlignmentBarriers,
 ) -> Vec<AlignedRow> {
     rows.retain(|row| row.a.is_some() || row.b.is_some() || row.c.is_some());
     for row in &mut rows {
@@ -1201,6 +1505,20 @@ fn trim_rows(
         return rows;
     }
 
+    // Every move below pulls a line back into an earlier row, which would undo
+    // a manual alignment if it crossed one of its boundaries. Segment indices
+    // are captured now, before any line moves, so a row keeps the identity it
+    // had when the segmented diff placed it.
+    let row_segments = barriers.row_segments(&rows);
+    let allows_move = |source: MergeSource, line: Option<usize>, target: usize| -> bool {
+        match line {
+            Some(line) if !barriers.is_empty() => row_segments
+                .get(target)
+                .is_none_or(|segment| barriers.segment(source, line) == *segment),
+            _ => true,
+        }
+    };
+
     let mut cursor_a = 0usize;
     let mut cursor_b = 0usize;
     let mut cursor_c = 0usize;
@@ -1209,11 +1527,26 @@ fn trim_rows(
     let mut line_c = 0usize;
 
     for look in 0..rows.len() {
+        // Manual alignment: every row the segmented diff produced lies wholly
+        // inside one segment, and a line may only be pulled back into a row of
+        // its own. Advance the cursors past rows from earlier segments so a
+        // move that would have crossed a boundary retries at the first row
+        // that can legally hold it, instead of stalling on a blocked one.
+        if !barriers.is_empty() {
+            let wanted = row_segments[look];
+            for cursor in [&mut cursor_a, &mut cursor_b, &mut cursor_c] {
+                while *cursor < look && row_segments[*cursor] < wanted {
+                    *cursor += 1;
+                }
+            }
+        }
+
         if look > line_a
             && rows[look].a.is_some()
             && rows[cursor_a].b.is_some()
             && rows[cursor_a].whitespace_equal_bc
             && line_equal(rows[look].a, rows[cursor_a].b, a_lines, b_lines)
+            && allows_move(MergeSource::A, rows[look].a, cursor_a)
         {
             rows[cursor_a].a = rows[look].a.take();
             recompute_row_metadata(&mut rows[cursor_a], a_lines, b_lines, c_lines);
@@ -1227,6 +1560,7 @@ fn trim_rows(
             && rows[cursor_b].a.is_some()
             && rows[cursor_b].whitespace_equal_ac
             && line_equal(rows[look].b, rows[cursor_b].a, b_lines, a_lines)
+            && allows_move(MergeSource::B, rows[look].b, cursor_b)
         {
             rows[cursor_b].b = rows[look].b.take();
             recompute_row_metadata(&mut rows[cursor_b], a_lines, b_lines, c_lines);
@@ -1240,6 +1574,7 @@ fn trim_rows(
             && rows[cursor_c].a.is_some()
             && rows[cursor_c].whitespace_equal_ab
             && line_equal(rows[look].c, rows[cursor_c].a, c_lines, a_lines)
+            && allows_move(MergeSource::C, rows[look].c, cursor_c)
         {
             rows[cursor_c].c = rows[look].c.take();
             recompute_row_metadata(&mut rows[cursor_c], a_lines, b_lines, c_lines);
@@ -1252,6 +1587,7 @@ fn trim_rows(
             && rows[look].a.is_some()
             && !rows[look].whitespace_equal_ab
             && !rows[look].whitespace_equal_ac
+            && allows_move(MergeSource::A, rows[look].a, cursor_a)
         {
             rows[cursor_a].a = rows[look].a.take();
             recompute_row_metadata(&mut rows[cursor_a], a_lines, b_lines, c_lines);
@@ -1264,6 +1600,7 @@ fn trim_rows(
             && rows[look].b.is_some()
             && !rows[look].whitespace_equal_ab
             && !rows[look].whitespace_equal_bc
+            && allows_move(MergeSource::B, rows[look].b, cursor_b)
         {
             rows[cursor_b].b = rows[look].b.take();
             recompute_row_metadata(&mut rows[cursor_b], a_lines, b_lines, c_lines);
@@ -1276,6 +1613,7 @@ fn trim_rows(
             && rows[look].c.is_some()
             && !rows[look].whitespace_equal_ac
             && !rows[look].whitespace_equal_bc
+            && allows_move(MergeSource::C, rows[look].c, cursor_c)
         {
             rows[cursor_c].c = rows[look].c.take();
             recompute_row_metadata(&mut rows[cursor_c], a_lines, b_lines, c_lines);
@@ -1284,13 +1622,21 @@ fn trim_rows(
             line_c += 1;
         }
 
+        // A paired move lands both lines in one row, so both must stay inside
+        // the manual segment that row belongs to.
+        let target_ab = if line_a > line_b { cursor_a } else { cursor_b };
+        let target_ac = if line_a > line_c { cursor_a } else { cursor_c };
+        let target_bc = if line_b > line_c { cursor_b } else { cursor_c };
+
         if look > line_a
             && look > line_b
             && rows[look].a.is_some()
             && rows[look].whitespace_equal_ab
             && !rows[look].whitespace_equal_ac
+            && allows_move(MergeSource::A, rows[look].a, target_ab)
+            && allows_move(MergeSource::B, rows[look].b, target_ab)
         {
-            let target = if line_a > line_b { cursor_a } else { cursor_b };
+            let target = target_ab;
             let next_line = line_a.max(line_b) + 1;
             rows[target].a = rows[look].a.take();
             rows[target].b = rows[look].b.take();
@@ -1305,8 +1651,10 @@ fn trim_rows(
             && rows[look].a.is_some()
             && rows[look].whitespace_equal_ac
             && !rows[look].whitespace_equal_ab
+            && allows_move(MergeSource::A, rows[look].a, target_ac)
+            && allows_move(MergeSource::C, rows[look].c, target_ac)
         {
-            let target = if line_a > line_c { cursor_a } else { cursor_c };
+            let target = target_ac;
             let next_line = line_a.max(line_c) + 1;
             rows[target].a = rows[look].a.take();
             rows[target].c = rows[look].c.take();
@@ -1321,8 +1669,10 @@ fn trim_rows(
             && rows[look].b.is_some()
             && rows[look].whitespace_equal_bc
             && !rows[look].whitespace_equal_ac
+            && allows_move(MergeSource::B, rows[look].b, target_bc)
+            && allows_move(MergeSource::C, rows[look].c, target_bc)
         {
-            let target = if line_b > line_c { cursor_b } else { cursor_c };
+            let target = target_bc;
             let next_line = line_b.max(line_c) + 1;
             rows[target].b = rows[look].b.take();
             rows[target].c = rows[look].c.take();
@@ -1687,6 +2037,21 @@ pub fn build_merge_plan_with_optional_base(
     remote: &str,
     options: &MergeOptions,
 ) -> MergePlan {
+    build_merge_plan_with_alignments(base, local, remote, options, &ManualAlignmentList::new())
+}
+
+/// Build a plan whose alignment honors the caller's manual constraints.
+///
+/// The constraints partition each input, and every diff pass runs per partition
+/// so no automatic match can cross a pinned boundary. This is KDiff3's manual
+/// diff help: the escape hatch for a block the automatic alignment gets wrong.
+pub fn build_merge_plan_with_alignments(
+    base: Option<&str>,
+    local: &str,
+    remote: &str,
+    options: &MergeOptions,
+    alignments: &ManualAlignmentList,
+) -> MergePlan {
     let (a_text, b_text, c_text, three_way) = match base {
         Some(base) => (base, local, remote, true),
         None => (local, remote, "", false),
@@ -1695,24 +2060,45 @@ pub fn build_merge_plan_with_optional_base(
     let b_lines = split_lines(b_text);
     let c_lines = split_lines(c_text);
 
-    let mut list = build_ab(&diff_chunks(&a_lines, &b_lines, options.diff_algorithm));
+    let entries = alignments.as_slice();
+    let barriers = AlignmentBarriers::new(entries, three_way);
+    let segments = |left: MergeSource, left_len: usize, right: MergeSource, right_len: usize| {
+        alignment_segments(entries, three_way, left, left_len, right, right_len)
+    };
+
+    let mut list = build_ab(&diff_chunks_segmented(
+        &a_lines,
+        &b_lines,
+        options.diff_algorithm,
+        &segments(MergeSource::A, a_lines.len(), MergeSource::B, b_lines.len()),
+    ));
     recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
 
     let rows = if three_way {
         integrate_ac(
             &mut list,
-            &diff_chunks(&a_lines, &c_lines, options.diff_algorithm),
+            &diff_chunks_segmented(
+                &a_lines,
+                &c_lines,
+                options.diff_algorithm,
+                &segments(MergeSource::A, a_lines.len(), MergeSource::C, c_lines.len()),
+            ),
         );
         recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
-        let first_trim = trim_rows(list.into_rows(), &a_lines, &b_lines, &c_lines);
+        let first_trim = trim_rows(list.into_rows(), &a_lines, &b_lines, &c_lines, &barriers);
         let mut list = RowList::from_rows(first_trim);
         recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
         if options.align_contributors && a_text != b_text && a_text != c_text && b_text != c_text {
             let baseline = list.clone().into_rows();
-            let chunks = diff_chunks(&b_lines, &c_lines, options.diff_algorithm);
+            let chunks = diff_chunks_segmented(
+                &b_lines,
+                &c_lines,
+                options.diff_algorithm,
+                &segments(MergeSource::B, b_lines.len(), MergeSource::C, c_lines.len()),
+            );
             integrate_bc(&mut list, &chunks, &a_lines, &b_lines, &c_lines);
             recompute_rows_in_list(&mut list, &a_lines, &b_lines, &c_lines);
-            let candidate = trim_rows(list.into_rows(), &a_lines, &b_lines, &c_lines);
+            let candidate = trim_rows(list.into_rows(), &a_lines, &b_lines, &c_lines, &barriers);
             if contributor_alignment_preserves_base_anchors(
                 &baseline,
                 &candidate,
@@ -1865,6 +2251,209 @@ mod tests {
         for (row, expected) in cases {
             assert_eq!(classify_three_way(&row).classification, expected);
         }
+    }
+
+    #[test]
+    fn manual_alignment_pairs_lines_the_automatic_diff_leaves_unmatched() {
+        let (local, remote) = ("x\ny\n", "y\nx\n");
+        let options = MergeOptions::default();
+
+        let automatic = build_merge_plan_with_optional_base(None, local, remote, &options);
+        assert_eq!(
+            automatic
+                .rows
+                .iter()
+                .map(|row| (row.a, row.b))
+                .collect::<Vec<_>>(),
+            vec![(Some(0), None), (Some(1), Some(0)), (None, Some(1))],
+            "the automatic alignment anchors the shared line and strands the rest"
+        );
+
+        let mut alignments = ManualAlignmentList::new();
+        assert!(alignments.insert(ManualAlignment::two_input(0..1, 0..1)));
+        let pinned = build_merge_plan_with_alignments(None, local, remote, &options, &alignments);
+
+        assert_eq!(
+            pinned
+                .rows
+                .iter()
+                .map(|row| (row.a, row.b))
+                .collect::<Vec<_>>(),
+            vec![(Some(0), Some(0)), (Some(1), Some(1))],
+            "the pin forces the first lines onto one row, and the rest follows"
+        );
+        assert!(!pinned.rows[0].equal_ab);
+    }
+
+    #[test]
+    fn manual_alignment_survives_the_trim_pass() {
+        // The automatic alignment keeps the first `x` and drops the second.
+        // Pinning the second one makes the first the deleted occurrence, and
+        // the trim pass must not quietly pull it back.
+        let base = "a\nx\nb\nx\nc\n";
+        let local = "a\nx\nb\nc\n";
+        let options = MergeOptions::default();
+
+        let automatic = build_merge_plan(base, local, base, &options);
+        assert!(
+            automatic
+                .rows
+                .iter()
+                .any(|row| row.a == Some(1) && row.b == Some(1)),
+            "without help the first occurrence is the one that survives"
+        );
+
+        let mut alignments = ManualAlignmentList::new();
+        assert!(alignments.insert(ManualAlignment::new(3..4, 1..2, 3..4)));
+        let pinned =
+            build_merge_plan_with_alignments(Some(base), local, base, &options, &alignments);
+
+        assert!(
+            pinned
+                .rows
+                .iter()
+                .any(|row| row.a == Some(3) && row.b == Some(1) && row.equal_ab),
+            "the pinned occurrence shares a row with the local line"
+        );
+        assert!(
+            pinned
+                .rows
+                .iter()
+                .all(|row| row.a != Some(1) || row.b.is_none()),
+            "the first occurrence is now the unmatched one"
+        );
+    }
+
+    #[test]
+    fn a_three_way_pin_pulls_every_source_onto_the_pinned_row() {
+        // Pinning base 0 against theirs 1 offsets the contributors by a line.
+        // The trim pass has to land all three on one row: its cursors must skip
+        // the rows the pin pushed into an earlier segment rather than stall on
+        // them, which would leave the pinned lines scattered.
+        let base = "base one\nbase two\nmiddle\nbase three\n";
+        let local = "ours one\nours two\nmiddle\nours three\n";
+        let remote = "theirs one\ntheirs two\nmiddle\ntheirs three\n";
+
+        let mut alignments = ManualAlignmentList::new();
+        assert!(alignments.insert(ManualAlignment::new(0..1, 0..1, 1..2)));
+        let plan = build_merge_plan_with_alignments(
+            Some(base),
+            local,
+            remote,
+            &MergeOptions::default(),
+            &alignments,
+        );
+
+        assert_eq!(
+            plan.rows
+                .iter()
+                .map(|row| (row.a, row.b, row.c))
+                .collect::<Vec<_>>(),
+            vec![
+                (None, None, Some(0)),
+                (Some(0), Some(0), Some(1)),
+                (Some(1), Some(1), None),
+                (Some(2), Some(2), Some(2)),
+                (Some(3), Some(3), Some(3)),
+            ],
+            "the pinned lines share a row and the displaced remote line stands alone"
+        );
+    }
+
+    #[test]
+    fn an_empty_alignment_list_leaves_the_plan_untouched() {
+        let (base, local, remote) = (
+            "one\ntwo\nthree\n",
+            "one\nlocal\nthree\n",
+            "one\ntwo\nremote\n",
+        );
+        let options = MergeOptions {
+            align_contributors: true,
+            ..MergeOptions::default()
+        };
+
+        assert_eq!(
+            build_merge_plan_with_alignments(
+                Some(base),
+                local,
+                remote,
+                &options,
+                &ManualAlignmentList::new(),
+            )
+            .rows,
+            build_merge_plan(base, local, remote, &options).rows
+        );
+    }
+
+    #[test]
+    fn a_stale_alignment_entry_constrains_nothing() {
+        let (base, local, remote) = ("one\ntwo\n", "one\nlocal\n", "one\nremote\n");
+        let options = MergeOptions::default();
+
+        let mut alignments = ManualAlignmentList::new();
+        assert!(alignments.insert(ManualAlignment::new(40..41, 40..41, 40..41)));
+
+        assert_eq!(
+            build_merge_plan_with_alignments(Some(base), local, remote, &options, &alignments).rows,
+            build_merge_plan(base, local, remote, &options).rows,
+            "an entry recorded against text that has since changed is ignored"
+        );
+    }
+
+    #[test]
+    fn the_alignment_list_orders_entries_and_rejects_conflicting_ones() {
+        let mut alignments = ManualAlignmentList::new();
+
+        assert!(alignments.insert(ManualAlignment::new(10..12, 10..11, 10..14)));
+        assert!(
+            alignments.insert(ManualAlignment::new(2..3, 2..3, 2..3)),
+            "an entry entirely ahead of the first is accepted"
+        );
+        assert_eq!(
+            alignments
+                .iter()
+                .map(|entry| entry.base.start)
+                .collect::<Vec<_>>(),
+            vec![2, 10],
+            "entries stay in source order regardless of insertion order"
+        );
+
+        assert!(
+            !alignments.insert(ManualAlignment::new(11..13, 20..21, 20..21)),
+            "an entry overlapping an existing one in any source is rejected"
+        );
+        assert!(
+            !alignments.insert(ManualAlignment::new(20..21, 0..1, 20..21)),
+            "an entry that interleaves with an existing one is rejected"
+        );
+        assert!(
+            !alignments.insert(ManualAlignment::new(5..5, 5..5, 5..5)),
+            "an entry pinning nothing is rejected"
+        );
+        assert_eq!(alignments.len(), 2);
+
+        assert!(alignments.remove_at(MergeSource::B, true, 10));
+        assert_eq!(alignments.len(), 1);
+        assert!(!alignments.remove_at(MergeSource::B, true, 10));
+    }
+
+    #[test]
+    fn an_empty_pinned_range_aligns_lines_against_nothing() {
+        let (local, remote) = ("keep\ndrop\n", "keep\n");
+        let options = MergeOptions::default();
+
+        let mut alignments = ManualAlignmentList::new();
+        assert!(alignments.insert(ManualAlignment::two_input(0..1, 0..0)));
+        let plan = build_merge_plan_with_alignments(None, local, remote, &options, &alignments);
+
+        assert_eq!(
+            plan.rows
+                .iter()
+                .map(|row| (row.a, row.b))
+                .collect::<Vec<_>>(),
+            vec![(Some(0), None), (Some(1), Some(0))],
+            "pinning `keep` against an empty range forces it off the shared row"
+        );
     }
 
     #[test]

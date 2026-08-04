@@ -115,6 +115,7 @@ pub(in crate::view::panes::main) fn resolved_output_highlight_provider_binding_k
     theme_epoch: u64,
     language: rows::DiffSyntaxLanguage,
     document: rows::PreparedDiffSyntaxDocument,
+    unresolved_ranges: &[Range<usize>],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
@@ -122,6 +123,7 @@ pub(in crate::view::panes::main) fn resolved_output_highlight_provider_binding_k
     theme_epoch.hash(&mut hasher);
     language.hash(&mut hasher);
     document.hash(&mut hasher);
+    unresolved_ranges.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -2421,6 +2423,11 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let old_document = self.conflict_resolved_preview_prepared_syntax_document;
+        let unresolved_ranges = resolved_output_unresolved_byte_ranges(
+            &self.conflict_resolver.marker_segments,
+            output_snapshot.as_str(),
+            output_snapshot.shared_line_starts().as_ref(),
+        );
         let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
             self.theme,
             output_snapshot,
@@ -2428,6 +2435,7 @@ impl MainPaneView {
             old_document,
             syntax_edit.clone(),
             self.full_document_syntax_budget(),
+            Arc::clone(&unresolved_ranges),
         );
         let background_key = if syntax_state.needs_background_prepare {
             self.conflict_resolved_preview_syntax_language
@@ -2457,6 +2465,7 @@ impl MainPaneView {
                     self.conflict_resolved_preview_highlight_provider_theme_epoch,
                     language,
                     document,
+                    unresolved_ranges.as_ref(),
                 )
             });
         self.conflict_resolver_input.update(cx, |input, cx| {
@@ -4346,6 +4355,8 @@ impl MainPaneView {
                 split_selection_rows,
                 join_previous_region,
                 join_next_region,
+                alignment_marked_columns: self.conflict_resolver_alignment_marked_columns(),
+                has_manual_alignments: self.conflict_resolver_has_manual_alignments(),
             },
             anchor,
             window,

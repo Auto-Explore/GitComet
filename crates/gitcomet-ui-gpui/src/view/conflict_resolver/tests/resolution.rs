@@ -75,6 +75,7 @@ fn deleting_placeholder_to_empty_does_not_implicitly_choose_an_empty_source() {
         theirs: "theirs\n".into(),
         choice: ConflictChoice::empty(),
         resolved: false,
+        whitespace_only: false,
     })];
     let mut output = generate_resolved_text(&segments);
     let mut block_map = ResolvedOutputBlockMap::from_segments(&segments);
@@ -100,6 +101,7 @@ fn selected_empty_source_keeps_its_explicit_source_resolution() {
             theirs: "theirs\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".into()),
     ];
@@ -842,25 +844,31 @@ fn autosolve_trace_summary_on_open_mode() {
 }
 
 #[test]
-fn open_summary_toast_reports_total_auto_and_remaining() {
+fn open_summary_toast_reports_kdiff3_total_auto_and_unsolved() {
+    let counts = |total, auto_solved, unsolved| ConflictSummaryCounts {
+        total,
+        auto_solved,
+        unsolved,
+        whitespace_conflicts: None,
+    };
     assert_eq!(
-        format_open_summary_toast(21, 19, 19).as_deref(),
-        Some("21 conflicts: 19 auto-solved, 2 remaining")
+        format_open_summary_toast(counts(21, 19, 2)).as_deref(),
+        Some("Total 21 / auto-solved 19 / unsolved 2")
     );
     assert_eq!(
-        format_open_summary_toast(5, 0, 0).as_deref(),
-        Some("5 conflicts: 0 auto-solved, 5 remaining")
+        format_open_summary_toast(counts(5, 0, 5)).as_deref(),
+        Some("Total 5 / auto-solved 0 / unsolved 5")
     );
     assert_eq!(
-        format_open_summary_toast(1, 1, 1).as_deref(),
-        Some("1 conflict: 1 auto-solved, 0 remaining")
+        format_open_summary_toast(counts(1, 1, 0)).as_deref(),
+        Some("Total 1 / auto-solved 1 / unsolved 0")
     );
-    // Counts clamp to the total and never underflow.
+    // Counts clamp to a valid partition and never underflow.
     assert_eq!(
-        format_open_summary_toast(3, 9, 9).as_deref(),
-        Some("3 conflicts: 3 auto-solved, 0 remaining")
+        format_open_summary_toast(counts(3, 9, 9)).as_deref(),
+        Some("Total 3 / auto-solved 0 / unsolved 3")
     );
-    assert!(format_open_summary_toast(0, 0, 0).is_none());
+    assert!(format_open_summary_toast(counts(0, 0, 0)).is_none());
 }
 
 #[test]
@@ -977,7 +985,66 @@ fn conflict_session_summary_counts_include_materialized_auto_resolutions() {
         region(R::Unresolved),
     ];
 
-    assert_eq!(conflict_session_summary_counts(&session), (4, 2, 3));
+    assert_eq!(
+        conflict_session_summary_counts(&session),
+        ConflictSummaryCounts {
+            total: 4,
+            auto_solved: 2,
+            unsolved: 1,
+            whitespace_conflicts: None,
+        }
+    );
+}
+
+#[test]
+fn plan_summary_counts_deltas_conflicts_and_whitespace_like_kdiff3() {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::FileConflictKind;
+    use gitcomet_core::merge::MergeSource;
+
+    let base = "start\nbase-local\nanchor-1\nbase-conflict\nanchor-2\nfoo(1);\nend\n";
+    let ours = "start\nours-local\nanchor-1\nours-conflict\nanchor-2\nfoo( 1 );\nend\n";
+    let theirs = "start\nbase-local\nanchor-1\ntheirs-conflict\nanchor-2\nfoo(1) ;\nend\n";
+    let mut session = ConflictSession::from_stage_inputs(
+        std::path::PathBuf::from("file.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+    );
+
+    assert_eq!(
+        conflict_session_summary_counts(&session),
+        ConflictSummaryCounts {
+            total: 3,
+            auto_solved: 1,
+            unsolved: 2,
+            whitespace_conflicts: Some(1),
+        }
+    );
+
+    let plan = session
+        .merge_plan
+        .as_mut()
+        .expect("stage-backed merge plan");
+    let conflict = plan
+        .blocks
+        .iter_mut()
+        .find(|block| block.original_conflict && !block.whitespace_conflict)
+        .expect("non-whitespace conflict");
+    conflict.replace_selection(MergeSource::B.into());
+    plan.refresh_unresolved_blocks();
+
+    assert_eq!(
+        conflict_session_summary_counts(&session),
+        ConflictSummaryCounts {
+            total: 3,
+            auto_solved: 2,
+            unsolved: 1,
+            whitespace_conflicts: Some(1),
+        },
+        "resolving a block changes the solved/unsolved partition, not the denominator",
+    );
 }
 
 #[test]

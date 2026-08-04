@@ -359,6 +359,8 @@ impl PopoverHost {
                 split_selection_rows,
                 join_previous_region,
                 join_next_region,
+                alignment_marked_columns,
+                has_manual_alignments,
             } => Some(conflict_resolver_chunk::model(
                 *conflict_ix,
                 *has_base,
@@ -368,6 +370,8 @@ impl PopoverHost {
                 *split_selection_rows,
                 join_previous_region.clone(),
                 join_next_region.clone(),
+                *alignment_marked_columns,
+                *has_manual_alignments,
             )),
             PopoverKind::ConflictResolverOutputMenu {
                 cursor_line,
@@ -1032,6 +1036,16 @@ impl PopoverHost {
                     pane.conflict_resolver_split_selection(cx);
                 });
             }
+            ContextMenuAction::ConflictResolverAlignManually => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_align_manually(cx);
+                });
+            }
+            ContextMenuAction::ConflictResolverClearManualAlignments => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_clear_manual_alignments(cx);
+                });
+            }
             ContextMenuAction::ConflictResolverJoinRegions { target } => {
                 self.main_pane.update(cx, |pane, cx| {
                     pane.conflict_resolver_join_regions(target, cx);
@@ -1076,6 +1090,13 @@ impl PopoverHost {
                         },
                         cx,
                     );
+                });
+                cx.notify();
+            }
+            ContextMenuAction::SetMergetoolOverviewMode { mode } => {
+                close_after_action = false;
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_set_overview_mode(mode, cx);
                 });
                 cx.notify();
             }
@@ -1486,6 +1507,62 @@ impl PopoverHost {
                     )
                     .id(("context_menu_label", ix))
                     .into_any_element(),
+                    ContextMenuItem::Segmented { label, segments } => {
+                        // Same construction as the toolbar's Inline/Split style
+                        // toggles: one bordered pill, dividers between segments,
+                        // the active one filled.
+                        let mut control = div()
+                            .id(("context_menu_segmented", ix))
+                            .flex()
+                            .items_center()
+                            .h(components::control_height(ui_scale))
+                            .rounded(px(theme.radii.row))
+                            .border_1()
+                            .border_color(theme.colors.border)
+                            .overflow_hidden()
+                            .p(px(1.0));
+                        for (seg_ix, segment) in segments.into_iter().enumerate() {
+                            if seg_ix > 0 {
+                                control = control
+                                    .child(div().h_full().w(px(1.0)).bg(theme.colors.border));
+                            }
+                            let ContextMenuSegment {
+                                id,
+                                label,
+                                tooltip,
+                                selected,
+                                action,
+                            } = segment;
+                            let debug_selector = id.clone();
+                            let mut button = components::Button::new(id, label)
+                                .borderless()
+                                .style(components::ButtonStyle::Subtle)
+                                .selected(selected)
+                                .selected_bg(theme.colors.active)
+                                .on_click(theme, cx, move |this, _e, window, cx| {
+                                    this.context_menu_activate_action(action.clone(), window, cx);
+                                })
+                                .debug_selector(move || debug_selector.to_string());
+                            if let Some(tooltip) = tooltip {
+                                button = button.gitcomet_tooltip(theme, tooltip);
+                            }
+                            control = control.child(button);
+                        }
+                        components::context_menu_label(
+                            theme,
+                            ui_scale,
+                            label,
+                            Some(tooltip_host.clone()),
+                            cx,
+                        )
+                        .id(("context_menu_segmented_row", ix))
+                        .flex()
+                        .items_center()
+                        .justify_between()
+                        .gap_2()
+                        .child(control)
+                        .into_any_element()
+                    }
                     ContextMenuItem::Entry {
                         label,
                         icon,

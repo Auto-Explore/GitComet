@@ -9,7 +9,9 @@ use gitcomet_core::conflict_session::{
     HistoryAutosolveOptions, RegexAutosolveOptions, join_conflict_regions_text,
     split_conflict_region_text,
 };
-use gitcomet_core::merge::{MergeSource, OrderedSelection};
+use gitcomet_core::merge::{
+    ManualAlignment, MergeBlockId, MergeOptions, MergeSource, OrderedSelection,
+};
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -112,6 +114,56 @@ pub(super) fn replace_region_selection(
         return Vec::new();
     }
     if session.replace_region_selection(region_index, selection) {
+        repo_state.bump_conflict_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn toggle_plan_block_source(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    block_id: MergeBlockId,
+    source: MergeSource,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path.as_path() {
+        return Vec::new();
+    }
+    if session.toggle_plan_block_source(block_id, source) {
+        repo_state.bump_conflict_rev();
+    }
+    Vec::new()
+}
+
+pub(super) fn replace_plan_block_selection(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    block_id: MergeBlockId,
+    selection: OrderedSelection,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path.as_path() {
+        return Vec::new();
+    }
+    if session.replace_plan_block_selection(block_id, selection) {
         repo_state.bump_conflict_rev();
     }
     Vec::new()
@@ -323,6 +375,70 @@ pub(super) fn join_regions(
         return Vec::new();
     }
     edit_regions(state, repo_id, path, region_index, ConflictRegionEdit::Join)
+}
+
+/// Pin a manual alignment and replan the file around it.
+///
+/// KDiff3's manual diff help. Replanning rebuilds the marker geometry from the
+/// stages, so any pending structural split/join edits are discarded; per-region
+/// decisions carry across wherever the blocks still identify unambiguously.
+pub(super) fn add_manual_alignment(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    alignment: ManualAlignment,
+    expected_conflict_rev: u64,
+) -> Vec<Effect> {
+    replan_manual_alignments(state, repo_id, path, expected_conflict_rev, |session| {
+        session.add_manual_alignment(alignment, &MergeOptions::default())
+    })
+}
+
+/// Drop every manual alignment and replan from the automatic alignment.
+pub(super) fn clear_manual_alignments(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    expected_conflict_rev: u64,
+) -> Vec<Effect> {
+    replan_manual_alignments(state, repo_id, path, expected_conflict_rev, |session| {
+        session.clear_manual_alignments(&MergeOptions::default())
+    })
+}
+
+fn replan_manual_alignments(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: RepoPath,
+    expected_conflict_rev: u64,
+    replan: impl FnOnce(&mut gitcomet_core::conflict_session::ConflictSession) -> bool,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if repo_state.conflict_state.conflict_rev != expected_conflict_rev {
+        return Vec::new();
+    }
+    if !matches_current_conflict_path(repo_state, path.as_path()) {
+        return Vec::new();
+    }
+    let Some(session) = repo_state.conflict_state.conflict_session.as_mut() else {
+        return Vec::new();
+    };
+    if session.path != path.as_path() {
+        return Vec::new();
+    }
+    if session.strategy != ConflictResolverStrategy::FullTextResolver {
+        return Vec::new();
+    }
+    if !replan(session) {
+        return Vec::new();
+    }
+
+    // The worktree stays untouched until Save, exactly as for split/join. The
+    // revision is what makes the embedded and focused views rebuild.
+    repo_state.bump_conflict_rev();
+    Vec::new()
 }
 
 fn edit_regions(
@@ -558,12 +674,23 @@ fn apply_bulk_choice_to_session(
     session: &mut gitcomet_core::conflict_session::ConflictSession,
     choice: ConflictBulkChoice,
 ) -> usize {
+    if let Some(plan) = session.merge_plan.as_ref() {
+        let has_base = plan.has_base();
+        let selection = match choice {
+            ConflictBulkChoice::Base if has_base => MergeSource::A.into(),
+            ConflictBulkChoice::Base => return 0,
+            ConflictBulkChoice::Ours => plan.local_source().into(),
+            ConflictBulkChoice::Theirs => plan.remote_source().into(),
+            ConflictBulkChoice::Both => {
+                OrderedSelection::from_sources([plan.local_source(), plan.remote_source()])
+            }
+        };
+        return session.replace_all_delta_selections(selection);
+    }
+
     let mut applied = 0usize;
 
     for region in &mut session.regions {
-        if region.resolution.is_resolved() {
-            continue;
-        }
         let Some(next) = (match choice {
             ConflictBulkChoice::Base => region
                 .base
@@ -575,8 +702,10 @@ fn apply_bulk_choice_to_session(
         }) else {
             continue;
         };
-        region.resolution = next;
-        applied += 1;
+        if region.resolution != next {
+            region.resolution = next;
+            applied += 1;
+        }
     }
 
     applied

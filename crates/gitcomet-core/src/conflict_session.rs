@@ -1,7 +1,8 @@
 use crate::domain::FileConflictKind;
 use crate::merge::{
-    ConflictStyle, InteractiveMergePlanBudget, MergeOptions, MergePlan, MergeSource,
-    OrderedSelection, render_merge_plan, try_build_interactive_merge_plan_with_optional_base,
+    ConflictStyle, InteractiveMergePlanBudget, ManualAlignment, ManualAlignmentList, MergeBlockId,
+    MergeOptions, MergePlan, MergeSource, OrderedSelection, render_merge_plan,
+    try_build_interactive_merge_plan_with_alignments,
 };
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -18,6 +19,7 @@ mod subchunk;
 use crate::text_utils::{LineEndingDetectionMode, detect_line_ending_from_texts};
 use autosolve::{
     compile_regex_patterns, regex_assisted_auto_resolve_pick_with_compiled, safe_auto_resolve,
+    safe_auto_resolve_with_classification,
 };
 #[cfg(test)]
 use history::history_section_suffix;
@@ -28,7 +30,7 @@ use regex::Regex;
 
 pub use autosolve::{
     is_whitespace_only_diff, regex_assisted_auto_resolve_pick, safe_auto_resolve_pick,
-    try_autosolve_merged_text,
+    try_autosolve_merge_plan, try_autosolve_merged_text,
 };
 pub use history::{HistoryAutosolveOptions, history_merge_region};
 pub use marker_parse::{
@@ -595,6 +597,11 @@ pub struct ConflictSession {
     /// Same-path reloads preserve this projection so a watcher refresh cannot
     /// discard structural edits before the user saves them.
     pub has_pending_structural_edits: bool,
+    /// User-pinned alignment constraints applied when planning this file.
+    ///
+    /// KDiff3's manual diff help: the escape hatch for a block the automatic
+    /// alignment gets wrong. Empty for every session until the user pins one.
+    pub manual_alignments: ManualAlignmentList,
 }
 
 /// Reason an interactive full-text session retained marker-backed geometry
@@ -676,6 +683,7 @@ impl ConflictSession {
             merge_plan_fallback: None,
             region_plan_blocks: Vec::new(),
             has_pending_structural_edits: false,
+            manual_alignments: ManualAlignmentList::new(),
         }
     }
 
@@ -744,29 +752,47 @@ impl ConflictSession {
     ) -> Self {
         let mut session =
             Self::new_with_optional_current(path, conflict_kind, base, ours, theirs, current);
-        if session.strategy != ConflictResolverStrategy::FullTextResolver {
-            return session;
+        session.rebuild_merge_plan(options);
+        session
+    }
+
+    /// Rebuild the plan, marker projection and regions from the stage inputs.
+    ///
+    /// Everything derived is discarded and recomputed, so the current
+    /// [`manual_alignments`](Self::manual_alignments) take effect. Callers that
+    /// need to keep the user's decisions pair this with
+    /// [`restore_plan_decisions_from`](Self::restore_plan_decisions_from).
+    fn rebuild_merge_plan(&mut self, options: &MergeOptions) {
+        if self.strategy != ConflictResolverStrategy::FullTextResolver {
+            return;
         }
 
+        let session = self;
         let ConflictPayload::Text(ours_text) = &session.ours else {
-            return session;
+            return;
         };
         let ConflictPayload::Text(theirs_text) = &session.theirs else {
-            return session;
+            return;
         };
         let base_text = match &session.base {
             ConflictPayload::Text(text) => Some(text.as_ref()),
             ConflictPayload::Absent => None,
-            ConflictPayload::Binary(_) => return session,
+            ConflictPayload::Binary(_) => return,
         };
 
-        let plan = try_build_interactive_merge_plan_with_optional_base(
+        let plan = try_build_interactive_merge_plan_with_alignments(
             base_text,
             ours_text,
             theirs_text,
             options,
             InteractiveMergePlanBudget::default(),
+            &session.manual_alignments,
         );
+        session.merge_plan = None;
+        session.merge_plan_fallback = None;
+        session.region_plan_blocks = Vec::new();
+        session.region_source_ranges = Vec::new();
+
         let marker_text = if let Some(plan) = plan.as_ref() {
             let mut marker_options = options.clone();
             marker_options.style = if plan.has_base() {
@@ -812,7 +838,64 @@ impl ConflictSession {
                 .collect();
             session.merge_plan = Some(plan);
         }
-        session
+    }
+
+    /// Pin a manual alignment and replan the file around it.
+    ///
+    /// KDiff3's `Ctrl+Y`. Returns whether the entry was accepted — one that
+    /// pins nothing, or that overlaps an existing pin, is rejected and leaves
+    /// the session untouched. Replanning rebuilds the marker geometry from the
+    /// stages, so it discards any pending structural split/join edits; the
+    /// user's per-region decisions are carried across where the blocks still
+    /// identify unambiguously.
+    pub fn add_manual_alignment(&mut self, entry: ManualAlignment, options: &MergeOptions) -> bool {
+        let mut alignments = self.manual_alignments.clone();
+        if !alignments.insert(entry) {
+            return false;
+        }
+        self.replan_with_manual_alignments(alignments, options);
+        true
+    }
+
+    /// Drop every manual alignment and replan the file.
+    ///
+    /// KDiff3's `Ctrl+Shift+Y`. Returns whether anything was pinned.
+    pub fn clear_manual_alignments(&mut self, options: &MergeOptions) -> bool {
+        if self.manual_alignments.is_empty() {
+            return false;
+        }
+        self.replan_with_manual_alignments(ManualAlignmentList::new(), options);
+        true
+    }
+
+    /// Drop the manual alignment covering `line` in `source` and replan.
+    ///
+    /// Returns whether a pin was found there.
+    pub fn remove_manual_alignment_at(
+        &mut self,
+        source: MergeSource,
+        line: usize,
+        options: &MergeOptions,
+    ) -> bool {
+        let three_way = self.merge_plan.as_ref().is_some_and(MergePlan::has_base);
+        let mut alignments = self.manual_alignments.clone();
+        if !alignments.remove_at(source, three_way, line) {
+            return false;
+        }
+        self.replan_with_manual_alignments(alignments, options);
+        true
+    }
+
+    fn replan_with_manual_alignments(
+        &mut self,
+        alignments: ManualAlignmentList,
+        options: &MergeOptions,
+    ) {
+        let previous = self.clone();
+        self.manual_alignments = alignments;
+        self.has_pending_structural_edits = false;
+        self.rebuild_merge_plan(options);
+        self.restore_plan_decisions_from(&previous);
     }
 
     /// Build a fresh full-text session using default merge options.
@@ -1034,6 +1117,127 @@ impl ConflictSession {
         self.replace_region_selection(region_index, selection)
     }
 
+    /// Toggle one source on a semantic merge block, whether or not that block
+    /// currently renders conflict markers.
+    ///
+    /// Marker-backed regions are kept in sync for the legacy/autosolve paths;
+    /// automatically selected deltas live only in the merge plan and are
+    /// updated directly here.
+    pub fn toggle_plan_block_source(
+        &mut self,
+        block_id: MergeBlockId,
+        source: MergeSource,
+    ) -> bool {
+        let Some(plan) = self.merge_plan.as_ref() else {
+            return false;
+        };
+        if plan.source_text(source).is_none() {
+            return false;
+        }
+        let Some(block_index) = plan.blocks.iter().position(|block| block.id == block_id) else {
+            return false;
+        };
+
+        let changed = self
+            .merge_plan
+            .as_mut()
+            .is_some_and(|plan| plan.toggle_source(block_index, source));
+        if changed {
+            self.sync_region_from_plan_block(block_index);
+        }
+        changed
+    }
+
+    /// Replace the complete ordered selection on a semantic merge block.
+    pub fn replace_plan_block_selection(
+        &mut self,
+        block_id: MergeBlockId,
+        selection: OrderedSelection,
+    ) -> bool {
+        let Some(plan) = self.merge_plan.as_ref() else {
+            return false;
+        };
+        if selection
+            .iter()
+            .any(|source| plan.source_text(source).is_none())
+        {
+            return false;
+        }
+        let Some(block_index) = plan.blocks.iter().position(|block| block.id == block_id) else {
+            return false;
+        };
+        let block = &plan.blocks[block_index];
+        if block.manual_content.is_none() && block.selection == selection {
+            return false;
+        }
+
+        let changed = self
+            .merge_plan
+            .as_mut()
+            .is_some_and(|plan| plan.replace_selection(block_index, selection));
+        if changed {
+            self.sync_region_from_plan_block(block_index);
+        }
+        changed
+    }
+
+    /// Replace every changed block's output decision, including deltas that
+    /// the planner selected automatically.
+    ///
+    /// This is KDiff3's `chooseGlobal(..., bConflictsOnly = false)` behavior.
+    /// Returns the number of blocks whose decision changed.
+    pub fn replace_all_delta_selections(&mut self, selection: OrderedSelection) -> usize {
+        let Some(plan) = self.merge_plan.as_ref() else {
+            return 0;
+        };
+        if selection
+            .iter()
+            .any(|source| plan.source_text(source).is_none())
+        {
+            return 0;
+        }
+        let changed_blocks: Vec<usize> = plan
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                (block.is_delta && (block.manual_content.is_some() || block.selection != selection))
+                    .then_some(index)
+            })
+            .collect();
+        let Some(plan) = self.merge_plan.as_mut() else {
+            return 0;
+        };
+        for block_index in &changed_blocks {
+            plan.replace_selection(*block_index, selection.clone());
+        }
+        for block_index in changed_blocks.iter().copied() {
+            self.sync_region_from_plan_block(block_index);
+        }
+        changed_blocks.len()
+    }
+
+    fn sync_region_from_plan_block(&mut self, block_index: usize) {
+        let Some(region_index) = self
+            .region_plan_blocks
+            .iter()
+            .position(|candidate| *candidate == block_index)
+        else {
+            return;
+        };
+        let Some(selection) = self
+            .merge_plan
+            .as_ref()
+            .and_then(|plan| plan.blocks.get(block_index))
+            .map(|block| block.selection.clone())
+        else {
+            return;
+        };
+        if let Some(region) = self.regions.get_mut(region_index) {
+            region.resolution = Self::resolution_for_selection(&selection);
+        }
+    }
+
     /// Synchronize plan decisions after legacy resolution or autosolve paths.
     pub fn sync_merge_plan_from_regions(&mut self) {
         let decisions: Vec<(usize, ConflictRegionResolution)> = self
@@ -1180,6 +1384,12 @@ impl ConflictSession {
         let Some(previous_plan) = previous.merge_plan.as_ref() else {
             return;
         };
+        if let Some(plan) = self.merge_plan.as_mut() {
+            // Preserve decisions on every semantic block. Region restoration
+            // below remains authoritative for marker-backed conflicts, while
+            // this carries overrides on automatically selected deltas too.
+            plan.restore_decisions_from(previous_plan);
+        }
         let Some(plan) = self.merge_plan.as_ref() else {
             return;
         };
@@ -1303,7 +1513,10 @@ impl ConflictSession {
     /// Returns `true` when all regions are resolved.
     pub fn is_fully_resolved(&self) -> bool {
         !self.has_implicit_binary_conflict()
-            && self.regions.iter().all(|r| r.resolution.is_resolved())
+            && self.merge_plan.as_ref().map_or_else(
+                || self.regions.iter().all(|r| r.resolution.is_resolved()),
+                |plan| plan.unresolved_count() == 0,
+            )
     }
 
     /// Find the index of the next unresolved region after `current`.
@@ -1353,14 +1566,36 @@ impl ConflictSession {
         self.auto_resolve_safe_with_options(false)
     }
 
-    /// Like [`auto_resolve_safe`] but with an optional whitespace-normalization toggle.
+    /// Like [`auto_resolve_safe`] but with an optional whitespace-resolution toggle.
+    /// Stage-backed regions trust their merge block's KDiff3 classification;
+    /// marker-only regions fall back to strip-all comparison.
     pub fn auto_resolve_safe_with_options(&mut self, whitespace_normalize: bool) -> usize {
+        let planned_whitespace: Vec<Option<bool>> = self
+            .region_plan_blocks
+            .iter()
+            .map(|block_index| {
+                self.merge_plan
+                    .as_ref()
+                    .and_then(|plan| plan.blocks.get(*block_index))
+                    .map(|block| block.whitespace_conflict)
+            })
+            .collect();
         let mut count = 0;
-        for region in &mut self.regions {
+        for (region_index, region) in self.regions.iter_mut().enumerate() {
             if region.resolution.is_resolved() {
                 continue;
             }
-            if let Some((rule, content)) = safe_auto_resolve(region, whitespace_normalize) {
+            let resolution = if whitespace_normalize {
+                match planned_whitespace.get(region_index).copied().flatten() {
+                    Some(whitespace_conflict) => {
+                        safe_auto_resolve_with_classification(region, whitespace_conflict)
+                    }
+                    None => safe_auto_resolve(region, true),
+                }
+            } else {
+                safe_auto_resolve(region, false)
+            };
+            if let Some((rule, content)) = resolution {
                 region.resolution = ConflictRegionResolution::AutoResolved {
                     confidence: rule.confidence(),
                     rule,
@@ -1522,7 +1757,10 @@ impl ConflictSession {
     /// Check whether the resolved output still contains unresolved conflict markers.
     /// This is the safety gate before staging.
     pub fn has_unresolved_markers(&self) -> bool {
-        self.unsolved_count() > 0
+        self.merge_plan.as_ref().map_or_else(
+            || self.unsolved_count() > 0,
+            |plan| plan.unresolved_count() > 0,
+        )
     }
 }
 

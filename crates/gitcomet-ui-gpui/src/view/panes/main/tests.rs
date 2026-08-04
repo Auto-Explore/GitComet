@@ -17,8 +17,8 @@ use super::{
     renderable_conflict_file, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
-    resolved_output_snapshot_is_modified, split_target_conflict_block_into_subchunks,
-    versioned_cached_diff_styled_text_is_current,
+    resolved_output_snapshot_is_modified, resolved_output_unresolved_byte_ranges,
+    split_target_conflict_block_into_subchunks, versioned_cached_diff_styled_text_is_current,
     versioned_query_cached_diff_styled_text_is_current, worktree_output_requires_protection,
 };
 use crate::kit::text_model::TextModel;
@@ -422,6 +422,7 @@ fn focused_mergetool_save_payload_rehydrates_unedited_materialized_conflicts() {
         theirs: "theirs\n".to_string().into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let block_map = conflict_resolver::ResolvedOutputBlockMap::from_segments(&segments);
 
@@ -451,6 +452,7 @@ fn focused_mergetool_save_payload_keeps_manual_edits_and_unedited_markers() {
             theirs: "theirs-1\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("middle\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
@@ -459,6 +461,7 @@ fn focused_mergetool_save_payload_keeps_manual_edits_and_unedited_markers() {
             theirs: "theirs-2\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("bottom\n".to_string().into()),
     ];
@@ -501,6 +504,7 @@ fn focused_mergetool_save_payload_preserves_edited_context() {
             theirs: "theirs-1\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("middle\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -509,6 +513,7 @@ fn focused_mergetool_save_payload_preserves_edited_context() {
             theirs: "theirs-2\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("bottom\n".into()),
     ];
@@ -564,6 +569,7 @@ fn focused_mergetool_save_payload_marks_manual_output_as_resolved() {
         theirs: "theirs\n".to_string().into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let mut block_map = conflict_resolver::ResolvedOutputBlockMap::from_segments(&segments);
     assert!(block_map.apply_edit_delta(0..5, 0..7));
@@ -797,6 +803,7 @@ fn resolved_output_conflict_block_ranges_match_point_lookup() {
             theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
@@ -805,6 +812,7 @@ fn resolved_output_conflict_block_ranges_match_point_lookup() {
             theirs: "y\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -831,6 +839,7 @@ fn output_line_range_for_conflict_block_in_text_maps_middle_blocks_exactly() {
             theirs: "x\ny\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
@@ -839,6 +848,7 @@ fn output_line_range_for_conflict_block_in_text_maps_middle_blocks_exactly() {
             theirs: "z\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -864,6 +874,7 @@ fn output_line_range_for_conflict_block_in_text_maps_eof_block_without_newline()
             theirs: "other".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
 
@@ -884,6 +895,7 @@ fn output_line_range_for_conflict_block_in_text_returns_none_when_output_drifts(
             theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
@@ -892,6 +904,7 @@ fn output_line_range_for_conflict_block_in_text_returns_none_when_output_drifts(
             theirs: "y\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
 
@@ -912,6 +925,7 @@ fn build_resolved_output_conflict_markers_maps_chunk_boundaries() {
             theirs: "x\ny\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
@@ -920,6 +934,7 @@ fn build_resolved_output_conflict_markers_maps_chunk_boundaries() {
             theirs: "z\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -973,6 +988,7 @@ fn build_resolved_output_conflict_markers_anchors_zero_length_ranges() {
             theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -1004,6 +1020,7 @@ fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
             theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -1044,6 +1061,7 @@ fn remapped_resolved_output_conflict_markers_cover_inserted_rows() {
             theirs: "x\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -1211,6 +1229,7 @@ fn clicked_unresolved_line_maps_to_chunk_marker() {
             theirs: "theirs-1\ntheirs-2\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
@@ -1234,6 +1253,7 @@ fn build_resolved_output_conflict_markers_splits_unresolved_subchunks() {
             theirs: "at\ncommon\nbt\n".to_string().into(),
             choice: ConflictChoice::Base,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1270,6 +1290,7 @@ fn build_resolved_output_conflict_markers_splits_method_edit_and_trailing_insert
                 .into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         })];
 
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -1404,6 +1425,7 @@ fn append_choice_after_conflict_block_appends_selected_order_for_single_marker()
             theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1433,6 +1455,7 @@ fn append_choice_after_conflict_block_from_same_marker_keeps_single_choice_per_s
             theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Base,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1492,6 +1515,7 @@ fn non_contiguous_matching_blocks_do_not_share_choice_group() {
             theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("middle\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1500,6 +1524,7 @@ fn non_contiguous_matching_blocks_do_not_share_choice_group() {
             theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::empty(),
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1527,6 +1552,7 @@ fn adjacent_markers_with_same_text_but_different_regions_do_not_interfere() {
             theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Block(ConflictBlock {
             base: Some("base\n".to_string().into()),
@@ -1534,6 +1560,7 @@ fn adjacent_markers_with_same_text_but_different_regions_do_not_interfere() {
             theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::empty(),
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let mut region_indices = vec![10, 11];
@@ -1574,6 +1601,7 @@ fn pick_sequence_is_reversible_to_original_unpicked_state() {
             theirs: "theirs\n".to_string().into(),
             choice: ConflictChoice::empty(),
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".to_string().into()),
     ];
@@ -1655,6 +1683,7 @@ fn pick_and_deselect_multiple_orders_always_restore_original_state() {
                 theirs: "theirs\n".to_string().into(),
                 choice: ConflictChoice::empty(),
                 resolved: false,
+                whitespace_only: false,
             }),
             ConflictSegment::Text("post\n".to_string().into()),
         ]
@@ -1812,6 +1841,7 @@ fn conflict_choice_hints_override_identical_text_to_selected_source() {
         theirs: "same\n".to_string().into(),
         choice: ConflictChoice::Ours,
         resolved: true,
+        whitespace_only: false,
     })];
     let output = conflict_resolver::generate_resolved_text(&segments);
     let output_lines = conflict_resolver::split_output_lines_for_outline(&output);
@@ -1850,6 +1880,7 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
             theirs: "other\n".to_string().into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
@@ -1936,6 +1967,117 @@ fn resolved_output_syntax_state_uses_prepared_document_for_multiline_comment() {
 }
 
 #[test]
+fn unresolved_output_ranges_cover_placeholders_and_selected_unresolved_rows() {
+    let segments = vec![
+        ConflictSegment::Text("head\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours\n".into(),
+            theirs: "theirs\n".into(),
+            choice: ConflictChoice::empty(),
+            resolved: false,
+            whitespace_only: false,
+        }),
+        ConflictSegment::Text("middle\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "selected\n".into(),
+            theirs: "alternate\n".into(),
+            choice: ConflictChoice::Ours,
+            resolved: false,
+            whitespace_only: false,
+        }),
+        ConflictSegment::Text("tail\n".into()),
+    ];
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    let line_starts = build_line_starts(&output);
+    let ranges = resolved_output_unresolved_byte_ranges(&segments, &output, line_starts.as_slice());
+    let highlighted_text: Vec<&str> = ranges.iter().map(|range| &output[range.clone()]).collect();
+
+    assert_eq!(highlighted_text, ["<Merge Conflict>", "selected"]);
+}
+
+#[test]
+fn resolved_output_syntax_provider_replaces_placeholder_syntax_with_danger() {
+    let theme = AppTheme::gitcomet_dark();
+    let output = "<div>clean</div>\n<Merge Conflict>\n<span>tail</span>\n";
+    let placeholder_start = output.find("<Merge Conflict>").expect("placeholder");
+    let placeholder_range = placeholder_start
+        ..placeholder_start + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
+    let output_model = TextModel::from(output);
+    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
+        theme,
+        &output_model.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Html),
+        None,
+        None,
+        rows::DiffSyntaxBudget::default(),
+        Arc::from([placeholder_range.clone()]),
+    );
+    let document = syntax_state
+        .prepared_document
+        .expect("HTML output should prepare document syntax");
+    let provider = syntax_state
+        .highlight_provider
+        .expect("prepared output should expose a highlight provider");
+    let mut result = provider.resolve(0..output.len());
+    if result.pending {
+        let started = std::time::Instant::now();
+        while rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document) == 0
+            && started.elapsed() < std::time::Duration::from_secs(2)
+        {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        result = provider.resolve(0..output.len());
+    }
+
+    let danger = theme.colors.danger.into();
+    let placeholder_highlights: Vec<_> = result
+        .highlights
+        .iter()
+        .filter(|(range, _)| {
+            range.start < placeholder_range.end && range.end > placeholder_range.start
+        })
+        .collect();
+    assert_eq!(placeholder_highlights.len(), 1);
+    assert_eq!(placeholder_highlights[0].0, placeholder_range);
+    assert_eq!(placeholder_highlights[0].1.color, Some(danger));
+    assert!(
+        result.highlights.iter().any(|(range, _)| {
+            range.end <= placeholder_range.start || range.start >= placeholder_range.end
+        }),
+        "normal HTML lines should retain syntax highlights"
+    );
+}
+
+#[test]
+fn unresolved_output_uses_danger_highlight_without_a_syntax_language() {
+    let theme = AppTheme::gitcomet_dark();
+    let output = "head\n<Merge Conflict>\ntail\n";
+    let placeholder_start = output.find("<Merge Conflict>").expect("placeholder");
+    let placeholder_range = placeholder_start
+        ..placeholder_start + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
+    let output_model = TextModel::from(output);
+    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
+        theme,
+        &output_model.snapshot(),
+        None,
+        None,
+        None,
+        rows::DiffSyntaxBudget::default(),
+        Arc::from([placeholder_range.clone()]),
+    );
+
+    assert!(syntax_state.highlight_provider.is_none());
+    assert_eq!(syntax_state.highlights.len(), 1);
+    assert_eq!(syntax_state.highlights[0].0, placeholder_range);
+    assert_eq!(
+        syntax_state.highlights[0].1.color,
+        Some(theme.colors.danger.into())
+    );
+}
+
+#[test]
 fn resolved_output_syntax_state_requests_background_prepare_for_large_documents() {
     let theme = AppTheme::gitcomet_dark();
     let output = "let value = Some(42);\n".repeat(4_001);
@@ -1951,6 +2093,7 @@ fn resolved_output_syntax_state_requests_background_prepare_for_large_documents(
         rows::DiffSyntaxBudget {
             foreground_parse: std::time::Duration::ZERO,
         },
+        Arc::default(),
     );
 
     assert!(
@@ -1968,6 +2111,38 @@ fn resolved_output_syntax_state_requests_background_prepare_for_large_documents(
     assert!(
         syntax_state.highlights.is_empty(),
         "pending document syntax should paint plain text instead of materializing a full fallback highlight vector"
+    );
+}
+
+#[test]
+fn pending_resolved_output_syntax_keeps_unresolved_danger_highlights() {
+    let theme = AppTheme::gitcomet_dark();
+    let placeholder = conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER;
+    let output = format!(
+        "{placeholder}\n{}",
+        "let value = Some(42);\n".repeat(rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1)
+    );
+    let output_model = TextModel::from(output);
+    let placeholder_range = 0..placeholder.len();
+    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
+        theme,
+        &output_model.snapshot(),
+        Some(rows::DiffSyntaxLanguage::Rust),
+        None,
+        None,
+        rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::ZERO,
+        },
+        Arc::from([placeholder_range.clone()]),
+    );
+
+    assert!(syntax_state.needs_background_prepare);
+    assert!(syntax_state.highlight_provider.is_none());
+    assert_eq!(syntax_state.highlights.len(), 1);
+    assert_eq!(syntax_state.highlights[0].0, placeholder_range);
+    assert_eq!(
+        syntax_state.highlights[0].1.color,
+        Some(theme.colors.danger.into())
     );
 }
 
@@ -1998,6 +2173,7 @@ fn resolved_output_syntax_state_retains_old_document_while_background_prepare_is
         rows::DiffSyntaxBudget {
             foreground_parse: std::time::Duration::ZERO,
         },
+        Arc::default(),
     );
 
     assert!(syntax_state.needs_background_prepare);
@@ -2010,7 +2186,7 @@ fn resolved_output_syntax_state_retains_old_document_while_background_prepare_is
 }
 
 #[test]
-fn resolved_output_highlight_provider_binding_key_tracks_theme_language_and_document() {
+fn resolved_output_highlight_provider_binding_key_tracks_all_style_inputs() {
     let theme = AppTheme::gitcomet_dark();
     let output_a = TextModel::from("fn alpha() -> usize { 1 }\n");
     let state_a = build_resolved_output_syntax_state_for_snapshot(
@@ -2028,16 +2204,19 @@ fn resolved_output_highlight_provider_binding_key_tracks_theme_language_and_docu
         1,
         rows::DiffSyntaxLanguage::Rust,
         document_a,
+        &[],
     );
     let key_theme_changed = resolved_output_highlight_provider_binding_key(
         2,
         rows::DiffSyntaxLanguage::Rust,
         document_a,
+        &[],
     );
     let key_language_changed = resolved_output_highlight_provider_binding_key(
         1,
         rows::DiffSyntaxLanguage::Html,
         document_a,
+        &[],
     );
 
     let output_b = TextModel::from("fn beta() -> usize { 2 }\n");
@@ -2055,11 +2234,19 @@ fn resolved_output_highlight_provider_binding_key_tracks_theme_language_and_docu
         1,
         rows::DiffSyntaxLanguage::Rust,
         document_b,
+        &[],
+    );
+    let key_unresolved_ranges_changed = resolved_output_highlight_provider_binding_key(
+        1,
+        rows::DiffSyntaxLanguage::Rust,
+        document_a,
+        &[3..8],
     );
 
     assert_ne!(key_a, key_theme_changed);
     assert_ne!(key_a, key_language_changed);
     assert_ne!(key_a, key_document_changed);
+    assert_ne!(key_a, key_unresolved_ranges_changed);
 }
 
 #[test]

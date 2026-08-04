@@ -12,7 +12,37 @@ use gitcomet_core::mergetool_trace::{
     MergetoolTraceStage,
 };
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Instant;
+
+/// Render the current semantic plan decisions into the marker/text projection
+/// consumed by the resolver UI. This differs from `marker_projection`, which
+/// intentionally remains the immutable structural baseline used to detect
+/// protected worktree edits.
+fn conflict_session_plan_projection(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+) -> Option<(Arc<str>, Vec<usize>)> {
+    let mut projection = session.merge_plan.clone()?;
+    // ConflictRegion remains the compatibility/autosolve model for original
+    // marker blocks. Keep those blocks present in this structural projection;
+    // their live choices are applied to parsed blocks below. Plan-only deltas
+    // retain their current selection, which is the structural gap this path
+    // closes.
+    for block_index in &session.region_plan_blocks {
+        projection.replace_selection(*block_index, gitcomet_core::merge::OrderedSelection::new());
+    }
+    let projected_plan_blocks = projection.unresolved_blocks.clone();
+    let mut options = gitcomet_core::merge::MergeOptions::default();
+    options.style = if projection.has_base() {
+        gitcomet_core::merge::ConflictStyle::Diff3
+    } else {
+        gitcomet_core::merge::ConflictStyle::Merge
+    };
+    Some((
+        Arc::from(gitcomet_core::merge::render_merge_plan(&projection, &options).output),
+        projected_plan_blocks,
+    ))
+}
 
 /// Pre-computed side stats for mergetool trace events.  Computing these once
 /// avoids redundant full-text newline counts across the ~10 trace events per
@@ -339,6 +369,7 @@ impl MainPaneView {
             session,
             &self.conflict_resolver.original_region_aligned_ranges,
             &self.conflict_resolver.conflict_region_indices,
+            &self.conflict_resolver.display_plan_block_indices,
             &display_aligned_ranges,
             &self.conflict_resolver.marker_segments,
         );
@@ -393,7 +424,11 @@ impl MainPaneView {
             })
     }
 
-    fn conflict_jump_to_nav_target(&mut self, target_index: usize, cx: &mut gpui::Context<Self>) {
+    pub(in crate::view) fn conflict_jump_to_nav_target(
+        &mut self,
+        target_index: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if !self.conflict_resolver.select_nav_target(target_index) {
             return;
         }
@@ -680,7 +715,7 @@ impl MainPaneView {
                 strategy: conflict_strategy,
                 conflict_kind,
                 last_autosolve_summary: None,
-                auto_solved_on_open: None,
+                open_summary_counts: None,
                 conflict_rev: repo.conflict_state.conflict_rev,
                 ..ConflictResolverUiState::default()
             };
@@ -707,12 +742,17 @@ impl MainPaneView {
                 _ => None,
             })
             .or_else(|| file.current.clone());
-        let marker_snapshot = session
+        let structural_marker_snapshot = session
             .and_then(|session| session.marker_projection.clone())
             .or_else(|| current_text.clone());
+        let plan_projection = session.and_then(conflict_session_plan_projection);
+        let marker_snapshot = plan_projection
+            .as_ref()
+            .map(|(text, _)| Arc::clone(text))
+            .or_else(|| structural_marker_snapshot.clone());
         let output_is_protected = worktree_output_requires_protection(
             current_text.as_deref(),
-            marker_snapshot.as_deref(),
+            structural_marker_snapshot.as_deref(),
             file.ours.as_deref(),
             file.theirs.as_deref(),
         );
@@ -734,6 +774,15 @@ impl MainPaneView {
         // real conflicts).
         let needs_full_side_texts =
             file.base.is_none() && file.ours.is_none() && file.theirs.is_none();
+        const FULL_LOAD_UPGRADE_MAX_CURRENT_LINES: usize = 100_000;
+        let full_text_plan_upgrade_expected = needs_full_side_texts
+            && matches!(
+                conflict_strategy,
+                Some(gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver)
+            )
+            && current_text
+                .as_deref()
+                .is_some_and(|text| count_newlines(text) < FULL_LOAD_UPGRADE_MAX_CURRENT_LINES);
         let three_way_base_len = if base_text.is_empty() {
             0
         } else {
@@ -872,15 +921,32 @@ impl MainPaneView {
             });
         let mut conflict_region_indices =
             conflict_resolver::sequential_conflict_region_indices(&marker_segments);
+        let mut display_plan_block_indices = Vec::new();
         if let Some(session) = session {
-            let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
-                &mut marker_segments,
-                &session.regions,
-            );
-            conflict_region_indices = applied.block_region_indices;
+            if let Some((_, projected_plan_blocks)) = plan_projection.as_ref()
+                && let Some(applied) =
+                    conflict_resolver::apply_plan_session_region_resolutions_with_index_map(
+                        &mut marker_segments,
+                        session,
+                        projected_plan_blocks,
+                    )
+            {
+                conflict_region_indices = applied.block_region_indices;
+                display_plan_block_indices = applied.block_plan_indices;
+            } else {
+                let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
+                    &mut marker_segments,
+                    &session.regions,
+                );
+                conflict_region_indices = applied.block_region_indices;
+            }
         }
         let merge_plan_aligned_conflict_ranges = session.and_then(|session| {
-            conflict_resolver::merge_plan_aligned_conflict_ranges(session, &conflict_region_indices)
+            conflict_resolver::merge_plan_aligned_conflict_ranges(
+                session,
+                &conflict_region_indices,
+                &display_plan_block_indices,
+            )
         });
         let conflict_block_count = conflict_resolver::conflict_count(&marker_segments);
 
@@ -1131,19 +1197,19 @@ impl MainPaneView {
             .conflict_session
             .as_ref()
             .filter(|session| session.path.as_path() == path.as_path())
-            .map(|session| {
-                let (total, auto_solved, resolved) =
-                    conflict_resolver::conflict_session_summary_counts(session);
-                (total, resolved, auto_solved)
-            });
+            // CurrentOnly is a provisional marker-only session. Wait for its
+            // Full upgrade so the open snapshot uses the plan-backed KDiff3
+            // denominator and exact whitespace classification.
+            .filter(|_| !full_text_plan_upgrade_expected)
+            .map(conflict_resolver::conflict_session_summary_counts);
         // Same-conflict syncs keep the open-time snapshot, but backfill it when
         // still unset: the fast CurrentOnly first paint can run before the
         // session (and its autosolve pass) exists.
-        let auto_solved_on_open =
-            if is_same_conflict && self.conflict_resolver.auto_solved_on_open.is_some() {
-                self.conflict_resolver.auto_solved_on_open
+        let open_summary_counts =
+            if is_same_conflict && self.conflict_resolver.open_summary_counts.is_some() {
+                self.conflict_resolver.open_summary_counts
             } else {
-                session_open_summary.map(|(_, _, auto_solved)| auto_solved)
+                session_open_summary
             };
         let open_summary_announced = (is_same_conflict
             && self.conflict_resolver.open_summary_announced)
@@ -1217,6 +1283,7 @@ impl MainPaneView {
                 std::collections::HashMap::default()
             },
             conflict_region_indices,
+            display_plan_block_indices,
             conflict_region_marker_has_base,
             active_conflict,
             nav_targets,
@@ -1225,6 +1292,9 @@ impl MainPaneView {
             // section 30 split: any pending row selection is invalidated by a source
             // rebuild (which happens after a split changes the segmentation).
             row_selection: None,
+            // Pending alignment marks are line numbers into the old source, so
+            // a rebuild invalidates them the same way.
+            alignment_selection: ThreeWaySides::default(),
             mode_state,
             view_mode,
             three_way_text,
@@ -1252,7 +1322,7 @@ impl MainPaneView {
             strategy: conflict_strategy,
             conflict_kind,
             last_autosolve_summary,
-            auto_solved_on_open,
+            open_summary_counts,
             open_summary_announced,
             conflict_rev: repo.conflict_state.conflict_rev,
             resolver_pending_recompute_seq: 0,
@@ -1348,23 +1418,12 @@ impl MainPaneView {
             self.conflict_jump_to_nav_target(target_index, cx);
         }
         // kdiff3-style one-shot open summary: announce total / auto-solved /
-        // remaining once per resolver open, as soon as the session-derived
-        // auto count is available (the fast first paint may precede the
-        // session and its on-open autosolve pass).
+        // unsolved once per resolver open, as soon as the stage-backed report
+        // is available (the fast first paint may be CurrentOnly).
         if !self.conflict_resolver.open_summary_announced
-            && let Some(auto_solved) = self.conflict_resolver.auto_solved_on_open
+            && let Some(counts) = self.conflict_resolver.open_summary_counts
         {
-            let (total, resolved) = session_open_summary
-                .map(|(total, resolved, _)| (total, resolved))
-                .unwrap_or_else(|| {
-                    (
-                        self.conflict_resolver_conflict_count(),
-                        self.conflict_resolver_resolved_count(),
-                    )
-                });
-            if let Some(message) =
-                conflict_resolver::format_open_summary_toast(total, auto_solved, resolved)
-            {
+            if let Some(message) = conflict_resolver::format_open_summary_toast(counts) {
                 self.conflict_resolver.open_summary_announced = true;
                 if let (Some(repo_id), Some(path)) = (
                     self.conflict_resolver.repo_id,
@@ -1390,20 +1449,11 @@ impl MainPaneView {
         // sized text conflicts to a Full load in the background; this
         // bootstrap re-runs with the sides once it lands. Giant files stay
         // on the block-local rows (the alignment gates reject them anyway).
-        const FULL_LOAD_UPGRADE_MAX_CURRENT_LINES: usize = 100_000;
         let specialized_strategy_needs_full_sides =
             conflict_strategy_needs_full_side_payloads(conflict_strategy);
         if !is_same_conflict
             && needs_full_side_texts
-            && (specialized_strategy_needs_full_sides
-                || matches!(
-                    conflict_strategy,
-                    Some(
-                        gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver
-                    )
-                ) && current_text
-                    .as_deref()
-                    .is_some_and(|text| count_newlines(text) < FULL_LOAD_UPGRADE_MAX_CURRENT_LINES))
+            && (specialized_strategy_needs_full_sides || full_text_plan_upgrade_expected)
         {
             let _ = self
                 .request_conflict_file_load_mode(gitcomet_state::model::ConflictFileLoadMode::Full);
@@ -1478,6 +1528,7 @@ impl MainPaneView {
             })
             .collect();
         let previous_region_indices = self.conflict_resolver.conflict_region_indices.clone();
+        let previous_marker_projection = self.conflict_resolver.current.clone();
         let previous_output_is_protected = self.conflict_resolver.output_is_protected;
         let live_materialized_output = (!self.conflict_resolved_output_is_streamed()).then(|| {
             self.conflict_resolver_input
@@ -1487,6 +1538,11 @@ impl MainPaneView {
             self.conflict_resolved_output_block_map
                 .is_valid_for(&self.conflict_resolver.marker_segments, output)
         });
+        let previous_generated_output_matches_live =
+            live_materialized_output.as_deref().is_some_and(|output| {
+                conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments)
+                    == output
+            });
 
         let worktree_current = repo
             .conflict_state
@@ -1499,15 +1555,24 @@ impl MainPaneView {
                 _ => None,
             })
             .or_else(|| file.current.clone());
-        let marker_snapshot = repo
+        let structural_marker_snapshot = repo
             .conflict_state
             .conflict_session
             .as_ref()
             .and_then(|session| session.marker_projection.clone())
             .or_else(|| worktree_current.clone());
+        let plan_projection = repo
+            .conflict_state
+            .conflict_session
+            .as_ref()
+            .and_then(conflict_session_plan_projection);
+        let marker_snapshot = plan_projection
+            .as_ref()
+            .map(|(text, _)| Arc::clone(text))
+            .or_else(|| structural_marker_snapshot.clone());
         let next_output_is_protected = worktree_output_requires_protection(
             worktree_current.as_deref(),
-            marker_snapshot.as_deref(),
+            structural_marker_snapshot.as_deref(),
             file.ours.as_deref(),
             file.theirs.as_deref(),
         );
@@ -1569,15 +1634,32 @@ impl MainPaneView {
                     .map(Some)
                     .collect()
             });
+        let mut display_plan_block_indices = Vec::new();
         if let Some(session) = session {
-            let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
-                &mut marker_segments,
-                &session.regions,
-            );
-            conflict_region_indices = applied.block_region_indices;
+            if let Some((_, projected_plan_blocks)) = plan_projection.as_ref()
+                && let Some(applied) =
+                    conflict_resolver::apply_plan_session_region_resolutions_with_index_map(
+                        &mut marker_segments,
+                        session,
+                        projected_plan_blocks,
+                    )
+            {
+                conflict_region_indices = applied.block_region_indices;
+                display_plan_block_indices = applied.block_plan_indices;
+            } else {
+                let applied = conflict_resolver::apply_session_region_resolutions_with_index_map(
+                    &mut marker_segments,
+                    &session.regions,
+                );
+                conflict_region_indices = applied.block_region_indices;
+            }
         }
         let merge_plan_aligned_conflict_ranges = session.and_then(|session| {
-            conflict_resolver::merge_plan_aligned_conflict_ranges(session, &conflict_region_indices)
+            conflict_resolver::merge_plan_aligned_conflict_ranges(
+                session,
+                &conflict_region_indices,
+                &display_plan_block_indices,
+            )
         });
 
         let use_streamed_projection = self.conflict_resolved_output_is_streamed()
@@ -1590,7 +1672,9 @@ impl MainPaneView {
                 conflict_resolver::ConflictSegment::Text(_) => None,
             })
             .collect();
-        let mapped_replacements = (previous_map_valid
+        let mapped_replacements = (previous_marker_projection.as_deref()
+            == marker_snapshot.as_deref()
+            && previous_map_valid
             && previous_region_indices == conflict_region_indices
             && previous_blocks.len() == next_blocks.len()
             && previous_blocks
@@ -1645,6 +1729,7 @@ impl MainPaneView {
         self.conflict_resolver.output_is_protected = next_output_is_protected;
         self.conflict_resolver.marker_segments = marker_segments;
         self.conflict_resolver.conflict_region_indices = conflict_region_indices;
+        self.conflict_resolver.display_plan_block_indices = display_plan_block_indices;
         self.conflict_resolver.merge_plan_aligned_conflict_ranges =
             merge_plan_aligned_conflict_ranges;
         self.conflict_resolver.original_region_aligned_ranges = original_region_aligned_ranges;
@@ -1667,7 +1752,9 @@ impl MainPaneView {
         let output_path = self.conflict_resolver.path.clone();
         let preserve_unmapped_live_output = live_materialized_output.is_some()
             && (previous_output_is_protected
-                || (self.conflict_resolved_output_modified && mapped_replacements.is_none()));
+                || (self.conflict_resolved_output_modified
+                    && mapped_replacements.is_none()
+                    && !previous_generated_output_matches_live));
         let mut preserved_materialized_output = preserve_unmapped_live_output;
         if preserve_unmapped_live_output {
             self.conflict_resolver.output_is_protected = true;
@@ -1755,6 +1842,21 @@ impl MainPaneView {
             mode,
         });
         true
+    }
+
+    /// Switch the kdiff3-style overview column between the merge itself and one
+    /// of the pairwise comparisons, repainting its bands.
+    pub(in crate::view) fn conflict_resolver_set_overview_mode(
+        &mut self,
+        overview_mode: gitcomet_core::merge::OverviewMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver.overview_mode == overview_mode {
+            return;
+        }
+        self.conflict_resolver.overview_mode = overview_mode;
+        self.conflict_resolver.rebuild_overview_bands();
+        cx.notify();
     }
 
     pub(in crate::view) fn conflict_resolver_set_view_mode(
@@ -2040,6 +2142,7 @@ impl MainPaneView {
             ) {
                 return target_conflict_ix;
             }
+            self.conflict_resolver.display_plan_block_indices.clear();
             self.conflict_resolver_rebuild_visible_map();
             let output_path = self.conflict_resolver.path.clone();
             self.refresh_streamed_resolved_output_preview_from_markers(output_path.as_ref());
@@ -2079,6 +2182,7 @@ impl MainPaneView {
         ) {
             return target_conflict_ix;
         }
+        self.conflict_resolver.display_plan_block_indices.clear();
         self.conflict_resolver_rebuild_visible_map();
 
         resolved_output_marker_for_line(
@@ -2104,6 +2208,7 @@ impl MainPaneView {
         ) else {
             return false;
         };
+        self.conflict_resolver.display_plan_block_indices.clear();
         self.conflict_resolver_rebuild_visible_map();
         let _ = self
             .conflict_resolver
@@ -2134,6 +2239,28 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.conflict_resolver.active_conflict.is_none()
+            && let Some(conflict_resolver::ConflictNavTargetId::PlanBlock(block_id)) = self
+                .conflict_resolver
+                .selected_nav_target_index()
+                .and_then(|index| self.conflict_resolver.nav_targets.get(index))
+                .map(|target| target.id)
+            && let (Some(repo_id), Some(path)) = (
+                self.conflict_resolver
+                    .repo_id
+                    .or_else(|| self.active_repo_id()),
+                self.conflict_resolver.dispatch_path(),
+            )
+        {
+            self.store.dispatch(Msg::ConflictReplacePlanBlockSelection {
+                repo_id,
+                path,
+                block_id,
+                selection: gitcomet_core::merge::OrderedSelection::new(),
+            });
+            cx.notify();
+            return;
+        }
         let Some(conflict_ix) = self.conflict_resolver.active_conflict else {
             return;
         };
@@ -2187,6 +2314,7 @@ impl MainPaneView {
         let selected_conflict =
             (total_conflicts > 0).then(|| conflict_ix.min(total_conflicts.saturating_sub(1)));
         let selected_conflict_ix = selected_conflict.unwrap_or(0);
+        self.conflict_resolver.display_plan_block_indices.clear();
         self.conflict_resolver_rebuild_visible_map();
         if let Some(selected_conflict) = selected_conflict {
             let _ = self
@@ -2632,6 +2760,25 @@ impl MainPaneView {
         if self.conflict_resolver.output_is_protected {
             return false;
         }
+        let selected_plan_target = self
+            .conflict_resolver
+            .selected_nav_target_index()
+            .and_then(|index| self.conflict_resolver.nav_targets.get(index))
+            .and_then(|target| match target.id {
+                conflict_resolver::ConflictNavTargetId::PlanBlock(block_id) => {
+                    Some((block_id, target.display_conflict_index))
+                }
+                conflict_resolver::ConflictNavTargetId::Region(_)
+                | conflict_resolver::ConflictNavTargetId::DisplayBlock(_) => None,
+            });
+        if let Some((block_id, display_conflict_index)) = selected_plan_target {
+            return self.conflict_resolver_apply_plan_block_choice(
+                block_id,
+                display_conflict_index,
+                choice,
+            );
+        }
+
         let Some(conflict_ix) = self.conflict_resolver.active_conflict else {
             return false;
         };
@@ -2717,6 +2864,109 @@ impl MainPaneView {
                     selection,
                 }),
                 None => {}
+            }
+        }
+        true
+    }
+
+    fn conflict_resolver_apply_plan_block_choice(
+        &mut self,
+        block_id: gitcomet_core::merge::MergeBlockId,
+        display_conflict_index: Option<usize>,
+        choice: conflict_resolver::ConflictChoice,
+    ) -> bool {
+        let Some((has_base, local_source, remote_source)) =
+            self.with_conflict_resolver_session(|session| {
+                let plan = session.merge_plan.as_ref()?;
+                plan.blocks
+                    .iter()
+                    .any(|block| block.id == block_id)
+                    .then_some((plan.has_base(), plan.local_source(), plan.remote_source()))
+            })
+        else {
+            return false;
+        };
+        let to_merge_source = |source| {
+            use gitcomet_core::conflict_output::ConflictOutputSource as Output;
+            use gitcomet_core::merge::MergeSource;
+            match (has_base, source) {
+                (true, Output::Base) => Some(MergeSource::A),
+                (true, Output::Ours) => Some(MergeSource::B),
+                (true, Output::Theirs) => Some(MergeSource::C),
+                (false, Output::Base) => None,
+                (false, Output::Ours) => Some(MergeSource::A),
+                (false, Output::Theirs) => Some(MergeSource::B),
+            }
+        };
+        if choice
+            .iter()
+            .any(|source| to_merge_source(source).is_none())
+        {
+            return false;
+        }
+
+        let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.dispatch_path(),
+        ) else {
+            return false;
+        };
+
+        if choice == conflict_resolver::ConflictChoice::Both {
+            self.store.dispatch(Msg::ConflictReplacePlanBlockSelection {
+                repo_id,
+                path,
+                block_id,
+                selection: gitcomet_core::merge::OrderedSelection::from_sources([
+                    local_source,
+                    remote_source,
+                ]),
+            });
+        } else if choice.len() == 1 {
+            let Some(source) = choice.first().and_then(to_merge_source) else {
+                return false;
+            };
+            self.store.dispatch(Msg::ConflictTogglePlanBlockSource {
+                repo_id,
+                path,
+                block_id,
+                source,
+            });
+        } else {
+            self.store.dispatch(Msg::ConflictReplacePlanBlockSelection {
+                repo_id,
+                path,
+                block_id,
+                selection: gitcomet_core::merge::OrderedSelection::from_sources(
+                    choice.iter().filter_map(to_merge_source),
+                ),
+            });
+        }
+
+        // Preserve the existing immediate feedback for a marker-backed plan
+        // target. Plan-only automatic deltas update on the conflict-revision
+        // resync, which re-renders their surrounding plain-text projection.
+        if let Some(conflict_ix) = display_conflict_index {
+            self.conflict_resolver.active_conflict = Some(conflict_ix);
+            if let Some(block) = self.conflict_resolver_active_block_mut() {
+                if choice == conflict_resolver::ConflictChoice::Both {
+                    block.choice = choice;
+                    block.resolved = true;
+                } else if choice.len() == 1 {
+                    let Some(output_source) = choice.first() else {
+                        return false;
+                    };
+                    if !block.resolved {
+                        block.choice = conflict_resolver::ConflictChoice::empty();
+                    }
+                    block.choice.toggle(output_source);
+                    block.resolved = !block.choice.is_empty();
+                } else {
+                    block.choice = choice;
+                    block.resolved = !choice.is_empty();
+                }
             }
         }
         true
@@ -2922,8 +3172,9 @@ impl MainPaneView {
             conflict_resolver::sequential_conflict_region_indices(
                 &self.conflict_resolver.marker_segments,
             );
+        self.conflict_resolver.display_plan_block_indices.clear();
         self.conflict_resolver.last_autosolve_summary = None;
-        self.conflict_resolver.auto_solved_on_open = None;
+        self.conflict_resolver.open_summary_counts = None;
         self.conflict_resolver_rebuild_visible_map();
         let _ = self.conflict_resolver.select_display_conflict(0);
         self.conflict_resolver_refresh_output_and_scroll(None, cx);
@@ -2958,6 +3209,21 @@ impl MainPaneView {
             return None;
         }
         Some((session.total_regions(), session.solved_count()))
+    }
+
+    pub(in crate::view) fn conflict_resolver_summary_counts(
+        &self,
+    ) -> Option<conflict_resolver::ConflictSummaryCounts> {
+        let resolver_path = self.conflict_resolver.path.as_ref()?;
+        let session = self
+            .active_repo()?
+            .conflict_state
+            .conflict_session
+            .as_ref()?;
+        if session.path.as_path() != resolver_path.as_path() {
+            return None;
+        }
+        Some(conflict_resolver::conflict_session_summary_counts(session))
     }
 
     pub(super) fn conflict_resolver_active_block_mut(
@@ -3351,6 +3617,188 @@ impl MainPaneView {
         cx.notify();
     }
 
+    /// KDiff3 manual diff help: mark `line` of `column` for the next Ctrl+Y.
+    ///
+    /// `extend` grows that column's mark from its anchor. No-op when the
+    /// current conflict has no real aligned row space to pin against.
+    pub(in crate::view) fn conflict_resolver_mark_alignment_line(
+        &mut self,
+        column: ThreeWayColumn,
+        line: usize,
+        extend: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !self.conflict_resolver.manual_alignment_enabled() {
+            return;
+        }
+        self.conflict_resolver
+            .set_alignment_selection(column, line, extend);
+        cx.notify();
+    }
+
+    /// KDiff3 manual diff help: drop the pending marks without pinning them.
+    pub(in crate::view) fn conflict_resolver_clear_alignment_marks(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let cleared = self.conflict_resolver.clear_alignment_selections();
+        if cleared {
+            cx.notify();
+        }
+        cleared
+    }
+
+    /// KDiff3's `Ctrl+Y`: pin the marked lines onto one another and replan.
+    ///
+    /// Returns whether a request was dispatched. The marks are dropped
+    /// immediately; the state round-trip rebuilds the resolver from the new
+    /// plan, and a rejected entry simply leaves the plan as it was.
+    pub(in crate::view) fn conflict_resolver_align_manually(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(alignment) = self
+            .conflict_resolver
+            .manual_alignment_from_selections(self.conflict_resolver_session_has_base())
+        else {
+            return false;
+        };
+        let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.dispatch_path(),
+        ) else {
+            return false;
+        };
+        self.store.dispatch(Msg::ConflictAddManualAlignment {
+            repo_id,
+            path,
+            alignment,
+            expected_conflict_rev: self.conflict_resolver.conflict_rev,
+        });
+        self.conflict_resolver.clear_alignment_selections();
+        cx.notify();
+        true
+    }
+
+    /// KDiff3's `Ctrl+Shift+Y`: drop every pinned alignment and replan.
+    ///
+    /// Also clears any pending marks, so one keystroke returns the file to its
+    /// automatic alignment. Returns whether anything was dispatched.
+    pub(in crate::view) fn conflict_resolver_clear_manual_alignments(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let cleared_marks = self.conflict_resolver.clear_alignment_selections();
+        let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.dispatch_path(),
+        ) else {
+            if cleared_marks {
+                cx.notify();
+            }
+            return cleared_marks;
+        };
+        self.store.dispatch(Msg::ConflictClearManualAlignments {
+            repo_id,
+            path,
+            expected_conflict_rev: self.conflict_resolver.conflict_rev,
+        });
+        cx.notify();
+        true
+    }
+
+    /// Pick-control state for the semantic current delta. A plan-backed target
+    /// remains actionable even when it is automatically resolved and therefore
+    /// has no displayed marker block.
+    pub(in crate::view) fn conflict_resolver_active_pick_state(
+        &self,
+    ) -> Option<(bool, Vec<conflict_resolver::ConflictChoice>)> {
+        let target = self
+            .conflict_resolver
+            .selected_nav_target_index()
+            .and_then(|index| self.conflict_resolver.nav_targets.get(index));
+        if let Some(conflict_resolver::ConflictNavTarget {
+            id: conflict_resolver::ConflictNavTargetId::PlanBlock(block_id),
+            is_delta: true,
+            ..
+        }) = target
+        {
+            return self.with_conflict_resolver_session(|session| {
+                let plan = session.merge_plan.as_ref()?;
+                let block = plan.blocks.iter().find(|block| block.id == *block_id)?;
+                let selected = block
+                    .selection
+                    .iter()
+                    .filter_map(|source| {
+                        conflict_resolver::choice_for_selection(&source.into(), plan.has_base())
+                    })
+                    .collect();
+                Some((plan.has_base(), selected))
+            });
+        }
+
+        let conflict_ix = self.conflict_resolver.active_conflict?;
+        Some((
+            self.conflict_resolver
+                .conflict_has_base
+                .get(conflict_ix)
+                .copied()
+                .unwrap_or(false),
+            self.conflict_resolver_selected_choices_for_conflict_ix(conflict_ix),
+        ))
+    }
+
+    pub(in crate::view) fn conflict_resolver_has_active_pick_target(&self) -> bool {
+        self.conflict_resolver_active_pick_state().is_some()
+    }
+
+    /// Read a value off the conflict session currently loaded in the resolver.
+    fn with_conflict_resolver_session<T: Default>(
+        &self,
+        read: impl FnOnce(&gitcomet_core::conflict_session::ConflictSession) -> T,
+    ) -> T {
+        let Some(path) = self.conflict_resolver.path.as_deref() else {
+            return T::default();
+        };
+        self.store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| Some(repo.id) == self.conflict_resolver.repo_id)
+            .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+            .filter(|session| session.path == path)
+            .map(read)
+            .unwrap_or_default()
+    }
+
+    /// Whether the loaded session's plan carries a base, which decides whether
+    /// a pinned entry uses three-input or true two-input source mapping.
+    fn conflict_resolver_session_has_base(&self) -> bool {
+        self.with_conflict_resolver_session(|session| {
+            session
+                .merge_plan
+                .as_ref()
+                .is_some_and(gitcomet_core::merge::MergePlan::has_base)
+        })
+    }
+
+    /// Whether the loaded session already has pinned manual alignments.
+    pub(in crate::view) fn conflict_resolver_has_manual_alignments(&self) -> bool {
+        self.with_conflict_resolver_session(|session| !session.manual_alignments.is_empty())
+    }
+
+    /// How many source columns carry a pending alignment mark.
+    pub(in crate::view) fn conflict_resolver_alignment_marked_columns(&self) -> usize {
+        ThreeWayColumn::ALL
+            .iter()
+            .filter(|column| self.conflict_resolver.alignment_selection[**column].is_some())
+            .count()
+    }
+
     pub(in crate::view) fn conflict_resolver_join_regions(
         &mut self,
         target: ConflictResolverJoinTarget,
@@ -3410,19 +3858,62 @@ impl MainPaneView {
         choice: conflict_resolver::ConflictChoice,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.conflict_resolver_conflict_count() == 0 {
+        let picked_conflict_index = self
+            .conflict_resolver
+            .selected_nav_target_index()
+            .and_then(|target_index| {
+                self.conflict_resolver.nav_targets[target_index].display_conflict_index
+            })
+            .or(self.conflict_resolver.active_conflict);
+        if picked_conflict_index.is_none() && !self.conflict_resolver_has_active_pick_target() {
             return;
         }
-        let Some(picked_conflict_index) = self.conflict_resolver.active_conflict else {
-            return;
-        };
         if !self.conflict_resolver_apply_block_choice(choice) {
             return;
         }
-        self.conflict_resolver_rebuild_visible_map();
-        self.conflict_resolver_refresh_output_and_scroll(Some(picked_conflict_index), cx);
+        if let Some(picked_conflict_index) = picked_conflict_index {
+            self.conflict_resolver_rebuild_visible_map();
+            self.conflict_resolver_refresh_output_and_scroll(Some(picked_conflict_index), cx);
+            self.conflict_resolver_auto_advance_to_next_unresolved(cx);
+        }
 
-        self.conflict_resolver_auto_advance_to_next_unresolved(cx);
+        cx.notify();
+    }
+
+    /// KDiff3's Choose A/B/C Everywhere: replace every semantic delta,
+    /// including automatically selected ones that have no marker region.
+    pub(in crate::view) fn conflict_resolver_choose_everywhere(
+        &mut self,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver.output_is_protected {
+            return;
+        }
+        let bulk_choice = if choice == conflict_resolver::ConflictChoice::Base {
+            gitcomet_state::msg::ConflictBulkChoice::Base
+        } else if choice == conflict_resolver::ConflictChoice::Ours {
+            gitcomet_state::msg::ConflictBulkChoice::Ours
+        } else if choice == conflict_resolver::ConflictChoice::Theirs {
+            gitcomet_state::msg::ConflictBulkChoice::Theirs
+        } else if choice == conflict_resolver::ConflictChoice::Both {
+            gitcomet_state::msg::ConflictBulkChoice::Both
+        } else {
+            return;
+        };
+        let (Some(repo_id), Some(path)) = (
+            self.conflict_resolver
+                .repo_id
+                .or_else(|| self.active_repo_id()),
+            self.conflict_resolver.dispatch_path(),
+        ) else {
+            return;
+        };
+        self.store.dispatch(Msg::ConflictApplyBulkChoice {
+            repo_id,
+            path,
+            choice: bulk_choice,
+        });
         cx.notify();
     }
 
@@ -3438,6 +3929,119 @@ impl MainPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn session_with_automatic_delta() -> gitcomet_core::conflict_session::ConflictSession {
+        use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+        use gitcomet_core::domain::FileConflictKind;
+
+        ConflictSession::from_stage_inputs(
+            std::path::PathBuf::from("file.txt"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text("start\nold-local\nmiddle\nold-conflict\nend\n".into()),
+            ConflictPayload::Text("start\nnew-local\nmiddle\nours-conflict\nend\n".into()),
+            ConflictPayload::Text("start\nold-local\nmiddle\ntheirs-conflict\nend\n".into()),
+        )
+    }
+
+    #[test]
+    fn live_plan_projection_renders_an_automatic_delta_override() {
+        use gitcomet_core::merge::MergeSource;
+
+        let mut session = session_with_automatic_delta();
+        let automatic_id = session
+            .merge_plan
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .find(|block| block.is_delta && !block.original_conflict)
+            .unwrap()
+            .id;
+        let (automatic, _) = conflict_session_plan_projection(&session).unwrap();
+        assert!(automatic.contains("new-local\n"));
+
+        assert!(session.replace_plan_block_selection(automatic_id, MergeSource::C.into()));
+        let (overridden, _) = conflict_session_plan_projection(&session).unwrap();
+        assert!(overridden.contains("old-local\n"));
+        assert!(!overridden.contains("new-local\n"));
+    }
+
+    #[test]
+    fn an_unresolved_automatic_delta_gets_a_visible_plan_block_mapping() {
+        use gitcomet_core::merge::MergeSource;
+
+        let mut session = session_with_automatic_delta();
+        let (automatic_index, automatic_id) = session
+            .merge_plan
+            .as_ref()
+            .unwrap()
+            .blocks
+            .iter()
+            .enumerate()
+            .find(|(_, block)| block.is_delta && !block.original_conflict)
+            .map(|(index, block)| (index, block.id))
+            .unwrap();
+        assert!(session.toggle_plan_block_source(automatic_id, MergeSource::B));
+        let (projection, projected_plan_blocks) =
+            conflict_session_plan_projection(&session).unwrap();
+        let mut segments = conflict_resolver::parse_conflict_markers(projection.as_ref());
+        let applied = conflict_resolver::apply_plan_session_region_resolutions_with_index_map(
+            &mut segments,
+            &session,
+            &projected_plan_blocks,
+        )
+        .expect("exact mapping");
+        let plan_blocks = applied.block_plan_indices;
+        assert!(plan_blocks.contains(&automatic_index));
+        assert_eq!(
+            plan_blocks,
+            session.merge_plan.as_ref().unwrap().unresolved_blocks
+        );
+    }
+
+    #[test]
+    fn plan_whitespace_classification_reaches_the_display_blocks() {
+        use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+        use gitcomet_core::domain::FileConflictKind;
+
+        // Both sides only respaced the same line, so kdiff3's per-row rule
+        // marks the block whitespace-only.
+        let session = ConflictSession::from_stage_inputs(
+            std::path::PathBuf::from("file.txt"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text("value = 1\n".into()),
+            ConflictPayload::Text("value=1\n".into()),
+            ConflictPayload::Text("value  =  1\n".into()),
+        );
+        assert!(
+            session
+                .merge_plan
+                .as_ref()
+                .expect("plan-backed session")
+                .blocks
+                .iter()
+                .any(|block| block.whitespace_conflict),
+            "fixture should produce a whitespace conflict"
+        );
+
+        let (projection, projected_plan_blocks) =
+            conflict_session_plan_projection(&session).unwrap();
+        let mut segments = conflict_resolver::parse_conflict_markers(projection.as_ref());
+        conflict_resolver::apply_plan_session_region_resolutions_with_index_map(
+            &mut segments,
+            &session,
+            &projected_plan_blocks,
+        )
+        .expect("exact mapping");
+
+        assert!(
+            segments.iter().any(|segment| matches!(
+                segment,
+                conflict_resolver::ConflictSegment::Block(block) if block.whitespace_only
+            )),
+            "the plan's whitespace verdict should land on the display block"
+        );
+    }
 
     #[test]
     fn conflict_file_source_fingerprint_is_stable_across_fresh_allocations() {

@@ -55,6 +55,7 @@ mod context_shortcuts;
 mod dialog;
 mod file_actions;
 mod layout;
+mod mergetool_settings;
 mod picker;
 mod recent_repo_picker;
 mod refs;

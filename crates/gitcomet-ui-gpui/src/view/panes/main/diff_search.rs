@@ -3470,6 +3470,7 @@ mod tests {
             theirs: "remote\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         })];
         let visible_range = 0..1;
         let three_way_visible_projection = build_three_way_visible_projection(
@@ -3544,6 +3545,7 @@ mod tests {
             theirs: "remote\nside\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         })];
         let index = ConflictSplitRowIndex::new(&marker_segments, 1);
         let projection = TwoWaySplitProjection::new(&index, &marker_segments, false);
@@ -3583,6 +3585,7 @@ mod tests {
             theirs: "theirs".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         })];
         let visible_range = 0..1;
         let three_way_visible_projection = build_three_way_visible_projection(
@@ -3618,6 +3621,7 @@ mod tests {
             theirs: "remote\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         })];
         let conflict_ranges = 0..1;
         let three_way_visible_projection = build_three_way_visible_projection(
@@ -3654,6 +3658,7 @@ mod tests {
                 theirs: "theirs_plain\ntheirs_plain\n".into(),
                 choice: ConflictChoice::Ours,
                 resolved: false,
+                whitespace_only: false,
             }),
             ConflictSegment::Text("footer\n".into()),
         ];
@@ -3717,6 +3722,7 @@ mod tests {
                 theirs: "delta\nepsilon\nneedle_theirs\n".into(),
                 choice: ConflictChoice::Ours,
                 resolved: false,
+                whitespace_only: false,
             }),
         ];
         let index = ConflictSplitRowIndex::new(&marker_segments, 1);
@@ -3774,6 +3780,7 @@ mod tests {
             theirs: "theirs\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         })];
         let conflict_ranges = 0..1;
         let projection = build_three_way_visible_projection(

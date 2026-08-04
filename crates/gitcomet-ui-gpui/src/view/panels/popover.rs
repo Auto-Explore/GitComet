@@ -3546,6 +3546,8 @@ impl PopoverHost {
                 split_selection_rows,
                 join_previous_region,
                 join_next_region,
+                alignment_marked_columns,
+                has_manual_alignments,
             } => self.context_menu_view(
                 PopoverKind::ConflictResolverChunkMenu {
                     conflict_ix,
@@ -3556,6 +3558,8 @@ impl PopoverHost {
                     split_selection_rows,
                     join_previous_region,
                     join_next_region,
+                    alignment_marked_columns,
+                    has_manual_alignments,
                 },
                 cx,
             ),

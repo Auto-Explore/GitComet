@@ -1053,6 +1053,21 @@ fn auto_mode_resolves_whitespace_only_conflict() {
 }
 
 #[test]
+fn auto_mode_uses_strip_all_whitespace_classification() {
+    let tmp = tempfile::tempdir().unwrap();
+    let base = "foo(1);\n";
+    let ours = "foo( 1 );\n";
+    let theirs = "foo(1) ;\n";
+
+    let mut config = make_config(tmp.path(), Some(base), ours, theirs, "");
+    config.auto = true;
+
+    let result = run_mergetool(&config).expect("mergetool run");
+    assert_eq!(result.exit_code, exit_code::SUCCESS);
+    assert_eq!(fs::read_to_string(&config.merged).unwrap(), ours);
+}
+
+#[test]
 fn auto_mode_resolves_diff3_subchunk_conflict() {
     let tmp = tempfile::tempdir().unwrap();
     // Base has 3 lines; ours changes line 2, theirs changes line 1.

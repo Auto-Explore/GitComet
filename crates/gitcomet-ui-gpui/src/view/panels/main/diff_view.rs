@@ -280,17 +280,34 @@ impl MainPaneView {
                 && (mods.control || mods.platform)
                 && !mods.alt
                 && !mods.function
-                && !mods.shift
-                && self.conflict_resolver.active_conflict.is_some()
                 && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
                     key,
                     self.conflict_resolver.view_mode,
                 )
             {
-                self.conflict_resolver_pick_active_conflict(choice, cx);
-                return true;
+                if mods.shift {
+                    self.conflict_resolver_choose_everywhere(choice, cx);
+                    return true;
+                }
+                if self.conflict_resolver_has_active_pick_target() {
+                    self.conflict_resolver_pick_active_conflict(choice, cx);
+                    return true;
+                }
             }
             return false;
+        }
+
+        // kdiff3 manual diff help: Escape abandons pending alignment marks
+        // before reaching the resolver's other escape behaviors, so a
+        // mis-marked line does not cost the user their selection or view.
+        if key == "escape"
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && self.conflict_resolver_clear_alignment_marks(cx)
+        {
+            return true;
         }
 
         if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
@@ -782,7 +799,7 @@ impl MainPaneView {
                 .read(cx)
                 .focus_handle()
                 .is_focused(window)
-            && self.conflict_resolver.active_conflict.is_some()
+            && self.conflict_resolver_has_active_pick_target()
         {
             if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(
                 key,
@@ -797,6 +814,24 @@ impl MainPaneView {
             }
         }
 
+        // KDiff3-compatible Ctrl+Shift+1/2/3: choose A/B/C on every delta,
+        // including blocks that were selected automatically and have no
+        // conflict markers.
+        if !handled
+            && conflict_resolver_active
+            && (mods.control || mods.platform)
+            && mods.shift
+            && !mods.alt
+            && !mods.function
+            && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
+                key,
+                self.conflict_resolver.view_mode,
+            )
+        {
+            self.conflict_resolver_choose_everywhere(choice, cx);
+            handled = true;
+        }
+
         // section 30: kdiff3-compatible Ctrl+1/2/3 pick aliases. When the output
         // editor is focused these are handled by the carve-out at the top of this
         // fn; this block covers the case where focus is elsewhere.
@@ -806,7 +841,7 @@ impl MainPaneView {
             && !mods.alt
             && !mods.function
             && !mods.shift
-            && self.conflict_resolver.active_conflict.is_some()
+            && self.conflict_resolver_has_active_pick_target()
             && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
                 key,
                 self.conflict_resolver.view_mode,
@@ -814,6 +849,23 @@ impl MainPaneView {
         {
             self.conflict_resolver_pick_active_conflict(choice, cx);
             handled = true;
+        }
+
+        // kdiff3 manual diff help: Ctrl+Y pins the lines marked in the source
+        // columns onto one another; Ctrl+Shift+Y drops every pin and returns
+        // the file to its automatic alignment.
+        if !handled
+            && conflict_resolver_active
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && key == "y"
+        {
+            handled = if mods.shift {
+                self.conflict_resolver_clear_manual_alignments(cx)
+            } else {
+                self.conflict_resolver_align_manually(cx)
+            };
         }
 
         // GitComet resolver navigation: Ctrl+Home/End jump to the first/last

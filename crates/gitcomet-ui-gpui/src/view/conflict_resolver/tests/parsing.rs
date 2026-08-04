@@ -141,6 +141,51 @@ fn unresolved_placeholder_preserves_crlf_output_rows() {
 }
 
 #[test]
+fn whitespace_only_blocks_name_themselves_in_the_placeholder() {
+    let mut segments =
+        parse_conflict_markers("a\n<<<<<<< ours\n  one\n=======\n\tone\n>>>>>>> theirs\nb\n");
+    let ConflictSegment::Block(block) = &mut segments[1] else {
+        panic!("expected a conflict block");
+    };
+    block.whitespace_only = true;
+
+    assert_eq!(
+        generate_resolved_text(&segments),
+        "a\n<Merge Conflict (Whitespace only)>\nb\n"
+    );
+}
+
+#[test]
+fn whitespace_only_placeholder_preserves_crlf_output_rows() {
+    let mut segments = parse_conflict_markers(
+        "a\r\n<<<<<<< ours\r\n  one\r\n=======\r\n\tone\r\n>>>>>>> theirs\r\nb\r\n",
+    );
+    let ConflictSegment::Block(block) = &mut segments[1] else {
+        panic!("expected a conflict block");
+    };
+    block.whitespace_only = true;
+
+    assert_eq!(
+        generate_resolved_text(&segments),
+        "a\r\n<Merge Conflict (Whitespace only)>\r\nb\r\n"
+    );
+}
+
+#[test]
+fn resolved_whitespace_only_blocks_emit_their_pick_not_the_placeholder() {
+    let mut segments =
+        parse_conflict_markers("a\n<<<<<<< ours\n  one\n=======\n\tone\n>>>>>>> theirs\nb\n");
+    let ConflictSegment::Block(block) = &mut segments[1] else {
+        panic!("expected a conflict block");
+    };
+    block.whitespace_only = true;
+    block.choice = ConflictChoice::Ours;
+    block.resolved = true;
+
+    assert_eq!(generate_resolved_text(&segments), "a\n  one\nb\n");
+}
+
+#[test]
 fn generate_with_options_preserves_unresolved_markers_with_labels() {
     let input = "a\n<<<<<<< ours\none\n||||||| base\norig\n=======\nuno\n>>>>>>> theirs\nb\n";
     let segments = parse_conflict_markers(input);
@@ -793,4 +838,58 @@ fn resolved_output_gutter_row_packs_marker_bits() {
     assert!(!source_only.is_start());
     assert!(!source_only.is_end());
     assert!(!source_only.unresolved());
+}
+
+#[test]
+fn placeholder_rows_read_as_unresolved_conflicts_without_a_marker_entry() {
+    // The state behind the reported bug: the marker array has no entry for the
+    // row, so it would otherwise fall back to a muted `M`.
+    let row = ResolvedOutputGutterRow::default().with_unresolved_placeholder();
+
+    assert_eq!(row.badge_char(), '?');
+    assert!(row.has_marker());
+    assert!(row.unresolved());
+    // A placeholder is a whole one-line block, so it caps at both ends.
+    assert!(row.is_start());
+    assert!(row.is_end());
+    // Must not paint as plain manual text.
+    assert!(!row.manual_without_marker());
+}
+
+#[test]
+fn placeholder_flag_leaves_a_real_marker_entry_intact() {
+    let row = ResolvedOutputGutterRow::new(ResolvedLineSource::B, Some(17), true, false, true)
+        .with_unresolved_placeholder();
+
+    assert_eq!(row.marker_conflict_ix(), Some(17));
+    assert_eq!(row.source(), ResolvedLineSource::B);
+    assert_eq!(row.badge_char(), '?');
+}
+
+#[test]
+fn both_placeholder_variants_are_recognized_by_text() {
+    for line in [
+        "<Merge Conflict>",
+        "<Merge Conflict>\n",
+        "<Merge Conflict>\r\n",
+        "<Merge Conflict (Whitespace only)>",
+        "<Merge Conflict (Whitespace only)>\r\n",
+    ] {
+        assert!(
+            line_is_unresolved_conflict_placeholder(line),
+            "expected {line:?} to read as a placeholder"
+        );
+    }
+
+    for line in [
+        "value = 1",
+        "",
+        "  <Merge Conflict>",
+        "<Merge Conflict> trailing",
+    ] {
+        assert!(
+            !line_is_unresolved_conflict_placeholder(line),
+            "expected {line:?} not to read as a placeholder"
+        );
+    }
 }
