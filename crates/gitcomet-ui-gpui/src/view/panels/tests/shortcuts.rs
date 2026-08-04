@@ -4184,38 +4184,34 @@ fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds
         });
     });
     cx.simulate_keystrokes("ctrl-shift-3");
-    wait_for_main_pane_condition(
-        cx,
-        &view,
-        "Choose C Everywhere",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+    // The bulk choice lands in the store, and this harness seeds the view's
+    // state directly rather than wiring the store through to it, so assert
+    // where the reducer actually writes.
+    let delta_selections = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let snapshot = view.read(app).store.snapshot();
+            snapshot
+                .repos
+                .iter()
+                .find_map(|repo| repo.conflict_state.conflict_session.as_ref())
                 .and_then(|session| session.merge_plan.as_ref())
-                .is_some_and(|plan| {
+                .map(|plan| {
                     plan.blocks
                         .iter()
                         .filter(|block| block.is_delta)
-                        .all(|block| {
-                            block.selection.as_slice() == [gitcomet_core::merge::MergeSource::C]
-                        })
-                })
-        },
-        |pane| {
-            format!(
-                "plan={:?}",
-                pane.active_repo()
-                    .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
-                    .and_then(|session| session.merge_plan.as_ref())
-                    .map(|plan| plan
-                        .blocks
-                        .iter()
-                        .filter(|block| block.is_delta)
                         .map(|block| block.selection.as_slice().to_vec())
-                        .collect::<Vec<_>>())
-            )
-        },
-    );
+                        .collect::<Vec<_>>()
+                })
+        })
+    };
+    wait_until(cx, "Choose C Everywhere", |cx| {
+        delta_selections(cx).is_some_and(|blocks| {
+            !blocks.is_empty()
+                && blocks
+                    .iter()
+                    .all(|selection| selection.as_slice() == [gitcomet_core::merge::MergeSource::C])
+        })
+    });
 }
 
 #[gpui::test]

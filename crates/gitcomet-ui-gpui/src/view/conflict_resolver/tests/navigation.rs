@@ -50,7 +50,6 @@ fn displayed_session_targets(
         Some(session),
         &region_ranges,
         &applied.block_region_indices,
-        &display_plan_blocks,
         &display_ranges,
         &segments,
     );
@@ -232,7 +231,6 @@ fn planless_sessions_use_all_regions_and_display_only_is_the_final_fallback() {
         Some(&session),
         &region_ranges,
         &display_region_indices,
-        &[],
         &[Some(2..4), Some(8..11)],
         &segments,
     );
@@ -261,7 +259,6 @@ fn planless_sessions_use_all_regions_and_display_only_is_the_final_fallback() {
         Some(&materialized),
         &region_ranges,
         &applied.block_region_indices,
-        &[],
         &[Some(8..11)],
         &materialized_segments,
     );
@@ -282,7 +279,6 @@ fn planless_sessions_use_all_regions_and_display_only_is_the_final_fallback() {
         None,
         &[],
         &display_region_indices,
-        &[],
         &[Some(2..4), Some(8..11)],
         &segments,
     );

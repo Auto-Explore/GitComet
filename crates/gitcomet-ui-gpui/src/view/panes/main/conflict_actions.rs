@@ -369,7 +369,6 @@ impl MainPaneView {
             session,
             &self.conflict_resolver.original_region_aligned_ranges,
             &self.conflict_resolver.conflict_region_indices,
-            &self.conflict_resolver.display_plan_block_indices,
             &display_aligned_ranges,
             &self.conflict_resolver.marker_segments,
         );

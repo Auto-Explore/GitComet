@@ -1764,7 +1764,6 @@ pub(in crate::view) fn build_conflict_nav_targets(
     session: Option<&gitcomet_core::conflict_session::ConflictSession>,
     region_aligned_ranges: &[Option<Range<usize>>],
     display_region_indices: &[usize],
-    display_plan_block_indices: &[usize],
     display_aligned_ranges: &[Option<Range<usize>>],
     segments: &[ConflictSegment],
 ) -> Vec<ConflictNavTarget> {
@@ -1792,10 +1791,17 @@ pub(in crate::view) fn build_conflict_nav_targets(
                     .region_plan_blocks
                     .iter()
                     .position(|candidate| *candidate == block_index);
-                let display_conflict_index = display_plan_block_indices
-                    .iter()
-                    .position(|candidate| *candidate == block_index)
-                    .or_else(|| region_index.and_then(display_for_region));
+                // `display_conflict_index` addresses a *rendered marker block*
+                // — it becomes `active_conflict`, which the rest of the UI uses
+                // as `conflict_ix`. Only the region mapping can produce it: a
+                // plan block's position among the plan's blocks is a different
+                // index space, and blocks that render no marker (automatically
+                // selected deltas) are absent from the displayed space entirely.
+                let display_conflict_index = region_index.and_then(display_for_region);
+                // Prefer the displayed block's own verdict where the block is
+                // rendered, since an in-progress edit can resolve a marker
+                // ahead of the plan; otherwise the plan block is the authority,
+                // which is what makes a plan-only delta navigable.
                 let unresolved = display_conflict_index
                     .and_then(|index| display_resolved.get(index))
                     .map_or_else(|| !block.is_resolved(), |resolved| !resolved);
