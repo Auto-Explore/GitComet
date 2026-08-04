@@ -3,8 +3,8 @@ use crate::theme::AppTheme;
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Bounds, Div, ElementId, IntoElement, Pixels, Point, ScrollHandle, Stateful, div,
-    point, px,
+    AnyElement, App, Bounds, Div, Element, ElementId, GlobalElementId, InspectorElementId,
+    IntoElement, LayoutId, Pixels, Point, ScrollHandle, Stateful, Window, div, point, px,
 };
 
 /// Sub-pixel slack: layout rounding leaves a hair of scrollable width behind
@@ -22,6 +22,88 @@ pub struct TabBarScroll {
 impl Default for TabBarScroll {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// Keeps a trailing control outside the scroll container's input hitbox while
+/// painting it at the measured end of the visible tab run. Its normal layout
+/// width remains reserved at the viewport edge for overflowing tabs.
+struct TabBarEnd {
+    child: Option<AnyElement>,
+    scroll: Option<TabBarScroll>,
+    tab_count: usize,
+}
+
+impl IntoElement for TabBarEnd {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for TabBarEnd {
+    type RequestLayoutState = AnyElement;
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut child = self.child.take().expect("tab bar end child");
+        (child.request_layout(window, cx), child)
+    }
+
+    fn prepaint(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        bounds: Bounds<Pixels>,
+        child: &mut Self::RequestLayoutState,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> Self::PrepaintState {
+        let offset_x = self
+            .scroll
+            .as_ref()
+            .and_then(|scroll| {
+                let viewport = scroll.viewport();
+                let desired_left = self
+                    .tab_count
+                    .checked_sub(1)
+                    .and_then(|ix| scroll.tab_bounds(ix))
+                    .map_or(viewport.left(), |last| last.right().min(viewport.right()));
+                (viewport.size.width > px(0.0)).then(|| (desired_left - bounds.left()).min(px(0.0)))
+            })
+            .unwrap_or(px(0.0));
+
+        window.with_element_offset(point(offset_x, px(0.0)), |window| {
+            child.prepaint(window, cx);
+        });
+    }
+
+    fn paint(
+        &mut self,
+        _global_id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        child: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        child.paint(window, cx);
     }
 }
 
@@ -135,9 +217,8 @@ impl TabBar {
         self
     }
 
-    /// Element laid out directly after the final tab. Keeping it in the scroll
-    /// row makes controls such as the add-repository button follow the tabs
-    /// instead of floating at the far edge of otherwise empty title-bar space.
+    /// Element laid out after the tab viewport and visually attached to the
+    /// final visible tab without becoming part of the scroll hitbox.
     pub fn tab_end(mut self, tab_end: impl IntoElement) -> Self {
         self.tab_end = Some(tab_end.into_any_element());
         self
@@ -157,6 +238,12 @@ impl TabBar {
             tab_end,
             scroll,
         } = self;
+        let tab_count = tabs.len();
+        let tab_end = tab_end.map(|child| TabBarEnd {
+            child: Some(child),
+            scroll: scroll.clone(),
+            tab_count,
+        });
 
         // The tabs are direct children of the scroll container on purpose:
         // GPUI measures scrollable content from its immediate children, so a
@@ -173,8 +260,7 @@ impl TabBar {
             .when_some(scroll.as_ref(), |this, scroll| {
                 this.track_scroll(&scroll.handle)
             })
-            .children(tabs)
-            .children(tab_end);
+            .children(tabs);
 
         let viewport = div()
             .relative()
@@ -193,5 +279,6 @@ impl TabBar {
             .w_full()
             .h_full()
             .child(viewport.child(tabs))
+            .children(tab_end)
     }
 }

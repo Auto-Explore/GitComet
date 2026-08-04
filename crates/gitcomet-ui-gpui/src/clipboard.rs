@@ -129,7 +129,8 @@ fn write_copy_diagnostic_inner(
             ClipboardBackend::X11 => "x11",
         },
     );
-    let mut file = std::fs::File::create(dir.join("last-operation.log"))?;
+    let mut file =
+        std::fs::File::create(dir.join(format!("last-operation-{}.log", std::process::id())))?;
     use std::io::Write as _;
     file.write_all(text.as_bytes())?;
     file.sync_data()

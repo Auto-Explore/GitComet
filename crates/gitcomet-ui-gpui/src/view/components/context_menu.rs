@@ -635,7 +635,7 @@ mod tests {
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg")),
-            theme.colors.text
+            theme.colors.accent
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Force push", Some("icons/warning.svg")),

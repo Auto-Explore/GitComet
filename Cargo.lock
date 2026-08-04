@@ -2235,6 +2235,7 @@ dependencies = [
  "serde",
  "serde_json",
  "signal-hook",
+ "sysinfo",
  "tempfile",
  "wayland-client",
 ]

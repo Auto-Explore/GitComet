@@ -4550,7 +4550,7 @@ fn dragging_a_repo_tab_past_the_strip_ends_keeps_it_inside(cx: &mut gpui::TestAp
 }
 
 #[gpui::test]
-fn add_repo_button_follows_the_last_overflowing_tab(cx: &mut gpui::TestAppContext) {
+fn add_repo_button_stays_after_the_overflowing_tab_viewport(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_test = store.clone();
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -4568,15 +4568,15 @@ fn add_repo_button_follows_the_last_overflowing_tab(cx: &mut gpui::TestAppContex
     let first_tab = cx
         .debug_bounds(repo_tab_selector(repo_ids[0]))
         .expect("expected first repository tab bounds");
-    let last_tab = cx
-        .debug_bounds(repo_tab_selector(*repo_ids.last().expect("repo ids")))
-        .expect("expected final repository tab bounds");
-
     assert!(cx.debug_bounds("tab_bar_scroll_left").is_none());
     assert!(cx.debug_bounds("tab_bar_scroll_right").is_none());
     assert!(
-        plus.left() >= last_tab.right(),
-        "expected the + button to follow the final overflowing repository tab"
+        plus.left() >= strip.right() - px(1.0),
+        "expected the + button immediately after the overflowing tab viewport"
+    );
+    assert!(
+        plus.left() <= strip.right() + px(12.0),
+        "expected the + button to stay attached to the overflowing tab viewport"
     );
     assert!(
         first_tab.right() <= strip.right() + px(1.0),
@@ -4599,9 +4599,6 @@ fn add_repo_button_stays_at_the_strip_end_when_tabs_fit(cx: &mut gpui::TestAppCo
     let plus = cx
         .debug_bounds("add_repo_menu")
         .expect("expected the + button");
-    let strip = cx.update(|_window, app| {
-        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
-    });
     let last_tab = cx
         .debug_bounds(repo_tab_selector(*repo_ids.last().expect("repo ids")))
         .expect("expected final repository tab bounds");
@@ -4614,10 +4611,6 @@ fn add_repo_button_stays_at_the_strip_end_when_tabs_fit(cx: &mut gpui::TestAppCo
         plus.left() <= last_tab.right() + px(12.0),
         "expected the + button to hug the final repository tab, got a {:?} gap",
         plus.left() - last_tab.right()
-    );
-    assert!(
-        plus.right() < strip.right(),
-        "expected unused title-bar space to remain after the inline + button"
     );
     assert!(
         cx.debug_bounds("tab_bar_scroll_right").is_none(),

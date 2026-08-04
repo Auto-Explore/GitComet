@@ -1077,7 +1077,11 @@ impl Render for RepoTabsBarView {
         let root_view = self.root_view.clone();
         let add_repo = div()
             .flex_none()
-            .h_full()
+            // Only the visible control row should intercept title-bar input.
+            // A full-height child here blocks window dragging in the blank
+            // chrome above the button when the tab row overflows.
+            .h(scaled_px(components::CONTROL_HEIGHT_PX))
+            .self_center()
             .flex()
             .items_center()
             .pl(scaled_px(2.0))
