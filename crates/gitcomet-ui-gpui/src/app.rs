@@ -771,7 +771,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", OpenRepository, None),
         KeyBinding::new("secondary-shift-o", SwitchRepository, None),
-        KeyBinding::new("ctrl-shift-a", SwitchRepository, None),
+        KeyBinding::new("secondary-shift-a", SwitchRepository, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-w", Close, None),
@@ -1693,7 +1693,7 @@ fn bind_terminal_keys(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-v", TerminalPaste, Some("Terminal")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-shift-a", TerminalSelectAll, Some("Terminal")),
+        KeyBinding::new("secondary-shift-a", TerminalSelectAll, Some("Terminal")),
     ]);
 }
 
@@ -2157,7 +2157,7 @@ mod tests {
         let cases = [
             ("ctrl-shift-c", TerminalCopy.name()),
             ("ctrl-shift-v", TerminalPaste.name()),
-            ("ctrl-shift-a", TerminalSelectAll.name()),
+            ("secondary-shift-a", TerminalSelectAll.name()),
         ];
 
         for (keystroke, expected_action) in cases {
@@ -2345,7 +2345,7 @@ mod tests {
             ("secondary-,", OpenSettings.name()),
             ("secondary-o", OpenRepository.name()),
             ("secondary-shift-o", SwitchRepository.name()),
-            ("ctrl-shift-a", SwitchRepository.name()),
+            ("secondary-shift-a", SwitchRepository.name()),
             ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-p", crate::view::ToggleCommandPalette.name()),
             ("secondary-w", Close.name()),
@@ -2562,14 +2562,14 @@ mod tests {
         });
         seed_workspace_repo(cx, &store, view);
 
-        cx.simulate_keystrokes("ctrl-shift-a");
+        cx.simulate_keystrokes("secondary-shift-a");
         cx.update(|window, app| {
             let _ = window.draw(app);
         });
 
         assert!(cx.debug_bounds("app_popover").is_some());
 
-        cx.simulate_keystrokes("ctrl-shift-a");
+        cx.simulate_keystrokes("secondary-shift-a");
         cx.update(|window, app| {
             let _ = window.draw(app);
         });
