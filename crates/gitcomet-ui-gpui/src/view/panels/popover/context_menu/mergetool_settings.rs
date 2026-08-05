@@ -1,5 +1,4 @@
 use super::*;
-use gitcomet_core::merge::OverviewMode;
 
 /// Cog-wheel settings menu for the merge conflict resolver (section 30). Holds the
 /// resolver-specific view options that used to borrow the diff-actions menu.
@@ -9,15 +8,8 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
         pane.mergetool_preferences();
     let collapse_context = pane.conflict_resolver_collapse_context();
     let three_way_view = pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
-    let overview_mode = pane.conflict_resolver.overview_mode;
-    // The pairwise comparisons need an ancestor to compare against, and the
-    // row is moot when the overview column itself is hidden.
-    let overview_available = pane.conflict_resolver.has_overview()
-        && !pane.conflict_resolver.three_way_text.base.is_empty();
     model_for_mergetool_settings(
         three_way_view,
-        overview_mode,
-        overview_available,
         auto_advance,
         collapse_context,
         output_scroll_sync,
@@ -27,8 +19,6 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
 
 fn model_for_mergetool_settings(
     three_way_view: bool,
-    overview_mode: OverviewMode,
-    overview_available: bool,
     auto_advance: bool,
     collapse_context: bool,
     output_scroll_sync: bool,
@@ -59,21 +49,6 @@ fn model_for_mergetool_settings(
             ],
         },
     ];
-    if overview_available {
-        items.push(ContextMenuItem::Segmented {
-            label: "Overview".into(),
-            segments: OverviewMode::ALL
-                .into_iter()
-                .map(|mode| ContextMenuSegment {
-                    id: overview_segment_id(mode).into(),
-                    label: mode.label().into(),
-                    tooltip: Some(overview_tooltip(mode).into()),
-                    selected: overview_mode == mode,
-                    action: ContextMenuAction::SetMergetoolOverviewMode { mode },
-                })
-                .collect(),
-        });
-    }
     items.push(ContextMenuItem::Separator);
     items.extend([
         ContextMenuItem::Entry {
@@ -114,32 +89,13 @@ fn model_for_mergetool_settings(
     ContextMenuModel::new(items)
 }
 
-fn overview_segment_id(mode: OverviewMode) -> &'static str {
-    match mode {
-        OverviewMode::Merge => "mergetool_overview_merge",
-        OverviewMode::BaseVsLocal => "mergetool_overview_ab",
-        OverviewMode::BaseVsRemote => "mergetool_overview_ac",
-        OverviewMode::LocalVsRemote => "mergetool_overview_bc",
-    }
-}
-
-fn overview_tooltip(mode: OverviewMode) -> &'static str {
-    match mode {
-        OverviewMode::Merge => "Overview: the merge — each side's changes and the conflicts",
-        OverviewMode::BaseVsLocal => "Overview: every line where Local differs from Base",
-        OverviewMode::BaseVsRemote => "Overview: every line where Remote differs from Base",
-        OverviewMode::LocalVsRemote => "Overview: every line where Local differs from Remote",
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn model_marks_enabled_options_and_toggles_them() {
-        let model =
-            model_for_mergetool_settings(true, OverviewMode::Merge, true, true, false, true, true);
+        let model = model_for_mergetool_settings(true, true, false, true, true);
 
         assert!(model.items.iter().any(|item| {
             matches!(
@@ -194,8 +150,7 @@ mod tests {
 
     #[test]
     fn view_row_selects_the_active_mode_and_offers_the_other() {
-        let model =
-            model_for_mergetool_settings(false, OverviewMode::Merge, true, true, false, true, true);
+        let model = model_for_mergetool_settings(false, true, false, true, true);
         let view = segments(&model, "View");
 
         assert_eq!(view.len(), 2);
@@ -212,47 +167,15 @@ mod tests {
     }
 
     #[test]
-    fn overview_row_lists_every_mode_and_marks_the_active_one() {
-        let model = model_for_mergetool_settings(
-            true,
-            OverviewMode::BaseVsRemote,
-            true,
-            true,
-            false,
-            true,
-            true,
-        );
-        let overview = segments(&model, "Overview");
-
-        assert_eq!(
-            overview
-                .iter()
-                .map(|segment| segment.label.as_ref())
-                .collect::<Vec<_>>(),
-            vec!["Merge", "A-B", "A-C", "B-C"],
-        );
-        assert!(overview.iter().filter(|segment| segment.selected).count() == 1);
-        assert!(
-            overview
-                .iter()
-                .find(|segment| segment.selected)
-                .is_some_and(|segment| matches!(
-                    segment.action,
-                    ContextMenuAction::SetMergetoolOverviewMode {
-                        mode: OverviewMode::BaseVsRemote
-                    }
-                ))
-        );
-    }
-
-    #[test]
-    fn overview_row_is_omitted_without_an_overview_column() {
-        let model =
-            model_for_mergetool_settings(true, OverviewMode::Merge, false, true, false, true, true);
+    fn the_minimap_has_no_settings_row() {
+        // The minimap always shows the merge itself; kdiff3's pairwise
+        // overview modes are not offered.
+        let model = model_for_mergetool_settings(true, true, false, true, true);
 
         assert!(!model.items.iter().any(|item| matches!(
             item,
-            ContextMenuItem::Segmented { label, .. } if label.as_ref() == "Overview"
+            ContextMenuItem::Segmented { label, .. }
+                if label.as_ref() == "Overview" || label.as_ref() == "Minimap"
         )));
     }
 }

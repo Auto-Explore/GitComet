@@ -40,6 +40,6 @@ pub(crate) use truncated_text::{
 
 pub(crate) use crate::kit::text_truncation::TextTruncationProfile;
 pub use crate::kit::{
-    OVERVIEW_COLUMN_WIDTH_PX, OverviewColumn, Scrollbar, ScrollbarAxis, ScrollbarMarker,
+    MINIMAP_COLUMN_WIDTH_PX, MinimapColumn, Scrollbar, ScrollbarAxis, ScrollbarMarker,
     ScrollbarMarkerKind, TextInput, TextInputOptions,
 };

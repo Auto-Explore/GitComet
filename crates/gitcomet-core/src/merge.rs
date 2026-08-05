@@ -10,10 +10,10 @@ use crate::file_diff::split_lines;
 use std::borrow::Cow;
 use std::fmt;
 
-mod overview;
+mod minimap;
 mod plan;
 
-pub use overview::{OverviewMode, OverviewRowKind, overview_row_kind, overview_rows};
+pub use minimap::{MinimapRowKind, minimap_row_kind, minimap_rows};
 pub(crate) use plan::normalized_without_whitespace;
 pub use plan::{
     AlignedRow, InteractiveMergePlanBudget, ManualAlignment, ManualAlignmentList, MergeBlock,

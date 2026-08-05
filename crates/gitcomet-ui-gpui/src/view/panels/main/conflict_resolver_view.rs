@@ -711,12 +711,12 @@ impl MainPaneView {
                                 show_preview_toggle
                                     && preview_mode == ConflictResolverPreviewMode::Preview;
 
-                            // kdiff3's overview column sits left of the inputs
+                            // kdiff3's minimap column sits left of the inputs
                             // and takes its width out of their budget.
-                            let overview_w = if !is_rendered_preview_active
-                                && self.conflict_resolver.has_overview()
+                            let minimap_w = if !is_rendered_preview_active
+                                && self.conflict_resolver.has_minimap()
                             {
-                                px(components::OVERVIEW_COLUMN_WIDTH_PX)
+                                px(components::MINIMAP_COLUMN_WIDTH_PX)
                             } else {
                                 px(0.0)
                             };
@@ -796,7 +796,7 @@ impl MainPaneView {
                             let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
                             let main_w = (self.main_pane_content_width(cx)
                                 - scrollbar_gutter
-                                - overview_w)
+                                - minimap_w)
                                 .max(px(0.0));
                             let available = (main_w - handle_w * 2.0).max(px(0.0));
                             let ratios = self.conflict_three_way_col_ratios;
@@ -1036,9 +1036,9 @@ impl MainPaneView {
                                 .flex()
                                 .items_center()
                                 // Keep the column headers over their columns:
-                                // the overview column shifts the body right.
-                                .when(overview_w > px(0.0), |d| {
-                                    d.child(div().w(overview_w).h_full().flex_shrink_0())
+                                // the minimap column shifts the body right.
+                                .when(minimap_w > px(0.0), |d| {
+                                    d.child(div().w(minimap_w).h_full().flex_shrink_0())
                                 })
                                 .when(view_mode == ConflictResolverViewMode::ThreeWay, |d| {
                                     d.child(
@@ -1596,10 +1596,10 @@ impl MainPaneView {
                                 }
                             };
 
-                            // kdiff3's Overview widget: the whole-file change
-                            // map beside the inputs, framing the viewport and
-                            // jumping the panes on click.
-                            let top_body: AnyElement = if overview_w > px(0.0) {
+                            // The minimap (kdiff3's Overview widget): the
+                            // whole-file change map beside the inputs, framing
+                            // the viewport and jumping the panes on click.
+                            let top_body: AnyElement = if minimap_w > px(0.0) {
                                 let view = cx.entity();
                                 let jump_rows = diff_list_len;
                                 div()
@@ -1608,12 +1608,9 @@ impl MainPaneView {
                                     .h_full()
                                     .min_h(px(0.0))
                                     .child(
-                                        components::OverviewColumn::new(
-                                            "conflict_overview",
-                                            self.conflict_resolver.overview_bands.clone(),
-                                        )
-                                        .compare_bands(
-                                            self.conflict_resolver.overview_compare_bands.clone(),
+                                        components::MinimapColumn::new(
+                                            "conflict_minimap",
+                                            self.conflict_resolver.minimap_bands.clone(),
                                         )
                                         .driver(self.conflict_resolver_diff_scroll.clone())
                                         .on_jump(move |fraction, _window, cx| {

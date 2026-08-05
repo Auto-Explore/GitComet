@@ -6077,7 +6077,7 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
         );
     }
 
-    // An overview click/drag: every source column gets a deferred
+    // A minimap click/drag: every source column gets a deferred
     // `scroll_to_item_strict`, which lands during prepaint, after this frame's
     // synchronizer already ran.
     cx.update(|_window, app| {
@@ -6106,14 +6106,14 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
     let settled = read_conflict_scroll_snapshot(cx, &view);
     assert!(
         settled.base < px(0.0),
-        "the overview jump should have scrolled the columns, got {settled:?}",
+        "the minimap jump should have scrolled the columns, got {settled:?}",
     );
     for frame in 1..=3 {
         draw_and_drain_test_window(cx);
         let idle = read_conflict_scroll_snapshot(cx, &view);
         assert_eq!(
             idle, settled,
-            "idle frame {frame} moved the resolver panes after an overview jump",
+            "idle frame {frame} moved the resolver panes after a minimap jump",
         );
     }
 

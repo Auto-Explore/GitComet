@@ -1,15 +1,15 @@
-//! kdiff3-style overview (minimap) column for the merge resolver.
+//! kdiff3-style minimap column for the merge resolver.
 //!
 //! Port of kdiff3's `Overview` widget (`Overview.cpp`): a narrow column beside
 //! the input panes that paints the whole file's change structure at a glance,
 //! frames the current viewport, and jumps the panes when clicked.
 //!
-//! Band classification lives in `gitcomet_core::merge::overview`; this module
+//! Band classification lives in `gitcomet_core::merge::minimap`; this module
 //! only paints the bands and handles the mouse.
 
 use crate::kit::scrollbar::{ScrollbarAxis, ScrollbarDriver};
 use crate::theme::AppTheme;
-use gitcomet_core::merge::OverviewRowKind;
+use gitcomet_core::merge::MinimapRowKind;
 use gpui::prelude::*;
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, ElementId, Hitbox, HitboxBehavior, MouseButton,
@@ -19,18 +19,18 @@ use gpui::{
 use std::sync::Arc;
 
 /// Column width, matching kdiff3's `setFixedWidth(20)`.
-pub const OVERVIEW_COLUMN_WIDTH_PX: f32 = 20.0;
+pub const MINIMAP_COLUMN_WIDTH_PX: f32 = 20.0;
 
 /// Where the viewport sits within the whole content, as fractions in `[0, 1]`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct OverviewViewport {
+pub struct MinimapViewport {
     /// Fraction of the content above the viewport.
     pub start: f32,
     /// Fraction of the content the viewport covers.
     pub extent: f32,
 }
 
-impl OverviewViewport {
+impl MinimapViewport {
     /// Derive the viewport frame from a scroll driver and the column height.
     ///
     /// The column is laid out beside the lists at the same height, so its
@@ -57,41 +57,31 @@ impl OverviewViewport {
 
 type JumpHandler = Arc<dyn Fn(f32, &mut Window, &mut App) + 'static>;
 
-/// The overview column element.
+/// The minimap column element.
 ///
-/// `bands` is the merge overview, always painted. `compare_bands`, when set,
-/// is a second classification painted in the right half of the column — kdiff3
-/// splits the column the same way in its pairwise A-B / A-C / B-C modes, so
-/// the merge structure stays visible while comparing two inputs.
+/// `bands` is the merge classification, one entry per quantized slice of the
+/// file, painted across the full column width.
 #[derive(Clone)]
-pub struct OverviewColumn {
+pub struct MinimapColumn {
     id: ElementId,
-    bands: Arc<[OverviewRowKind]>,
-    compare_bands: Option<Arc<[OverviewRowKind]>>,
+    bands: Arc<[MinimapRowKind]>,
     driver: Option<Arc<dyn ScrollbarDriver>>,
     on_jump: Option<JumpHandler>,
 }
 
 #[derive(Default)]
-struct OverviewInteractionState {
+struct MinimapInteractionState {
     dragging: bool,
 }
 
-impl OverviewColumn {
-    pub fn new(id: impl Into<ElementId>, bands: Arc<[OverviewRowKind]>) -> Self {
+impl MinimapColumn {
+    pub fn new(id: impl Into<ElementId>, bands: Arc<[MinimapRowKind]>) -> Self {
         Self {
             id: id.into(),
             bands,
-            compare_bands: None,
             driver: None,
             on_jump: None,
         }
-    }
-
-    /// Paint a second classification in the right half of the column.
-    pub fn compare_bands(mut self, bands: Option<Arc<[OverviewRowKind]>>) -> Self {
-        self.compare_bands = bands;
-        self
     }
 
     /// Scroll model the viewport frame follows. The column is laid out at the
@@ -111,7 +101,6 @@ impl OverviewColumn {
         let Self {
             id,
             bands,
-            compare_bands,
             driver,
             on_jump,
         } = self;
@@ -123,9 +112,9 @@ impl OverviewColumn {
             },
             move |bounds, hitbox: Hitbox, window, cx| {
                 let interaction = window.use_keyed_state(
-                    (state_id.clone(), "overview_interaction"),
+                    (state_id.clone(), "minimap_interaction"),
                     cx,
-                    |_window, _cx| OverviewInteractionState::default(),
+                    |_window, _cx| MinimapInteractionState::default(),
                 );
 
                 window.paint_quad(fill(bounds, theme.colors.surface_bg));
@@ -139,31 +128,18 @@ impl OverviewColumn {
                     theme.colors.border,
                 ));
 
-                let split = compare_bands.is_some();
-                let full_w = bounds.size.width;
-                let half_w = full_w / 2.0;
                 paint_bands(
                     window,
                     theme,
                     bounds,
                     bounds.left(),
-                    if split { half_w } else { full_w },
+                    bounds.size.width,
                     &bands,
                 );
-                if let Some(compare) = compare_bands.as_ref() {
-                    paint_bands(
-                        window,
-                        theme,
-                        bounds,
-                        bounds.left() + half_w,
-                        half_w,
-                        compare,
-                    );
-                }
 
                 if let Some(driver) = driver.as_ref() {
                     let viewport =
-                        OverviewViewport::from_driver(driver.as_ref(), bounds.size.height);
+                        MinimapViewport::from_driver(driver.as_ref(), bounds.size.height);
                     paint_viewport_frame(window, theme, bounds, viewport);
                 }
 
@@ -231,19 +207,23 @@ impl OverviewColumn {
         div()
             .id(id)
             .h_full()
-            .w(px(OVERVIEW_COLUMN_WIDTH_PX))
+            .w(px(MINIMAP_COLUMN_WIDTH_PX))
             .flex_shrink_0()
             .child(paint)
     }
 }
 
-fn band_color(theme: AppTheme, kind: OverviewRowKind) -> Option<gpui::Rgba> {
-    let alpha = if theme.is_dark { 0.85 } else { 0.70 };
-    let mut color = match kind {
-        OverviewRowKind::Unchanged => return None,
-        OverviewRowKind::LocalChanged => theme.colors.diff_add_text,
-        OverviewRowKind::RemoteChanged => theme.colors.accent,
-        OverviewRowKind::Conflict => theme.colors.danger,
+fn band_color(theme: AppTheme, kind: MinimapRowKind) -> Option<gpui::Rgba> {
+    let changed_alpha = if theme.is_dark { 0.85 } else { 0.70 };
+    // A settled conflict drops to a muted neutral, so the red that remains is
+    // exactly the work left and it reads as neither side's change color.
+    let resolved_alpha = if theme.is_dark { 0.45 } else { 0.35 };
+    let (mut color, alpha) = match kind {
+        MinimapRowKind::Unchanged => return None,
+        MinimapRowKind::LocalChanged => (theme.colors.diff_add_text, changed_alpha),
+        MinimapRowKind::RemoteChanged => (theme.colors.accent, changed_alpha),
+        MinimapRowKind::ResolvedConflict => (theme.colors.text_muted, resolved_alpha),
+        MinimapRowKind::Conflict => (theme.colors.danger, changed_alpha),
     };
     color.a = alpha;
     Some(color)
@@ -257,7 +237,7 @@ fn paint_bands(
     bounds: Bounds<Pixels>,
     x: Pixels,
     width: Pixels,
-    bands: &[OverviewRowKind],
+    bands: &[MinimapRowKind],
 ) {
     let count = bands.len();
     if count == 0 || width <= px(0.0) {
@@ -289,7 +269,7 @@ fn paint_viewport_frame(
     window: &mut Window,
     theme: AppTheme,
     bounds: Bounds<Pixels>,
-    viewport: OverviewViewport,
+    viewport: MinimapViewport,
 ) {
     if viewport.extent >= 1.0 {
         return;
@@ -349,7 +329,7 @@ mod tests {
             max: px(0.0),
             raw: px(0.0),
         };
-        let viewport = OverviewViewport::from_driver(&driver, px(400.0));
+        let viewport = MinimapViewport::from_driver(&driver, px(400.0));
         assert_eq!(viewport.start, 0.0);
         assert_eq!(viewport.extent, 1.0);
     }
@@ -361,21 +341,21 @@ mod tests {
             max: px(1200.0),
             raw: px(-600.0),
         };
-        let viewport = OverviewViewport::from_driver(&driver, px(400.0));
+        let viewport = MinimapViewport::from_driver(&driver, px(400.0));
         assert!((viewport.extent - 0.25).abs() < 1e-5);
         assert!((viewport.start - 0.375).abs() < 1e-5);
     }
 
     #[test]
     fn viewport_accepts_either_offset_sign() {
-        let negative = OverviewViewport::from_driver(
+        let negative = MinimapViewport::from_driver(
             &FixedDriver {
                 max: px(1200.0),
                 raw: px(-1200.0),
             },
             px(400.0),
         );
-        let positive = OverviewViewport::from_driver(
+        let positive = MinimapViewport::from_driver(
             &FixedDriver {
                 max: px(1200.0),
                 raw: px(1200.0),
@@ -389,9 +369,31 @@ mod tests {
     #[test]
     fn unchanged_bands_are_not_painted() {
         let theme = crate::theme::AppTheme::gitcomet_dark();
-        assert!(band_color(theme, OverviewRowKind::Unchanged).is_none());
-        assert!(band_color(theme, OverviewRowKind::Conflict).is_some());
-        assert!(band_color(theme, OverviewRowKind::LocalChanged).is_some());
-        assert!(band_color(theme, OverviewRowKind::RemoteChanged).is_some());
+        assert!(band_color(theme, MinimapRowKind::Unchanged).is_none());
+        assert!(band_color(theme, MinimapRowKind::Conflict).is_some());
+        assert!(band_color(theme, MinimapRowKind::LocalChanged).is_some());
+        assert!(band_color(theme, MinimapRowKind::RemoteChanged).is_some());
+    }
+
+    #[test]
+    fn a_resolved_conflict_is_painted_but_not_in_the_conflict_color() {
+        for theme in [
+            crate::theme::AppTheme::gitcomet_dark(),
+            crate::theme::AppTheme::gitcomet_light(),
+        ] {
+            let resolved = band_color(theme, MinimapRowKind::ResolvedConflict)
+                .expect("a resolved conflict still marks its rows");
+            let open =
+                band_color(theme, MinimapRowKind::Conflict).expect("an open conflict paints");
+            assert_ne!(
+                (resolved.r, resolved.g, resolved.b),
+                (open.r, open.g, open.b),
+                "a resolved conflict must not keep the open-conflict hue",
+            );
+            assert!(
+                resolved.a < open.a,
+                "a resolved conflict should recede: {resolved:?} vs {open:?}",
+            );
+        }
     }
 }

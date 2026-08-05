@@ -249,9 +249,6 @@ pub(in crate::view) enum ContextMenuAction {
     SetMergetoolThreeWayView {
         enabled: bool,
     },
-    SetMergetoolOverviewMode {
-        mode: gitcomet_core::merge::OverviewMode,
-    },
     ConflictResolverOutputCut {
         text: String,
     },
@@ -328,8 +325,8 @@ enum ContextMenuItem {
     },
     /// A caption plus a segmented control, for settings whose options are
     /// mutually exclusive and read better side by side than as a checked list
-    /// (the merge tool's view mode and overview mode). Segments are clicked,
-    /// not keyboard-selected, so the row is skipped by arrow navigation.
+    /// (the merge tool's view mode). Segments are clicked, not
+    /// keyboard-selected, so the row is skipped by arrow navigation.
     Segmented {
         label: SharedString,
         segments: Vec<ContextMenuSegment>,

@@ -1,5 +1,4 @@
 use super::*;
-use gitcomet_core::merge::OverviewMode;
 
 fn open_mergetool_settings_and_draw(
     view: &gpui::Entity<GitCometView>,
@@ -74,78 +73,40 @@ fn view_mode_segments_render_and_switch_the_resolver_view(cx: &mut gpui::TestApp
     });
 }
 
-/// Fake just enough resolver state for the overview row to appear: bands make
-/// the column exist, and a non-empty base makes the pairwise modes meaningful.
-fn seed_overview_state(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
+/// The minimap always shows the merge itself: kdiff3's pairwise overview modes
+/// are not offered, so the menu carries no row for it even with a live column.
+#[gpui::test]
+fn the_minimap_has_no_row_in_the_settings_menu(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+
+    // Seed enough resolver state that a mode row would have been shown.
     cx.update(|_window, app| {
         let main_pane = view.read(app).main_pane.clone();
         main_pane.update(app, |pane, _cx| {
-            pane.conflict_resolver.overview_bands =
-                vec![gitcomet_core::merge::OverviewRowKind::Unchanged; 8].into();
+            pane.conflict_resolver.minimap_bands =
+                vec![gitcomet_core::merge::MinimapRowKind::Unchanged; 8].into();
             pane.conflict_resolver.three_way_text.base = "alpha\nbeta\n".into();
         });
     });
-}
-
-#[gpui::test]
-fn overview_segments_render_within_the_menu_and_switch_the_mode(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|window, app| {
-        crate::app::bind_text_input_keys_for_test(app);
-        let _ = window.draw(app);
-    });
-
-    seed_overview_state(&view, cx);
     open_mergetool_settings_and_draw(&view, cx);
 
-    let segment_bounds = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
-        cx.debug_bounds(selector)
-            .unwrap_or_else(|| panic!("expected {selector} in debug bounds"))
-    };
-    let merge = segment_bounds(cx, "mergetool_overview_merge");
-    let bc = segment_bounds(cx, "mergetool_overview_bc");
-    let view_segment = segment_bounds(cx, "mergetool_view_three_way");
-
-    // All four segments sit on one row, in order, and the row still fits the
-    // menu: the widest option must not push past the menu's maximum width
-    // measured from where the rows start.
-    assert!(merge.size.width > gpui::px(0.0));
-    assert!(bc.origin.x > merge.origin.x);
-    assert!(bc.origin.y == merge.origin.y);
-    assert!(bc.origin.x + bc.size.width <= view_segment.origin.x + gpui::px(420.0));
-
-    click_debug_selector(cx, "mergetool_overview_ac");
-    cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        assert_eq!(
-            main_pane.read(app).conflict_resolver.overview_mode,
-            OverviewMode::BaseVsRemote,
+    for selector in [
+        "mergetool_overview_merge",
+        "mergetool_overview_ab",
+        "mergetool_overview_ac",
+        "mergetool_overview_bc",
+    ] {
+        assert!(
+            cx.debug_bounds(selector).is_none(),
+            "{selector} should be gone with the overview modes",
         );
-    });
-}
-
-/// Without a conflict loaded there is no overview column, so its row is absent
-/// — the pairwise modes would have nothing to compare.
-#[gpui::test]
-fn overview_segments_are_absent_without_an_overview_column(cx: &mut gpui::TestAppContext) {
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) =
-        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
-    cx.update(|window, app| {
-        crate::app::bind_text_input_keys_for_test(app);
-        let _ = window.draw(app);
-    });
-
-    open_mergetool_settings_and_draw(&view, cx);
-
-    assert!(cx.debug_bounds("mergetool_overview_merge").is_none());
-    cx.update(|_window, app| {
-        let main_pane = view.read(app).main_pane.clone();
-        assert_eq!(
-            main_pane.read(app).conflict_resolver.overview_mode,
-            OverviewMode::Merge,
-        );
-    });
+    }
+    // The view row is still there, so this is not just an unopened menu.
+    assert!(cx.debug_bounds("mergetool_view_three_way").is_some());
 }

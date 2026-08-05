@@ -1,10 +1,10 @@
-mod overview;
+mod minimap;
 mod scrollbar;
 mod text_input;
 pub(crate) mod text_model;
 pub(crate) mod text_truncation;
 
-pub use overview::{OVERVIEW_COLUMN_WIDTH_PX, OverviewColumn};
+pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapColumn};
 pub use scrollbar::{
     Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker, ScrollbarMarkerKind,
 };
