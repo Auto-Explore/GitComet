@@ -4677,7 +4677,11 @@ impl PressGestureHostView {
 }
 
 impl gpui::Render for PressGestureHostView {
-    fn render(&mut self, window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
         let content = div()
             .relative()
             .size_full()
@@ -4772,7 +4776,9 @@ fn release_outside_a_text_input_does_not_click_where_it_lands(cx: &mut gpui::Tes
         let _ = window.draw(app);
     });
 
-    let input = cx.debug_bounds("pg_input").expect("expected the input bounds");
+    let input = cx
+        .debug_bounds("pg_input")
+        .expect("expected the input bounds");
     let click_target = cx
         .debug_bounds("pg_click")
         .expect("expected the on_click target bounds");
@@ -4841,7 +4847,9 @@ fn a_press_under_an_occluding_overlay_still_clears_the_claim(cx: &mut gpui::Test
         let _ = window.draw(app);
     });
 
-    let input = cx.debug_bounds("pg_input").expect("expected the input bounds");
+    let input = cx
+        .debug_bounds("pg_input")
+        .expect("expected the input bounds");
     let inert = cx
         .debug_bounds("pg_inert")
         .expect("expected the inert overlay area bounds");
@@ -4876,7 +4884,9 @@ fn a_button_less_pointer_move_clears_a_stranded_claim(cx: &mut gpui::TestAppCont
         let _ = window.draw(app);
     });
 
-    let input = cx.debug_bounds("pg_input").expect("expected the input bounds");
+    let input = cx
+        .debug_bounds("pg_input")
+        .expect("expected the input bounds");
 
     cx.simulate_mouse_move(input.center(), None, Modifiers::default());
     cx.simulate_mouse_down(input.center(), MouseButton::Left, Modifiers::default());
