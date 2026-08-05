@@ -111,6 +111,19 @@ struct TerminalPaintCursor {
     shape: TerminalCursorShape,
 }
 
+/// Grid dimensions read live from the backing `Term`, rather than from the
+/// `last_content` snapshot that is only refreshed during canvas prepaint. Any
+/// `scroll_display` (autoscroll tick, wheel, scrollbar drag, scrollback keys)
+/// leaves that snapshot's `display_offset` stale until the next paint, so
+/// selection must resolve against these values instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct TerminalGridGeometry {
+    display_offset: usize,
+    history_size: usize,
+    columns: usize,
+    screen_lines: usize,
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum TerminalShortcutAction {
     Copy,
@@ -124,6 +137,121 @@ enum TerminalShortcutAction {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct TerminalPanelResizeDrag;
 
+/// Zero-size element that installs window-level mouse listeners so a selection
+/// drag keeps extending after the pointer leaves the terminal viewport.
+///
+/// Element-local `on_mouse_move`/`on_mouse_up` are hitbox-gated by gpui (they
+/// only fire while the element is hovered), which is why drag-selection used to
+/// die at the viewport edge. Same shape as `DiffTextSelectionTracker` in
+/// `diff_text_selection.rs`.
+struct TerminalSelectionTracker {
+    view: Entity<TerminalViewportView>,
+}
+
+impl IntoElement for TerminalSelectionTracker {
+    type Element = Self;
+
+    fn into_element(self) -> Self::Element {
+        self
+    }
+}
+
+impl Element for TerminalSelectionTracker {
+    type RequestLayoutState = ();
+    type PrepaintState = ();
+
+    fn id(&self) -> Option<ElementId> {
+        None
+    }
+
+    fn source_location(&self) -> Option<&'static core::panic::Location<'static>> {
+        None
+    }
+
+    fn request_layout(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        window: &mut Window,
+        cx: &mut App,
+    ) -> (LayoutId, Self::RequestLayoutState) {
+        let mut style = Style::default();
+        style.size.width = px(0.0).into();
+        style.size.height = px(0.0).into();
+        (window.request_layout(style, [], cx), ())
+    }
+
+    fn prepaint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _window: &mut Window,
+        _cx: &mut App,
+    ) -> Self::PrepaintState {
+    }
+
+    fn paint(
+        &mut self,
+        _id: Option<&GlobalElementId>,
+        _inspector_id: Option<&InspectorElementId>,
+        _bounds: Bounds<Pixels>,
+        _request_layout: &mut Self::RequestLayoutState,
+        _prepaint: &mut Self::PrepaintState,
+        window: &mut Window,
+        _cx: &mut App,
+    ) {
+        // Registered unconditionally and gated inside the closures: `selecting`
+        // only becomes true while handling mouse-down, i.e. after this frame was
+        // painted, so gating here would drop every move and up event of the drag
+        // that just started.
+        let view_for_move = self.view.clone();
+        window.on_mouse_event(move |event: &MouseMoveEvent, phase, _window, cx| {
+            if phase != gpui::DispatchPhase::Bubble {
+                return;
+            }
+            view_for_move.update(cx, |this, cx| {
+                if !this.selecting {
+                    return;
+                }
+                if !event.dragging() {
+                    // The button came up without us seeing the release (e.g. it
+                    // was let go outside the window). Don't leave the drag — and
+                    // its autoscroll ticker — running forever.
+                    this.end_selection_drag(cx);
+                    return;
+                }
+                if this.drag_selection_to(event.position) {
+                    cx.notify();
+                }
+            });
+        });
+
+        let view_for_up = self.view.clone();
+        window.on_mouse_event(move |event: &MouseUpEvent, phase, _window, cx| {
+            if phase != gpui::DispatchPhase::Bubble {
+                return;
+            }
+            if event.button != MouseButton::Left {
+                return;
+            }
+            view_for_up.update(cx, |this, cx| {
+                // Cleared before the `selecting` check, because the two are
+                // mutually exclusive: `pressed_mouse_button` is only set on the
+                // mouse-reporting path and `selecting` only on the selection
+                // path. Element-local `on_mouse_up` is hitbox-gated, so without
+                // this a press released outside the viewport left the button
+                // latched and every later motion report claimed it was held.
+                // (A release report is not synthesised for the TUI here — that
+                // would double-report whenever the release lands inside.)
+                this.pressed_mouse_button = None;
+                this.end_selection_drag(cx);
+            });
+        });
+    }
+}
+
 // ============================================================================
 // TerminalViewportView
 // ============================================================================
@@ -135,11 +263,23 @@ impl TerminalViewportView {
         term_lock: AlacrittyTermLock,
         pty_sender: terminal_alacritty::PtySender,
     ) -> Self {
+        Self::with_backend(theme, focus_handle, Some(term_lock), Some(pty_sender))
+    }
+
+    /// Shared constructor. Tests use it to build a viewport over a real `Term`
+    /// but with no PTY, since a `PtySender` can only come from a spawned event
+    /// loop.
+    fn with_backend(
+        theme: AppTheme,
+        focus_handle: FocusHandle,
+        term_lock: Option<AlacrittyTermLock>,
+        pty_sender: Option<terminal_alacritty::PtySender>,
+    ) -> Self {
         Self {
             theme,
             focus_handle,
-            term_lock: Some(term_lock),
-            pty_sender: Some(pty_sender),
+            term_lock,
+            pty_sender,
             layout_cache: None,
             render_cache: TerminalRenderCache::default(),
             cursor_blink_visible: true,
@@ -156,6 +296,10 @@ impl TerminalViewportView {
             selection_start: None,
             selection_end: None,
             select_all_active: false,
+            selecting: false,
+            selection_last_mouse_pos: point(px(0.0), px(0.0)),
+            selection_drag_moved: false,
+            selection_autoscroll_seq: 0,
             ime_state: None,
         }
     }
@@ -265,6 +409,11 @@ impl TerminalViewportView {
     }
 
     fn handle_focus_lost(&mut self, cx: &mut gpui::Context<Self>) {
+        // Backstop for a drag whose mouse-up never reaches us — a release over
+        // another window is not delivered on every platform. Without this the
+        // drag stays live: its ticker keeps waking, keeps taking the terminal
+        // lock, and the next unrelated pointer move silently resumes selecting.
+        self.end_selection_drag(cx);
         let has_focus_mode = self
             .last_content
             .as_ref()
@@ -349,10 +498,8 @@ impl TerminalViewportView {
         if let Some(bytes) = encode_alacritty_key_input(keystroke, app_cursor, option_as_meta) {
             // Typing clears any active selection / select-all so the highlight
             // doesn't linger and `selected_text()` stops copying the whole buffer.
-            if self.selection_start.is_some() || self.select_all_active {
-                self.selection_start = None;
-                self.selection_end = None;
-                self.select_all_active = false;
+            if self.clear_selection() {
+                cx.notify();
             }
             self.queue_input(bytes, cx);
             cx.stop_propagation();
@@ -400,7 +547,7 @@ impl TerminalViewportView {
     }
 
     fn copy_grid_range(&self, start: TerminalGridPoint, end: TerminalGridPoint) -> String {
-        let norm = if start <= end {
+        let (mut first, mut last) = if start <= end {
             (start, end)
         } else {
             (end, start)
@@ -410,28 +557,32 @@ impl TerminalViewportView {
         };
         let term = term_lock.lock();
         let grid = term.grid();
-        let cols = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.columns)
-            .unwrap_or(80);
+        // Dimensions come from the live grid, not from `last_content`: a resize
+        // or scrollback eviction between selecting and copying would otherwise
+        // index the grid out of range and panic.
+        let cols = grid.columns();
+        let history_size = grid.history_size();
+        let screen_lines = grid.screen_lines();
+        if cols == 0 || screen_lines == 0 {
+            return String::new();
+        }
+        first.row = terminal_clamp_grid_row(first.row, history_size, screen_lines);
+        last.row = terminal_clamp_grid_row(last.row, history_size, screen_lines);
         let mut text = String::new();
-        for row in norm.0.row..=norm.1.row {
-            if row > norm.0.row {
-                text.push('\n');
-            }
-            let sc = if row == norm.0.row {
-                norm.0.col as usize
+        for row in first.row..=last.row {
+            let sc = if row == first.row {
+                (first.col as usize).min(cols)
             } else {
                 0
             };
-            let ec = if row == norm.1.row {
-                (norm.1.col as usize + 1).min(cols)
+            let ec = if row == last.row {
+                (last.col as usize + 1).min(cols)
             } else {
                 cols
             };
+            let line_start = text.len();
             for c in sc..ec {
-                let cell = &grid[Line(row as i32)][Column(c)];
+                let cell = &grid[Line(row)][Column(c)];
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
                     continue;
                 }
@@ -441,6 +592,17 @@ impl TerminalViewportView {
                 } else {
                     text.push(ch);
                 }
+            }
+            // Grid rows are space-padded to the full width, so whenever the
+            // selection reaches the line end the trailing spaces are padding
+            // rather than selected content. A selection that stops mid-row is
+            // left verbatim — those spaces really were selected.
+            if ec == cols {
+                let trimmed = text[line_start..].trim_end().len();
+                text.truncate(line_start + trimmed);
+            }
+            if row < last.row && !terminal_row_wraps(&grid[Line(row)], cols) {
+                text.push('\n');
             }
         }
         drop(term);
@@ -453,22 +615,13 @@ impl TerminalViewportView {
         };
         let term = term_lock.lock();
         let grid = term.grid();
-        let display_offset = term.grid().display_offset();
-        let cols = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.columns)
-            .unwrap_or(80);
-        let rows = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.screen_lines)
-            .unwrap_or(0);
+        // Live dimensions, not the `last_content` snapshot: a shrinking resize
+        // between paint and copy would otherwise index the grid out of range.
+        let display_offset = grid.display_offset();
+        let cols = grid.columns();
+        let rows = grid.screen_lines();
         let mut text = String::new();
         for row in 0..rows {
-            if row > 0 {
-                text.push('\n');
-            }
             let grid_row = row as i32 - display_offset as i32;
             for c in 0..cols {
                 let cell = &grid[Line(grid_row)][Column(c)];
@@ -481,6 +634,9 @@ impl TerminalViewportView {
                 } else {
                     text.push(ch);
                 }
+            }
+            if row + 1 < rows && !terminal_row_wraps(&grid[Line(grid_row)], cols) {
+                text.push('\n');
             }
         }
         drop(term);
@@ -496,24 +652,15 @@ impl TerminalViewportView {
         };
         let term = term_lock.lock();
         let grid = term.grid();
-        let cols = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.columns)
-            .unwrap_or(80);
-        let screen_lines = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.screen_lines)
-            .unwrap_or(0);
+        // Live dimensions, not the `last_content` snapshot: a shrinking resize
+        // between paint and copy would otherwise index the grid out of range.
+        let cols = grid.columns();
+        let screen_lines = grid.screen_lines();
         let history_size = grid.history_size();
         let mut text = String::new();
         let top = -(history_size as i32);
         let bottom = screen_lines as i32 - 1;
         for row in top..=bottom {
-            if row > top {
-                text.push('\n');
-            }
             for c in 0..cols {
                 let cell = &grid[Line(row)][Column(c)];
                 if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
@@ -525,6 +672,9 @@ impl TerminalViewportView {
                 } else {
                     text.push(ch);
                 }
+            }
+            if row < bottom && !terminal_row_wraps(&grid[Line(row)], cols) {
+                text.push('\n');
             }
         }
         drop(term);
@@ -545,25 +695,61 @@ impl TerminalViewportView {
         if text.is_empty() { None } else { Some(text) }
     }
 
+    /// Live grid dimensions, or `None` when there is no backing terminal.
+    ///
+    /// Takes the terminal lock, so it must not be called while that lock is
+    /// already held — `FairMutex` is not reentrant.
+    fn grid_geometry(&self) -> Option<TerminalGridGeometry> {
+        let term = self.term_lock.as_ref()?.lock();
+        let grid = term.grid();
+        Some(TerminalGridGeometry {
+            display_offset: grid.display_offset(),
+            history_size: grid.history_size(),
+            columns: grid.columns(),
+            screen_lines: grid.screen_lines(),
+        })
+    }
+
     pub(super) fn select_all(&mut self, cx: &mut gpui::Context<Self>) {
-        let cols = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.columns)
-            .unwrap_or(0);
-        let rows = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.screen_lines)
-            .unwrap_or(0);
-        if rows > 0 && cols > 0 {
-            // Highlight the visible screen, but mark the whole buffer (including
-            // scrollback) as selected so Copy grabs the history too.
-            self.selection_start = Some(TerminalGridPoint::new(0, 0));
-            self.selection_end = Some(TerminalGridPoint::new(rows as u16 - 1, cols as u16 - 1));
-            self.select_all_active = true;
-            cx.notify();
+        let Some(geometry) = self.grid_geometry() else {
+            return;
+        };
+        if geometry.screen_lines == 0 || geometry.columns == 0 {
+            return;
         }
+        // Select the whole buffer, scrollback included, so the highlight stays
+        // correct at every scroll position. Copy still routes through
+        // `copy_entire_buffer` (via `select_all_active`) for its trimming.
+        self.selection_start = Some(TerminalGridPoint::new(-(geometry.history_size as i32), 0));
+        self.selection_end = Some(TerminalGridPoint::new(
+            geometry.screen_lines as i32 - 1,
+            geometry.columns as u16 - 1,
+        ));
+        self.select_all_active = true;
+        cx.notify();
+    }
+
+    /// Drops any selection and cancels an in-flight drag. Returns whether
+    /// anything changed, so callers can skip a redundant `notify`.
+    fn clear_selection(&mut self) -> bool {
+        if self.selection_start.is_none()
+            && self.selection_end.is_none()
+            && !self.select_all_active
+            && !self.selecting
+        {
+            return false;
+        }
+        self.selection_start = None;
+        self.selection_end = None;
+        self.select_all_active = false;
+        self.end_selection_drag_state();
+        true
+    }
+
+    /// Clears drag state and invalidates any running autoscroll ticker.
+    fn end_selection_drag_state(&mut self) {
+        self.selecting = false;
+        self.selection_autoscroll_seq = self.selection_autoscroll_seq.wrapping_add(1);
     }
 
     pub(super) fn paste_text(&mut self, text: &str, cx: &mut gpui::Context<Self>) {
@@ -622,6 +808,12 @@ impl TerminalViewportView {
             return;
         };
         cx.stop_propagation();
+
+        // Scrolling mid-drag counts as movement, so the ticker starts re-resolving
+        // the free end and the selection follows the newly revealed rows.
+        if self.selecting {
+            self.selection_drag_moved = true;
+        }
 
         let mouse_mode = self.live_modes();
         if mouse_mode.mouse_mode() {
@@ -720,7 +912,10 @@ impl TerminalViewportView {
         } else if button == gpui::MouseButton::Left {
             // Starting a manual selection cancels a prior "select all".
             self.select_all_active = false;
-            let anchor = self.viewport_to_grid_point(event.position);
+            self.selecting = true;
+            self.selection_last_mouse_pos = event.position;
+            self.selection_drag_moved = false;
+            let anchor = self.selection_grid_point(event.position);
             match event.click_count {
                 2 => {
                     // Double click: select the word under the cursor.
@@ -737,11 +932,7 @@ impl TerminalViewportView {
                 }
                 n if n >= 3 => {
                     // Triple (or more) click: select the whole line.
-                    let cols = self
-                        .last_content
-                        .as_ref()
-                        .map(|c| c.terminal_bounds.columns)
-                        .unwrap_or(0);
+                    let cols = self.grid_geometry().map(|g| g.columns).unwrap_or(0);
                     match anchor {
                         Some(p) if cols > 0 => {
                             self.selection_start = Some(TerminalGridPoint::new(p.row, 0));
@@ -763,6 +954,7 @@ impl TerminalViewportView {
                     self.selection_end = None;
                 }
             }
+            self.start_selection_autoscroll(cx);
             cx.notify();
         }
     }
@@ -778,13 +970,26 @@ impl TerminalViewportView {
         if mode.mouse_mode() {
             self.queue_mouse_event(event.position, button, event.modifiers, false, mode, cx);
             cx.stop_propagation();
-        } else if button == gpui::MouseButton::Left && self.selection_end.is_none() {
-            // A left click that never dragged (no end point) clears the selection.
-            if self.selection_start.take().is_some() {
-                cx.notify();
-            }
+        } else if button == gpui::MouseButton::Left {
+            self.end_selection_drag(cx);
         }
         self.pressed_mouse_button = None;
+    }
+
+    /// Ends a selection drag. Idempotent, because both the element-local
+    /// `on_mouse_up` (release inside the viewport) and the window-level
+    /// [`TerminalSelectionTracker`] (release anywhere) route through here.
+    fn end_selection_drag(&mut self, cx: &mut gpui::Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+        self.end_selection_drag_state();
+        // A press that never dragged has no end point; clear it so a plain click
+        // dismisses the previous selection.
+        if self.selection_end.is_none() {
+            self.selection_start = None;
+        }
+        cx.notify();
     }
 
     fn handle_mouse_move(
@@ -794,70 +999,41 @@ impl TerminalViewportView {
         cx: &mut gpui::Context<Self>,
     ) {
         let mode = self.live_modes();
-        if mode.mouse_mode() {
-            if mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG) {
-                // Only forward a motion report when the pointer crosses into a new
-                // grid cell. Without this, every sub-cell GPUI move event produces a
-                // duplicate report and floods a TUI in any-event mode (1003); Zed
-                // dedupes the same way via `mouse_changed`.
-                let cell = self
-                    .viewport_to_grid_point(event.position)
-                    .map(|p| (p.row, p.col));
-                if cell != self.last_motion_cell {
-                    self.last_motion_cell = cell;
-                    if let Some(report) = terminal_mouse_moved_report_at(
-                        event.position,
-                        self.viewport_bounds,
-                        &self.layout_cache,
-                        &self.last_content,
-                        self.pressed_mouse_button,
-                        event.modifiers,
-                        mode,
-                    ) {
-                        self.queue_input(report, cx);
-                    }
-                }
-            }
-        } else if event.pressed_button == Some(gpui::MouseButton::Left)
-            && self.selection_start.is_some()
+        if mode.mouse_mode()
+            && mode.intersects(TerminalModes::MOUSE_MOTION | TerminalModes::MOUSE_DRAG)
         {
-            // Auto-scroll when mouse is dragged outside viewport bounds
-            if let (Some(bounds), Some(term_lock), Some(cache)) =
-                (self.viewport_bounds, &self.term_lock, &self.layout_cache)
-            {
-                let line_h: f32 = cache.metrics.line_height.into();
-                let mouse_y: f32 = event.position.y.into();
-                let min_y: f32 = bounds.top().into();
-                let max_y: f32 = bounds.bottom().into();
-                if mouse_y < min_y || mouse_y > max_y {
-                    let dist = if mouse_y < min_y {
-                        ((min_y - mouse_y) / line_h).ceil()
-                    } else {
-                        ((mouse_y - max_y) / line_h).ceil()
-                    };
-                    let lines = (1.1_f32.powf(dist) as i32).min(3);
-                    if lines > 0 {
-                        let scroll_dir = if mouse_y < min_y {
-                            alacritty_terminal::grid::Scroll::Delta(-lines)
-                        } else {
-                            alacritty_terminal::grid::Scroll::Delta(lines)
-                        };
-                        let mut term = term_lock.lock();
-                        term.scroll_display(scroll_dir);
-                        drop(term);
-                        cx.notify();
-                    }
+            // Only forward a motion report when the pointer crosses into a new
+            // grid cell. Without this, every sub-cell GPUI move event produces a
+            // duplicate report and floods a TUI in any-event mode (1003); Zed
+            // dedupes the same way via `mouse_changed`.
+            let cell = self.viewport_to_grid_point(event.position);
+            if cell != self.last_motion_cell {
+                self.last_motion_cell = cell;
+                if let Some(report) = terminal_mouse_moved_report_at(
+                    event.position,
+                    self.viewport_bounds,
+                    &self.layout_cache,
+                    &self.last_content,
+                    self.pressed_mouse_button,
+                    event.modifiers,
+                    mode,
+                ) {
+                    self.queue_input(report, cx);
                 }
-            }
-            if let Some(new_end) = self.viewport_to_grid_point(event.position)
-                && self.selection_end != Some(new_end)
-            {
-                self.selection_end = Some(new_end);
-                cx.notify();
             }
         }
+        // Selection drags are handled entirely by `TerminalSelectionTracker`.
+        // Extending here as well would be pure duplicated work: the tracker
+        // registers its window listener unconditionally on every paint, so a
+        // live listener always exists before any mouse-down, and gpui dispatches
+        // window listeners ahead of this element-local one.
     }
 
+    /// Strict resolver used by mouse reporting: returns `None` outside the
+    /// viewport, matching what `terminal_mouse_*_report_at` will actually
+    /// report. Selection must not share it — a clamping variant here would let
+    /// `last_motion_cell` latch a cell that was never reported, swallowing the
+    /// next genuine entry into it.
     fn viewport_to_grid_point(&self, position: Point<Pixels>) -> Option<TerminalGridPoint> {
         let bounds = self.viewport_bounds?;
         let cache = self.layout_cache.as_ref()?;
@@ -870,15 +1046,137 @@ impl TerminalViewportView {
             content.display_offset,
             content.terminal_bounds.columns as u16,
         )?;
-        // Clamp the row to the visible grid. A drag that leaves the viewport (the
-        // auto-scroll path above relies on exactly this) can yield a row past the
-        // last line; without this clamp `copy_grid_range` would index the grid out
-        // of range and panic.
-        let max_row = content.terminal_bounds.screen_lines.saturating_sub(1) as i32;
-        Some(TerminalGridPoint::new(
-            grid_row.clamp(0, max_row) as u16,
-            grid_col as u16,
-        ))
+        Some(TerminalGridPoint::new(grid_row, grid_col as u16))
+    }
+
+    /// Resolver used by text selection: clamps the position into the viewport so
+    /// a drag past the edge keeps extending, and resolves against the *live*
+    /// scroll offset so a point resolved right after an autoscroll tick is not
+    /// off by the amount just scrolled.
+    fn selection_grid_point(&self, position: Point<Pixels>) -> Option<TerminalGridPoint> {
+        let bounds = self.viewport_bounds?;
+        let cache = self.layout_cache.as_ref()?;
+        let geometry = self.grid_geometry()?;
+        terminal_selection_grid_point(
+            position,
+            bounds,
+            cache.metrics.cell_width,
+            cache.metrics.line_height,
+            geometry.display_offset,
+            geometry.history_size,
+            geometry.columns,
+            geometry.screen_lines,
+        )
+    }
+
+    /// Moves the selection's free end to `position` in response to real pointer
+    /// motion, which also unlocks the autoscroll ticker's own re-resolving.
+    fn drag_selection_to(&mut self, position: Point<Pixels>) -> bool {
+        self.selection_drag_moved = true;
+        self.extend_selection_to(position)
+    }
+
+    /// Moves the selection's free end to `position`. Returns whether the
+    /// selection changed, so callers can skip a redundant `notify`.
+    fn extend_selection_to(&mut self, position: Point<Pixels>) -> bool {
+        self.selection_last_mouse_pos = position;
+        let Some(point) = self.selection_grid_point(position) else {
+            return false;
+        };
+        // A press that never moved must stay "pending" (end == None) so mouse-up
+        // still clears it. Without this the autoscroll ticker would materialise a
+        // one-cell selection after every click, leaving a stray highlight and
+        // wrongly enabling Copy in the context menu.
+        if self.selection_end.is_none() && Some(point) == self.selection_start {
+            return false;
+        }
+        if self.selection_end == Some(point) {
+            return false;
+        }
+        self.selection_end = Some(point);
+        true
+    }
+
+    /// Starts the loop that scrolls the viewport while a selection drag sits
+    /// outside it. A ticker is needed rather than doing this from move events:
+    /// the pointer can be held perfectly still beyond the edge, and a mid-drag
+    /// wheel scroll also has to re-resolve the selection's free end.
+    fn start_selection_autoscroll(&mut self, cx: &mut gpui::Context<Self>) {
+        if !self.selecting {
+            return;
+        }
+        // Invalidates any ticker left over from a previous drag.
+        self.selection_autoscroll_seq = self.selection_autoscroll_seq.wrapping_add(1);
+        let seq = self.selection_autoscroll_seq;
+        cx.spawn(
+            async move |view: WeakEntity<TerminalViewportView>, cx: &mut gpui::AsyncApp| {
+                loop {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(16))
+                        .await;
+                    let mut keep_going = false;
+                    let updated = view.update(cx, |this, cx| {
+                        if !this.selecting || this.selection_autoscroll_seq != seq {
+                            return;
+                        }
+                        keep_going = true;
+                        if this.tick_selection_autoscroll() {
+                            cx.notify();
+                        }
+                    });
+                    if updated.is_err() || !keep_going {
+                        break;
+                    }
+                }
+            },
+        )
+        .detach();
+    }
+
+    /// One autoscroll step. Returns whether anything changed.
+    fn tick_selection_autoscroll(&mut self) -> bool {
+        let Some(bounds) = self.viewport_bounds else {
+            return false;
+        };
+        let Some(cache) = self.layout_cache.as_ref() else {
+            return false;
+        };
+        let line_height = cache.metrics.line_height;
+        let lines = terminal_autoscroll_lines(
+            self.selection_last_mouse_pos.y,
+            bounds.top(),
+            bounds.bottom(),
+            line_height,
+        );
+        let scrolled = if lines != 0 {
+            match &self.term_lock {
+                Some(term_lock) => {
+                    let mut term = term_lock.lock();
+                    let before = term.grid().display_offset();
+                    term.scroll_display(alacritty_terminal::grid::Scroll::Delta(lines));
+                    let after = term.grid().display_offset();
+                    // Must drop before extending: `selection_grid_point` takes the
+                    // same non-reentrant lock.
+                    drop(term);
+                    before != after
+                }
+                None => false,
+            }
+        } else {
+            false
+        };
+        if scrolled {
+            self.selection_drag_moved = true;
+        }
+        // Re-resolve only once the drag has actually moved. Doing it
+        // unconditionally would drag a double- or triple-click's word/line
+        // selection back to the press cell on the very first tick. Once the drag
+        // has moved, re-resolving every tick is what keeps a held-still pointer
+        // outside the viewport extending, and what makes a mid-drag wheel scroll
+        // extend the selection.
+        let extended =
+            self.selection_drag_moved && self.extend_selection_to(self.selection_last_mouse_pos);
+        scrolled || extended
     }
 
     /// Word boundaries (inclusive) for the cell at `point`, or `None` when the
@@ -888,18 +1186,22 @@ impl TerminalViewportView {
         point: TerminalGridPoint,
     ) -> Option<(TerminalGridPoint, TerminalGridPoint)> {
         let term_lock = self.term_lock.as_ref()?;
-        let cols = self
-            .last_content
-            .as_ref()
-            .map(|c| c.terminal_bounds.columns)
-            .unwrap_or(0);
+        // Dimensions from the live grid, so a row captured before a resize or a
+        // scrollback eviction cannot index out of range.
+        let geometry = self.grid_geometry()?;
+        let cols = geometry.columns;
         if cols == 0 || point.col as usize >= cols {
+            return None;
+        }
+        if point.row
+            != terminal_clamp_grid_row(point.row, geometry.history_size, geometry.screen_lines)
+        {
             return None;
         }
         let chars: Vec<char> = {
             let term = term_lock.lock();
             let grid = term.grid();
-            let line = Line(point.row as i32);
+            let line = Line(point.row);
             (0..cols)
                 .map(|c| {
                     let cell = &grid[line][Column(c)];
@@ -960,13 +1262,18 @@ impl TerminalViewportView {
             .unwrap_or(0);
         if current_cols != next_size.cols as usize || current_rows != next_size.rows as usize {
             let mut term = term_lock.lock();
-            term.resize(TerminalResizeDims {
+            term.resize(TerminalDims {
                 columns: next_size.cols as usize,
                 screen_lines: next_size.rows as usize,
                 total_lines: TERMINAL_SCROLLBACK_ROWS,
             });
             drop(term);
             pty_sender.resize(next_size.cols as usize, next_size.rows as usize);
+            // `resize` reflows the grid, so the stored endpoints now name
+            // different text. The clamps in the copy paths keep that from
+            // panicking, but leaving the selection would show a highlight over —
+            // and copy — text the user never selected.
+            self.clear_selection();
         }
     }
 
@@ -1104,19 +1411,24 @@ impl TerminalViewportView {
 
             // Selection rects. Selection points are in grid coordinates (display
             // offset already subtracted), so convert each grid row to a display row
-            // with `+ disp_off` — matching the background rects above — and skip any
-            // row scrolled out of view. Painting `sel_row` directly left the
-            // highlight glued to fixed screen rows when scrolled.
+            // with `+ disp_off` — matching the background rects above. Painting
+            // `sel_row` directly left the highlight glued to fixed screen rows when
+            // scrolled. The row span is clamped to the visible window up front: a
+            // selection can now cover the whole scrollback, and iterating all
+            // 10_000 rows every frame to skip most of them would be wasteful.
             if let Some((start, end)) = self
                 .selection_start
                 .zip(self.selection_end)
                 .map(|(s, e)| if s <= e { (s, e) } else { (e, s) })
+                && let Some(visible_rows) = terminal_selection_visible_rows(
+                    start.row,
+                    end.row,
+                    content.display_offset,
+                    rows as usize,
+                )
             {
-                for sel_row in start.row..=end.row {
-                    let display_row = sel_row as i32 + disp_off;
-                    if display_row < 0 || display_row >= rows as i32 {
-                        continue;
-                    }
+                for sel_row in visible_rows {
+                    let display_row = sel_row + disp_off;
                     let sel_start_col = if sel_row == start.row {
                         start.col as usize
                     } else {
@@ -1229,24 +1541,6 @@ impl TerminalViewportView {
     }
 }
 
-struct TerminalResizeDims {
-    columns: usize,
-    screen_lines: usize,
-    total_lines: usize,
-}
-
-impl alacritty_terminal::grid::Dimensions for TerminalResizeDims {
-    fn columns(&self) -> usize {
-        self.columns
-    }
-    fn screen_lines(&self) -> usize {
-        self.screen_lines
-    }
-    fn total_lines(&self) -> usize {
-        self.total_lines
-    }
-}
-
 impl Render for TerminalViewportView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         let view = cx.entity().clone();
@@ -1308,32 +1602,45 @@ impl Render for TerminalViewportView {
                     .relative()
                     .w_full()
                     .h_full()
-                    .child({
-                        let focus_handle = self.focus_handle.clone();
-                        let pty_sender = self.pty_sender.clone();
-                        let view = view.clone();
-                        gpui::canvas(
-                            move |bounds, window, cx| {
-                                view.update(cx, |this, cx| {
-                                    this.build_terminal_canvas_paint_state(bounds, window, cx)
-                                })
-                            },
-                            move |_bounds, paint_state, window, cx| {
-                                let ime_handler = TerminalTextInputHandler {
-                                    pty_sender: pty_sender.clone(),
-                                    ime_state: paint_state.ime_marked_text.as_ref().map(|t| {
-                                        TerminalImeState {
-                                            marked_text: t.clone(),
-                                        }
-                                    }),
-                                };
-                                window.handle_input(&focus_handle, ime_handler, cx);
-                                paint_terminal_canvas_state(paint_state, theme, window, cx);
-                            },
-                        )
-                        .w_full()
-                        .h_full()
-                    })
+                    .child(
+                        // Keep the grid clear of the scrollbar gutter. The
+                        // always-visible scrollbar blocks mouse events across its
+                        // full-height gutter once there is scrollback, so text under
+                        // it could neither be clicked to start a selection nor be
+                        // read with the thumb drawn over it.
+                        div()
+                            .w_full()
+                            .h_full()
+                            .pr(Scrollbar::gutter(ScrollbarAxis::Vertical))
+                            .child({
+                                let focus_handle = self.focus_handle.clone();
+                                let pty_sender = self.pty_sender.clone();
+                                let view = view.clone();
+                                gpui::canvas(
+                                    move |bounds, window, cx| {
+                                        view.update(cx, |this, cx| {
+                                            this.build_terminal_canvas_paint_state(
+                                                bounds, window, cx,
+                                            )
+                                        })
+                                    },
+                                    move |_bounds, paint_state, window, cx| {
+                                        let ime_handler = TerminalTextInputHandler {
+                                            pty_sender: pty_sender.clone(),
+                                            ime_state: paint_state.ime_marked_text.as_ref().map(
+                                                |t| TerminalImeState {
+                                                    marked_text: t.clone(),
+                                                },
+                                            ),
+                                        };
+                                        window.handle_input(&focus_handle, ime_handler, cx);
+                                        paint_terminal_canvas_state(paint_state, theme, window, cx);
+                                    },
+                                )
+                                .w_full()
+                                .h_full()
+                            }),
+                    )
                     .child({
                         let line_height = self
                             .terminal_layout_snapshot(_window, cx)
@@ -1350,6 +1657,9 @@ impl Render for TerminalViewportView {
                         .render(theme)
                     }),
             )
+            // Last child, so its window-level listeners are registered last and
+            // therefore dispatched first in the bubble phase.
+            .child(TerminalSelectionTracker { view })
     }
 }
 
@@ -3142,6 +3452,499 @@ fn terminal_clipboard_shortcut_action(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alacritty_terminal::vte::ansi::Handler;
+
+    // A 20x6 grid of 6x12 cells, so the viewport is 120x72 at (100, 200).
+    const TEST_COLS: usize = 20;
+    const TEST_ROWS: usize = 6;
+    const TEST_CELL_W: f32 = 6.0;
+    const TEST_LINE_H: f32 = 12.0;
+    const TEST_SCROLLBACK: usize = 100;
+
+    fn test_viewport_bounds() -> Bounds<Pixels> {
+        Bounds::new(
+            point(px(100.0), px(200.0)),
+            size(
+                px(TEST_CELL_W * TEST_COLS as f32),
+                px(TEST_LINE_H * TEST_ROWS as f32),
+            ),
+        )
+    }
+
+    /// Position of the top-left pixel of visible row `row`, column `col`.
+    fn test_cell_pos(row: usize, col: usize) -> Point<Pixels> {
+        let bounds = test_viewport_bounds();
+        point(
+            bounds.left() + px(TEST_CELL_W * col as f32 + 1.0),
+            bounds.top() + px(TEST_LINE_H * row as f32 + 1.0),
+        )
+    }
+
+    fn test_layout_cache() -> TerminalLayoutCache {
+        TerminalLayoutCache {
+            rem_size: px(16.0),
+            key: TerminalLayoutKey::default(),
+            base_style: gpui::TextStyle::default(),
+            metrics: TerminalTextMetrics {
+                font_size: px(10.0),
+                line_height: px(TEST_LINE_H),
+                cell_width: px(TEST_CELL_W),
+            },
+        }
+    }
+
+    /// A live `Term` holding `count` numbered lines, so anything beyond the last
+    /// `TEST_ROWS` of them sits in scrollback.
+    fn test_term_with_lines(count: usize) -> AlacrittyTermLock {
+        let (events_tx, _events_rx) = smol::channel::unbounded();
+        let term_lock = new_term(
+            &terminal_config(TEST_SCROLLBACK),
+            &TerminalDims {
+                columns: TEST_COLS,
+                screen_lines: TEST_ROWS,
+                total_lines: TEST_ROWS + TEST_SCROLLBACK,
+            },
+            events_tx,
+        );
+        let mut term = term_lock.lock();
+        for i in 0..count {
+            for c in format!("line{i:03}").chars() {
+                term.input(c);
+            }
+            if i + 1 < count {
+                term.linefeed();
+                term.carriage_return();
+            }
+        }
+        drop(term);
+        term_lock
+    }
+
+    /// Builds a viewport view over `term_lock`, with the layout and bounds a
+    /// paint would normally supply. `pty_sender` is `None`, which also keeps
+    /// `sync_terminal_grid_size` from resizing the grid out from under the test.
+    fn test_viewport(
+        term_lock: AlacrittyTermLock,
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<TerminalViewportView>, &mut gpui::VisualTestContext) {
+        cx.add_window_view(|_window, cx| {
+            let mut view = TerminalViewportView::with_backend(
+                AppTheme::gitcomet_dark(),
+                cx.focus_handle(),
+                Some(term_lock),
+                None,
+            );
+            view.viewport_bounds = Some(test_viewport_bounds());
+            view.layout_cache = Some(test_layout_cache());
+            view
+        })
+    }
+
+    /// Runs `f` against the view, re-stubbing the geometry a real paint would
+    /// own so the test does not depend on the test window's actual size.
+    fn with_viewport<R>(
+        view: &Entity<TerminalViewportView>,
+        cx: &mut gpui::VisualTestContext,
+        f: impl FnOnce(
+            &mut TerminalViewportView,
+            &mut Window,
+            &mut gpui::Context<TerminalViewportView>,
+        ) -> R,
+    ) -> R {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.viewport_bounds = Some(test_viewport_bounds());
+                this.layout_cache = Some(test_layout_cache());
+                f(this, window, cx)
+            })
+        })
+    }
+
+    fn test_mouse_down(position: Point<Pixels>) -> MouseDownEvent {
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: gpui::Modifiers::default(),
+            click_count: 1,
+            first_mouse: false,
+        }
+    }
+
+    fn display_offset_of(
+        view: &Entity<TerminalViewportView>,
+        cx: &mut gpui::VisualTestContext,
+    ) -> usize {
+        with_viewport(view, cx, |this, _window, _cx| {
+            this.grid_geometry().expect("live term").display_offset
+        })
+    }
+
+    #[gpui::test]
+    fn drag_below_the_viewport_keeps_extending_the_selection(cx: &mut gpui::TestAppContext) {
+        let term_lock = test_term_with_lines(30);
+        let (view, cx) = test_viewport(term_lock, cx);
+
+        // Press on the top visible row, then drag far below the panel. The
+        // element-local move handler is hitbox-gated by gpui, so this is the path
+        // the window-level `TerminalSelectionTracker` drives.
+        with_viewport(&view, cx, |this, window, cx| {
+            this.handle_mouse_down(
+                &test_mouse_down(test_cell_pos(0, 0)),
+                window,
+                cx,
+                MouseButton::Left,
+            );
+        });
+
+        let below = point(
+            test_viewport_bounds().left() + px(30.0),
+            test_viewport_bounds().bottom() + px(500.0),
+        );
+        let extended = with_viewport(&view, cx, |this, _window, _cx| {
+            this.drag_selection_to(below)
+        });
+
+        assert!(
+            extended,
+            "a drag past the bottom edge must extend the selection"
+        );
+        let (start, end) = with_viewport(&view, cx, |this, _window, _cx| {
+            (this.selection_start, this.selection_end)
+        });
+        assert_eq!(start, Some(TerminalGridPoint::new(0, 0)));
+        assert_eq!(
+            end.map(|p| p.row),
+            Some(TEST_ROWS as i32 - 1),
+            "extends to the last visible row rather than stopping at the anchor"
+        );
+        // Release, so no detached autoscroll ticker outlives the test.
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+    }
+
+    #[gpui::test]
+    fn autoscroll_tick_scrolls_while_the_pointer_sits_outside(cx: &mut gpui::TestAppContext) {
+        let term_lock = test_term_with_lines(30);
+        let (view, cx) = test_viewport(term_lock, cx);
+
+        // Scroll back into history, then hold a drag above the panel.
+        with_viewport(&view, cx, |this, _window, _cx| {
+            let term_lock = this.term_lock.clone().expect("live term");
+            term_lock.lock().scroll_display(Scroll::Delta(5));
+        });
+        assert_eq!(display_offset_of(&view, cx), 5);
+
+        let above = point(
+            test_viewport_bounds().left() + px(30.0),
+            test_viewport_bounds().top() - px(40.0),
+        );
+        with_viewport(&view, cx, |this, _window, _cx| {
+            this.selecting = true;
+            this.selection_start = Some(TerminalGridPoint::new(-5, 0));
+            this.selection_last_mouse_pos = above;
+        });
+
+        // The pointer never moves again: only the ticker can make progress.
+        for _ in 0..3 {
+            with_viewport(&view, cx, |this, _window, _cx| {
+                this.tick_selection_autoscroll()
+            });
+        }
+        assert!(
+            display_offset_of(&view, cx) > 5,
+            "holding the pointer above the panel must keep scrolling into history"
+        );
+
+        // And below the panel scrolls back toward the live tail.
+        let below = point(
+            test_viewport_bounds().left() + px(30.0),
+            test_viewport_bounds().bottom() + px(40.0),
+        );
+        with_viewport(&view, cx, |this, _window, _cx| {
+            this.selection_last_mouse_pos = below;
+        });
+        let before = display_offset_of(&view, cx);
+        with_viewport(&view, cx, |this, _window, _cx| {
+            this.tick_selection_autoscroll()
+        });
+        assert!(
+            display_offset_of(&view, cx) < before,
+            "dragging below the panel must scroll toward the live tail"
+        );
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+    }
+
+    #[gpui::test]
+    fn selecting_after_scrolling_back_copies_the_scrollback_rows(cx: &mut gpui::TestAppContext) {
+        let term_lock = test_term_with_lines(30);
+        let (view, cx) = test_viewport(term_lock, cx);
+
+        // 30 lines in a 6-row grid: rows 24..29 are on screen, the rest is
+        // history. Scrolling back 10 puts lines 14..19 on screen.
+        with_viewport(&view, cx, |this, _window, _cx| {
+            let term_lock = this.term_lock.clone().expect("live term");
+            term_lock.lock().scroll_display(Scroll::Delta(10));
+        });
+
+        // Select the first two visible rows, whole width.
+        let text = with_viewport(&view, cx, |this, window, cx| {
+            this.handle_mouse_down(
+                &test_mouse_down(test_cell_pos(0, 0)),
+                window,
+                cx,
+                MouseButton::Left,
+            );
+            this.drag_selection_to(test_cell_pos(1, TEST_COLS - 1));
+            this.selected_text()
+        });
+
+        assert_eq!(
+            text.as_deref(),
+            Some("line014\nline015"),
+            "the highlight must resolve to the scrollback rows under the pointer, \
+             and whole-row copies must not carry the grid's padding spaces"
+        );
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+    }
+
+    #[gpui::test]
+    fn a_click_without_a_drag_leaves_no_selection(cx: &mut gpui::TestAppContext) {
+        let term_lock = test_term_with_lines(30);
+        let (view, cx) = test_viewport(term_lock, cx);
+
+        with_viewport(&view, cx, |this, window, cx| {
+            this.handle_mouse_down(
+                &test_mouse_down(test_cell_pos(2, 3)),
+                window,
+                cx,
+                MouseButton::Left,
+            );
+        });
+
+        // The autoscroll ticker re-resolves the pointer every frame; it must not
+        // turn a stationary press into a one-cell selection, or every click would
+        // leave a stray highlight and enable Copy.
+        for _ in 0..5 {
+            with_viewport(&view, cx, |this, _window, _cx| {
+                this.tick_selection_autoscroll()
+            });
+        }
+        assert_eq!(
+            with_viewport(&view, cx, |this, _window, _cx| this.selection_end),
+            None,
+            "a press that never moved stays pending"
+        );
+
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+        let (has_selection, selecting) = with_viewport(&view, cx, |this, _window, _cx| {
+            (this.has_selection(), this.selecting)
+        });
+        assert!(!has_selection, "releasing a click clears the anchor");
+        assert!(!selecting, "and ends the drag");
+    }
+
+    /// A `Term` holding one line of `len` characters, so anything past the
+    /// column count soft-wraps onto the following row(s).
+    fn test_term_with_long_line(len: usize) -> AlacrittyTermLock {
+        let (events_tx, _events_rx) = smol::channel::unbounded();
+        let term_lock = new_term(
+            &terminal_config(TEST_SCROLLBACK),
+            &TerminalDims {
+                columns: TEST_COLS,
+                screen_lines: TEST_ROWS,
+                total_lines: TEST_ROWS + TEST_SCROLLBACK,
+            },
+            events_tx,
+        );
+        {
+            let mut term = term_lock.lock();
+            for i in 0..len {
+                term.input((b'a' + (i % 26) as u8) as char);
+            }
+        }
+        term_lock
+    }
+
+    #[gpui::test]
+    fn copying_a_soft_wrapped_line_does_not_insert_a_newline(cx: &mut gpui::TestAppContext) {
+        let expected: String = (0..30).map(|i| (b'a' + (i % 26) as u8) as char).collect();
+        let (view, cx) = test_viewport(test_term_with_long_line(30), cx);
+
+        // 30 characters in a 20-column grid occupy rows 0 and 1 as one logical
+        // line. Selecting both must copy it unbroken: a '\n' at the wrap column
+        // makes a pasted command run as a truncated fragment.
+        let text = with_viewport(&view, cx, |this, window, cx| {
+            this.handle_mouse_down(
+                &test_mouse_down(test_cell_pos(0, 0)),
+                window,
+                cx,
+                MouseButton::Left,
+            );
+            this.drag_selection_to(test_cell_pos(1, TEST_COLS - 1));
+            this.selected_text()
+        });
+        assert_eq!(text.as_deref(), Some(expected.as_str()));
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+    }
+
+    #[gpui::test]
+    fn a_selection_starting_mid_row_still_drops_the_grid_padding(cx: &mut gpui::TestAppContext) {
+        let (view, cx) = test_viewport(test_term_with_lines(30), cx);
+
+        // Start two columns in and drag to the end of the next row. The first
+        // row's selection still reaches the line end, so its trailing spaces are
+        // grid padding, not selected content.
+        let text = with_viewport(&view, cx, |this, window, cx| {
+            this.handle_mouse_down(
+                &test_mouse_down(test_cell_pos(0, 2)),
+                window,
+                cx,
+                MouseButton::Left,
+            );
+            this.drag_selection_to(test_cell_pos(1, TEST_COLS - 1));
+            this.selected_text()
+        });
+        assert_eq!(text.as_deref(), Some("ne024\nline025"));
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+    }
+
+    fn test_multi_click(position: Point<Pixels>, click_count: usize) -> MouseDownEvent {
+        MouseDownEvent {
+            button: MouseButton::Left,
+            position,
+            modifiers: gpui::Modifiers::default(),
+            click_count,
+            first_mouse: false,
+        }
+    }
+
+    #[gpui::test]
+    fn the_autoscroll_ticker_does_not_collapse_a_word_or_line_selection(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let term_lock = test_term_with_lines(30);
+        let (view, cx) = test_viewport(term_lock, cx);
+
+        // Double-click in the middle of the word on the last visible row. The
+        // ticker then fires with the pointer never having moved; it must leave
+        // the word selection alone rather than re-resolving the free end back to
+        // the press cell.
+        let press = test_cell_pos(TEST_ROWS - 1, 3);
+        let word = with_viewport(&view, cx, |this, window, cx| {
+            this.handle_mouse_down(&test_multi_click(press, 2), window, cx, MouseButton::Left);
+            this.selected_text()
+        });
+        assert_eq!(
+            word.as_deref(),
+            Some("line029"),
+            "double click selects a word"
+        );
+
+        for _ in 0..5 {
+            with_viewport(&view, cx, |this, _window, _cx| {
+                this.tick_selection_autoscroll()
+            });
+        }
+        assert_eq!(
+            with_viewport(&view, cx, |this, _window, _cx| this.selected_text()).as_deref(),
+            Some("line029"),
+            "a stationary pointer must not shrink the word selection"
+        );
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+
+        // Same for a triple-click line selection.
+        let (start, end) = with_viewport(&view, cx, |this, window, cx| {
+            this.handle_mouse_down(&test_multi_click(press, 3), window, cx, MouseButton::Left);
+            (this.selection_start, this.selection_end)
+        });
+        assert_eq!(start.map(|p| p.col), Some(0));
+        assert_eq!(end.map(|p| p.col), Some(TEST_COLS as u16 - 1));
+
+        for _ in 0..5 {
+            with_viewport(&view, cx, |this, _window, _cx| {
+                this.tick_selection_autoscroll()
+            });
+        }
+        assert_eq!(
+            with_viewport(&view, cx, |this, _window, _cx| (
+                this.selection_start,
+                this.selection_end
+            )),
+            (start, end),
+            "a stationary pointer must not shrink the line selection"
+        );
+        with_viewport(&view, cx, |this, _window, cx| this.end_selection_drag(cx));
+    }
+
+    #[gpui::test]
+    fn the_grid_stops_short_of_the_scrollbar_gutter(cx: &mut gpui::TestAppContext) {
+        let term_lock = test_term_with_lines(3);
+        let (view, cx) = cx.add_window_view(|_window, cx| {
+            TerminalViewportView::with_backend(
+                AppTheme::gitcomet_dark(),
+                cx.focus_handle(),
+                Some(term_lock),
+                None,
+            )
+        });
+        cx.run_until_parked();
+
+        let (window_size, viewport) =
+            cx.update(|window, app| (window.viewport_size(), view.read(app).viewport_bounds));
+        let viewport = viewport.expect("the canvas records its bounds during prepaint");
+        let gutter = Scrollbar::gutter(ScrollbarAxis::Vertical);
+        // The always-visible scrollbar blocks mouse events across its whole
+        // gutter, so text must never be laid out underneath it: a press there
+        // could not start a selection, and the thumb would cover the glyphs.
+        assert_eq!(
+            window_size.width - viewport.size.width,
+            gutter,
+            "the grid must be inset from the right edge by exactly the gutter"
+        );
+        assert_eq!(
+            viewport.size.height, window_size.height,
+            "and must still fill the available height"
+        );
+    }
+
+    #[gpui::test]
+    fn select_all_covers_the_whole_buffer_and_stays_visible_when_scrolled(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let term_lock = test_term_with_lines(30);
+        let (view, cx) = test_viewport(term_lock, cx);
+
+        let (start, end, history) = with_viewport(&view, cx, |this, _window, cx| {
+            this.select_all(cx);
+            let history = this.grid_geometry().expect("live term").history_size;
+            (this.selection_start, this.selection_end, history)
+        });
+        assert!(
+            history > 0,
+            "30 lines in a 6-row grid must produce scrollback"
+        );
+        assert_eq!(start, Some(TerminalGridPoint::new(-(history as i32), 0)));
+        assert_eq!(
+            end,
+            Some(TerminalGridPoint::new(
+                TEST_ROWS as i32 - 1,
+                TEST_COLS as u16 - 1
+            ))
+        );
+
+        // The painted span is clamped to the screen at every scroll position, so
+        // a buffer-wide selection never iterates the whole scrollback per frame.
+        for offset in [0usize, 5, history] {
+            let visible = terminal_selection_visible_rows(
+                start.unwrap().row,
+                end.unwrap().row,
+                offset,
+                TEST_ROWS,
+            )
+            .expect("select-all is visible at every scroll offset");
+            assert_eq!(visible.clone().count(), TEST_ROWS);
+            assert_eq!(*visible.start(), -(offset as i32));
+        }
+    }
 
     #[test]
     fn friendly_terminal_title_collapses_shell_paths_to_the_program_stem() {

@@ -4118,17 +4118,36 @@ pub(super) struct TerminalViewportView {
     pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
     pub(super) viewport_bounds: Option<Bounds<Pixels>>,
     pub(super) pressed_mouse_button: Option<gpui::MouseButton>,
-    /// Last grid cell `(row, col)` reported to the PTY for mouse-motion tracking.
-    /// Used to dedupe motion reports so a TUI in any-event mode (1003) receives at
-    /// most one report per cell instead of one per pixel-level move event.
-    pub(super) last_motion_cell: Option<(u16, u16)>,
+    /// Last grid cell reported to the PTY for mouse-motion tracking. Used to
+    /// dedupe motion reports so a TUI in any-event mode (1003) receives at most
+    /// one report per cell instead of one per pixel-level move event.
+    pub(super) last_motion_cell: Option<TerminalGridPoint>,
     pub(super) was_focused: bool,
+    /// Selection endpoints in grid coordinates. Note these are *not* rotated
+    /// when the PTY emits output: alacritty shifts existing content to
+    /// more-negative rows as lines scroll off, so text can slide under a
+    /// stationary highlight during a drag. Autoscroll itself is safe because
+    /// `scroll_display` moves the viewport, not the content.
     pub(super) selection_start: Option<TerminalGridPoint>,
     pub(super) selection_end: Option<TerminalGridPoint>,
-    /// Set by "select all" so Copy grabs the entire buffer (including scrollback
-    /// history, which the `u16` grid-point selection cannot represent). Cleared
-    /// as soon as a manual selection begins.
+    /// Set by "select all" so Copy grabs the entire buffer through the trimming
+    /// `copy_entire_buffer` path. Cleared as soon as a manual selection begins.
     pub(super) select_all_active: bool,
+    /// True while the left button is held down for a selection drag. Drives the
+    /// window-level `TerminalSelectionTracker` listeners and the autoscroll
+    /// ticker, both of which keep working after the pointer leaves the viewport.
+    pub(super) selecting: bool,
+    /// Most recent pointer position seen during a drag. The autoscroll ticker
+    /// re-reads it every frame so scrolling continues while the pointer is held
+    /// still outside the viewport.
+    pub(super) selection_last_mouse_pos: Point<Pixels>,
+    /// Whether the current drag has actually moved (pointer motion, a wheel
+    /// scroll, or an autoscroll step). The ticker refuses to re-resolve the free
+    /// end until it has: otherwise the first tick after a double- or
+    /// triple-click would drag that word/line selection back to the press cell.
+    pub(super) selection_drag_moved: bool,
+    /// Bumped whenever a drag starts or ends so a stale autoscroll ticker exits.
+    pub(super) selection_autoscroll_seq: u64,
     pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
 }
 
@@ -4192,14 +4211,19 @@ pub(crate) struct TerminalPanelResizeState {
     pub(super) start_height: Pixels,
 }
 
+/// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
+/// top of the visible screen at the live tail, and scrollback history is
+/// negative down to `-history_size`. Field order matters — the derived `Ord`
+/// gives row-major ordering, which is what normalises a selection's
+/// `start`/`end` pair.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct TerminalGridPoint {
-    pub(super) row: u16,
+    pub(super) row: i32,
     pub(super) col: u16,
 }
 
 impl TerminalGridPoint {
-    pub(super) fn new(row: u16, col: u16) -> Self {
+    pub(super) fn new(row: i32, col: u16) -> Self {
         Self { row, col }
     }
 }
