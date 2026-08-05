@@ -597,41 +597,15 @@ fn status_row(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                let clicked_path = (*path_for_menu).clone();
-                let clicked_in_multiselect = this
-                    .status_selected_paths_for_area(repo_id, area)
-                    .iter()
-                    .any(|p| p == &clicked_path);
-                if !clicked_in_multiselect {
-                    this.status_selection_apply_click(
-                        repo_id,
-                        section,
-                        clicked_path.clone(),
-                        Some(ix),
-                        gpui::Modifiers::default(),
-                        None,
-                    );
-                }
-                if is_conflicted && area == DiffArea::Unstaged {
-                    this.store.dispatch(Msg::SelectConflictDiff {
-                        repo_id,
-                        path: clicked_path.clone(),
-                    });
-                } else {
-                    this.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: clicked_path.clone(),
-                            area,
-                        },
-                    });
-                }
+                // Right-click only opens the menu: it must not open the diff (that is
+                // left-click's job) and must not touch the left-click selection. The
+                // right-clicked row is marked separately via the context menu invoker.
                 this.activate_context_menu_invoker(context_menu_invoker_for_row.clone(), cx);
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
-                        path: clicked_path,
+                        path: (*path_for_menu).clone(),
                     },
                     e.position,
                     window,
