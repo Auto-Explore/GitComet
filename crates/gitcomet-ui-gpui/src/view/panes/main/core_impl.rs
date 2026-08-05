@@ -264,6 +264,7 @@ struct BackgroundResolvedOutlineRecomputeRequest {
     output_text: Arc<str>,
     output_line_count: usize,
     marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    block_map: conflict_resolver::ResolvedOutputBlockMap,
     sources: OwnedResolvedOutlineSourceData,
 }
 
@@ -278,11 +279,16 @@ fn compute_resolved_outline_computation(
     output_text: &str,
     output_line_count: usize,
     marker_segments: &[conflict_resolver::ConflictSegment],
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
     sources: ResolvedOutlineSourceView<'_>,
 ) -> ResolvedOutlineComputation {
     let view_mode = sources.view_mode();
-    let markers =
-        build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count);
+    let markers = build_resolved_output_conflict_markers(
+        marker_segments,
+        output_text,
+        output_line_count,
+        block_map,
+    );
     if should_skip_resolved_outline_provenance(view_mode, output_line_count) {
         return ResolvedOutlineComputation {
             output_line_count,
@@ -2276,6 +2282,7 @@ impl MainPaneView {
             &self.conflict_resolver.marker_segments,
             output_snapshot.as_str(),
             output_snapshot.shared_line_starts().as_ref(),
+            &self.conflict_resolved_output_block_map,
         );
         let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
             self.theme,
@@ -2317,7 +2324,15 @@ impl MainPaneView {
                     unresolved_ranges.as_ref(),
                 )
             });
+        // The placeholder rows are a rendering of open decisions, so hand them
+        // to the buffer as uneditable spans. They travel with later edits on
+        // their own, which keeps them exact while this refresh is debounced.
+        let protected_ranges = resolved_output_placeholder_protected_ranges(
+            output_snapshot.as_str(),
+            output_snapshot.shared_line_starts().as_ref(),
+        );
         self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_protected_ranges(protected_ranges);
             if let Some(provider) = syntax_state.highlight_provider {
                 if let Some(provider_key) = provider_key {
                     input.set_highlight_provider_with_key(provider_key, provider, cx);
@@ -2647,6 +2662,7 @@ impl MainPaneView {
             output_text,
             output_line_count,
             marker_segments: self.conflict_resolver.marker_segments.clone(),
+            block_map: self.conflict_resolved_output_block_map.clone(),
             sources,
         }
     }
@@ -2778,6 +2794,7 @@ impl MainPaneView {
             output_text,
             output_line_count,
             &self.conflict_resolver.marker_segments,
+            &self.conflict_resolved_output_block_map,
             self.resolved_outline_source_view(),
         );
         self.sync_conflict_resolved_preview_snapshot(
@@ -2857,9 +2874,10 @@ impl MainPaneView {
         else {
             return false;
         };
-        let new_block_ranges = match resolved_output_conflict_block_ranges_in_text(
+        let new_block_ranges = match resolved_output_conflict_block_line_ranges(
             &self.conflict_resolver.marker_segments,
             output_text,
+            &self.conflict_resolved_output_block_map,
         ) {
             Some(ranges) if ranges.len() == old_block_ranges.len() => ranges,
             _ => remap_resolved_output_conflict_block_ranges_for_delta(
@@ -3208,6 +3226,7 @@ impl MainPaneView {
                     request.output_text.as_ref(),
                     request.output_line_count,
                     &request.marker_segments,
+                    &request.block_map,
                     request.sources.as_view(),
                 );
                 self.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
@@ -3278,6 +3297,7 @@ impl MainPaneView {
                             request.output_text.as_ref(),
                             request.output_line_count,
                             &request.marker_segments,
+                            &request.block_map,
                             request.sources.as_view(),
                         )
                     };
@@ -4431,6 +4451,7 @@ impl MainPaneView {
                 &self.conflict_resolver.marker_segments,
                 &content,
                 context_line,
+                &self.conflict_resolved_output_block_map,
             )
         };
         if let Some(marker) = conflict_marker {

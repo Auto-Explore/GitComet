@@ -74,14 +74,27 @@ impl ConflictAutosolveMode {
     }
 }
 
-/// A KDiff3-style source choice applied everywhere: every merge-plan delta,
-/// not only unresolved marker regions.
+/// A KDiff3-style source choice applied in bulk. The blocks it reaches depend
+/// on the [`ConflictBulkScope`] it is dispatched with.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictBulkChoice {
     Base,
     Ours,
     Theirs,
     Both,
+}
+
+/// Which blocks a bulk choice reaches, mirroring KDiff3's `chooseGlobal`
+/// `bConflictsOnly` / `bWhiteSpaceOnly` pair.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ConflictBulkScope {
+    /// "Choose A/B/C Everywhere": every merge-plan delta, including the ones
+    /// the planner already selected automatically.
+    #[default]
+    AllDeltas,
+    /// "Choose A/B/C for All Unsolved Whitespace Conflicts": only blocks still
+    /// unresolved and classified as whitespace-only, skipping hand-edited ones.
+    UnsolvedWhitespace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -709,6 +722,7 @@ pub enum Msg {
         repo_id: RepoId,
         path: RepoPath,
         choice: ConflictBulkChoice,
+        scope: ConflictBulkScope,
     },
     ConflictSetRegionChoice {
         repo_id: RepoId,

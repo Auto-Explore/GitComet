@@ -236,6 +236,10 @@ pub(in crate::view) enum ContextMenuAction {
     ConflictResolverJoinRegions {
         target: ConflictResolverJoinTarget,
     },
+    /// kdiff3's Choose A/B/C for All Unsolved Whitespace Conflicts.
+    ConflictResolverChooseForWhitespaceConflicts {
+        choice: conflict_resolver::ConflictChoice,
+    },
     SetMergetoolAutoAdvance {
         enabled: bool,
     },

@@ -2143,16 +2143,20 @@ impl MainPaneView {
             &self.conflict_resolver.marker_segments,
             output_text,
             output_line_ix,
+            &self.conflict_resolved_output_block_map,
         ) else {
             return fallback_conflict_ix;
         };
         let target_conflict_ix = marker.conflict_ix;
-        let marker_count_for_conflict =
-            resolved_output_markers_for_text(&self.conflict_resolver.marker_segments, output_text)
-                .iter()
-                .flatten()
-                .filter(|m| m.conflict_ix == target_conflict_ix && m.is_start)
-                .count();
+        let marker_count_for_conflict = resolved_output_markers_for_text(
+            &self.conflict_resolver.marker_segments,
+            output_text,
+            &self.conflict_resolved_output_block_map,
+        )
+        .iter()
+        .flatten()
+        .filter(|m| m.conflict_ix == target_conflict_ix && m.is_start)
+        .count();
         if marker_count_for_conflict <= 1 {
             return target_conflict_ix;
         }
@@ -2171,6 +2175,7 @@ impl MainPaneView {
             &self.conflict_resolver.marker_segments,
             output_text,
             output_line_ix,
+            &self.conflict_resolved_output_block_map,
         )
         .map(|m| m.conflict_ix)
         .unwrap_or(target_conflict_ix)
@@ -3012,7 +3017,9 @@ impl MainPaneView {
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             let selection = input.selected_range();
-            if selection.is_empty() {
+            // The unresolved-conflict rows are uneditable however the edit is
+            // spelled, so a Cut across one takes nothing with it.
+            if selection.is_empty() || input.edit_alters_protected_range(&selection, "") {
                 return;
             }
             input.set_theme(theme, cx);
@@ -3030,6 +3037,9 @@ impl MainPaneView {
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
             let pos = input.cursor_offset().min(input.text().len());
+            if input.edit_alters_protected_range(&(pos..pos), paste_text) {
+                return;
+            }
             input.set_theme(theme, cx);
             input.replace_utf8_range(pos..pos, paste_text, cx);
         });
@@ -3213,6 +3223,19 @@ impl MainPaneView {
             return None;
         }
         Some(conflict_resolver::conflict_session_summary_counts(session))
+    }
+
+    /// Whitespace-only conflicts still awaiting a decision, KDiff3's status-line
+    /// convention. Drops as the user resolves them, unlike the plan-wide
+    /// classification count.
+    pub(in crate::view) fn conflict_resolver_unsolved_whitespace_conflicts(&self) -> usize {
+        let Some(resolver_path) = self.conflict_resolver.path.as_ref() else {
+            return 0;
+        };
+        self.active_repo()
+            .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
+            .filter(|session| session.path.as_path() == resolver_path.as_path())
+            .map_or(0, |session| session.unsolved_whitespace_conflict_count())
     }
 
     pub(super) fn conflict_resolver_active_block_mut(
@@ -3879,6 +3902,37 @@ impl MainPaneView {
         if self.conflict_resolver.output_is_protected {
             return;
         }
+        self.conflict_resolver_dispatch_bulk_choice(
+            choice,
+            gitcomet_state::msg::ConflictBulkScope::AllDeltas,
+            cx,
+        );
+    }
+
+    /// KDiff3's Choose A/B/C for All Unsolved Whitespace Conflicts: clear the
+    /// whitespace-only blocks the on-open pass deliberately left alone, without
+    /// touching real conflicts or hand-edited blocks.
+    pub(in crate::view) fn conflict_resolver_choose_for_whitespace_conflicts(
+        &mut self,
+        choice: conflict_resolver::ConflictChoice,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver.output_is_protected {
+            return;
+        }
+        self.conflict_resolver_dispatch_bulk_choice(
+            choice,
+            gitcomet_state::msg::ConflictBulkScope::UnsolvedWhitespace,
+            cx,
+        );
+    }
+
+    fn conflict_resolver_dispatch_bulk_choice(
+        &mut self,
+        choice: conflict_resolver::ConflictChoice,
+        scope: gitcomet_state::msg::ConflictBulkScope,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let bulk_choice = if choice == conflict_resolver::ConflictChoice::Base {
             gitcomet_state::msg::ConflictBulkChoice::Base
         } else if choice == conflict_resolver::ConflictChoice::Ours {
@@ -3902,6 +3956,7 @@ impl MainPaneView {
             repo_id,
             path,
             choice: bulk_choice,
+            scope,
         });
         cx.notify();
     }

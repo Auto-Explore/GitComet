@@ -1546,7 +1546,8 @@ fn reduce_inner(
             repo_id,
             path,
             choice,
-        } => conflict_interactions::apply_bulk_choice(state, repo_id, path, choice),
+            scope,
+        } => conflict_interactions::apply_bulk_choice(state, repo_id, path, choice, scope),
         Msg::ConflictSetRegionChoice {
             repo_id,
             path,

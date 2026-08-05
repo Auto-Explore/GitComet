@@ -2176,3 +2176,97 @@ fn highlight_provider_with_pending_uses_custom_callbacks() {
     let second = provider.resolve(4..12);
     assert!(!second.pending);
 }
+
+const PROTECTED_SAMPLE_TEXT: &str = "head\n<Merge Conflict>\ntail\n";
+
+fn protected_sample_span() -> Range<usize> {
+    let start = PROTECTED_SAMPLE_TEXT
+        .find("<Merge Conflict>")
+        .expect("placeholder line");
+    start..start + "<Merge Conflict>\n".len()
+}
+
+fn protected_sample_input(
+    cx: &mut gpui::TestAppContext,
+) -> (Entity<TextInput>, &mut gpui::VisualTestContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text(PROTECTED_SAMPLE_TEXT, cx);
+            input.set_protected_ranges(Arc::from([protected_sample_span()]));
+        });
+    });
+    (input, cx)
+}
+
+#[gpui::test]
+fn protected_ranges_reject_typed_edits_that_would_alter_them(cx: &mut gpui::TestAppContext) {
+    let span = protected_sample_span();
+    let (input, cx) = protected_sample_input(cx);
+
+    for (range, inserted) in [
+        // Typing inside the line, over it, and at its first offset.
+        (span.start + 2..span.start + 2, "x"),
+        (span.start..span.end, "picked\n"),
+        (span.start..span.start, "x"),
+        // Backspace at the line start, which would join the line above into it.
+        (span.start - 1..span.start, ""),
+        // Replacing the line above with text that no longer ends the line.
+        (0..span.start, "head"),
+    ] {
+        cx.update(|window, app| {
+            input.update(app, |input, cx| {
+                input.replace_text_in_range(Some(range.clone()), inserted, window, cx);
+                assert_eq!(
+                    input.text(),
+                    PROTECTED_SAMPLE_TEXT,
+                    "replacing {range:?} with {inserted:?} must be refused"
+                );
+                assert_eq!(input.protected_ranges(), std::slice::from_ref(&span));
+            });
+        });
+    }
+}
+
+#[gpui::test]
+fn protected_ranges_ride_along_with_edits_around_them(cx: &mut gpui::TestAppContext) {
+    let span = protected_sample_span();
+    let (input, cx) = protected_sample_input(cx);
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            // Editing the line after the span leaves it where it was.
+            input.replace_text_in_range(Some(span.end..span.end), "new\n", window, cx);
+            assert_eq!(input.text(), "head\n<Merge Conflict>\nnew\ntail\n");
+            assert_eq!(input.protected_ranges(), std::slice::from_ref(&span));
+
+            // Editing before it moves it by the length the edit added.
+            input.replace_text_in_range(Some(0..0), "top\n", window, cx);
+            assert_eq!(input.text(), "top\nhead\n<Merge Conflict>\nnew\ntail\n");
+            let moved = span.start + "top\n".len()..span.end + "top\n".len();
+            assert_eq!(input.protected_ranges(), std::slice::from_ref(&moved));
+
+            // Deleting the whole line above keeps the placeholder a line of its
+            // own, so that edit goes through.
+            let span = input.protected_ranges()[0].clone();
+            input.replace_text_in_range(
+                Some(span.start - "head\n".len()..span.start),
+                "",
+                window,
+                cx,
+            );
+            assert_eq!(input.text(), "top\n<Merge Conflict>\nnew\ntail\n");
+            let moved = span.start - "head\n".len()..span.end - "head\n".len();
+            assert_eq!(input.protected_ranges(), std::slice::from_ref(&moved));
+        });
+    });
+}

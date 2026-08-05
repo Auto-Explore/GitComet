@@ -74,6 +74,7 @@ impl TextInput {
             content_width_cache: None,
             selection: SelectionState::new(),
             interaction: InteractionState::new(),
+            protected_ranges: Arc::from([]),
         }
     }
 
@@ -183,6 +184,7 @@ impl TextInput {
             return;
         }
         self.content.set_text(text.as_ref());
+        self.protected_ranges = Arc::from([]);
         self.rebuild_content_width_cache_if_present();
         self.selection.range = self.content.len()..self.content.len();
         self.selection.reversed = false;
@@ -353,6 +355,94 @@ impl TextInput {
             self.invalidate_layout_caches();
         }
         cx.notify();
+    }
+
+    /// Refuse edits to these byte spans, each covering a whole line including
+    /// its terminator. Spans must be sorted and disjoint. Cleared by
+    /// [`Self::set_text`], since the offsets describe the buffer that was
+    /// replaced; the owner re-publishes them for the new one.
+    pub fn set_protected_ranges(&mut self, ranges: Arc<[Range<usize>]>) {
+        self.protected_ranges = ranges;
+    }
+
+    #[cfg(test)]
+    pub fn protected_ranges(&self) -> &[Range<usize>] {
+        &self.protected_ranges
+    }
+
+    /// Whether replacing `range` with `new_text` would alter a protected line.
+    ///
+    /// Anything overlapping a span is out, and so are the two ways to reach one
+    /// from outside: inserting at its first offset lands inside the protected
+    /// line, and an edit that stops there eats the newline that made the line
+    /// stand on its own unless it puts a line boundary back.
+    pub fn edit_alters_protected_range(&self, range: &Range<usize>, new_text: &str) -> bool {
+        if self.protected_ranges.is_empty() {
+            return false;
+        }
+
+        let content = self.content.as_ref();
+        self.protected_ranges.iter().any(|protected| {
+            if range.start >= protected.end || range.end < protected.start {
+                return false;
+            }
+            if range.end > protected.start || range.start == protected.start {
+                return true;
+            }
+            // Ends exactly where the span begins: safe only while whatever now
+            // precedes the span still ends a line.
+            match new_text.as_bytes().last() {
+                Some(last) => *last != b'\n',
+                None => {
+                    range.start != 0
+                        && content
+                            .as_bytes()
+                            .get(range.start.saturating_sub(1))
+                            .is_some_and(|byte| *byte != b'\n')
+                }
+            }
+        })
+    }
+
+    /// Carry the protected spans across an edit that was allowed through.
+    ///
+    /// Typed edits never overlap a span, but a programmatic rewrite does when
+    /// the owner resolves that conflict — the spans it published describe a
+    /// buffer that no longer exists, so drop them and let it republish.
+    fn shift_protected_ranges_for_edit(&mut self, old: &Range<usize>, new: &Range<usize>) {
+        if self.protected_ranges.is_empty() {
+            return;
+        }
+        if self
+            .protected_ranges
+            .iter()
+            .any(|range| old.start < range.end && old.end > range.start)
+        {
+            self.protected_ranges = Arc::from([]);
+            return;
+        }
+        let shift = new.len() as isize - old.len() as isize;
+        if shift == 0 {
+            return;
+        }
+        let shifted = |offset: usize| {
+            if shift >= 0 {
+                offset.saturating_add(shift as usize)
+            } else {
+                offset.saturating_sub(shift.unsigned_abs())
+            }
+        };
+        self.protected_ranges = self
+            .protected_ranges
+            .iter()
+            .map(|range| {
+                if range.end <= old.start {
+                    range.clone()
+                } else {
+                    shifted(range.start)..shifted(range.end)
+                }
+            })
+            .collect();
     }
 
     pub fn set_display_truncation(
@@ -1742,6 +1832,7 @@ impl TextInput {
         let previous_selection = self.selection.range.clone();
         let previous_reversed = self.selection.reversed;
         let inserted = self.replace_content_range(range.clone(), new_text);
+        self.shift_protected_ranges_for_edit(&range, &inserted);
         self.push_undo_snapshot(undo_snapshot);
         self.selection.redo_stack.clear();
         self.selection
@@ -1964,6 +2055,9 @@ impl TextInput {
         let text_edit_delta =
             utf8_edit_delta_between_texts(self.content.as_ref(), snapshot.content.as_ref());
         self.content = snapshot.content.into();
+        // The spans described the buffer this snapshot just replaced; the owner
+        // republishes them for the restored one.
+        self.protected_ranges = Arc::from([]);
         self.rebuild_content_width_cache_if_present();
         self.selection.range = snapshot.selected_range;
         self.selection.reversed = snapshot.selection_reversed;
@@ -2809,8 +2903,12 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.selection.marked_range.clone())
             .unwrap_or(self.selection.range.clone());
+        if self.edit_alters_protected_range(&range, new_text.as_str()) {
+            return;
+        }
 
         let inserted = self.replace_content_range(range.clone(), new_text.as_str());
+        self.shift_protected_ranges_for_edit(&range, &inserted);
         self.selection
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));
@@ -2848,8 +2946,12 @@ impl EntityInputHandler for TextInput {
             .map(|range_utf16| self.range_from_utf16(range_utf16))
             .or(self.selection.marked_range.clone())
             .unwrap_or(self.selection.range.clone());
+        if self.edit_alters_protected_range(&range, new_text.as_str()) {
+            return;
+        }
 
         let inserted = self.replace_content_range(range.clone(), new_text.as_str());
+        self.shift_protected_ranges_for_edit(&range, &inserted);
         self.selection
             .pending_text_edit_deltas
             .push((range.clone(), inserted.clone()));

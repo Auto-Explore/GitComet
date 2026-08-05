@@ -10,8 +10,8 @@ mod store_event;
 pub use effect::Effect;
 pub use message::{
     CommitSelectMode, ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice,
-    ConflictRegionChoice, ConflictRegionResolutionUpdate, InternalMsg, Msg, RepoActionKind,
-    RepoWatchDegradedReason,
+    ConflictBulkScope, ConflictRegionChoice, ConflictRegionResolutionUpdate, InternalMsg, Msg,
+    RepoActionKind, RepoWatchDegradedReason,
 };
 pub use repo_command_kind::RepoCommandKind;
 pub use repo_external_change::RepoExternalChange;

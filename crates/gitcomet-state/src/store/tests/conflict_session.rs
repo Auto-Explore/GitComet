@@ -368,8 +368,11 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
     }));
 }
 
+/// The CurrentOnly -> Full upgrade is the first stage-backed open, so it is the
+/// load that runs the on-open policy. Under KDiff3 parity that policy leaves a
+/// whitespace-only conflict for the user on both loads.
 #[test]
-fn current_only_upgrade_runs_on_open_autosolve_on_full_regions() {
+fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
@@ -463,11 +466,15 @@ fn current_only_upgrade_runs_on_open_autosolve_on_full_regions() {
         .conflict_session
         .as_ref()
         .unwrap();
-    assert!(matches!(
+    assert!(
+        upgraded.merge_plan.is_some(),
+        "the Full load replaces the provisional session with a plan-backed one",
+    );
+    assert_eq!(
         upgraded.regions[0].resolution,
-        ConflictRegionResolution::AutoResolved { .. }
-    ));
-    assert_eq!(upgraded.merge_plan.as_ref().unwrap().unresolved_count(), 0);
+        ConflictRegionResolution::Unresolved,
+    );
+    assert_eq!(upgraded.merge_plan.as_ref().unwrap().unresolved_count(), 1);
 }
 
 #[test]
@@ -994,6 +1001,7 @@ theirs two\n\
             repo_id,
             path: PathBuf::from("file.txt").into(),
             choice: crate::msg::ConflictBulkChoice::Ours,
+            scope: crate::msg::ConflictBulkScope::AllDeltas,
         },
     );
 
@@ -1055,6 +1063,7 @@ fn conflict_apply_bulk_choice_rewrites_automatic_plan_deltas_too() {
             repo_id,
             path: PathBuf::from("file.txt").into(),
             choice: crate::msg::ConflictBulkChoice::Theirs,
+            scope: crate::msg::ConflictBulkScope::AllDeltas,
         },
     );
 
@@ -1615,8 +1624,13 @@ same content\n\
     assert_eq!(repo_state.conflict_state.conflict_rev, before_rev);
 }
 
+/// KDiff3 parity: `WhiteSpace2FileMergeDefault` / `WhiteSpace3FileMergeDefault`
+/// both default to "Manual Choice", so a whitespace-only conflict is detected
+/// and counted but never picked for the user. On-open autosolve must leave it
+/// alone in both the regions and the shared plan — and the whitespace-scoped
+/// bulk choice is how the user then clears them all at once.
 #[test]
-fn conflict_file_loaded_syncs_on_open_whitespace_autosolve_into_plan() {
+fn whitespace_only_conflicts_stay_manual_until_the_bulk_choice_clears_them() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
@@ -1666,11 +1680,54 @@ fn conflict_file_loaded_syncs_on_open_whitespace_autosolve_into_plan() {
         .conflict_session
         .as_ref()
         .expect("session exists");
-    assert_eq!(session.unsolved_count(), 0);
-    assert!(matches!(
+    assert_eq!(session.unsolved_count(), 1);
+    assert_eq!(
         session.regions[0].resolution,
-        gitcomet_core::conflict_session::ConflictRegionResolution::AutoResolved { .. }
-    ));
+        gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved,
+        "whitespace-only conflicts stay a manual choice, as in KDiff3",
+    );
+    assert!(
+        session
+            .merge_plan
+            .as_ref()
+            .expect("merge plan")
+            .blocks
+            .iter()
+            .any(|block| block.whitespace_conflict),
+        "the block is still classified as a whitespace conflict, just not resolved",
+    );
+    assert_eq!(
+        session
+            .merge_plan
+            .as_ref()
+            .expect("merge plan")
+            .unresolved_count(),
+        1,
+    );
+
+    // ...and the user clears it in one action, KDiff3's "Choose B for All
+    // Unsolved Whitespace Conflicts".
+    let before_rev = state.repos[0].conflict_state.conflict_rev;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ConflictApplyBulkChoice {
+            repo_id,
+            path: PathBuf::from("file.txt").into(),
+            choice: crate::msg::ConflictBulkChoice::Ours,
+            scope: crate::msg::ConflictBulkScope::UnsolvedWhitespace,
+        },
+    );
+
+    let repo_state = &state.repos[0];
+    let session = repo_state
+        .conflict_state
+        .conflict_session
+        .as_ref()
+        .expect("session exists");
+    assert_eq!(session.unsolved_count(), 0);
+    assert_eq!(session.unsolved_whitespace_conflict_count(), 0);
     assert_eq!(
         session
             .merge_plan
@@ -1678,8 +1735,8 @@ fn conflict_file_loaded_syncs_on_open_whitespace_autosolve_into_plan() {
             .expect("merge plan")
             .unresolved_count(),
         0,
-        "on-open autosolve decisions must be reflected in the shared plan",
     );
+    assert!(repo_state.conflict_state.conflict_rev > before_rev);
 }
 
 fn history_conflict_file() -> ConflictFile {

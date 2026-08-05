@@ -544,4 +544,9 @@ pub struct TextInput {
     pub(super) content_width_cache: Option<ContentWidthCache>,
     pub(super) selection: SelectionState,
     pub(super) interaction: InteractionState,
+    /// Byte spans the buffer refuses to edit, each covering a whole line
+    /// including its terminator. Edits that would alter one are dropped; the
+    /// spans ride along with edits elsewhere so they stay accurate between
+    /// refreshes by the owner.
+    pub(super) protected_ranges: Arc<[Range<usize>]>,
 }

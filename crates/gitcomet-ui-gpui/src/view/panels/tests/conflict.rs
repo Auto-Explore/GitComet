@@ -6229,6 +6229,14 @@ fn conflict_resolver_scroll_positions_hold_across_idle_frames(cx: &mut gpui::Tes
 /// A multi-conflict fixture whose two sides have different line counts per
 /// block, so the aligned column row space and the resolved output line space
 /// genuinely diverge and the conflict-anchored remap has real work to do.
+///
+/// The divergence comes from the *settled* blocks: an unresolved block now
+/// covers its full aligned span in the output too (one named placeholder row
+/// plus blank rows), so leaving every block conflicted would make the two
+/// spaces line up 1:1 and prove nothing. Every other block is therefore already
+/// merged to ours in `current` — it occupies `ours_len` output lines against
+/// `max(ours_len, theirs_len)` aligned rows — while the blocks in between stay
+/// conflicted so the output still has markers to anchor on.
 fn build_multi_conflict_sides() -> (String, String, String, String) {
     let mut base = Vec::new();
     let mut ours = Vec::new();
@@ -6246,20 +6254,29 @@ fn build_multi_conflict_sides() -> (String, String, String, String) {
         // shrinks, so no single global ratio maps the two row spaces.
         let ours_len = 2 + block;
         let theirs_len = 10 - block;
+        let settled = block % 2 == 1;
         base.push(format!("base block {block:02}"));
-        current.push("<<<<<<< ours".to_string());
+        if !settled {
+            current.push("<<<<<<< ours".to_string());
+        }
         for line in 0..ours_len {
             let text = format!("ours {block:02}/{line:02}");
             ours.push(text.clone());
             current.push(text);
         }
-        current.push("=======".to_string());
+        if !settled {
+            current.push("=======".to_string());
+        }
         for line in 0..theirs_len {
             let text = format!("theirs {block:02}/{line:02}");
             theirs.push(text.clone());
-            current.push(text);
+            if !settled {
+                current.push(text);
+            }
         }
-        current.push(">>>>>>> theirs".to_string());
+        if !settled {
+            current.push(">>>>>>> theirs".to_string());
+        }
     }
     let join = |lines: Vec<String>| format!("{}\n", lines.join("\n"));
     (join(base), join(ours), join(theirs), join(current))

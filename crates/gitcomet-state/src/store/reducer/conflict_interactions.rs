@@ -1,7 +1,7 @@
 use crate::model::{AppState, RepoId};
 use crate::msg::{
-    ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictRegionChoice,
-    ConflictRegionResolutionUpdate, Effect, RepoPath,
+    ConflictAutosolveMode, ConflictAutosolveStats, ConflictBulkChoice, ConflictBulkScope,
+    ConflictRegionChoice, ConflictRegionResolutionUpdate, Effect, RepoPath,
 };
 use gitcomet_core::conflict_session::{
     AutosolveConfidence, AutosolveRule, ConflictRegion, ConflictRegionEditOutcome,
@@ -36,6 +36,7 @@ pub(super) fn apply_bulk_choice(
     repo_id: RepoId,
     path: RepoPath,
     choice: ConflictBulkChoice,
+    scope: ConflictBulkScope,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -50,7 +51,7 @@ pub(super) fn apply_bulk_choice(
         return Vec::new();
     }
 
-    let applied = apply_bulk_choice_to_session(session, choice);
+    let applied = apply_bulk_choice_to_session(session, choice, scope);
     if applied > 0 {
         session.sync_merge_plan_from_regions();
         repo_state.bump_conflict_rev();
@@ -673,6 +674,7 @@ fn matches_current_conflict_path(repo_state: &crate::model::RepoState, path: &Pa
 fn apply_bulk_choice_to_session(
     session: &mut gitcomet_core::conflict_session::ConflictSession,
     choice: ConflictBulkChoice,
+    scope: ConflictBulkScope,
 ) -> usize {
     if let Some(plan) = session.merge_plan.as_ref() {
         let has_base = plan.has_base();
@@ -685,7 +687,18 @@ fn apply_bulk_choice_to_session(
                 OrderedSelection::from_sources([plan.local_source(), plan.remote_source()])
             }
         };
-        return session.replace_all_delta_selections(selection);
+        return match scope {
+            ConflictBulkScope::AllDeltas => session.replace_all_delta_selections(selection),
+            ConflictBulkScope::UnsolvedWhitespace => {
+                session.replace_whitespace_conflict_selections(selection)
+            }
+        };
+    }
+
+    // Marker-only fallback sessions carry no whitespace classification, so the
+    // whitespace-scoped action has nothing it can safely act on.
+    if scope == ConflictBulkScope::UnsolvedWhitespace {
+        return 0;
     }
 
     let mut applied = 0usize;

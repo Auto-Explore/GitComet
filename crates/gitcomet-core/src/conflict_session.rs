@@ -1217,6 +1217,66 @@ impl ConflictSession {
         changed_blocks.len()
     }
 
+    /// Pick one side for every still-unresolved whitespace-only conflict.
+    ///
+    /// This is KDiff3's "Choose A/B/C for All Unsolved Whitespace Conflicts"
+    /// (`chooseGlobal(sel, bConflictsOnly = true, bWhiteSpaceOnly = true)`).
+    /// Since the on-open pass deliberately leaves these alone, this is how a
+    /// file full of reindented lines gets cleared in one action.
+    ///
+    /// Mirrors KDiff3's `updateDefaults` filter: only blocks that are still
+    /// unresolved, classified as a whitespace conflict, and not hand-edited
+    /// (its `hasModfiedText()` guard) are touched. Returns the number of
+    /// blocks whose decision changed.
+    pub fn replace_whitespace_conflict_selections(&mut self, selection: OrderedSelection) -> usize {
+        let Some(plan) = self.merge_plan.as_ref() else {
+            // Marker-only fallback sessions have no aligned-row classification,
+            // so there is no trustworthy whitespace verdict to act on.
+            return 0;
+        };
+        if selection
+            .iter()
+            .any(|source| plan.source_text(source).is_none())
+        {
+            return 0;
+        }
+        let changed_blocks: Vec<usize> = plan
+            .blocks
+            .iter()
+            .enumerate()
+            .filter_map(|(index, block)| {
+                (block.whitespace_conflict
+                    && !block.is_resolved()
+                    && block.manual_content.is_none())
+                .then_some(index)
+            })
+            .collect();
+        let Some(plan) = self.merge_plan.as_mut() else {
+            return 0;
+        };
+        for block_index in &changed_blocks {
+            plan.replace_selection(*block_index, selection.clone());
+        }
+        for block_index in changed_blocks.iter().copied() {
+            self.sync_region_from_plan_block(block_index);
+        }
+        changed_blocks.len()
+    }
+
+    /// Count the whitespace-only conflicts still awaiting a decision.
+    ///
+    /// KDiff3's status line reports the unsolved subset
+    /// (`getNumberOfUnsolvedConflicts(&wsc)`), so the number falls as the user
+    /// works through them.
+    pub fn unsolved_whitespace_conflict_count(&self) -> usize {
+        self.merge_plan.as_ref().map_or(0, |plan| {
+            plan.blocks
+                .iter()
+                .filter(|block| block.whitespace_conflict && !block.is_resolved())
+                .count()
+        })
+    }
+
     fn sync_region_from_plan_block(&mut self, block_index: usize) {
         let Some(region_index) = self
             .region_plan_blocks

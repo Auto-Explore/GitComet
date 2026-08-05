@@ -967,7 +967,14 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
                 }
                 let start_line = line_offset;
                 let mut end_line = line_offset.saturating_add(count_newlines(&expected));
-                if end == output_text.len() && !expected.is_empty() {
+                // A block that ends the file without a trailing newline still
+                // occupies its last line, which no newline accounts for. Only
+                // that case needs the extra row: when the block *is* newline
+                // terminated, the outline still keeps an empty row after the
+                // final newline (`resolved_output_outline_line_count`), and
+                // claiming it would put this block's `?` gutter and conflict
+                // bracket on a row that belongs to no conflict.
+                if end == output_text.len() && !expected.is_empty() && !expected.ends_with('\n') {
                     end_line = end_line.saturating_add(1);
                 }
                 ranges.push(start_line..end_line);
@@ -978,6 +985,56 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
     }
 
     Some(ranges)
+}
+
+/// Line ranges for the displayed conflict blocks, tolerating manual edits.
+///
+/// The walk above only reports ranges while the buffer still reads back exactly
+/// as the segments render, so one keystroke anywhere in the output drops every
+/// marker at once — placeholders lose their conflict color, their bracket and
+/// their chunk menu. `ResolvedOutputBlockMap` carries block byte ownership
+/// through edits, so fall back to it and convert its ranges into line space.
+pub(super) fn resolved_output_conflict_block_line_ranges(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &str,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
+) -> Option<Vec<Range<usize>>> {
+    resolved_output_conflict_block_ranges_in_text(marker_segments, output_text).or_else(|| {
+        conflict_block_line_ranges_from_block_map(marker_segments, output_text, block_map)
+    })
+}
+
+fn conflict_block_line_ranges_from_block_map(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &str,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
+) -> Option<Vec<Range<usize>>> {
+    if !block_map.is_valid_for(marker_segments, output_text) {
+        return None;
+    }
+
+    let byte_ranges = block_map.ranges();
+    let mut line_ranges = Vec::with_capacity(byte_ranges.len());
+    // The map keeps its ranges sorted and disjoint, so one forward pass counts
+    // every newline exactly once instead of rescanning the prefix per block.
+    let mut cursor = 0usize;
+    let mut line = 0usize;
+    for range in byte_ranges {
+        let lead = output_text.get(cursor..range.start)?;
+        let body = output_text.get(range.clone())?;
+        let start_line = line.saturating_add(count_newlines(lead));
+        let mut end_line = start_line.saturating_add(count_newlines(body));
+        // A block that ends the file without a trailing newline still occupies
+        // its last row, matching the strict walk's accounting.
+        if range.end == output_text.len() && !body.is_empty() && !body.ends_with('\n') {
+            end_line = end_line.saturating_add(1);
+        }
+        line_ranges.push(start_line..end_line);
+        line = start_line.saturating_add(count_newlines(body));
+        cursor = range.end;
+    }
+
+    Some(line_ranges)
 }
 
 pub(super) fn conflict_marker_ranges_for_block(
@@ -1237,9 +1294,10 @@ pub(super) fn build_resolved_output_conflict_markers(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
     output_line_count: usize,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
     let Some(block_ranges) =
-        resolved_output_conflict_block_ranges_in_text(marker_segments, output_text)
+        resolved_output_conflict_block_line_ranges(marker_segments, output_text, block_map)
     else {
         return vec![None; output_line_count];
     };
@@ -1330,9 +1388,15 @@ pub(super) fn push_conflict_text_segment(
 pub(super) fn resolved_output_markers_for_text(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
     let output_line_count = conflict_resolver::resolved_output_outline_line_count(output_text);
-    build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count)
+    build_resolved_output_conflict_markers(
+        marker_segments,
+        output_text,
+        output_line_count,
+        block_map,
+    )
 }
 
 /// Byte ranges whose output rows are still unresolved. Derive these from the
@@ -1342,13 +1406,14 @@ pub(super) fn resolved_output_unresolved_byte_ranges(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
     line_starts: &[usize],
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Arc<[Range<usize>]> {
     if !marker_segments.iter().any(|segment| {
         matches!(segment, conflict_resolver::ConflictSegment::Block(block) if !block.resolved)
     }) {
         return Arc::default();
     }
-    let markers = resolved_output_markers_for_text(marker_segments, output_text);
+    let markers = resolved_output_markers_for_text(marker_segments, output_text, block_map);
     let mut ranges = Vec::new();
     for (line_ix, marker) in markers.iter().enumerate() {
         if !marker.is_some_and(|marker| marker.unresolved) {
@@ -1368,12 +1433,53 @@ pub(super) fn resolved_output_unresolved_byte_ranges(
     ranges.into()
 }
 
+/// Byte spans of the unresolved-conflict placeholder rows, terminator included.
+///
+/// A `<Merge Conflict>` row is a drawing of an open decision, not text the file
+/// will ever contain, so the buffer refuses to edit these spans however the
+/// rest of the output has been rewritten by hand. Rows are identified by their
+/// own content, which keeps the protection standing even once the marker
+/// segments no longer line up with the buffer.
+pub(super) fn resolved_output_placeholder_protected_ranges(
+    output_text: &str,
+    line_starts: &[usize],
+) -> Arc<[Range<usize>]> {
+    if !conflict_resolver::text_may_contain_unresolved_conflict_placeholder(output_text) {
+        return Arc::default();
+    }
+
+    let line_count = indexed_line_count(output_text, line_starts);
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    for line_ix in 0..line_count {
+        let start = line_starts
+            .get(line_ix)
+            .copied()
+            .unwrap_or(output_text.len())
+            .min(output_text.len());
+        let end = line_starts
+            .get(line_ix.saturating_add(1))
+            .copied()
+            .unwrap_or(output_text.len())
+            .min(output_text.len())
+            .max(start);
+        let Some(line) = output_text.get(start..end) else {
+            continue;
+        };
+        if conflict_resolver::line_is_unresolved_conflict_placeholder(line) {
+            ranges.push(start..end);
+        }
+    }
+
+    ranges.into()
+}
+
 pub(super) fn resolved_output_marker_for_line(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
     output_line_ix: usize,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Option<ResolvedOutputConflictMarker> {
-    resolved_output_markers_for_text(marker_segments, output_text)
+    resolved_output_markers_for_text(marker_segments, output_text, block_map)
         .get(output_line_ix)
         .copied()
         .flatten()

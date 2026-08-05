@@ -2614,3 +2614,182 @@ fn choose_everywhere_rewrites_automatic_and_conflicting_deltas() {
     );
     assert_eq!(plan.unresolved_count(), 0);
 }
+
+fn session_with_whitespace_and_real_conflicts() -> ConflictSession {
+    ConflictSession::from_stage_inputs(
+        PathBuf::from("mixed.txt"),
+        FileConflictKind::BothModified,
+        ConflictPayload::Text("value = 1\nkeep\nold-conflict\n".into()),
+        ConflictPayload::Text("value=1\nkeep\nours-conflict\n".into()),
+        ConflictPayload::Text("value  =  1\nkeep\ntheirs-conflict\n".into()),
+    )
+}
+
+/// KDiff3's Choose B for All Unsolved Whitespace Conflicts only reaches the
+/// blocks its aligned-row classification flagged as whitespace-only.
+#[test]
+fn whitespace_bulk_choice_leaves_real_conflicts_alone() {
+    let mut session = session_with_whitespace_and_real_conflicts();
+    let plan = session.merge_plan.as_ref().expect("plan");
+    assert_eq!(
+        plan.blocks
+            .iter()
+            .filter(|block| block.whitespace_conflict)
+            .count(),
+        1,
+        "fixture has one whitespace conflict"
+    );
+    assert_eq!(session.unsolved_whitespace_conflict_count(), 1);
+    let unresolved_before = plan.unresolved_count();
+    assert!(
+        unresolved_before > 1,
+        "fixture also has a real conflict to protect"
+    );
+
+    assert_eq!(
+        session.replace_whitespace_conflict_selections(MergeSource::B.into()),
+        1
+    );
+
+    let plan = session.merge_plan.as_ref().expect("plan");
+    assert!(
+        plan.blocks
+            .iter()
+            .filter(|block| block.whitespace_conflict)
+            .all(|block| block.selection.as_slice() == [MergeSource::B])
+    );
+    assert_eq!(
+        plan.unresolved_count(),
+        unresolved_before - 1,
+        "the real conflict still needs a decision"
+    );
+    assert_eq!(
+        session.unsolved_whitespace_conflict_count(),
+        0,
+        "the status-line count drops as they are picked"
+    );
+}
+
+/// KDiff3's `updateDefaults` skips blocks with `hasModfiedText()`, so a bulk
+/// whitespace pick never clobbers text the user typed.
+#[test]
+fn whitespace_bulk_choice_skips_hand_edited_blocks() {
+    let mut session = session_with_whitespace_and_real_conflicts();
+    let whitespace_block = session
+        .merge_plan
+        .as_ref()
+        .expect("plan")
+        .blocks
+        .iter()
+        .position(|block| block.whitespace_conflict)
+        .expect("whitespace block");
+    assert!(
+        session
+            .merge_plan
+            .as_mut()
+            .expect("plan")
+            .set_manual_content(whitespace_block, "hand written\n".to_string())
+    );
+
+    assert_eq!(
+        session.replace_whitespace_conflict_selections(MergeSource::B.into()),
+        0,
+        "a hand-edited whitespace block is left as the user wrote it"
+    );
+    assert_eq!(
+        session.merge_plan.as_ref().expect("plan").blocks[whitespace_block]
+            .manual_content
+            .as_deref(),
+        Some("hand written\n")
+    );
+}
+
+/// An unresolved block's aligned row span equals its widest side's line count.
+///
+/// The resolved-output pane depends on this: it only sees a region's three
+/// texts, never the plan rows, so it sizes an unresolved block's placeholder
+/// from `max(base, ours, theirs)` line counts (`unresolved_placeholder_row_count`
+/// in the UI crate). If the planner ever grouped more rows into a block than its
+/// widest side contributes, the output would come up short and every line below
+/// it would be numbered early against the source columns.
+#[test]
+fn unresolved_block_row_span_matches_its_widest_side() {
+    let cases: &[(&str, &str, &str, &str)] = &[
+        (
+            "whitespace-only reindent",
+            "# app settings\nvalue = 1\ntimeout = 30\n",
+            "# app settings\nvalue=1\ntimeout=30\n",
+            "# app settings\nvalue  =  1\ntimeout  =  30\n",
+        ),
+        (
+            "same line clashes",
+            "one\na\nthree\n",
+            "one\nb\nthree\n",
+            "one\nc\nthree\n",
+        ),
+        ("insert vs insert", "one\nz\n", "one\nP\nz\n", "one\nQ\nz\n"),
+        (
+            "uneven side lengths",
+            "one\na\nthree\n",
+            "one\nb1\nb2\nb3\nthree\n",
+            "one\nc1\nthree\n",
+        ),
+        (
+            "delete vs modify",
+            "one\na\nb\nthree\n",
+            "one\nthree\n",
+            "one\nA\nB\nthree\n",
+        ),
+        (
+            "multiline on both sides",
+            "one\na\nb\nthree\n",
+            "one\nA1\nA2\nthree\n",
+            "one\nC1\nC2\nthree\n",
+        ),
+    ];
+
+    for (name, base, ours, theirs) in cases {
+        let session = ConflictSession::from_stage_inputs(
+            PathBuf::from("rows.txt"),
+            FileConflictKind::BothModified,
+            ConflictPayload::Text((*base).into()),
+            ConflictPayload::Text((*ours).into()),
+            ConflictPayload::Text((*theirs).into()),
+        );
+        let plan = session.merge_plan.as_ref().expect("plan");
+        let mut checked = 0usize;
+        for (index, block) in plan.blocks.iter().enumerate() {
+            if block.is_resolved() {
+                continue;
+            }
+            let Some(region_index) = session
+                .region_plan_blocks
+                .iter()
+                .position(|candidate| *candidate == index)
+            else {
+                continue;
+            };
+            let region = &session.regions[region_index];
+            let widest = region
+                .ours
+                .as_str()
+                .lines()
+                .count()
+                .max(region.theirs.as_str().lines().count())
+                .max(
+                    region
+                        .base
+                        .as_ref()
+                        .map_or(0, |base| base.as_str().lines().count()),
+                );
+            assert_eq!(
+                block.rows.len(),
+                widest,
+                "{name}: block {index} spans {} rows but its widest side has {widest} lines",
+                block.rows.len()
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "{name}: fixture produced no unresolved block");
+    }
+}

@@ -126,10 +126,17 @@ pub(super) fn conflict_file_loaded(
     Vec::new()
 }
 
-/// UI_DESIGN.md section 30 auto-solve policy: the High and Medium confidence tiers
-/// (safe rules, subchunk split, whitespace/regex normalization) apply
-/// automatically when a conflicted file first opens in the resolver. The Low
-/// tier (history merge) only ever runs behind the explicit Auto-solve action.
+/// UI_DESIGN.md section 30 auto-solve policy: only the always-safe rules
+/// (identical sides, one-side-changed) and the subchunk split apply
+/// automatically when a conflicted file first opens in the resolver.
+///
+/// Whitespace-only conflicts and regex normalization are deliberately left
+/// alone, matching KDiff3: its `WhiteSpace2FileMergeDefault` /
+/// `WhiteSpace3FileMergeDefault` both default to "Manual Choice"
+/// (`e_SrcSelector::None`), so `MergeResultWindow::merge` skips
+/// `updateDefaults` for whitespace blocks, and `RunRegExpAutoMergeOnMergeStart`
+/// defaults to false. Both still run behind the explicit Auto-solve action, as
+/// does the Low tier (history merge).
 ///
 /// Reloads of an already stage-backed file keep user resolutions via
 /// [`restore_conflict_session_resolutions`] and are never re-autosolved, so a
@@ -150,8 +157,8 @@ fn auto_resolve_session_on_open(repo_state: &mut RepoState, path: &Path) {
 
     let stats = super::conflict_interactions::apply_autosolve_to_session(
         session,
-        ConflictAutosolveMode::Regex,
-        true,
+        ConflictAutosolveMode::Safe,
+        false,
     );
     if stats.total_resolved() == 0 {
         return;
@@ -165,7 +172,7 @@ fn auto_resolve_session_on_open(repo_state: &mut RepoState, path: &Path) {
         true,
         format!("telemetry.conflict_autosolve.on_open {}", path.display()),
         super::util::conflict_autosolve_telemetry_summary(
-            ConflictAutosolveMode::Regex,
+            ConflictAutosolveMode::Safe,
             Some(path),
             total_before,
             total_after,

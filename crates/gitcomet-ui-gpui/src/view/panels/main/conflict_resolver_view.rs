@@ -514,19 +514,26 @@ impl MainPaneView {
                     .gap_2()
                     .pl_1()
                     .child(status)
-                    .when_some(counts.whitespace_conflicts, |d, whitespace| {
-                        let noun = if whitespace == 1 {
-                            "whitespace conflict"
-                        } else {
-                            "whitespace conflicts"
-                        };
-                        d.child(
-                            div()
-                                .text_xs()
-                                .text_color(theme.colors.text_muted)
-                                .child(format!("{whitespace} {noun}")),
-                        )
-                    })
+                    // KDiff3 qualifies its unsolved count with the whitespace
+                    // subset ("of which M are whitespace"); with none left there
+                    // is no subset to name, so the chip goes away rather than
+                    // reading "0 whitespace conflicts" for the rest of the merge.
+                    .when_some(
+                        counts.whitespace_conflicts.filter(|count| *count > 0),
+                        |d, whitespace| {
+                            let noun = if whitespace == 1 {
+                                "whitespace conflict"
+                            } else {
+                                "whitespace conflicts"
+                            };
+                            d.child(
+                                div()
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(format!("{whitespace} {noun}")),
+                            )
+                        },
+                    )
                     .when(has_conflict_markers, |d| {
                         d.child(
                             div()

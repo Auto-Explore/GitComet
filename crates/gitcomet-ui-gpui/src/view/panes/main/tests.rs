@@ -17,8 +17,9 @@ use super::{
     renderable_conflict_file, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
-    resolved_output_snapshot_is_modified, resolved_output_unresolved_byte_ranges,
-    split_target_conflict_block_into_subchunks, versioned_cached_diff_styled_text_is_current,
+    resolved_output_placeholder_protected_ranges, resolved_output_snapshot_is_modified,
+    resolved_output_unresolved_byte_ranges, split_target_conflict_block_into_subchunks,
+    versioned_cached_diff_styled_text_is_current,
     versioned_query_cached_diff_styled_text_is_current, worktree_output_requires_protection,
 };
 use crate::kit::text_model::TextModel;
@@ -34,6 +35,12 @@ use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
 use rustc_hash::FxHashMap as HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+
+/// Block ownership for output text that still reads back exactly as the
+/// segments render, which is what these marker tests build.
+fn block_map_for(segments: &[ConflictSegment]) -> conflict_resolver::ResolvedOutputBlockMap {
+    conflict_resolver::ResolvedOutputBlockMap::from_segments(segments)
+}
 
 #[test]
 fn clear_diff_selection_action_is_clear_for_normal_mode() {
@@ -941,7 +948,12 @@ fn build_resolved_output_conflict_markers_maps_chunk_boundaries() {
 
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
-    let markers = build_resolved_output_conflict_markers(&segments, &output, line_count);
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
 
     assert_eq!(
         markers[1],
@@ -995,7 +1007,12 @@ fn build_resolved_output_conflict_markers_anchors_zero_length_ranges() {
 
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
-    let markers = build_resolved_output_conflict_markers(&segments, &output, line_count);
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
 
     assert_eq!(
         markers[1],
@@ -1027,7 +1044,12 @@ fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
 
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
-    let markers = build_resolved_output_conflict_markers(&segments, &output, line_count);
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
 
     assert_eq!(
         markers[1],
@@ -1038,6 +1060,142 @@ fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
             is_start: true,
             is_end: true,
             unresolved: true,
+        })
+    );
+}
+
+/// A multi-row placeholder is one conflict across all of its rows: the `?`
+/// gutter and the bracket must run the whole span, not just the named first row.
+#[test]
+fn build_resolved_output_conflict_markers_cover_every_placeholder_row() {
+    let segments = vec![
+        ConflictSegment::Text("top\n".to_string().into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a1\na2\na3\n".to_string().into(),
+            theirs: "x1\n".to_string().into(),
+            choice: ConflictChoice::empty(),
+            resolved: false,
+            whitespace_only: false,
+        }),
+        ConflictSegment::Text("bottom\n".to_string().into()),
+    ];
+
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    assert_eq!(output, "top\n<Merge Conflict>\n\n\nbottom\n");
+    let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
+
+    for (line_ix, expected_start, expected_end) in
+        [(1, true, false), (2, false, false), (3, false, true)]
+    {
+        assert_eq!(
+            markers[line_ix],
+            Some(ResolvedOutputConflictMarker {
+                conflict_ix: 0,
+                range_start: 1,
+                range_end: 4,
+                is_start: expected_start,
+                is_end: expected_end,
+                unresolved: true,
+            }),
+            "row {line_ix} belongs to the placeholder block"
+        );
+    }
+    assert_eq!(markers[0], None);
+    assert_eq!(
+        markers[4], None,
+        "the text after the block is not part of it"
+    );
+}
+
+/// A conflict that is the file's last line owns exactly that line. The output
+/// keeps a trailing empty row after the final newline (see
+/// `resolved_output_outline_line_count`); that row belongs to no conflict and
+/// must not inherit the block's `?` gutter.
+#[test]
+fn build_resolved_output_conflict_markers_stop_at_a_file_final_block() {
+    let segments = vec![
+        ConflictSegment::Text("top\n".to_string().into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a\n".to_string().into(),
+            theirs: "x\n".to_string().into(),
+            choice: ConflictChoice::empty(),
+            resolved: false,
+            whitespace_only: false,
+        }),
+    ];
+
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
+    assert_eq!(
+        line_count, 3,
+        "the trailing newline keeps an empty last row"
+    );
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
+
+    assert_eq!(
+        markers[1],
+        Some(ResolvedOutputConflictMarker {
+            conflict_ix: 0,
+            range_start: 1,
+            range_end: 2,
+            is_start: true,
+            is_end: true,
+            unresolved: true,
+        })
+    );
+    assert_eq!(
+        markers[2], None,
+        "the empty row after the final newline is not part of the conflict"
+    );
+}
+
+/// A block that ends the file with no trailing newline still owns that line —
+/// no newline accounts for it, so its range must not collapse to zero width.
+#[test]
+fn build_resolved_output_conflict_markers_cover_a_file_final_block_without_newline() {
+    let segments = vec![
+        ConflictSegment::Text("top\n".to_string().into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "a".to_string().into(),
+            theirs: "x".to_string().into(),
+            choice: ConflictChoice::Ours,
+            resolved: true,
+            whitespace_only: false,
+        }),
+    ];
+
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
+
+    assert_eq!(
+        markers[1],
+        Some(ResolvedOutputConflictMarker {
+            conflict_ix: 0,
+            range_start: 1,
+            range_end: 2,
+            is_start: true,
+            is_end: true,
+            unresolved: false,
         })
     );
 }
@@ -1238,7 +1396,13 @@ fn clicked_unresolved_line_maps_to_chunk_marker() {
     let clicked_offset = "top\nours-1\n".len();
     let clicked_line =
         conflict_resolver_output_context_line(&output, cursor_offset, Some(clicked_offset));
-    let marker = resolved_output_marker_for_line(&segments, &output, clicked_line).expect("marker");
+    let marker = resolved_output_marker_for_line(
+        &segments,
+        &output,
+        clicked_line,
+        &block_map_for(&segments),
+    )
+    .expect("marker");
     assert!(marker.unresolved);
     assert_eq!(marker.conflict_ix, 0);
 }
@@ -1260,7 +1424,12 @@ fn build_resolved_output_conflict_markers_splits_unresolved_subchunks() {
 
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
-    let markers = build_resolved_output_conflict_markers(&segments, &output, line_count);
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
 
     let starts = markers
         .iter()
@@ -1295,7 +1464,12 @@ fn build_resolved_output_conflict_markers_splits_method_edit_and_trailing_insert
 
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
-    let markers = build_resolved_output_conflict_markers(&segments, &output, line_count);
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
 
     let starts = markers
         .iter()
@@ -1314,7 +1488,12 @@ fn build_resolved_output_conflict_markers_matches_combined_conflict_marker_case(
 
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
-    let markers = build_resolved_output_conflict_markers(&segments, &output, line_count);
+    let markers = build_resolved_output_conflict_markers(
+        &segments,
+        &output,
+        line_count,
+        &block_map_for(&segments),
+    );
     let starts = markers
         .iter()
         .flatten()
@@ -1336,7 +1515,8 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
     let output_before = conflict_resolver::generate_resolved_text(&segments);
     let projection_before = conflict_resolver::ResolvedOutputProjection::from_segments(&segments);
 
-    let before_markers = resolved_output_markers_for_text(&segments, &output_before);
+    let before_markers =
+        resolved_output_markers_for_text(&segments, &output_before, &block_map_for(&segments));
     let before_starts = before_markers
         .iter()
         .flatten()
@@ -1398,7 +1578,8 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
         "lazy split should expose one coarse marker start per resulting subchunk block"
     );
 
-    let after_markers = resolved_output_markers_for_text(&segments, &output_after);
+    let after_markers =
+        resolved_output_markers_for_text(&segments, &output_after, &block_map_for(&segments));
     let mut starts_by_conflict: std::collections::BTreeMap<usize, usize> =
         std::collections::BTreeMap::new();
     for marker in after_markers.iter().flatten().filter(|m| m.is_start) {
@@ -1991,7 +2172,12 @@ fn unresolved_output_ranges_cover_placeholders_and_selected_unresolved_rows() {
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_starts = build_line_starts(&output);
-    let ranges = resolved_output_unresolved_byte_ranges(&segments, &output, line_starts.as_slice());
+    let ranges = resolved_output_unresolved_byte_ranges(
+        &segments,
+        &output,
+        line_starts.as_slice(),
+        &block_map_for(&segments),
+    );
     let highlighted_text: Vec<&str> = ranges.iter().map(|range| &output[range.clone()]).collect();
 
     assert_eq!(highlighted_text, ["<Merge Conflict>", "selected"]);
@@ -2268,4 +2454,85 @@ fn pane_content_width_for_layout_clamps_at_zero_for_tight_space() {
         pane_content_width_for_layout(total_w, gpui::px(140.0), gpui::px(80.0), false, false);
 
     assert_eq!(width, gpui::px(0.0));
+}
+
+/// The strict segment walk only reports block ranges while the buffer still
+/// reads back exactly as the segments render, so one keystroke anywhere used to
+/// strip every conflict of its color, its bracket and its chunk menu. The block
+/// map tracks that ownership through edits and must keep the markers standing.
+#[test]
+fn conflict_markers_survive_a_manual_edit_outside_the_blocks() {
+    let segments = vec![
+        ConflictSegment::Text("pre\n".to_string().into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours\n".to_string().into(),
+            theirs: "theirs\n".to_string().into(),
+            choice: ConflictChoice::empty(),
+            resolved: false,
+            whitespace_only: false,
+        }),
+        ConflictSegment::Text("post\n".to_string().into()),
+    ];
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    assert_eq!(output, "pre\n<Merge Conflict>\npost\n");
+
+    let mut block_map = block_map_for(&segments);
+    let edited = "pre-edited\n<Merge Conflict>\npost\n";
+    assert!(block_map.apply_edit_delta(3..3, 3.."-edited".len() + 3));
+    assert!(
+        resolved_output_conflict_block_ranges_in_text(&segments, edited).is_none(),
+        "the edited buffer no longer matches the segments verbatim"
+    );
+
+    let line_count = conflict_resolver::resolved_output_outline_line_count(edited);
+    let markers = build_resolved_output_conflict_markers(&segments, edited, line_count, &block_map);
+    assert_eq!(
+        markers[1],
+        Some(ResolvedOutputConflictMarker {
+            conflict_ix: 0,
+            range_start: 1,
+            range_end: 2,
+            is_start: true,
+            is_end: true,
+            unresolved: true,
+        })
+    );
+    assert!(markers[0].is_none() && markers[2].is_none());
+
+    let line_starts = build_line_starts(edited);
+    let ranges = resolved_output_unresolved_byte_ranges(
+        &segments,
+        edited,
+        line_starts.as_slice(),
+        &block_map,
+    );
+    let highlighted: Vec<&str> = ranges.iter().map(|range| &edited[range.clone()]).collect();
+    assert_eq!(highlighted, ["<Merge Conflict>"]);
+}
+
+#[test]
+fn placeholder_protected_ranges_cover_whole_placeholder_lines() {
+    let output = "head\n<Merge Conflict>\n<Merge Conflict (Whitespace only)>\r\ntail";
+    let line_starts = build_line_starts(output);
+    let ranges = resolved_output_placeholder_protected_ranges(output, line_starts.as_slice());
+    let protected: Vec<&str> = ranges.iter().map(|range| &output[range.clone()]).collect();
+
+    assert_eq!(
+        protected,
+        [
+            "<Merge Conflict>\n",
+            "<Merge Conflict (Whitespace only)>\r\n"
+        ]
+    );
+}
+
+#[test]
+fn placeholder_protected_ranges_are_empty_without_a_placeholder() {
+    let output = "head\nresolved\ntail\n";
+    let line_starts = build_line_starts(output);
+
+    assert!(
+        resolved_output_placeholder_protected_ranges(output, line_starts.as_slice()).is_empty()
+    );
 }
