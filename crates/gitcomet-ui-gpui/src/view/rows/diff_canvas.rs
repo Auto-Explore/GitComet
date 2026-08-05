@@ -2778,8 +2778,22 @@ fn line_metrics_annot_when(window: &Window) -> LineMetrics {
     line_metrics_scaled(window, 0.85)
 }
 
-pub(in crate::view) fn diff_text_wrap_char_width(window: &mut Window) -> Pixels {
-    let style = diff_text_style(window);
+/// Width of one wrapped diff-text column, measured in `editor_font_family`.
+///
+/// The family must be passed in rather than taken from the ambient text style:
+/// wrap columns are computed while the diff pane builds its element tree, which
+/// is before the rows container pushes `.font_family(editor_font)` onto the
+/// window text style stack. `window.text_style()` still resolves to the
+/// proportional UI font at that point, and measuring the `W` sample there
+/// overestimates the column width by ~1.5x (IBM Plex Sans `W` is 0.891em vs
+/// Lilex 0.600em), so every line wrapped at about two thirds of the width it
+/// actually had.
+pub(in crate::view) fn diff_text_wrap_char_width(
+    window: &mut Window,
+    editor_font_family: impl Into<gpui::SharedString>,
+) -> Pixels {
+    let mut style = diff_text_style(window);
+    style.font_family = editor_font_family.into();
     let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE;
     let run = style.to_run(DIFF_TEXT_WRAP_WIDTH_SAMPLE.len());
     let layout = window.text_system().shape_line(
