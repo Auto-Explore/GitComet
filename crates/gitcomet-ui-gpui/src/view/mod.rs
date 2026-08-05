@@ -44,6 +44,17 @@ use std::time::{Duration, Instant};
 
 const REPO_ACTIVATION_THROTTLE: Duration = Duration::from_secs(5);
 
+/// How long after requesting an interactive move/resize grab a deactivation is
+/// still attributed to that grab. Compositors hand over focus within a frame;
+/// generous enough for a loaded system, short enough that a genuine alt-tab
+/// right after a drag is not mistaken for the grab.
+const WINDOW_GRAB_DEACTIVATE_GRACE: Duration = Duration::from_millis(1_500);
+
+/// Upper bound on how long a drag may hold the grab before the re-activation is
+/// no longer treated as its echo. Only a safety valve: arming already requires a
+/// fresh grab plus a deactivation within [`WINDOW_GRAB_DEACTIVATE_GRACE`].
+const WINDOW_GRAB_REACTIVATE_GRACE: Duration = Duration::from_secs(120);
+
 actions!(
     text_input_diff_navigation,
     [
@@ -89,6 +100,17 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
             && !mods.function
             && matches!(key, "a" | "c" | "e" | "s" | "d" | "h" | "u"))
         || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
+}
+
+/// Whether this activation is the tail of a move/resize grab we started, and so
+/// must not be treated as the user returning to the app. Always consumes the
+/// marker; a drag that outlives [`WINDOW_GRAB_REACTIVATE_GRACE`] falls back to
+/// refreshing, which is the conservative direction.
+fn consume_window_grab_activation(suppressed_at: &mut Option<Instant>, now: Instant) -> bool {
+    match suppressed_at.take() {
+        Some(at) => now.saturating_duration_since(at) <= WINDOW_GRAB_REACTIVATE_GRACE,
+        None => false,
+    }
 }
 
 fn repo_activation_msg(
@@ -1505,26 +1527,37 @@ impl GitCometView {
         });
 
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
+            let now = Instant::now();
             if !window.is_window_active() {
                 // Capture the focused element before the platform blur() fires and clears it.
                 // This is the restore target when opening the palette via a global hotkey while
                 // this window is in the background.
                 this.pre_palette_focus = window.focused(cx);
+                // A deactivation right after we asked for a move/resize grab is
+                // the compositor taking focus for the drag, not the user leaving
+                // the app. Remember it so the matching re-activation does not
+                // refresh the repo.
+                this.window_grab_activation_suppressed_at =
+                    crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE)
+                        .then_some(now);
                 return;
             }
+            let self_initiated_grab =
+                consume_window_grab_activation(&mut this.window_grab_activation_suppressed_at, now);
             let runtime = refresh_git_runtime();
             if runtime != this.state.git_runtime {
                 this.store
                     .dispatch(Msg::SetGitRuntimeState(runtime.clone()));
             }
-            if !runtime.is_available() {
+            // Suppressed activations skip `repo_activation_msg` entirely, so its
+            // throttle map is not stamped and a genuine alt-tab immediately after
+            // a drag still refreshes.
+            if !runtime.is_available() || self_initiated_grab {
                 return;
             }
-            if let Some(msg) = repo_activation_msg(
-                &this.state,
-                &mut this.last_repo_activation_dispatch_at,
-                Instant::now(),
-            ) {
+            if let Some(msg) =
+                repo_activation_msg(&this.state, &mut this.last_repo_activation_dispatch_at, now)
+            {
                 this.store.dispatch(msg);
             }
         });
@@ -1710,6 +1743,7 @@ impl GitCometView {
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
             last_repo_activation_dispatch_at: HashMap::default(),
+            window_grab_activation_suppressed_at: None,
             date_time_format,
             timezone,
             show_timezone,
@@ -1730,7 +1764,6 @@ impl GitCometView {
             diff_whitespace_mode,
             diff_view_mode,
             annotate_enabled,
-            diff_view_mode_before_annotate: None,
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
@@ -2054,11 +2087,6 @@ impl GitCometView {
             return;
         }
 
-        // An explicit mode change while blame is on overrides the automatic
-        // Split → Inline switch, so don't restore the stashed mode later.
-        if self.annotate_enabled {
-            self.diff_view_mode_before_annotate = None;
-        }
         self.diff_view_mode = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_view_mode(next, cx));
@@ -2075,21 +2103,12 @@ impl GitCometView {
         }
 
         self.annotate_enabled = next;
+        // Blame is an annotation column, not a view mode: it renders in the left
+        // column in Split (see `rows::diff`, `annotation_active() && is_left`)
+        // just as it does in Inline, and the wrap widths already account for it
+        // in both. Toggling it must leave the selected mode alone.
         self.main_pane
             .update(cx, |pane, cx| pane.set_annotate_enabled(next, cx));
-        // The blame gutter and split panes don't fit side by side at typical
-        // widths — run blame in the inline view and restore the previous mode
-        // when it's toggled off (unless the user changed modes meanwhile).
-        if next {
-            if self.diff_view_mode == DiffViewMode::Split {
-                self.set_diff_view_mode(DiffViewMode::Inline, cx);
-                self.diff_view_mode_before_annotate = Some(DiffViewMode::Split);
-            }
-        } else if let Some(previous) = self.diff_view_mode_before_annotate.take()
-            && self.diff_view_mode == DiffViewMode::Inline
-        {
-            self.set_diff_view_mode(previous, cx);
-        }
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -3921,7 +3940,7 @@ impl Render for GitCometView {
                     };
 
                     cx.stop_propagation();
-                    window.start_window_resize(edge);
+                    crate::app::begin_window_resize(window, edge);
                 }),
             );
         } else if self.hover_resize_edge.is_some() {

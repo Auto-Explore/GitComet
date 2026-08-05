@@ -59,7 +59,7 @@ av1-grain	0.2.5	BSD-2-Clause
 avif-serialize	0.8.9	BSD-3-Clause
 backtrace	0.3.76	MIT OR Apache-2.0
 base64	0.22.1	MIT OR Apache-2.0
-base64	0.23.0	MIT OR Apache-2.0
+base64	0.23.1	MIT OR Apache-2.0
 bindgen	0.72.1	BSD-3-Clause
 bisync	0.3.0	MIT OR Apache-2.0
 bisync_macros	0.2.3	MIT OR Apache-2.0
@@ -352,7 +352,7 @@ jobserver	0.1.35	MIT OR Apache-2.0
 js-sys	0.3.103	MIT OR Apache-2.0
 khronos-egl	6.0.0	MIT/Apache-2.0
 khronos_api	3.1.0	Apache-2.0
-kqueue	1.2.0	MIT
+kqueue	1.2.1	MIT
 kqueue-sys	1.1.2	MIT
 kurbo	0.13.1	Apache-2.0 OR MIT
 lazy_static	1.5.0	MIT OR Apache-2.0
@@ -523,7 +523,7 @@ ref-cast	1.0.26	MIT OR Apache-2.0
 ref-cast-impl	1.0.26	MIT OR Apache-2.0
 refineable	0.1.0	Apache-2.0
 regex	1.13.1	MIT OR Apache-2.0
-regex-automata	0.4.16	MIT OR Apache-2.0
+regex-automata	0.4.18	MIT OR Apache-2.0
 regex-syntax	0.8.11	MIT OR Apache-2.0
 renderdoc-sys	1.1.0	MIT OR Apache-2.0
 resvg	0.47.0	Apache-2.0 OR MIT

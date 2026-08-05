@@ -671,6 +671,9 @@ pub struct HistoryState {
     pub blame_path: Option<PathBuf>,
     pub blame_source: Option<BlameSource>,
     pub blame: Loadable<Shared<Vec<BlameLine>>>,
+    /// Annotations to keep painting while blame reloads for the same target, so
+    /// the annotation column does not blank out on every refresh.
+    pub retained_blame_while_loading: Option<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
     pub commit_details: Loadable<Shared<CommitDetails>>,
@@ -698,6 +701,7 @@ impl Default for HistoryState {
             blame_path: None,
             blame_source: None,
             blame: Loadable::NotLoaded,
+            retained_blame_while_loading: None,
             selected_commit: None,
             selected_commit_rev: 0,
             commit_details: Loadable::NotLoaded,
@@ -1392,6 +1396,24 @@ impl RepoState {
         if let Loadable::Ready(page) = &self.log {
             self.history_state.retained_log_while_loading = Some(Arc::clone(page));
         }
+    }
+
+    /// Hold on to the currently loaded annotations so the blame column keeps
+    /// painting them while the same target reloads, instead of blanking out.
+    /// Only valid while `blame_path`/`blame_source` still describe them —
+    /// callers that re-target blame must call [`Self::clear_retained_blame`].
+    pub(crate) fn retain_blame_while_loading(&mut self) {
+        if self.history_state.retained_blame_while_loading.is_some() {
+            return;
+        }
+
+        if let Loadable::Ready(lines) = &self.history_state.blame {
+            self.history_state.retained_blame_while_loading = Some(Arc::clone(lines));
+        }
+    }
+
+    pub(crate) fn clear_retained_blame(&mut self) {
+        self.history_state.retained_blame_while_loading = None;
     }
 
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {

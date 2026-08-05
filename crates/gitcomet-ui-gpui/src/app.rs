@@ -30,9 +30,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use schemars::JsonSchema;
 #[cfg(target_os = "macos")]
 use serde::Deserialize;
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::time::{Duration, Instant};
 
 const WINDOW_MIN_WIDTH_PX: f32 = 820.0;
 const WINDOW_MIN_HEIGHT_PX: f32 = 560.0;
@@ -332,8 +334,38 @@ fn window_hwnd(window: &Window) -> Option<isize> {
     Some(handle.hwnd.get())
 }
 
+thread_local! {
+    /// When we last asked the compositor/window manager for an interactive move
+    /// or resize grab.
+    static LAST_WINDOW_GRAB_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Record that we just requested an interactive move/resize grab.
+///
+/// The grab is executed by the compositor/WM, which takes the input focus for
+/// the duration of the drag. GPUI surfaces that as a plain window deactivate →
+/// activate pair — on Wayland via `wl_keyboard` Leave/Enter, on X11 via
+/// FocusOut/FocusIn (which are not filtered on `mode`, so NotifyGrab and
+/// NotifyUngrab arrive too) — indistinguishable from the user alt-tabbing away
+/// and back. This marker lets the activation observer ignore its own echo
+/// instead of treating it as a return to the app and refreshing the repo.
+pub(crate) fn note_window_grab_started() {
+    LAST_WINDOW_GRAB_AT.with(|cell| cell.set(Some(Instant::now())));
+}
+
+/// Whether a grab was requested no more than `max_age` ago. Always consumes the
+/// marker, so a grab the compositor silently dropped cannot arm suppression for
+/// an unrelated activation minutes later.
+pub(crate) fn take_window_grab_started_within(now: Instant, max_age: Duration) -> bool {
+    LAST_WINDOW_GRAB_AT.with(|cell| match cell.take() {
+        Some(at) => now.saturating_duration_since(at) <= max_age,
+        None => false,
+    })
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn begin_window_move(window: &Window) {
+    note_window_grab_started();
     if let Some(hwnd) = window_hwnd(window)
         && gitcomet_win32_window_utils::begin_window_move(hwnd)
     {
@@ -345,7 +377,13 @@ pub(crate) fn begin_window_move(window: &Window) {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn begin_window_move(window: &Window) {
+    note_window_grab_started();
     window.start_window_move();
+}
+
+pub(crate) fn begin_window_resize(window: &Window, edge: gpui::ResizeEdge) {
+    note_window_grab_started();
+    window.start_window_resize(edge);
 }
 
 #[cfg(target_os = "windows")]

@@ -1076,14 +1076,7 @@ fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
     );
 }
 
-#[test]
-fn repo_externally_changed_invalidates_loaded_blame() {
-    // Regression: an external edit/stage reloads the working-tree diff, and the
-    // blame annotation column is derived from that same content. Leaving blame
-    // `Ready` would make `request_blame_for_current_target` treat the target as
-    // already attempted and keep painting stale attribution over the new lines.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
-    let id_alloc = AtomicU64::new(1);
+fn state_with_blamed_unstaged_diff() -> (AppState, RepoId) {
     let mut state = AppState::default();
     let repo_id = RepoId(1);
     state.repos.push(RepoState::new_opening(
@@ -1115,6 +1108,18 @@ fn repo_externally_changed_invalidates_loaded_blame() {
             prior_commit: None,
         },
     ]));
+    (state, repo_id)
+}
+
+#[test]
+fn repo_externally_changed_worktree_keeps_blame_until_content_changes() {
+    // A worktree/index event reloads the diff, but the reload may well find the
+    // same bytes (a window-focus refresh, a touch, a save that changed nothing).
+    // Blame is expensive — it shells out to `git blame` — so it must survive
+    // until `diff_loaded`/`diff_file_loaded` sees the content actually differ.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, repo_id) = state_with_blamed_unstaged_diff();
 
     let effects = reduce(
         &mut repos,
@@ -1126,17 +1131,63 @@ fn repo_externally_changed_invalidates_loaded_blame() {
         },
     );
 
-    // The working-tree diff reloads against the new content...
+    // The working-tree diff still reloads against the (possibly new) content...
     assert!(
         effects
             .iter()
             .any(|e| matches!(e, Effect::LoadDiff { repo_id: id, .. } if *id == repo_id)),
         "external worktree change must reload the diff"
     );
-    // ...and blame is dropped so it reloads too, with the target preserved.
+    // ...but the annotations stay painted until that reload proves them stale.
+    assert!(
+        matches!(state.repos[0].history_state.blame, Loadable::Ready(_)),
+        "a worktree event alone must not invalidate blame"
+    );
+}
+
+#[test]
+fn repo_externally_changed_git_state_invalidates_loaded_blame() {
+    // A moved HEAD (external commit / checkout / rebase) can leave the patch
+    // byte-identical while every line's attribution changes, and no downstream
+    // content comparison can detect that — so git-state events drop blame up
+    // front, preserving the target so it reloads for the same file.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, repo_id) = state_with_blamed_unstaged_diff();
+    let previous = match &state.repos[0].history_state.blame {
+        Loadable::Ready(lines) => Arc::clone(lines),
+        other => panic!("expected a loaded blame, got {other:?}"),
+    };
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::all(),
+        },
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|e| matches!(e, Effect::LoadDiff { repo_id: id, .. } if *id == repo_id)),
+        "a git-state change must reload the diff"
+    );
     assert!(
         matches!(state.repos[0].history_state.blame, Loadable::NotLoaded),
-        "blame must be invalidated when the working-tree diff reloads externally"
+        "blame must be invalidated when refs may have moved"
+    );
+    // The outgoing annotations are held over so the column does not blank while
+    // the reload runs.
+    assert!(
+        state.repos[0]
+            .history_state
+            .retained_blame_while_loading
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, &previous)),
+        "the previous annotations must be retained while blame reloads"
     );
     assert_eq!(
         state.repos[0].history_state.blame_path.as_deref(),

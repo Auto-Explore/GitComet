@@ -1755,6 +1755,255 @@ fn diff_loaded_ok_sets_ready_when_target_matches() {
     assert!(repo_state.diagnostics.is_empty());
 }
 
+/// A repo with a working-tree diff and blame both loaded, ready to be fed a
+/// `DiffLoaded` / `DiffFileLoaded` result.
+fn state_with_loaded_diff_and_blame(
+    diff: gitcomet_core::domain::Diff,
+) -> (
+    AppState,
+    DiffTarget,
+    Arc<Vec<gitcomet_core::services::BlameLine>>,
+) {
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    let target = diff.target.clone();
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff = Loadable::Ready(Arc::new(diff));
+    let blame = Arc::new(vec![gitcomet_core::services::BlameLine {
+        commit_id: Arc::from("1111111111111111111111111111111111111111"),
+        author: Arc::from("Ada"),
+        author_time_unix: Some(1_700_000_000),
+        summary: Arc::from("initial"),
+        body: None,
+        line: "let x = 1;".to_string(),
+        prior_exists: true,
+        source_path: None,
+        prior_commit: None,
+    }]);
+    repo_state.history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+    repo_state.history_state.blame_source = Some(gitcomet_core::domain::BlameSource::WorkingTree(
+        gitcomet_core::domain::DiffArea::Unstaged,
+    ));
+    repo_state.history_state.blame = Loadable::Ready(Arc::clone(&blame));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+    (state, target, blame)
+}
+
+fn unstaged_diff(line: &str) -> gitcomet_core::domain::Diff {
+    gitcomet_core::domain::Diff {
+        target: DiffTarget::WorkingTree {
+            path: PathBuf::from("src/lib.rs"),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        },
+        lines: vec![gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Context,
+            text: line.into(),
+        }],
+    }
+}
+
+#[test]
+fn diff_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
+    // A refresh that found no change must not churn the UI: window focus (and,
+    // before the fix, every window drag) reloads the working-tree diff, and
+    // bumping the revs would blank and re-run the expensive blame.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, target, blame) = state_with_loaded_diff_and_blame(unstaged_diff("let x = 1;"));
+    let diff_rev = state.repos[0].diff_state.diff_rev;
+    let diff_state_rev = state.repos[0].diff_state.diff_state_rev;
+    let previous = match &state.repos[0].diff_state.diff {
+        Loadable::Ready(diff) => Arc::clone(diff),
+        other => panic!("expected a loaded diff, got {other:?}"),
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+            repo_id: RepoId(1),
+            target: target.clone(),
+            result: Ok(unstaged_diff("let x = 1;")),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert_eq!(repo_state.diff_state.diff_rev, diff_rev);
+    assert_eq!(repo_state.diff_state.diff_state_rev, diff_state_rev);
+    assert!(
+        matches!(&repo_state.diff_state.diff, Loadable::Ready(diff) if Arc::ptr_eq(diff, &previous)),
+        "an unchanged reload must keep the existing Arc so identity fingerprints stay put"
+    );
+    assert!(
+        matches!(&repo_state.history_state.blame, Loadable::Ready(lines) if Arc::ptr_eq(lines, &blame)),
+        "blame must survive a reload that found no change"
+    );
+}
+
+#[test]
+fn diff_loaded_changed_content_bumps_revs_and_invalidates_blame() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, target, blame) = state_with_loaded_diff_and_blame(unstaged_diff("let x = 1;"));
+    let diff_rev = state.repos[0].diff_state.diff_rev;
+    let diff_state_rev = state.repos[0].diff_state.diff_state_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(unstaged_diff("let x = 2;")),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert_eq!(repo_state.diff_state.diff_rev, diff_rev.wrapping_add(1));
+    assert_eq!(
+        repo_state.diff_state.diff_state_rev,
+        diff_state_rev.wrapping_add(1)
+    );
+    assert!(
+        matches!(repo_state.history_state.blame, Loadable::NotLoaded),
+        "blame is derived from the diff content, so changed content invalidates it"
+    );
+    // The target is preserved so the view reloads the same file's blame, and the
+    // outgoing annotations stay painted meanwhile.
+    assert_eq!(
+        repo_state.history_state.blame_path.as_deref(),
+        Some(std::path::Path::new("src/lib.rs"))
+    );
+    assert!(
+        repo_state
+            .history_state
+            .retained_blame_while_loading
+            .as_ref()
+            .is_some_and(|held| Arc::ptr_eq(held, &blame))
+    );
+}
+
+#[test]
+fn diff_loaded_error_after_ready_still_bumps_revs() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, target, _) = state_with_loaded_diff_and_blame(unstaged_diff("let x = 1;"));
+    let diff_state_rev = state.repos[0].diff_state.diff_state_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Err(Error::new(ErrorKind::Backend("boom".to_string()))),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert!(matches!(repo_state.diff_state.diff, Loadable::Error(_)));
+    assert_eq!(
+        repo_state.diff_state.diff_state_rev,
+        diff_state_rev.wrapping_add(1)
+    );
+    assert!(!repo_state.diagnostics.is_empty());
+}
+
+fn file_diff_text(line: &str) -> gitcomet_core::domain::FileDiffText {
+    gitcomet_core::domain::FileDiffText::new(
+        PathBuf::from("icon.svg"),
+        None,
+        Some(line.to_string()),
+    )
+}
+
+/// A repo showing a file-text view (`load_file_text`, not `load_patch_diff`)
+/// with blame loaded — the shape that makes `diff_file` the only content signal.
+fn state_with_loaded_file_text_and_blame(
+    text: gitcomet_core::domain::FileDiffText,
+) -> (
+    AppState,
+    DiffTarget,
+    Arc<Vec<gitcomet_core::services::BlameLine>>,
+) {
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("icon.svg"),
+        area: DiffArea::Unstaged,
+    };
+    let (mut state, _, blame) = state_with_loaded_diff_and_blame(gitcomet_core::domain::Diff {
+        target: target.clone(),
+        lines: vec![],
+    });
+    state.repos[0].diff_state.diff = Loadable::NotLoaded;
+    state.repos[0].diff_state.diff_file = Loadable::Ready(Some(Arc::new(text)));
+    (state, target, blame)
+}
+
+#[test]
+fn diff_file_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, target, blame) = state_with_loaded_file_text_and_blame(file_diff_text("a"));
+    let diff_file_rev = state.repos[0].diff_state.diff_file_rev;
+    let diff_state_rev = state.repos[0].diff_state.diff_state_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(Some(file_diff_text("a"))),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert_eq!(repo_state.diff_state.diff_file_rev, diff_file_rev);
+    assert_eq!(repo_state.diff_state.diff_state_rev, diff_state_rev);
+    assert!(
+        matches!(&repo_state.history_state.blame, Loadable::Ready(lines) if Arc::ptr_eq(lines, &blame))
+    );
+}
+
+#[test]
+fn diff_file_loaded_changed_content_bumps_revs_and_invalidates_blame() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, target, _) = state_with_loaded_file_text_and_blame(file_diff_text("a"));
+    let diff_file_rev = state.repos[0].diff_state.diff_file_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffFileLoaded {
+            repo_id: RepoId(1),
+            target,
+            result: Ok(Some(file_diff_text("b"))),
+        }),
+    );
+
+    let repo_state = &state.repos[0];
+    assert_eq!(
+        repo_state.diff_state.diff_file_rev,
+        diff_file_rev.wrapping_add(1)
+    );
+    assert!(matches!(
+        repo_state.history_state.blame,
+        Loadable::NotLoaded
+    ));
+}
+
 #[test]
 fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();

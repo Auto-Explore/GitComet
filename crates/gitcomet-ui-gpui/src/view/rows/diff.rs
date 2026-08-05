@@ -797,13 +797,23 @@ fn build_row_blame_paint_tracked(
 impl MainPaneView {
     /// Build a blame render context when annotate is enabled and blame for the
     /// current target is loaded; otherwise `None`.
+    ///
+    /// While the same target reloads, falls back to the annotations retained by
+    /// the store (`retained_blame_while_loading`) so the column keeps its
+    /// contents instead of blanking on every refresh. The retained value is
+    /// dropped when blame re-targets, so it always describes `blame_path`.
     pub(super) fn blame_render_ctx(&mut self) -> Option<BlameRenderCtx> {
-        if !self.annotation_active() {
+        if !self.annotation_active() || !self.blame_matches_rendered_target() {
             return None;
         }
         let repo = self.active_repo()?;
-        let gitcomet_state::model::Loadable::Ready(lines) = &repo.history_state.blame else {
-            return None;
+        let lines = match &repo.history_state.blame {
+            gitcomet_state::model::Loadable::Ready(lines) => lines,
+            gitcomet_state::model::Loadable::NotLoaded
+            | gitcomet_state::model::Loadable::Loading => {
+                repo.history_state.retained_blame_while_loading.as_ref()?
+            }
+            gitcomet_state::model::Loadable::Error(_) => return None,
         };
         let path: std::sync::Arc<std::path::Path> =
             std::sync::Arc::from(repo.history_state.blame_path.as_deref()?);

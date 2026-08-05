@@ -50,8 +50,15 @@ pub(super) fn blame_loaded(
         && repo_state.history_state.blame_path.as_ref() == Some(&path)
         && repo_state.history_state.blame_source.as_ref() == Some(&source)
     {
+        let retained = repo_state.history_state.retained_blame_while_loading.take();
         repo_state.history_state.blame = match result {
-            Ok(v) => Loadable::Ready(Arc::new(v)),
+            // Reuse the retained allocation when the reload produced identical
+            // annotations, so the view's `Arc`-identity fingerprints and the
+            // memoized blame time range stay valid and nothing repaints.
+            Ok(v) => Loadable::Ready(match retained {
+                Some(prev) if *prev == v => prev,
+                _ => Arc::new(v),
+            }),
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
@@ -729,6 +736,26 @@ pub(super) fn load_blame(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // The view dispatches this from `MainPaneView::render` against an
+    // asynchronously pushed `AppState` snapshot, and `AppStore::dispatch` is a
+    // channel send, so several frames can ask for the same blame before the
+    // `Loading` snapshot reaches the view. Without this guard each of those
+    // frames forks another `git blame --line-porcelain` for the same file.
+    // `blame_path` + `blame_source` identify the request exactly, which a
+    // repo-wide `RepoLoadsInFlight` bit could not.
+    let same_target = repo_state.history_state.blame_path.as_ref() == Some(&path)
+        && repo_state.history_state.blame_source.as_ref() == Some(&source);
+    if same_target && repo_state.history_state.blame.is_loading() {
+        return Vec::new();
+    }
+    if same_target {
+        // Reloading the same file: keep the current annotations painted until
+        // the new ones land.
+        repo_state.retain_blame_while_loading();
+    } else {
+        // Re-targeting: anything held over describes a different file.
+        repo_state.clear_retained_blame();
+    }
     repo_state.history_state.blame_path = Some(path.clone());
     repo_state.history_state.blame_source = Some(source.clone());
     repo_state.history_state.blame = Loadable::Loading;
@@ -3616,6 +3643,173 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, Effect::LoadSelectedDiff { .. }))
         );
+    }
+
+    fn blame_line(line: &str) -> gitcomet_core::services::BlameLine {
+        gitcomet_core::services::BlameLine {
+            commit_id: Arc::from("1111111111111111111111111111111111111111"),
+            author: Arc::from("Ada"),
+            author_time_unix: Some(1_700_000_000),
+            summary: Arc::from("initial"),
+            body: None,
+            line: line.to_string(),
+            prior_exists: true,
+            source_path: None,
+            prior_commit: None,
+        }
+    }
+
+    #[test]
+    fn load_blame_dedupes_same_target_while_loading() {
+        // `MainPaneView::render` dispatches from an asynchronously pushed state
+        // snapshot, so a render burst (e.g. during a window resize) can ask for
+        // the same blame many times before the `Loading` snapshot arrives. Each
+        // duplicate would fork another `git blame` subprocess.
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let path = PathBuf::from("src/lib.rs");
+        let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
+
+        let effects = load_blame(&mut state, repo_id, path.clone(), source.clone());
+        assert_eq!(effects.len(), 1);
+        assert!(load_blame(&mut state, repo_id, path.clone(), source.clone()).is_empty());
+        assert!(load_blame(&mut state, repo_id, path, source).is_empty());
+    }
+
+    #[test]
+    fn load_blame_reloads_when_target_changes_while_loading() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
+
+        load_blame(
+            &mut state,
+            repo_id,
+            PathBuf::from("src/lib.rs"),
+            source.clone(),
+        );
+        let other = PathBuf::from("src/main.rs");
+        let effects = load_blame(&mut state, repo_id, other.clone(), source);
+        assert_eq!(effects.len(), 1);
+        assert_eq!(
+            repo_mut(&mut state, repo_id)
+                .history_state
+                .blame_path
+                .as_ref(),
+            Some(&other)
+        );
+    }
+
+    #[test]
+    fn load_blame_retains_ready_annotations_for_the_same_target() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let path = PathBuf::from("src/lib.rs");
+        let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
+        let lines = Arc::new(vec![blame_line("let x = 1;")]);
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.history_state.blame_path = Some(path.clone());
+            repo.history_state.blame_source = Some(source.clone());
+            repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        }
+
+        load_blame(&mut state, repo_id, path, source);
+
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(repo.history_state.blame.is_loading());
+        assert!(
+            repo.history_state
+                .retained_blame_while_loading
+                .as_ref()
+                .is_some_and(|held| Arc::ptr_eq(held, &lines)),
+            "the annotation column must keep painting while the same target reloads"
+        );
+    }
+
+    #[test]
+    fn load_blame_drops_retained_annotations_when_retargeting() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.history_state.blame_path = Some(PathBuf::from("src/lib.rs"));
+            repo.history_state.blame_source = Some(source.clone());
+            repo.history_state.blame = Loadable::Ready(Arc::new(vec![blame_line("let x = 1;")]));
+        }
+
+        load_blame(&mut state, repo_id, PathBuf::from("src/main.rs"), source);
+
+        assert!(
+            repo_mut(&mut state, repo_id)
+                .history_state
+                .retained_blame_while_loading
+                .is_none(),
+            "annotations for a different file must never be painted"
+        );
+    }
+
+    #[test]
+    fn blame_loaded_reuses_the_retained_allocation_when_unchanged() {
+        // An identical reload must not produce a new `Arc`: the view keys its
+        // notify fingerprint and its memoized blame time range on Arc identity.
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let path = PathBuf::from("src/lib.rs");
+        let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
+        let lines = Arc::new(vec![blame_line("let x = 1;")]);
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.history_state.blame_path = Some(path.clone());
+            repo.history_state.blame_source = Some(source.clone());
+            repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        }
+        load_blame(&mut state, repo_id, path.clone(), source.clone());
+
+        blame_loaded(
+            &mut state,
+            repo_id,
+            path,
+            source,
+            Ok(vec![blame_line("let x = 1;")]),
+        );
+
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(
+            matches!(&repo.history_state.blame, Loadable::Ready(got) if Arc::ptr_eq(got, &lines))
+        );
+        assert!(repo.history_state.retained_blame_while_loading.is_none());
+    }
+
+    #[test]
+    fn blame_loaded_replaces_the_retained_allocation_when_changed() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        let path = PathBuf::from("src/lib.rs");
+        let source = gitcomet_core::domain::BlameSource::WorkingTree(DiffArea::Unstaged);
+        let lines = Arc::new(vec![blame_line("let x = 1;")]);
+        {
+            let repo = repo_mut(&mut state, repo_id);
+            repo.history_state.blame_path = Some(path.clone());
+            repo.history_state.blame_source = Some(source.clone());
+            repo.history_state.blame = Loadable::Ready(Arc::clone(&lines));
+        }
+        load_blame(&mut state, repo_id, path.clone(), source.clone());
+
+        blame_loaded(
+            &mut state,
+            repo_id,
+            path,
+            source,
+            Ok(vec![blame_line("let x = 2;")]),
+        );
+
+        let repo = repo_mut(&mut state, repo_id);
+        assert!(
+            matches!(&repo.history_state.blame, Loadable::Ready(got) if !Arc::ptr_eq(got, &lines))
+        );
+        assert!(repo.history_state.retained_blame_while_loading.is_none());
     }
 
     #[test]

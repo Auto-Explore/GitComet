@@ -673,8 +673,7 @@ impl MainPaneView {
                     if conflict_resolver_active {
                         handled = false;
                     } else if self.active_conflict_target().is_some() {
-                        self.diff_view = DiffViewMode::Split;
-                        self.clear_diff_text_style_caches();
+                        self.set_diff_view_mode(DiffViewMode::Split, cx);
                         handled = true;
                         let root_view = self.root_view.clone();
                         cx.defer(move |cx| {
@@ -694,8 +693,7 @@ impl MainPaneView {
                         } else {
                             DiffViewMode::Split
                         };
-                        self.diff_view = new_mode;
-                        self.clear_diff_text_style_caches();
+                        self.set_diff_view_mode(new_mode, cx);
                         handled = true;
                         let root_view = self.root_view.clone();
                         let mode = new_mode;
@@ -2155,11 +2153,7 @@ impl MainPaneView {
                     .selected(self.diff_view == DiffViewMode::Inline)
                     .selected_bg(view_toggle_selected_bg)
                     .on_click(theme, cx, |this, _e, window, cx| {
-                        this.diff_view = DiffViewMode::Inline;
-                        this.clear_diff_text_style_caches();
-                        if this.diff_search_has_query() {
-                            this.diff_search_recompute_matches_preserving_current();
-                        }
+                        this.set_diff_view_mode(DiffViewMode::Inline, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         let root_view = this.root_view.clone();
                         cx.defer(move |cx| {
@@ -2188,11 +2182,7 @@ impl MainPaneView {
                     .selected(self.diff_view == DiffViewMode::Split)
                     .selected_bg(view_toggle_selected_bg)
                     .on_click(theme, cx, |this, _e, window, cx| {
-                        this.diff_view = DiffViewMode::Split;
-                        this.clear_diff_text_style_caches();
-                        if this.diff_search_has_query() {
-                            this.diff_search_recompute_matches_preserving_current();
-                        }
+                        this.set_diff_view_mode(DiffViewMode::Split, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         let root_view = this.root_view.clone();
                         cx.defer(move |cx| {

@@ -547,6 +547,73 @@ fn window_activation_dispatch_is_throttled_per_repo() {
 }
 
 #[test]
+fn window_grab_suppresses_the_activation_it_caused() {
+    // Dragging the title bar or a resize edge hands focus to the compositor for
+    // the duration of the grab, which GPUI reports as a deactivate → activate
+    // pair. Treating that as a return to the app refreshed the whole repo on
+    // every window move/resize.
+    let now = Instant::now();
+    crate::app::note_window_grab_started();
+
+    let armed = crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE);
+    assert!(armed, "a fresh grab must claim the deactivation it caused");
+
+    let mut suppressed_at = Some(now);
+    assert!(consume_window_grab_activation(
+        &mut suppressed_at,
+        now + Duration::from_secs(5)
+    ));
+    assert!(
+        suppressed_at.is_none(),
+        "the marker must be consumed so it cannot suppress twice"
+    );
+}
+
+#[test]
+fn stale_window_grab_does_not_suppress_a_later_activation() {
+    // A grab the compositor ignored (bad serial, unsupported protocol) must not
+    // leave suppression armed for an unrelated alt-tab minutes later.
+    let now = Instant::now();
+    crate::app::note_window_grab_started();
+
+    assert!(!crate::app::take_window_grab_started_within(
+        now + WINDOW_GRAB_DEACTIVATE_GRACE + Duration::from_millis(1),
+        WINDOW_GRAB_DEACTIVATE_GRACE,
+    ));
+    assert!(
+        !crate::app::take_window_grab_started_within(now, WINDOW_GRAB_DEACTIVATE_GRACE),
+        "the stale marker must have been cleared, not left armed"
+    );
+}
+
+#[test]
+fn window_grab_suppression_expires_for_a_very_late_activation() {
+    let now = Instant::now();
+    let mut suppressed_at = Some(now);
+    assert!(!consume_window_grab_activation(
+        &mut suppressed_at,
+        now + WINDOW_GRAB_REACTIVATE_GRACE + Duration::from_secs(1),
+    ));
+}
+
+#[test]
+fn unsuppressed_activation_still_dispatches_repo_activated() {
+    // Suppression is opt-in, and a suppressed activation must not stamp the
+    // throttle map — a genuine alt-tab right after a drag still refreshes.
+    let repo_id = RepoId(1);
+    let state = view_state_with_active_ready_repo(repo_id);
+    let mut last_activation_dispatch = HashMap::default();
+    let now = Instant::now();
+
+    let mut suppressed_at = None;
+    assert!(!consume_window_grab_activation(&mut suppressed_at, now));
+    assert!(matches!(
+        repo_activation_msg(&state, &mut last_activation_dispatch, now),
+        Some(Msg::RepoActivated { repo_id: got }) if got == repo_id
+    ));
+}
+
+#[test]
 fn toast_total_lifetime_includes_fade_in_and_out() {
     let ttl = Duration::from_secs(6);
     assert_eq!(
