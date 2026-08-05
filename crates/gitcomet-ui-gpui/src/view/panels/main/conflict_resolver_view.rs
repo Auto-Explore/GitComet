@@ -537,7 +537,7 @@ impl MainPaneView {
                     }),
             )
             .child(
-                components::Button::new("conflict_reset_markers", "Reset from markers")
+                components::Button::new("conflict_reset_markers", "Reset conflict markers")
                     .style(components::ButtonStyle::Transparent)
                     .disabled(!can_reset_from_markers)
                     .on_click(theme, cx, |this, _e, _w, cx| {
