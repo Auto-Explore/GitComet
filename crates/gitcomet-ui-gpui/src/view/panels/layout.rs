@@ -1962,6 +1962,7 @@ impl DetailsPaneView {
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
+                        crate::press_gesture::claim_press(cx);
                         this.start_status_section_resize(handle, e.position.y, cx);
                         window.refresh();
                     }),

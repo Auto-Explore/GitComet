@@ -501,6 +501,8 @@ impl Scrollbar {
                             return;
                         }
 
+                        crate::press_gesture::claim_press(cx);
+
                         if thumb_hit_bounds.contains(&event.position) {
                             driver.drag_started(axis);
                             let grab = match axis {

@@ -203,6 +203,7 @@ impl MainPaneView {
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
+                    crate::press_gesture::claim_press(cx);
                     this.annotate_resize = Some(AnnotateResizeState {
                         start_x: e.position.x,
                         start_width: this.annotate_column_width,
@@ -2910,6 +2911,9 @@ impl MainPaneView {
                                                                   _w,
                                                                   cx| {
                                                                 cx.stop_propagation();
+                                                                crate::press_gesture::claim_press(
+                                                                    cx,
+                                                                );
                                                                 this.diff_split_resize = Some(
                                                                     DiffSplitResizeState {
                                                                         handle:

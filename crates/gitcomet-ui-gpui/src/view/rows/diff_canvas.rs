@@ -2724,6 +2724,12 @@ fn install_diff_row_mouse_handlers(
                 return;
             }
 
+            // A canvas cannot lean on `on_click` to pair press and release, so
+            // it asks who owns the press instead.
+            if crate::press_gesture::is_press_claimed(cx) {
+                return;
+            }
+
             let shift = event.modifiers.shift;
             view.update(cx, |this, cx| {
                 if this.consume_suppress_click_after_drag() {

@@ -1032,6 +1032,11 @@ impl MainPaneView {
             .on_mouse_up(
                 gpui::MouseButton::Right,
                 cx.listener(move |this, e: &gpui::MouseUpEvent, window, cx| {
+                    // Checked before `stop_propagation`: declining to open the
+                    // menu must not swallow the release either.
+                    if crate::press_gesture::is_press_claimed(cx) {
+                        return;
+                    }
                     cx.stop_propagation();
                     let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
                         return;

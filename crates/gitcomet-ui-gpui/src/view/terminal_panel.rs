@@ -903,6 +903,7 @@ impl TerminalViewportView {
     ) {
         window.focus(&self.focus_handle, cx);
         self.reset_cursor_blink(cx);
+        crate::press_gesture::claim_press(cx);
 
         let mode = self.live_modes();
         if mode.mouse_mode() {
@@ -968,8 +969,15 @@ impl TerminalViewportView {
     ) {
         let mode = self.live_modes();
         if mode.mouse_mode() {
-            self.queue_mouse_event(event.position, button, event.modifiers, false, mode, cx);
-            cx.stop_propagation();
+            // A release belongs to this viewport only when the matching press
+            // did. Without the latch check, letting go over the terminal after
+            // a drag that started elsewhere reports a phantom button-up to the
+            // program running in it. `stop_propagation` stays inside the guard:
+            // declining to act must not swallow the event either.
+            if self.pressed_mouse_button == Some(button) {
+                self.queue_mouse_event(event.position, button, event.modifiers, false, mode, cx);
+                cx.stop_propagation();
+            }
         } else if button == gpui::MouseButton::Left {
             self.end_selection_drag(cx);
         }
@@ -2871,6 +2879,7 @@ impl GitCometView {
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
+                    crate::press_gesture::claim_press(cx);
                     this.terminal_panel_resize = Some(TerminalPanelResizeState {
                         start_y: e.position.y,
                         start_height: this.terminal_panel_height,

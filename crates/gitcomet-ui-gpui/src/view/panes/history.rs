@@ -3917,6 +3917,125 @@ mod tests {
     /// on the collapsed sidebar's popover — or on the scrim that dismisses it —
     /// belongs to that popover, not to the row it happens to cover.
     #[gpui::test]
+    fn history_row_selection_follows_the_press_not_the_release(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let store_for_assert = store.clone();
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let repo_path = PathBuf::from(format!(
+            "/tmp/history-press-selects-{}-{}",
+            std::process::id(),
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        let commits = (0..12)
+            .map(|ix| {
+                let id = format!("c{ix:02}");
+                commit(&id, &[], &format!("commit {ix:02}"))
+            })
+            .collect::<Vec<_>>();
+        let page = Arc::new(log_page(commits, None));
+        let mut repo = RepoState::new_opening(repo_id, RepoSpec { workdir: repo_path });
+        // Everything the panes read is already loaded, so rendering never has
+        // to ask the store (and its worker threads) for data.
+        repo.open = Loadable::Ready(());
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "c00")]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.tags = Loadable::Ready(Arc::new(Vec::new()));
+        repo.tags_rev = 1;
+        repo.worktrees = Loadable::Ready(Arc::new(Vec::new()));
+        repo.submodules = Loadable::Ready(Arc::new(Vec::new()));
+        repo.stashes = Loadable::Ready(Arc::new(Vec::new()));
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        // The rows dispatch into the store, so it has to hold the same repo the
+        // view renders; the reducer thread mutates exactly this state.
+        store_for_assert.replace_snapshot_for_test(Arc::clone(&state));
+        cx.update(|_window, app| {
+            let ui_model = view.read(app)._ui_model.clone();
+            ui_model.update(app, |model, cx| {
+                model.set_state(Arc::clone(&state), cx);
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+        wait_until(cx, "history rows", |cx| {
+            cx.debug_bounds("history_row_3").is_some()
+        });
+
+        let selected = |store: &AppStore| {
+            store
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.history_state.selected_commit.clone())
+        };
+        let row = |cx: &mut gpui::VisualTestContext, selector: &'static str| {
+            cx.debug_bounds(selector)
+                .unwrap_or_else(|| panic!("expected {selector} to be rendered"))
+                .center()
+        };
+
+        // Positive control: an ordinary click selects, and the dispatch really
+        // does reach the store, so the assertions below are not vacuous.
+        let row_3 = row(cx, "history_row_3");
+        cx.simulate_mouse_move(row_3, None, gpui::Modifiers::default());
+        cx.simulate_click(row_3, gpui::Modifiers::default());
+        wait_until(cx, "row 3 selected by a click", |_cx| {
+            selected(&store_for_assert) == Some(CommitId("c03".into()))
+        });
+
+        // Press on one row, release on another: the press decides.
+        let row_1 = row(cx, "history_row_1");
+        let row_5 = row(cx, "history_row_5");
+        cx.simulate_mouse_move(row_1, None, gpui::Modifiers::default());
+        cx.simulate_mouse_down(row_1, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_move(row_5, gpui::MouseButton::Left, gpui::Modifiers::default());
+        cx.simulate_mouse_up(row_5, gpui::MouseButton::Left, gpui::Modifiers::default());
+
+        wait_until(cx, "row 1 selected by the press", |_cx| {
+            selected(&store_for_assert) == Some(CommitId("c01".into()))
+        });
+        // A release-driven selection would have been queued before this point,
+        // so a short settle is enough to prove none was.
+        for _ in 0..15 {
+            std::thread::sleep(Duration::from_millis(10));
+            cx.run_until_parked();
+            assert_eq!(
+                selected(&store_for_assert),
+                Some(CommitId("c01".into())),
+                "releasing over another row must not move the selection"
+            );
+        }
+    }
+
+    #[gpui::test]
     fn history_rows_ignore_clicks_that_landed_on_the_collapsed_sidebar_popover(
         cx: &mut gpui::TestAppContext,
     ) {

@@ -562,12 +562,16 @@ impl Render for TitleBarView {
             .on_mouse_up(
                 MouseButton::Right,
                 cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                    if crate::press_gesture::is_press_claimed(cx) {
+                        return;
+                    }
                     show_titlebar_secondary_menu(e.position, window, cx);
                 }),
             )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _w, cx| {
+                    crate::press_gesture::claim_press(cx);
                     this.title_drag_state.on_left_mouse_down(e.click_count);
                     cx.notify();
                 }),
@@ -848,7 +852,12 @@ pub(crate) fn window_frame(
         inner = inner.child(overlay);
     }
 
-    outer.child(inner).into_any_element()
+    // Every window built on the frame resets the press claim; see the
+    // `press_gesture` module docs.
+    outer
+        .child(crate::press_gesture::PressGestureReset)
+        .child(inner)
+        .into_any_element()
 }
 
 #[cfg(test)]

@@ -2161,6 +2161,11 @@ impl TextInput {
         if self.interaction.context_menu.take().is_some() {
             cx.notify();
         }
+        // The press belongs to this input for as long as the button is held,
+        // even once the pointer leaves it — nobody else may read its release
+        // as a click. Claimed unconditionally, because a double-click that
+        // turns into a drag never sets `is_selecting`.
+        crate::press_gesture::claim_press(cx);
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
@@ -2266,6 +2271,7 @@ impl TextInput {
             return;
         }
 
+        crate::press_gesture::claim_press(cx);
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
