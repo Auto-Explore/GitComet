@@ -1942,9 +1942,12 @@ fn history_table_row(
         })
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
-        .on_mouse_up(
+        // Selecting on press, like the sidebar rows: the row the gesture
+        // *starts* on owns it, so a release that merely drifted here — the end
+        // of a text-selection drag in the details pane, say — selects nothing.
+        .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |this, e: &MouseUpEvent, _w, cx| {
+            cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                 let modifiers = e.modifiers;
                 let mode = if modifiers.shift {
                     CommitSelectMode::Range

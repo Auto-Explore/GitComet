@@ -2774,6 +2774,7 @@ impl MainPaneView {
         if !self.conflict_resolver.conflict_row_selection_enabled() {
             return;
         }
+        crate::press_gesture::claim_press(cx);
         let row = self
             .conflict_resolver
             .clamp_row_to_conflict_block(conflict_ix, aligned_row);

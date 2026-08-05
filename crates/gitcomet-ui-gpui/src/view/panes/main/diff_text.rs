@@ -331,6 +331,11 @@ impl MainPaneView {
         click_count: usize,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Deliberately does not claim the press: the diff row's own release
+        // handler reads the claim, and this gesture starts on that same row.
+        // A drag that actually moved is suppressed by
+        // `diff_suppress_clicks_remaining` instead, which a plain click leaves
+        // alone.
         match click_count {
             3.. => {
                 self.select_diff_text_line_at_mouse(visible_ix, region, position);
