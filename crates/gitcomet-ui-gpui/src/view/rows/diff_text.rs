@@ -356,6 +356,12 @@ fn diff_wrap_next_range_for_text(
 
     let next_start = if end >= text.len() || forced_newline {
         end
+    } else if text[end..].chars().next().is_some_and(char::is_whitespace) {
+        // The word ended exactly on the column boundary, so the row is not
+        // splitting one — keep it full and let the following whitespace open
+        // the next row. Backing up to `last_break` here would drop a whole
+        // word that fit, wrapping the line short of the width it had.
+        end
     } else {
         last_break
             .filter(|break_ix| *break_ix > row_start)
@@ -1042,6 +1048,43 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(rows, ["alpha ", "beta ", "gamma"]);
+    }
+
+    #[test]
+    fn diff_wrap_ranges_keep_a_word_that_ends_on_the_column_boundary() {
+        // "alpha beta" is exactly 10 columns and the next character is a space,
+        // so the row is not splitting a word: giving "beta" back to the next row
+        // would wrap the line four columns short of the width it had.
+        let text = "alpha beta gamma";
+        let rows = diff_wrap_ranges_for_text(text, 10)
+            .into_iter()
+            .map(|range| text[range].to_string())
+            .collect::<Vec<_>>();
+
+        assert_eq!(rows, ["alpha beta", " gamma"]);
+    }
+
+    #[test]
+    fn diff_wrap_ranges_tile_the_line_and_respect_the_column_budget() {
+        let text = "alpha beta gamma delta";
+        for columns in 1..=text.len() + 4 {
+            let ranges = diff_wrap_ranges_for_text(text, columns);
+            let joined = ranges
+                .iter()
+                .cloned()
+                .map(|range| &text[range])
+                .collect::<String>();
+            assert_eq!(joined, text, "columns={columns}: rows must tile the line");
+
+            for range in ranges {
+                let width = text[range.clone()].chars().count();
+                assert!(
+                    width <= columns,
+                    "columns={columns}: row {:?} exceeds the budget",
+                    &text[range]
+                );
+            }
+        }
     }
 
     #[test]

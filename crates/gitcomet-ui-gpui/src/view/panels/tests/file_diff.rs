@@ -2621,6 +2621,370 @@ index 1111111..2222222 100644
 }
 
 #[gpui::test]
+async fn diff_word_wrap_column_count_consistency_with_available_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1200.0), px(600.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    let long_new_line = format!("consistency {}", "x".repeat(200));
+    let unified = format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n\
+         index 1111111..2222222 100644\n\
+         --- a/src/lib.rs\n\
+         +++ b/src/lib.rs\n\
+         @@ -1 +1 @@\n\
+         -old line\n\
+         +{long_new_line}\n"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(199),
+        "wrap_column_consistency",
+        path,
+        unified,
+        "old line\n".to_string(),
+        format!("{long_new_line}\n"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "wrap column consistency ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| {
+            format!(
+                "inflight={:?} active={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active()
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    let (inline_columns, char_width, show_line_numbers) = cx.update(|window, app| {
+        let editor_font_family = crate::font_preferences::current_editor_font_family(app);
+        let pane = view.read(app).main_pane.read(app);
+        let cache_key = pane
+            .diff_wrap_visible_cache_key
+            .expect("wrap cache key must be populated after rendering with wrap on");
+        let inline_columns = cache_key.inline_columns;
+        let char_width = rows::diff_canvas_text_wrap_char_width(window, editor_font_family);
+        let show_line_numbers = pane.diff_show_line_numbers;
+        (inline_columns, char_width, show_line_numbers)
+    });
+
+    // Compute expected text-area pixel width.
+    let ui_scale_percent = 100u32;
+    let content_width = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        crate::view::panes::main::pane_content_width_for_layout(
+            pane.last_window_size.width,
+            pane.layout_sidebar_render_width,
+            pane.layout_details_render_width,
+            pane.layout_sidebar_collapsed,
+            pane.layout_details_collapsed,
+        )
+    });
+    let scrollbar_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
+    let available_width = (content_width - scrollbar_gutter).max(px(0.0));
+    let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
+    let inline_text_start = if show_line_numbers {
+        rows::diff_canvas_inline_text_start(ui_scale_percent)
+    } else {
+        pad
+    };
+    let text_area_px = (available_width - inline_text_start - pad).max(px(0.0));
+
+    let expected_columns = diff_wrap_column_for_width(text_area_px, char_width);
+
+    assert!(
+        inline_columns > 1,
+        "wrap columns should be > 1 (got {inline_columns})"
+    );
+
+    let diff = inline_columns.abs_diff(expected_columns);
+    let max_tol = (expected_columns / 10).max(2);
+    assert!(
+        diff <= max_tol,
+        "inline_columns ({inline_columns}) differs from expected ({expected_columns}) \
+         by {diff}, max acceptable {max_tol} \
+         (text_area_px={text_area_px:?}, char_width={char_width:?})"
+    );
+
+    let occupied_px = char_width * inline_columns as f32;
+    assert!(
+        occupied_px <= text_area_px + char_width,
+        "wrapped text width ({occupied_px:?}) should not exceed text area \
+         ({text_area_px:?}) by more than one char width"
+    );
+
+    let unused = (text_area_px - occupied_px).max(px(0.0));
+    assert!(
+        unused <= char_width * 3.0,
+        "unused space ({unused:?}) should be < 3 chars ({:?}) — \
+         lines break too early if larger",
+        char_width * 3.0
+    );
+}
+
+fn diff_wrap_column_for_width(width: Pixels, char_width: Pixels) -> usize {
+    let cw = f32::from(char_width.max(px(1.0)));
+    ((f32::from(width.max(px(0.0))) / cw).floor() as usize).max(1)
+}
+
+/// Display columns a wrapped segment occupies, matching the tab expansion the
+/// wrap algorithm uses (`DIFF_WRAP_TAB_EXPANDED_COLUMNS`).
+fn wrap_display_columns(text: &str) -> usize {
+    text.chars().map(|ch| if ch == '\t' { 4 } else { 1 }).sum()
+}
+
+/// Greedy word wrap must emit *maximal* segments: a non-final segment may only
+/// stop short of the column budget when the next word could not have fit.
+///
+/// This is the invariant that "lines break too early" violates. It is stated in
+/// columns rather than pixels on purpose — `#[gpui::test]` runs on gpui's
+/// `NoopTextSystem`, where every glyph advances an identical 0.6em regardless of
+/// font, so pixel measurements taken in a test cannot distinguish fonts at all.
+#[gpui::test]
+async fn diff_word_wrap_segments_are_maximal_for_their_column_budget(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), px(520.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    // Short words only, so every break lands on whitespace. A segment that
+    // stops early here is a genuine wrap bug — unlike a single long token,
+    // which correctly gets pushed to the next row and leaves the previous one
+    // partly empty.
+    let long_new_line = "let value = compute(alpha, beta, gamma) + delta * epsilon - zeta / eta; "
+        .repeat(6)
+        .trim_end()
+        .to_string();
+    let unified = format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n\
+         index 1111111..2222222 100644\n\
+         --- a/src/lib.rs\n\
+         +++ b/src/lib.rs\n\
+         @@ -1 +1 @@\n\
+         -old line\n\
+         +{long_new_line}\n"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(200),
+        "wrap_segments_maximal",
+        path,
+        unified,
+        "old line\n".to_string(),
+        format!("{long_new_line}\n"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "wrap segments ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| {
+            format!(
+                "inflight={:?} active={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active()
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let wrap_columns = pane
+            .diff_wrap_visible_cache_key
+            .expect("wrap cache key must be populated after rendering with wrap on")
+            .inline_columns;
+        assert!(
+            wrap_columns > 8,
+            "degenerate wrap budget ({wrap_columns} columns)"
+        );
+
+        let visible_len = pane.diff_visible_len();
+        let mut checked = 0usize;
+        for visible_ix in 0..visible_len {
+            let rows = &pane.diff_wrap_visible_rows;
+            let (Some(row), Some(next_row)) = (rows.get(visible_ix), rows.get(visible_ix + 1))
+            else {
+                continue;
+            };
+            // Only non-final segments of a wrapped source row are constrained;
+            // the last segment is free to be short.
+            if next_row.source_visible_ix != row.source_visible_ix {
+                continue;
+            }
+
+            let text = pane.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+            let next_text = pane.diff_text_line_for_region(visible_ix + 1, DiffTextRegion::Inline);
+            if text.is_empty() || next_text.is_empty() {
+                continue;
+            }
+
+            let used = wrap_display_columns(text.as_ref());
+            // What appending the next row's first word to this row would have
+            // cost, including any whitespace the row opens with (a row starts
+            // with whitespace when the previous word ended exactly on the
+            // column boundary).
+            let next_word: String = {
+                let next_text = next_text.as_ref();
+                let leading_ws = next_text.len() - next_text.trim_start().len();
+                let word = next_text
+                    .trim_start()
+                    .chars()
+                    .take_while(|ch| !ch.is_whitespace());
+                next_text[..leading_ws].chars().chain(word).collect()
+            };
+            let next_word_columns = wrap_display_columns(&next_word);
+
+            assert!(
+                used <= wrap_columns,
+                "visible_ix={visible_ix}: segment overflows its budget \
+                 ({used} columns of {wrap_columns}). text={text:?}"
+            );
+            assert!(
+                used + next_word_columns > wrap_columns,
+                "visible_ix={visible_ix}: line broke too early — {used} of \
+                 {wrap_columns} columns used and the next word {next_word:?} \
+                 ({next_word_columns} columns) would still have fit. \
+                 text={text:?}"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "expected at least one source row that wraps to multiple visual rows"
+        );
+    });
+}
+
+/// Wrap columns must be measured in the font the rows are *painted* in.
+///
+/// `MainPane::diff_wrap_columns` runs while the diff pane is building its
+/// element tree, before the rows container pushes
+/// `.font_family(editor_font_family)` onto the window text style stack. The
+/// ambient style there is a proportional UI font, and the wrap width sample is
+/// `"WWWWWWWWWW"` — the widest glyph in a proportional face (IBM Plex Sans `W`
+/// is 0.891em against Lilex's uniform 0.600em), which overestimated the column
+/// width by ~1.5x and wrapped every line at roughly two thirds of the width it
+/// actually had.
+///
+/// The assertion is on font *identity*, not measured width: gpui's test
+/// `NoopTextSystem` maps every font descriptor to the same `FontId` and every
+/// glyph to the same advance, so no width-based test can catch this.
+#[gpui::test]
+async fn diff_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), px(520.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    let long_new_line = format!("fonttest {}", "abc def ghi ".repeat(30));
+    let unified = format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n\
+         index 1111111..2222222 100644\n\
+         --- a/src/lib.rs\n\
+         +++ b/src/lib.rs\n\
+         @@ -1 +1 @@\n\
+         -old line\n\
+         +{long_new_line}\n"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(201),
+        "wrap_measure_font",
+        path,
+        unified,
+        "old line\n".to_string(),
+        format!("{long_new_line}\n"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "wrap measure font ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| {
+            format!(
+                "inflight={:?} active={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active()
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    cx.update(|window, app| {
+        let editor_font_family = crate::font_preferences::current_editor_font_family(app);
+        let main_pane = view.read(app).main_pane.clone();
+        let measured = main_pane.update(app, |pane, cx| pane.diff_wrap_measure_font_family(cx));
+
+        assert_eq!(
+            measured.as_ref(),
+            editor_font_family.as_str(),
+            "wrap columns must be measured in the editor font the rows are painted in"
+        );
+        // The trap: outside the rows container the ambient text style is never
+        // the editor font, so measuring against `window.text_style()` silently
+        // measures the wrong face.
+        assert_ne!(
+            window.text_style().font_family.as_ref(),
+            editor_font_family.as_str(),
+            "ambient text style unexpectedly matches the editor font — this test \
+             no longer guards anything"
+        );
+    });
+}
+
+#[gpui::test]
 fn reveal_whitespace_chars_marks_file_diff_paint_rows(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

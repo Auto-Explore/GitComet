@@ -5119,6 +5119,16 @@ impl MainPaneView {
         }
     }
 
+    /// Font the wrapped diff rows are painted in — the same family the rows
+    /// container applies via `.font_family(editor_font_family)`. Wrap widths
+    /// must be measured in it, never in the ambient text style.
+    pub(in crate::view) fn diff_wrap_measure_font_family(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::SharedString {
+        crate::font_preferences::current_editor_font_family(cx).into()
+    }
+
     pub(in crate::view) fn diff_wrap_columns(
         &self,
         window: &mut gpui::Window,
@@ -5127,7 +5137,11 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let vertical_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
         let content_width = (self.main_pane_content_width(cx) - vertical_gutter).max(px(0.0));
-        let char_width = rows::diff_canvas_text_wrap_char_width(window);
+        // Measured in the editor font the rows are painted in, not in the
+        // ambient UI font that is still current while this element tree is
+        // being built. See `diff_text_wrap_char_width`.
+        let char_width =
+            rows::diff_canvas_text_wrap_char_width(window, self.diff_wrap_measure_font_family(cx));
         let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
         let inline_text_start = if self.diff_show_line_numbers {
             rows::diff_canvas_inline_text_start(ui_scale_percent)
