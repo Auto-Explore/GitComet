@@ -718,7 +718,7 @@ impl MainPaneView {
 
                     let semantic_nav_target =
                         this.conflict_resolver.nav_target_index_for_aligned_row(ix);
-                    let is_active_conflict = range_ix == this.conflict_resolver.active_conflict
+                    let is_active_conflict = this.conflict_resolver.conflict_is_active(range_ix)
                         || this
                             .conflict_resolver
                             .selected_nav_target_contains_aligned_row(ix);
@@ -1080,7 +1080,7 @@ impl MainPaneView {
                     show_line_numbers,
                 );
 
-                let is_active_conflict = conflict_ix == this.conflict_resolver.active_conflict;
+                let is_active_conflict = this.conflict_resolver.conflict_is_active(conflict_ix);
                 if this.conflict_canvas_rows_enabled {
                     let chunk_context_data = conflict_ix.map(|conflict_ix| ConflictChunkContext {
                         conflict_ix,
@@ -1497,7 +1497,7 @@ impl MainPaneView {
                         .conflict_index_for_side_line(column, row);
                     let semantic_nav_target =
                         this.conflict_resolver.nav_target_index_for_aligned_row(row);
-                    let is_active_conflict = conflict_ix == this.conflict_resolver.active_conflict
+                    let is_active_conflict = this.conflict_resolver.conflict_is_active(conflict_ix)
                         || this
                             .conflict_resolver
                             .selected_nav_target_contains_aligned_row(row);
@@ -1899,7 +1899,7 @@ impl MainPaneView {
                     with_alpha(badge_fg, if theme.is_dark { 0.45 } else { 0.55 })
                 };
                 let conflict_ix = gutter_row.marker_conflict_ix();
-                let conflict_active = conflict_ix == this.conflict_resolver.active_conflict;
+                let conflict_active = this.conflict_resolver.conflict_is_active(conflict_ix);
                 let conflict_unresolved = gutter_row.unresolved();
                 let marker_color = if conflict_unresolved {
                     with_alpha(theme.colors.danger, if theme.is_dark { 0.96 } else { 0.90 })

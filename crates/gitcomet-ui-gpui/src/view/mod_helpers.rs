@@ -1567,6 +1567,17 @@ impl ConflictResolverUiState {
             .is_some_and(|range| range.contains(&row))
     }
 
+    /// Whether the conflict a row belongs to is the selected one.
+    ///
+    /// `conflict_ix` is `None` for a row in no conflict at all, and
+    /// `active_conflict` is `None` whenever nothing is selected — for instance
+    /// right after a pick moves the anchor onto a block that renders no marker.
+    /// Comparing the two options directly made those two `None`s match, which
+    /// painted the active-conflict marker on every row *outside* a conflict.
+    pub(super) fn conflict_is_active(&self, conflict_ix: Option<usize>) -> bool {
+        conflict_ix.is_some() && conflict_ix == self.active_conflict
+    }
+
     fn nav_target_matches_display(
         &self,
         target: &conflict_resolver::ConflictNavTarget,

@@ -6720,3 +6720,262 @@ fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppConte
 
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver nav-center fixture");
 }
+
+/// An HTML-shaped fixture with the structure that exposed the bug: a repeated
+/// card, most of which the planner settles on its own, and a handful of real
+/// conflicts spread through the file.
+///
+/// The repetition matters — it is what makes the marker-projection estimate
+/// drift, because the same text appears in every card.
+fn build_repetitive_card_conflict_sides() -> (String, String, String, String) {
+    let mut base = Vec::new();
+    let mut ours = Vec::new();
+    let mut theirs = Vec::new();
+
+    base.push("<html>".to_string());
+    ours.push("<html>".to_string());
+    theirs.push("<html>".to_string());
+    for card in 0..24 {
+        let head = [
+            format!("  <article class=\"card\" id=\"card-{card:02}\">"),
+            "    <header>".to_string(),
+            format!("      <h2>Card {card:02}</h2>"),
+        ];
+        for line in &head {
+            base.push(line.clone());
+            ours.push(line.clone());
+            theirs.push(line.clone());
+        }
+
+        // Every third card is a real conflict; the ones between it are edits
+        // both sides made the same way, which the planner resolves by itself.
+        match card % 3 {
+            0 => {
+                base.push("      <span>Healthy</span>".to_string());
+                ours.push("      <span>Local override</span>".to_string());
+                theirs.push("      <span>Remote canary</span>".to_string());
+            }
+            1 => {
+                base.push("      <span>Healthy</span>".to_string());
+                ours.push("      <span>Shared rollout</span>".to_string());
+                theirs.push("      <span>Shared rollout</span>".to_string());
+            }
+            _ => {
+                for side in [&mut base, &mut ours, &mut theirs] {
+                    side.push("      <span>Healthy</span>".to_string());
+                }
+            }
+        }
+
+        let tail = [
+            "    </header>".to_string(),
+            "    <div class=\"body\">".to_string(),
+            "      <p>Nominal traffic across all production cells.</p>".to_string(),
+            "    </div>".to_string(),
+            "  </article>".to_string(),
+        ];
+        for line in &tail {
+            base.push(line.clone());
+            ours.push(line.clone());
+            theirs.push(line.clone());
+        }
+    }
+    base.push("</html>".to_string());
+    ours.push("</html>".to_string());
+    theirs.push("</html>".to_string());
+
+    let join = |lines: Vec<String>| format!("{}\n", lines.join("\n"));
+    let (base, ours, theirs) = (join(base), join(ours), join(theirs));
+    let current = gitcomet_core::merge::merge_file_with_optional_base(
+        Some(base.as_str()),
+        &ours,
+        &theirs,
+        &gitcomet_core::merge::MergeOptions::default(),
+    )
+    .output;
+    (base, ours, theirs, current)
+}
+
+/// Every conflict highlight must stay inside the block it belongs to.
+///
+/// The highlight is driven by `three_way_conflict_ranges` (the chunk bar and
+/// the active-conflict tint) and by the nav targets' `aligned_rows`. Both are
+/// exact when the merge plan describes them; the marker-projection estimate
+/// used to be able to hand a block a range running to the end of the file,
+/// which painted the whole tail as one enormous selected conflict.
+fn assert_conflict_highlight_ranges_are_bounded(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    stage: &str,
+) {
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let aligned_len = pane.conflict_resolver.three_way_len;
+        let ranges =
+            &pane.conflict_resolver.three_way_conflict_ranges[crate::view::ThreeWayColumn::Ours];
+        assert!(
+            !ranges.is_empty(),
+            "{stage}: the fixture must still have conflicts to highlight",
+        );
+
+        // No block may claim more than a modest slice of the file. The fixture's
+        // conflicts are a line or two; anything spanning a quarter of the aligned
+        // rows is the runaway range this guards against.
+        let budget = (aligned_len / 4).max(8);
+        for (ix, range) in ranges.iter().enumerate() {
+            assert!(
+                range.end <= aligned_len,
+                "{stage}: conflict {ix} range {range:?} leaves the aligned space \
+                 (len {aligned_len})",
+            );
+            assert!(
+                range.len() <= budget,
+                "{stage}: conflict {ix} spans {} of {aligned_len} aligned rows ({range:?})",
+                range.len(),
+            );
+        }
+        for pair in ranges.windows(2) {
+            assert!(
+                pair[0].end <= pair[1].start,
+                "{stage}: conflict ranges overlap or go backwards: {pair:?}",
+            );
+        }
+
+        for (ix, target) in pane.conflict_resolver.nav_targets.iter().enumerate() {
+            let Some(rows) = target.aligned_rows.as_ref() else {
+                continue;
+            };
+            assert!(
+                rows.end <= aligned_len && rows.len() <= budget,
+                "{stage}: nav target {ix} spans {rows:?} of {aligned_len} aligned rows",
+            );
+        }
+
+        // The painted highlight itself: every aligned row the source columns
+        // mark as the active conflict has to belong to a conflict.
+        let highlighted = (0..aligned_len)
+            .filter(|row| {
+                let conflict_ix = pane
+                    .conflict_resolver
+                    .conflict_index_for_side_line(crate::view::ThreeWayColumn::Ours, *row);
+                pane.conflict_resolver.conflict_is_active(conflict_ix)
+                    || pane
+                        .conflict_resolver
+                        .selected_nav_target_contains_aligned_row(*row)
+            })
+            .count();
+        assert!(
+            highlighted <= budget,
+            "{stage}: {highlighted} of {aligned_len} aligned rows are painted as the \
+             active conflict (active={:?})",
+            pane.conflict_resolver.active_conflict,
+        );
+    });
+}
+
+/// The active-conflict highlight must never cover more than the conflict it
+/// belongs to — not on open, not after a pick, and above all not when nothing
+/// is selected, which is where it used to swallow the rest of the file.
+///
+/// It guards the two range sources (the aligned conflict ranges behind the
+/// chunk bar, and the nav targets' `aligned_rows`) as well as the predicate the
+/// source columns actually paint with.
+#[gpui::test]
+fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(193);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_conflict_highlight_bounds",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_highlight_bounds.html");
+    let abs_path = workdir.join(&file_rel);
+    let (base_text, ours_text, theirs_text, current_text) = build_repetitive_card_conflict_sides();
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create conflict highlight fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write conflict highlight fixture");
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict highlight fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && !pane.conflict_resolver.three_way_aligned.is_identity()
+                && pane.conflict_resolver.three_way_conflict_ranges
+                    [crate::view::ThreeWayColumn::Ours]
+                    .len()
+                    >= 4
+        },
+        |pane| {
+            format!(
+                "path={:?} identity={} ranges={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.three_way_aligned.is_identity(),
+                pane.conflict_resolver.three_way_conflict_ranges[crate::view::ThreeWayColumn::Ours]
+                    .len(),
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert_conflict_highlight_ranges_are_bounded(cx, &view, "on open");
+
+    // Pick a source on a conflict partway down the file — the case the user hit.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver_select_conflict(3, cx);
+                pane.conflict_resolver_pick_active_conflict(
+                    crate::view::conflict_resolver::ConflictChoice::Theirs,
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert_conflict_highlight_ranges_are_bounded(cx, &view, "after picking a source");
+
+    // Nothing selected is the state a pick can settle into: the anchor lands on
+    // a block that renders no marker, so there is no displayed conflict index.
+    // Rows outside every conflict must stay unmarked — comparing the row's
+    // `Option` conflict index against the equally-`None` selection is what used
+    // to light up the whole file below the conflict that was just resolved.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver.active_conflict = None;
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert_conflict_highlight_ranges_are_bounded(cx, &view, "with nothing selected");
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup conflict highlight fixture");
+}
