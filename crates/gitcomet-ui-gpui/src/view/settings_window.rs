@@ -5266,7 +5266,7 @@ impl Render for SettingsWindowView {
                     };
 
                     cx.stop_propagation();
-                    window.start_window_resize(edge);
+                    crate::app::begin_window_resize(window, edge);
                 }),
             );
         } else {

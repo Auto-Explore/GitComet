@@ -4614,6 +4614,9 @@ pub struct GitCometView {
     pub(super) ui_window_size_last_seen: Size<Pixels>,
     pub(super) ui_settings_persist_seq: u64,
     pub(super) last_repo_activation_dispatch_at: HashMap<RepoId, Instant>,
+    /// Set when a deactivation was caused by a move/resize grab we requested, so
+    /// the matching re-activation does not trigger a repo refresh.
+    pub(super) window_grab_activation_suppressed_at: Option<Instant>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
@@ -4635,9 +4638,6 @@ pub struct GitCometView {
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_view_mode: DiffViewMode,
     pub(super) annotate_enabled: bool,
-    /// View mode stashed when enabling blame forced Split → Inline; restored
-    /// on toggle-off unless the user changed modes in the meantime.
-    pub(super) diff_view_mode_before_annotate: Option<DiffViewMode>,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,

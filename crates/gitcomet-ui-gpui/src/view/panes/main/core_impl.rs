@@ -3475,6 +3475,14 @@ impl MainPaneView {
         }
 
         self.diff_view = next;
+        // Inline keys styled segments by `row_ix` while split keys them by
+        // `row_ix * 2` / `row_ix * 2 + 1` (`file_diff_split_cache_key`) against
+        // the same `split_left`/`split_right` epochs, so the two key spaces
+        // alias. Clear on every mode change, not just the toolbar/hotkey ones.
+        self.clear_diff_text_style_caches();
+        if self.diff_search_has_query() {
+            self.diff_search_recompute_matches_preserving_current();
+        }
         cx.notify();
     }
 
@@ -3514,6 +3522,24 @@ impl MainPaneView {
                 .rendered_diff_target()
                 .and_then(blame_path_rev_for_target)
                 .is_some()
+    }
+
+    /// Whether the loaded (or retained) blame describes the diff target being
+    /// rendered right now. `blame_path`/`blame_source` follow the store snapshot,
+    /// which lags the dispatch by at least a frame, so just after a file switch
+    /// they still name the previous file — its annotations must not be painted
+    /// over the new one's rows.
+    pub(in crate::view) fn blame_matches_rendered_target(&self) -> bool {
+        let Some((path, source)) = self
+            .rendered_diff_target()
+            .and_then(blame_path_rev_for_target)
+        else {
+            return false;
+        };
+        self.active_repo().is_some_and(|repo| {
+            repo.history_state.blame_path.as_deref() == Some(path.as_path())
+                && repo.history_state.blame_source.as_ref() == Some(&source)
+        })
     }
 
     /// Record the hovered blame annotation sub-area and drive the shared tooltip
@@ -5093,7 +5119,7 @@ impl MainPaneView {
         }
     }
 
-    fn diff_wrap_columns(
+    pub(in crate::view) fn diff_wrap_columns(
         &self,
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
