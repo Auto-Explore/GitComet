@@ -435,12 +435,16 @@ pub(super) fn select_commit_multi(
 
     repo_state.set_commit_multi_selection(sel);
 
-    // Exactly two selected commits enter "compare" mode: the details pane shows
-    // the diff between them instead of a plain list. Any other count (1, or 3+)
-    // clears the comparison and falls back to single/multi-list behavior.
+    // Two or more selected commits enter "compare" mode: the details pane shows
+    // the merged diff of the whole selection — every selected commit's own
+    // changes, combined — instead of a plain list. A single commit (or a
+    // selection that can't be resolved in the loaded log) falls back to the
+    // single/multi-list behavior below.
     let range_pair = {
         let selected = &repo_state.history_state.multi_selection.commits;
-        (selected.len() == 2).then(|| order_range_pair(repo_state, &selected[0], &selected[1]))
+        (selected.len() >= 2)
+            .then(|| merged_selection_range(repo_state, selected))
+            .flatten()
     };
 
     match range_pair {
@@ -461,21 +465,39 @@ pub(super) fn select_commit_multi(
     }
 }
 
-/// Order a commit pair oldest→newest for a range comparison. The history log is
-/// newest-first, so the larger index is the older commit and becomes `from`
-/// (the base). Falls back to input order when either id isn't in the loaded log.
-fn order_range_pair(repo_state: &RepoState, a: &CommitId, b: &CommitId) -> (CommitId, CommitId) {
-    let index_of = |id: &CommitId| -> Option<usize> {
-        match &repo_state.history_state.log {
-            Loadable::Ready(page) => page.commits.iter().position(|c| &c.id == id),
-            _ => None,
-        }
+/// Endpoints for the merged diff of a multi-commit selection. `to` is the newest
+/// selected commit; `from` is the *parent* of the oldest selected commit, so the
+/// combined patch includes every selected commit's own changes — matching the
+/// "merged diff of N commits" the comparison view presents. The history log is
+/// newest-first, so the smallest index is the newest commit and the largest is
+/// the oldest.
+///
+/// Falls back to the oldest commit itself as `from` when it is a root commit
+/// (no parent): its introducing changes can't be shown without an empty-tree
+/// base. Returns `None` unless the log is loaded and every selected commit
+/// resolves within it, so the caller leaves comparison mode rather than guess.
+fn merged_selection_range(
+    repo_state: &RepoState,
+    selected: &[CommitId],
+) -> Option<(CommitId, CommitId)> {
+    let Loadable::Ready(page) = &repo_state.history_state.log else {
+        return None;
     };
-    match (index_of(a), index_of(b)) {
-        // a is newer (smaller index) → base is b.
-        (Some(ia), Some(ib)) if ia < ib => (b.clone(), a.clone()),
-        _ => (a.clone(), b.clone()),
+    let mut newest_ix: Option<usize> = None;
+    let mut oldest_ix: Option<usize> = None;
+    for id in selected {
+        let ix = page.commits.iter().position(|c| &c.id == id)?;
+        newest_ix = Some(newest_ix.map_or(ix, |n: usize| n.min(ix)));
+        oldest_ix = Some(oldest_ix.map_or(ix, |o: usize| o.max(ix)));
     }
+    let newest = &page.commits[newest_ix?];
+    let oldest = &page.commits[oldest_ix?];
+    let from = oldest
+        .parent_ids
+        .first()
+        .cloned()
+        .unwrap_or_else(|| oldest.id.clone());
+    Some((from, newest.id.clone()))
 }
 
 /// Abbreviated commit id used as a fallback label in the comparison UI/menus.
@@ -489,8 +511,8 @@ fn short_commit_label(id: &CommitId) -> String {
 /// working tree. The diff pane is left empty (any prior selection is cleared) so
 /// the comparison presents the file side-selection first — the user opens an
 /// individual file's range diff by clicking it, rather than the whole range
-/// patch opening automatically. Reused by two-commit selection, the mark/compare
-/// context-menu flow, and the compare-with-working-tree action.
+/// patch opening automatically. Reused by multi-commit selection, the
+/// mark/compare context-menu flow, and the compare-with-working-tree action.
 pub(super) fn compare_range(
     state: &mut AppState,
     repo_id: RepoId,
@@ -2748,6 +2770,88 @@ mod tests {
         );
         let sel = multi_selection(&mut state, repo_id);
         assert_eq!(sel.commits, vec![b]);
+    }
+
+    fn test_commit(id: &str, parent: Option<&str>) -> gitcomet_core::domain::Commit {
+        gitcomet_core::domain::Commit {
+            id: CommitId(id.into()),
+            parent_ids: parent
+                .map(|p| smallvec::smallvec![CommitId(p.into())])
+                .unwrap_or_default(),
+            summary: "s".into(),
+            author: "a".into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    #[test]
+    fn multi_selection_compares_merged_diff_from_oldest_parent_to_newest() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        // Log is newest-first; each of c2..c4 has a parent, c1 is the root.
+        repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: vec![
+                test_commit("c4", Some("c3")),
+                test_commit("c3", Some("c2")),
+                test_commit("c2", Some("c1")),
+                test_commit("c1", None),
+            ],
+            next_cursor: None,
+        })));
+
+        // Select c4 (newest) and c2 (oldest of the pair). The merged diff spans
+        // c2's parent (c1) → c4, so every selected commit's own changes show.
+        select_commit(&mut state, repo_id, CommitId("c4".into()));
+        let effects = select_commit_multi(
+            &mut state,
+            repo_id,
+            CommitId("c2".into()),
+            CommitSelectMode::Toggle,
+            Some(2),
+            None,
+        );
+
+        let range = repo_mut(&mut state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("range comparison active for a multi-selection");
+        assert_eq!(range.from, CommitId("c1".into()));
+        assert_eq!(range.to, Some(CommitId("c4".into())));
+        assert!(effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadRangeFiles { from, to, .. }
+                if *from == CommitId("c1".into()) && *to == Some(CommitId("c4".into()))
+        )));
+    }
+
+    #[test]
+    fn multi_selection_reaching_root_uses_root_itself_as_base() {
+        let repo_id = RepoId(1);
+        let mut state = new_state_with_repo(repo_id);
+        repo_mut(&mut state, repo_id).set_log(Loadable::Ready(Arc::new(LogPage {
+            commits: vec![test_commit("c2", Some("c1")), test_commit("c1", None)],
+            next_cursor: None,
+        })));
+
+        select_commit(&mut state, repo_id, CommitId("c2".into()));
+        select_commit_multi(
+            &mut state,
+            repo_id,
+            CommitId("c1".into()),
+            CommitSelectMode::Toggle,
+            Some(1),
+            None,
+        );
+
+        let range = repo_mut(&mut state, repo_id)
+            .history_state
+            .range_selection
+            .clone()
+            .expect("range comparison active");
+        // The oldest selected commit is the root, so it becomes the base itself.
+        assert_eq!(range.from, CommitId("c1".into()));
+        assert_eq!(range.to, Some(CommitId("c2".into())));
     }
 
     #[test]

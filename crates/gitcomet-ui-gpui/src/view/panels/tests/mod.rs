@@ -1174,6 +1174,7 @@ pub(super) fn wait_for_file_image_diff_cache<Ready>(
     );
 }
 
+mod comparison;
 mod conflict;
 mod file_diff;
 mod file_preview;

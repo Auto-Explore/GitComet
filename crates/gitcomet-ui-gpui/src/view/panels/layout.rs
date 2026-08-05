@@ -785,6 +785,113 @@ impl DetailsPaneView {
             .collect()
     }
 
+    /// Commits to preview as cards while a two-point comparison is active.
+    /// Prefers an explicit multi-selection (selecting commits, then comparing);
+    /// otherwise derives the endpoints from the range itself (the mark +
+    /// compare, branch/tag, and working-tree flows), looking each SHA up in the
+    /// loaded log so its summary/author/time can be shown. Ordered newest first
+    /// (tip before base) to match the log. The working tree has no commit of its
+    /// own, so a compare-against-working-tree range yields a single card.
+    fn range_comparison_commits(repo: &RepoState) -> Vec<Commit> {
+        let multi = Self::multi_selected_commits_in_log_order(repo);
+        if !multi.is_empty() {
+            return multi;
+        }
+        let Some(range) = repo.history_state.range_selection.as_ref() else {
+            return Vec::new();
+        };
+        let Loadable::Ready(page) = &repo.log else {
+            return Vec::new();
+        };
+        let find = |id: &CommitId| page.commits.iter().find(|c| &c.id == id).cloned();
+        let mut commits = Vec::new();
+        if let Some(to) = range.to.as_ref().and_then(&find) {
+            commits.push(to);
+        }
+        if let Some(from) = find(&range.from) {
+            commits.push(from);
+        }
+        commits
+    }
+
+    /// One selected/compared-commit preview card: avatar, summary, an author +
+    /// relative-time line, and the short SHA. Shared by the multi-selection and
+    /// range-comparison lists so both read identically.
+    fn commit_card_element(
+        &self,
+        ix: usize,
+        commit: &Commit,
+        now: std::time::SystemTime,
+        show_border: bool,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, self.ui_scale_percent);
+
+        let short_sha: SharedString = commit
+            .id
+            .as_ref()
+            .get(0..8)
+            .unwrap_or(commit.id.as_ref())
+            .to_string()
+            .into();
+        let summary: SharedString = commit.summary.to_string().into();
+        let author = commit.author.to_string();
+        let unix_secs = commit
+            .time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let when: SharedString = format!(
+            "{} · {}",
+            author,
+            crate::view::date_time::format_relative_time(unix_secs, now)
+        )
+        .into();
+
+        div()
+            .id(("commit_multi_row", ix))
+            .debug_selector(move || format!("commit_multi_row_{ix}"))
+            .h(scaled_px(MULTI_COMMIT_ROW_HEIGHT_PX))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(scaled_px(8.0))
+            .px(scaled_px(8.0))
+            // The last card sits directly above the files section's own top
+            // separator, so it omits its bottom border to avoid a double line.
+            .when(show_border, |row| {
+                row.border_b_1().border_color(theme.colors.border)
+            })
+            .child(components::author_avatar(theme, ui_scale, &author))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(scaled_px(2.0))
+                    .child(div().text_sm().line_clamp(1).child(summary))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .child(when),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+                    .text_color(theme.colors.text_muted)
+                    .child(short_sha),
+            )
+            .into_any_element()
+    }
+
     pub(in super::super) fn render_multi_commit_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -796,78 +903,29 @@ impl DetailsPaneView {
             return Vec::new();
         };
         let commits = Self::multi_selected_commits_in_log_order(repo);
-        let theme = this.theme;
-        let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let last_ix = commits.len().saturating_sub(1);
         let now = std::time::SystemTime::now();
-
         range
-            .filter_map(|ix| commits.get(ix).map(|commit| (ix, commit)))
-            .map(|(ix, commit)| {
-                let short_sha: SharedString = commit
-                    .id
-                    .as_ref()
-                    .get(0..8)
-                    .unwrap_or(commit.id.as_ref())
-                    .to_string()
-                    .into();
-                let summary: SharedString = commit.summary.to_string().into();
-                let unix_secs = commit
-                    .time
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                let when: SharedString = format!(
-                    "{} · {}",
-                    commit.author,
-                    crate::view::date_time::format_relative_time(unix_secs, now)
-                )
-                .into();
+            .filter_map(|ix| commits.get(ix).map(|commit| (ix, commit.clone())))
+            .map(|(ix, commit)| this.commit_card_element(ix, &commit, now, ix != last_ix))
+            .collect()
+    }
 
-                div()
-                    .id(("commit_multi_row", ix))
-                    .debug_selector(move || format!("commit_multi_row_{ix}"))
-                    .h(scaled_px(MULTI_COMMIT_ROW_HEIGHT_PX))
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .gap(scaled_px(2.0))
-                    .px(scaled_px(8.0))
-                    .border_b_1()
-                    .border_color(theme.colors.border)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(scaled_px(8.0))
-                            .min_w(px(0.0))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-                                    .text_color(theme.colors.text_muted)
-                                    .child(short_sha),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .text_sm()
-                                    .line_clamp(1)
-                                    .child(summary),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .line_clamp(1)
-                            .child(when),
-                    )
-                    .into_any_element()
-            })
+    /// The compared-commit preview cards, rendered directly (not virtualized):
+    /// a range comparison has only one or two endpoints, so a plain column of
+    /// cards is simpler and avoids the uniform-list viewport sizing that leaves
+    /// a fixed-height, non-scrolling container empty.
+    fn range_comparison_commit_cards(&self) -> Vec<AnyElement> {
+        let Some(repo) = self.active_repo() else {
+            return Vec::new();
+        };
+        let commits = Self::range_comparison_commits(repo);
+        let last_ix = commits.len().saturating_sub(1);
+        let now = std::time::SystemTime::now();
+        commits
+            .iter()
+            .enumerate()
+            .map(|(ix, commit)| self.commit_card_element(ix, commit, now, ix != last_ix))
             .collect()
     }
 
@@ -1000,7 +1058,7 @@ impl DetailsPaneView {
             let Some(range) = repo.history_state.range_selection.clone() else {
                 return div().into_any_element();
             };
-            let card_count = Self::multi_selected_commits_in_log_order(repo).len();
+            let card_count = Self::range_comparison_commits(repo).len();
             let (files_loading, files_count) = match &repo.history_state.range_files {
                 Loadable::Ready(files) => (false, files.len()),
                 Loadable::Error(_) => (false, 0),
@@ -1014,8 +1072,11 @@ impl DetailsPaneView {
         } else {
             "Comparison".into()
         };
-        let subheader: SharedString =
-            format!("Viewing diff: {} → {}", range.from_label, range.to_label).into();
+        let subheader: SharedString = if card_count > 1 {
+            format!("Viewing merged diff of {card_count} commits").into()
+        } else {
+            format!("Viewing diff: {} → {}", range.from_label, range.to_label).into()
+        };
 
         let header = div()
             .flex()
@@ -1052,20 +1113,15 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, "Close comparison".into()),
             );
 
-        // Selected commit cards (present for the two-commit selection path).
+        // Compared-commit preview cards. A range has at most two endpoints, so
+        // these render as a plain column rather than a virtualized list.
         let cards = (card_count > 0).then(|| {
-            let cards_height = crate::ui_scale::design_px_from_percent(
-                MULTI_COMMIT_ROW_HEIGHT_PX * card_count as f32,
-                self.ui_scale_percent,
-            );
-            let list = uniform_list(
-                ("range_commit_list", repo_id.0),
-                card_count,
-                cx.processor(Self::render_multi_commit_rows),
-            )
-            .w_full()
-            .track_scroll(&self.commit_multi_scroll);
-            div().flex_none().w_full().h(cards_height).child(list)
+            div()
+                .flex_none()
+                .w_full()
+                .flex()
+                .flex_col()
+                .children(self.range_comparison_commit_cards())
         });
 
         let files_label: SharedString = format!("{files_count} changed").into();
