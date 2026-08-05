@@ -288,6 +288,10 @@ impl MainPaneView {
         // `conflict_resolved_output_editor_scroll`. Scroll the line-number gutter
         // to the target row; the gutter↔editor scroll sync (which makes the
         // changed handle the master) then pulls the editor to the same offset.
+        // The streamed list is scrolled alongside it so both output renderings
+        // land in the same place, matching the strict variant's handle set.
+        self.conflict_resolved_preview_scroll
+            .scroll_to_item(target, gpui::ScrollStrategy::Center);
         self.conflict_resolved_preview_gutter_scroll
             .scroll_to_item(target, gpui::ScrollStrategy::Center);
     }
@@ -432,8 +436,13 @@ impl MainPaneView {
             return;
         }
         let target = self.conflict_resolver.nav_targets[target_index].clone();
+        // Reveal rather than centre, in each pane's own line space, the way
+        // KDiff3's `getBestFirstLine` does: a target already on screen does not
+        // move the view at all. Centring both panes independently is what made
+        // navigation nudge them a few rows apart, since they are the two halves
+        // of the split and do not have the same height.
         if let Some(visible_index) = self.conflict_resolver_visible_ix_for_nav_target(&target) {
-            self.conflict_resolver_scroll_all_columns(visible_index, gpui::ScrollStrategy::Center);
+            self.conflict_resolver_reveal_all_columns(visible_index);
         }
 
         let output_text = (!self.conflict_resolved_output_is_streamed()).then(|| {
@@ -448,7 +457,7 @@ impl MainPaneView {
             &target,
             output_text.as_deref().unwrap_or(""),
         ) {
-            self.conflict_resolver_scroll_resolved_output_to_line(output_line, output_line_count);
+            self.conflict_resolver_reveal_resolved_output_line(output_line, output_line_count);
         }
         cx.notify();
     }
@@ -1318,8 +1327,6 @@ impl MainPaneView {
             resolver_pending_recompute_seq: 0,
             resolved_outline: ResolvedOutlineData::default(),
             resolved_outline_gutter_rows: Vec::new(),
-            conflict_output_row_anchors: Arc::from([(0.0, 0.0)]),
-            conflict_output_row_anchors_dirty: true,
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode,

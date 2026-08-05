@@ -706,7 +706,6 @@ fn sync_conflict_preview_axis(
     axis: SyncedScrollAxis,
     mode: DiffScrollSync,
     group: ConflictPreviewSyncGroup,
-    anchors: &[(f32, f32)],
     explicit_master_ix: Option<usize>,
 ) {
     // An editable output lays out at content width and therefore has a real
@@ -722,16 +721,34 @@ fn sync_conflict_preview_axis(
         (SyncedScrollAxis::Horizontal, ConflictPreviewSyncGroup::TwoWayPairAndOutput, false) => {
             ConflictPreviewSyncGroup::TwoWayPair
         }
+        // Vertically the resolved output stands on its own, as KDiff3's merge
+        // result window does: it owns a scrollbar the diff windows are not
+        // connected to. The columns share one aligned row space, so keeping
+        // them together is exact; the output is a different document whose
+        // lines correspond to aligned rows only through the merge structure,
+        // and on a file that changes every few rows there is no continuous
+        // correspondence to follow. Tying them together made the output creep
+        // relative to the diffs instead of tracking them. The two are brought
+        // together on navigation instead, where the block being visited gives
+        // an exact position in both.
+        //
+        // Horizontally they stay coupled, which KDiff3 also does — one shared
+        // horizontal scrollbar drives all three inputs and the merge result.
+        (SyncedScrollAxis::Vertical, ConflictPreviewSyncGroup::ColumnsAndOutput, _) => {
+            ConflictPreviewSyncGroup::ColumnsOnly
+        }
+        (SyncedScrollAxis::Vertical, ConflictPreviewSyncGroup::TwoWayPairAndOutput, _) => {
+            ConflictPreviewSyncGroup::TwoWayPair
+        }
         (_, group, _) => group,
     };
     match group {
         ConflictPreviewSyncGroup::ColumnsAndOutput => {
-            maybe_sync_synced_scroll_offsets_with_output_anchor(
+            maybe_sync_synced_scroll_offsets_with_master(
                 handles,
                 last_synced,
                 axis,
                 mode,
-                anchors,
                 explicit_master_ix,
             );
         }
@@ -771,12 +788,11 @@ fn sync_conflict_preview_axis(
         ConflictPreviewSyncGroup::TwoWayPairAndOutput => {
             let group = [handles[0].clone(), handles[2].clone(), handles[3].clone()];
             let mut group_last = [last_synced[0], last_synced[2], last_synced[3]];
-            maybe_sync_synced_scroll_offsets_with_output_anchor(
+            maybe_sync_synced_scroll_offsets_with_master(
                 &group,
                 &mut group_last,
                 axis,
                 mode,
-                anchors,
                 match explicit_master_ix {
                     Some(0) => Some(0),
                     Some(2) => Some(1),
@@ -797,14 +813,6 @@ fn snapshot_synced_scroll_offsets<const N: usize>(
     axis: SyncedScrollAxis,
 ) -> [Pixels; N] {
     std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()))
-}
-
-fn sync_synced_scroll_offsets<const N: usize>(
-    handles: &[ScrollHandle; N],
-    last_synced: &mut [Pixels; N],
-    axis: SyncedScrollAxis,
-) {
-    sync_synced_scroll_offsets_with_master(handles, last_synced, axis, None);
 }
 
 fn sync_synced_scroll_offsets_with_master<const N: usize>(
@@ -873,196 +881,6 @@ fn maybe_sync_synced_scroll_offsets_with_master<const N: usize>(
     } else {
         *last_synced = snapshot_synced_scroll_offsets(handles, axis);
     }
-}
-
-/// Row height (px) shared by the aligned columns and the resolved-output
-/// preview/editor. Both render 20px rows, so column↔output sync is a pure
-/// row-index remap.
-const CONFLICT_PREVIEW_ROW_H: f32 = 20.0;
-
-#[cfg(test)]
-fn compute_anchored_vertical_scroll_offsets<const N: usize>(
-    offsets: [Pixels; N],
-    max_scrolls: [Pixels; N],
-    last_synced: [Pixels; N],
-    anchors: &[(f32, f32)],
-) -> [Pixels; N] {
-    compute_anchored_vertical_scroll_offsets_with_master(
-        offsets,
-        max_scrolls,
-        last_synced,
-        anchors,
-        None,
-    )
-}
-
-fn compute_anchored_vertical_scroll_offsets_with_master<const N: usize>(
-    offsets: [Pixels; N],
-    max_scrolls: [Pixels; N],
-    last_synced: [Pixels; N],
-    anchors: &[(f32, f32)],
-    explicit_master_ix: Option<usize>,
-) -> [Pixels; N] {
-    if N == 0 {
-        return offsets;
-    }
-
-    let row_h = px(CONFLICT_PREVIEW_ROW_H);
-    let output_ix = N - 1;
-    let to_rows = |off: Pixels| -> f32 {
-        let mag = if off < px(0.0) { -off } else { off };
-        (mag / row_h).max(0.0)
-    };
-
-    // Prefer output if it moved; otherwise the first moved source column is
-    // the master. If nobody moved, preserve the current (possibly clamped)
-    // offsets. Re-electing output in that case pulls longer source panes out
-    // of their intentional EOF overscroll and creates a scroll/reset loop.
-    let changed = |ix: usize| offsets[ix] != clamp_raw_scroll_y(last_synced[ix], max_scrolls[ix]);
-    let output_changed = changed(output_ix);
-    let master_column = (0..output_ix).find(|&ix| changed(ix));
-    let explicit_master_ix = explicit_master_ix.filter(|&ix| ix < N);
-    if explicit_master_ix.is_none() && !output_changed && master_column.is_none() {
-        return offsets;
-    }
-
-    let mut targets = offsets;
-    if explicit_master_ix == Some(output_ix) || (explicit_master_ix.is_none() && output_changed) {
-        // Output drives the columns.
-        let output_offset = clamp_raw_scroll_y(offsets[output_ix], max_scrolls[output_ix]);
-        targets[output_ix] = output_offset;
-        let out_row = to_rows(output_offset);
-        let col_row = (out_row + interpolated_anchor_shift(anchors, out_row, false)).max(0.0);
-        for ix in 0..output_ix {
-            targets[ix] = clamp_raw_scroll_y(-(row_h * col_row), max_scrolls[ix]);
-        }
-    } else {
-        // A column drives the output; the other columns follow it 1:1.
-        let master = explicit_master_ix
-            .filter(|&ix| ix < output_ix)
-            .or(master_column)
-            .expect("changed column present");
-        let master_offset = clamp_raw_scroll_y(offsets[master], max_scrolls[master]);
-        let al_row = to_rows(master_offset);
-        let out_row = (al_row + interpolated_anchor_shift(anchors, al_row, true)).max(0.0);
-        targets[output_ix] = clamp_raw_scroll_y(-(row_h * out_row), max_scrolls[output_ix]);
-        for ix in 0..output_ix {
-            targets[ix] = clamp_raw_scroll_y(master_offset, max_scrolls[ix]);
-        }
-    }
-
-    targets
-}
-
-/// Sync a group that includes the resolved output. The aligned columns carry
-/// padding rows (one-sided insertions/deletions) the merged output does not, so
-/// a single global ratio drifts across the file. Horizontal stays pixel-aligned;
-/// vertically we re-anchor on the nearest conflict — context regions between
-/// conflicts are 1:1, so applying the master↔follower row shift of the nearest
-/// conflict keeps drift bounded to a single conflict block's padding.
-///
-/// The resolved output is always the LAST handle in `handles`; the rest are
-/// aligned columns. `anchors` are `(aligned_row, output_row)` pairs.
-fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
-    handles: &[ScrollHandle; N],
-    last_synced: &mut [Pixels; N],
-    axis: SyncedScrollAxis,
-    mode: DiffScrollSync,
-    anchors: &[(f32, f32)],
-    explicit_master_ix: Option<usize>,
-) {
-    if !axis.includes(mode) {
-        *last_synced = snapshot_synced_scroll_offsets(handles, axis);
-        return;
-    }
-    if axis != SyncedScrollAxis::Vertical || N == 0 {
-        // Horizontal scrolling stays pixel-aligned across the panes.
-        sync_synced_scroll_offsets(handles, last_synced, axis);
-        return;
-    }
-
-    let offsets: [Pixels; N] =
-        std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()));
-    let max_scrolls: [Pixels; N] = std::array::from_fn(|ix| {
-        axis.max_scroll_component(handles[ix].max_offset().into())
-            .max(px(0.0))
-    });
-    let targets = compute_anchored_vertical_scroll_offsets_with_master(
-        offsets,
-        max_scrolls,
-        *last_synced,
-        anchors,
-        explicit_master_ix,
-    );
-
-    for ix in 0..N {
-        if offsets[ix] != targets[ix] {
-            handles[ix].set_offset(axis.with_offset_component(handles[ix].offset(), targets[ix]));
-        }
-    }
-    *last_synced = targets;
-}
-
-/// Reduce `(aligned_row, output_row)` anchors, already sorted by aligned row,
-/// to a subsequence that strictly increases in *both* coordinates.
-///
-/// [`interpolated_anchor_shift`] brackets `pos` by scanning whichever
-/// coordinate it was asked to map from, so the same array is walked by aligned
-/// row in one direction and by output row in the other. Sorting alone only
-/// orders one of them: an anchor whose output row goes backwards is skipped by
-/// the output-direction scan, which then interpolates across the anchor that
-/// follows it and lands rows away from the truth — a mapping that jumps
-/// instead of tracking the scroll.
-///
-/// The conflict-to-output-line lookup that feeds these anchors is rebuilt
-/// incrementally and can lag an edit, so an inverted pair is possible. Drop it:
-/// the surrounding anchors still bracket the region, and a slightly coarser
-/// map is far better than a discontinuous one.
-fn strictly_increasing_anchors(anchors: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
-    let mut kept: Vec<(f32, f32)> = Vec::with_capacity(anchors.len());
-    for anchor in anchors {
-        match kept.last() {
-            Some((aligned, output)) if anchor.0 <= *aligned || anchor.1 <= *output => continue,
-            _ => kept.push(anchor),
-        }
-    }
-    kept
-}
-
-/// Continuous row shift `follower_row - master_row` between conflict anchors.
-/// `by_aligned` selects whether `pos` is in aligned-column space (a column is
-/// master) or output space. Outside the anchor range the nearest endpoint's
-/// shift is extended with slope 1, including source comfort overscroll at EOF.
-///
-/// Using the nearest anchor directly is discontinuous: when consecutive
-/// conflicts have different cumulative padding, crossing their midpoint can
-/// send the follower backward by many rows even while the user scrolls down.
-fn interpolated_anchor_shift(anchors: &[(f32, f32)], pos: f32, by_aligned: bool) -> f32 {
-    let mut previous: Option<(f32, f32)> = None;
-    for &(aligned, output) in anchors {
-        let (coord, follower) = if by_aligned {
-            (aligned, output)
-        } else {
-            (output, aligned)
-        };
-        if pos <= coord {
-            let Some((previous_coord, previous_follower)) = previous else {
-                return follower - coord;
-            };
-            let span = coord - previous_coord;
-            if span <= f32::EPSILON {
-                return follower - coord;
-            }
-            let progress = ((pos - previous_coord) / span).clamp(0.0, 1.0);
-            let mapped = previous_follower + (follower - previous_follower) * progress;
-            return mapped - pos;
-        }
-        previous = Some((coord, follower));
-    }
-
-    previous
-        .map(|(coord, follower)| follower - coord)
-        .unwrap_or(0.0)
 }
 
 /// Resolve the file path and blame source for a diff target, or `None` for
@@ -2232,7 +2050,6 @@ impl MainPaneView {
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolved_preview_segments_cache.clear();
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
     }
 
     pub(in crate::view) fn refresh_streamed_resolved_output_preview_from_projection(
@@ -2754,7 +2571,6 @@ impl MainPaneView {
         self.conflict_three_way_segments_cache.clear();
         self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
     }
 
     pub(super) fn recompute_conflict_resolved_outline_and_provenance(
@@ -2922,7 +2738,6 @@ impl MainPaneView {
         if clear_outline {
             self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
             self.conflict_resolver.resolved_output_visible_dirty = true;
-            self.conflict_resolver.conflict_output_row_anchors_dirty = true;
             self.conflict_resolver.resolved_outline_gutter_rows.clear();
         }
     }
@@ -2936,7 +2751,6 @@ impl MainPaneView {
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_outline = computed.outline;
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
         self.conflict_resolver.resolved_outline_gutter_rows.clear();
         record_resolved_outline_trace(path, trace_started, self, computed.output_line_count);
     }
@@ -3296,7 +3110,6 @@ impl MainPaneView {
             sources_index: next_sources_index,
         };
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
         self.conflict_resolver.resolved_outline_gutter_rows.clear();
         self.conflict_resolved_preview_text = output_snapshot;
         true
@@ -5793,15 +5606,6 @@ impl MainPaneView {
         let vertical_wheel_master = self.conflict_preview_vertical_wheel_master.take();
         let handles = self.conflict_preview_scroll_handles();
         let group = self.conflict_preview_sync_group();
-        let anchors = if matches!(
-            group,
-            ConflictPreviewSyncGroup::ColumnsAndOutput
-                | ConflictPreviewSyncGroup::TwoWayPairAndOutput
-        ) {
-            self.conflict_output_row_anchors()
-        } else {
-            Arc::from([(0.0f32, 0.0f32)])
-        };
         for (axis, last_synced) in [
             (
                 SyncedScrollAxis::Vertical,
@@ -5818,7 +5622,6 @@ impl MainPaneView {
                 axis,
                 self.diff_scroll_sync,
                 group,
-                anchors.as_ref(),
                 if axis == SyncedScrollAxis::Vertical {
                     vertical_wheel_master
                 } else {
@@ -5826,71 +5629,6 @@ impl MainPaneView {
                 },
             );
         }
-    }
-
-    /// `(aligned_row, output_row)` anchor pairs for the conflict-anchored
-    /// output scroll sync — the aligned column row and the resolved-output line
-    /// where each conflict starts. Seeded with `(0, 0)` so scrolling above the
-    /// first conflict stays 1:1. Conflicts with no locatable output line (e.g.
-    /// resolved, no marker) are skipped; the nearest remaining anchor is used.
-    fn conflict_output_row_anchors(&mut self) -> Arc<[(f32, f32)]> {
-        if !self.conflict_resolver.conflict_output_row_anchors_dirty {
-            return Arc::clone(&self.conflict_resolver.conflict_output_row_anchors);
-        }
-        let mut anchors = vec![(0.0f32, 0.0f32)];
-        // The anchors map aligned diff rows to output lines. In markdown/image
-        // preview the columns render rendered content, not the 20px aligned row
-        // space, so the mapping is meaningless — keep only the `(0, 0)` seed,
-        // which makes the sync degenerate to a raw 1:1 copy.
-        if self.is_markdown_preview_active() {
-            return anchors.into();
-        }
-        let streamed = self.conflict_resolved_output_is_streamed();
-        let conflict_count = self.conflict_resolver_conflict_count();
-        let output_lines = if streamed {
-            Vec::new()
-        } else {
-            let mut output_lines = vec![None; conflict_count];
-            for (line_ix, marker) in self
-                .conflict_resolver
-                .resolved_outline
-                .markers
-                .iter()
-                .enumerate()
-            {
-                let Some(marker) = marker.filter(|marker| marker.is_start) else {
-                    continue;
-                };
-                if let Some(slot) = output_lines.get_mut(marker.conflict_ix)
-                    && slot.is_none()
-                {
-                    *slot = Some(line_ix);
-                }
-            }
-            output_lines
-        };
-        for conflict_ix in 0..conflict_count {
-            let Some(aligned) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) else {
-                continue;
-            };
-            let output = if streamed {
-                self.conflict_resolved_output_projection
-                    .as_ref()
-                    .and_then(|projection| projection.conflict_line_range(conflict_ix))
-                    .map(|range| range.start)
-            } else {
-                output_lines.get(conflict_ix).copied().flatten()
-            };
-            let Some(output) = output else {
-                continue;
-            };
-            anchors.push((aligned as f32, output as f32));
-        }
-        anchors.sort_by(|a, b| a.0.total_cmp(&b.0));
-        self.conflict_resolver.conflict_output_row_anchors =
-            strictly_increasing_anchors(anchors).into();
-        self.conflict_resolver.conflict_output_row_anchors_dirty = false;
-        Arc::clone(&self.conflict_resolver.conflict_output_row_anchors)
     }
 
     /// Which conflict-preview lists share a row space and may be raw-offset
@@ -6160,172 +5898,6 @@ mod tests {
         );
 
         assert_eq!(targets, [px(0.0), px(0.0)]);
-    }
-
-    #[test]
-    fn anchored_scroll_holds_diff_overscroll_after_output_clamps() {
-        // The source panes have ten comfort rows below EOF, while resolved
-        // output stops at its last real row. Once output clamps, an idle render
-        // must not promote that shorter follower and pull the sources back.
-        let steady = [px(-500.0), px(-500.0), px(-100.0)];
-        let targets = compute_anchored_vertical_scroll_offsets(
-            steady,
-            [px(500.0), px(500.0), px(100.0)],
-            // Output was requested beyond its range, then clamped during paint.
-            [px(-500.0), px(-500.0), px(-120.0)],
-            &[(0.0, 0.0)],
-        );
-
-        assert_eq!(targets, steady);
-    }
-
-    #[test]
-    fn anchored_scroll_clamps_output_without_clamping_diff_master() {
-        let targets = compute_anchored_vertical_scroll_offsets(
-            [px(-500.0), px(-480.0), px(-100.0)],
-            [px(500.0), px(500.0), px(100.0)],
-            [px(-480.0), px(-480.0), px(-100.0)],
-            &[(0.0, 0.0)],
-        );
-
-        assert_eq!(targets, [px(-500.0), px(-500.0), px(-100.0)]);
-    }
-
-    #[test]
-    fn anchored_scroll_honors_remote_wheel_over_stale_output_change() {
-        let targets = compute_anchored_vertical_scroll_offsets_with_master(
-            [px(-500.0), px(-500.0), px(0.0)],
-            [px(500.0), px(500.0), px(100.0)],
-            [px(-480.0), px(-480.0), px(-100.0)],
-            &[(0.0, 0.0)],
-            Some(1),
-        );
-
-        assert_eq!(targets, [px(-500.0), px(-500.0), px(-100.0)]);
-    }
-
-    #[test]
-    fn anchored_output_wheel_at_top_pulls_stale_sources_to_top() {
-        let targets = compute_anchored_vertical_scroll_offsets_with_master(
-            [px(-100.0), px(-100.0), px(0.0)],
-            [px(500.0), px(500.0), px(500.0)],
-            [px(-100.0), px(-100.0), px(0.0)],
-            &[(0.0, 0.0)],
-            Some(2),
-        );
-
-        assert_eq!(targets, [px(0.0), px(0.0), px(0.0)]);
-    }
-
-    #[test]
-    fn anchored_output_top_overscroll_does_not_propagate_positive_offset() {
-        let targets = compute_anchored_vertical_scroll_offsets_with_master(
-            [px(0.0), px(0.0), px(24.0)],
-            [px(500.0), px(500.0), px(500.0)],
-            [px(0.0), px(0.0), px(0.0)],
-            &[(0.0, 0.0)],
-            Some(2),
-        );
-
-        assert_eq!(targets, [px(0.0), px(0.0), px(0.0)]);
-    }
-
-    #[test]
-    fn anchors_are_reduced_to_a_strictly_increasing_subsequence() {
-        // Sorted by aligned row, but the output row goes backwards at (20, 15).
-        let anchors = vec![(0.0, 0.0), (10.0, 30.0), (20.0, 15.0), (30.0, 40.0)];
-        assert_eq!(
-            strictly_increasing_anchors(anchors),
-            vec![(0.0, 0.0), (10.0, 30.0), (30.0, 40.0)],
-        );
-        // A duplicate aligned row cannot bracket anything either.
-        assert_eq!(
-            strictly_increasing_anchors(vec![(0.0, 0.0), (5.0, 3.0), (5.0, 9.0)]),
-            vec![(0.0, 0.0), (5.0, 3.0)],
-        );
-    }
-
-    #[test]
-    fn sanitized_anchors_map_both_directions_without_jumping() {
-        // The raw list inverts, which makes the output-direction scan skip an
-        // anchor and interpolate across the wrong bracket.
-        let raw = vec![(0.0, 0.0), (10.0, 30.0), (20.0, 15.0), (30.0, 40.0)];
-        let mapped_raw = |pos: f32| pos + interpolated_anchor_shift(&raw, pos, false);
-        // Scrolling the output down 5 rows yanks the columns far further,
-        // because the inverted anchor is skipped and the scan interpolates
-        // across the wrong bracket.
-        let raw_step = mapped_raw(35.0) - mapped_raw(30.0);
-        assert!(
-            raw_step > 3.0 * 5.0,
-            "expected the unsanitized map to jump, got {raw_step}",
-        );
-
-        let anchors = strictly_increasing_anchors(raw);
-        let to_column = |pos: f32| pos + interpolated_anchor_shift(&anchors, pos, false);
-        let to_output = |pos: f32| pos + interpolated_anchor_shift(&anchors, pos, true);
-
-        // Both directions advance monotonically, in steps bounded by the
-        // gesture rather than jumping across a skipped anchor.
-        for direction in [&to_column as &dyn Fn(f32) -> f32, &to_output] {
-            let mut previous = direction(0.0);
-            let mut pos = 1.0f32;
-            while pos <= 60.0 {
-                let mapped = direction(pos);
-                assert!(
-                    mapped >= previous - 1e-3,
-                    "mapping went backwards at {pos}: {previous} -> {mapped}",
-                );
-                assert!(
-                    mapped - previous <= 4.0,
-                    "mapping jumped at {pos}: {previous} -> {mapped}",
-                );
-                previous = mapped;
-                pos += 1.0;
-            }
-        }
-
-        // And the two directions still invert each other at the anchors.
-        for (aligned, output) in anchors.iter().copied() {
-            assert!((to_output(aligned) - output).abs() < 1e-3);
-            assert!((to_column(output) - aligned).abs() < 1e-3);
-        }
-    }
-
-    #[test]
-    fn interpolated_anchor_shift_is_continuous_and_maps_exact_anchors() {
-        // Conflict 1: aligned row 10 / output row 8 (2 padding rows above it).
-        // Conflict 2: aligned row 30 / output row 25 (5 padding rows above it).
-        let anchors = [(0.0, 0.0), (10.0, 8.0), (30.0, 25.0)];
-        let mapped =
-            |pos: f32, by_aligned: bool| pos + interpolated_anchor_shift(&anchors, pos, by_aligned);
-
-        assert_eq!(mapped(10.0, true), 8.0);
-        assert_eq!(mapped(30.0, true), 25.0);
-        assert_eq!(mapped(8.0, false), 10.0);
-        assert_eq!(mapped(25.0, false), 30.0);
-
-        // Mapping must never jump backward at the midpoint between anchors.
-        assert!(mapped(20.01, true) >= mapped(19.99, true));
-        assert!(mapped(16.51, false) >= mapped(16.49, false));
-
-        // Past the last anchor, retain its shift with slope 1.
-        assert_eq!(mapped(32.0, true), 27.0);
-        assert_eq!(mapped(27.0, false), 32.0);
-    }
-
-    #[test]
-    fn interpolated_anchor_shift_does_not_reset_at_large_asymmetric_block() {
-        // Mirrors pipeline.rs: the later conflict begins 24 rows farther down
-        // in aligned source space than in resolved-output space.
-        let anchors = [(0.0, 0.0), (100.0, 100.0), (140.0, 116.0)];
-        let mapped = |row: f32| row + interpolated_anchor_shift(&anchors, row, true);
-
-        let before_midpoint = mapped(119.99);
-        let after_midpoint = mapped(120.01);
-        assert!(
-            after_midpoint >= before_midpoint,
-            "scrolling down must not map output backward: {before_midpoint} -> {after_midpoint}",
-        );
     }
 
     #[test]

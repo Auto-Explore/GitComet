@@ -1936,7 +1936,14 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
 
             cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                let expected = if axis.includes(mode) {
+                // In markdown preview the columns render formatted content
+                // rather than the aligned row space, so a vertical
+                // correspondence with the output text is even less meaningful
+                // than in the code view, where it was already dropped. Only
+                // the horizontal axis stays coupled.
+                let expected = if axis.includes(mode)
+                    && matches!(axis, ScrollSyncAxis::Horizontal)
+                {
                     axis.component(output_offset)
                 } else {
                     px(0.0)
@@ -1954,7 +1961,11 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
                     expected,
                     "conflict markdown base preview should {} {} scrolling from resolved output in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    if axis.includes(mode) && matches!(axis, ScrollSyncAxis::Horizontal) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
                     axis.label(),
                     mode,
                 );
@@ -1995,6 +2006,16 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                 } else {
                     px(0.0)
                 };
+                // The columns share one row space and stay coupled on both
+                // axes; the resolved output is a separate document and follows
+                // only horizontally.
+                let output_expected = if axis.includes(mode)
+                    && matches!(axis, ScrollSyncAxis::Horizontal)
+                {
+                    axis.component(base_offset)
+                } else {
+                    px(0.0)
+                };
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
                     axis.component(base_offset),
@@ -2022,9 +2043,13 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
                     axis.component(scroll_handle_offset(
                         &pane.conflict_resolved_output_editor_scroll,
                     )),
-                    expected,
+                    output_expected,
                     "conflict markdown resolved output should {} {} scrolling from the base preview in {:?} mode",
-                    if axis.includes(mode) { "sync" } else { "not sync" },
+                    if axis.includes(mode) && matches!(axis, ScrollSyncAxis::Horizontal) {
+                        "sync"
+                    } else {
+                        "not sync"
+                    },
                     axis.label(),
                     mode,
                 );

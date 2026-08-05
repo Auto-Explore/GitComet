@@ -1413,10 +1413,6 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolved_outline: ResolvedOutlineData,
     /// Cached per-line gutter render state for resolved-output preview rows.
     pub(super) resolved_outline_gutter_rows: Vec<conflict_resolver::ResolvedOutputGutterRow>,
-    /// Conflict-to-output anchors used by scroll sync. Rebuilt lazily after
-    /// either the source projection or resolved outline changes.
-    pub(super) conflict_output_row_anchors: Arc<[(f32, f32)]>,
-    pub(super) conflict_output_row_anchors_dirty: bool,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Cached image previews for the merge-input sides.
@@ -1482,8 +1478,6 @@ impl Default for ConflictResolverUiState {
             resolved_output_visible: None,
             resolved_output_visible_dirty: true,
             output_context_fold_reveals: std::collections::HashMap::default(),
-            conflict_output_row_anchors: Arc::from([(0.0, 0.0)]),
-            conflict_output_row_anchors_dirty: true,
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
@@ -2634,7 +2628,6 @@ impl ConflictResolverUiState {
             }
         }
         self.three_way_visible_state_ready = true;
-        self.conflict_output_row_anchors_dirty = true;
         self.refresh_three_way_horizontal_measure_rows();
         self.rebuild_minimap_bands();
     }
@@ -2688,7 +2681,6 @@ impl ConflictResolverUiState {
                 );
             }
         }
-        self.conflict_output_row_anchors_dirty = true;
         self.debug_assert_rendering_mode_invariants();
         self.refresh_two_way_horizontal_measure_rows();
     }

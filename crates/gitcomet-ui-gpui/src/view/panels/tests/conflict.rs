@@ -1204,7 +1204,13 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
 
             cx.update(|_window, app| {
                 let pane = view.read(app).main_pane.read(app);
-                let output_coupled = axis.includes(mode);
+                // The resolved output is a different document from the
+                // aligned columns and is only coupled to them horizontally,
+                // where the correspondence is exact (same pixel column).
+                // Vertically it scrolls on its own; see
+                // `sync_conflict_preview_axis`.
+                let output_coupled =
+                    axis.includes(mode) && matches!(axis, ScrollSyncAxis::Horizontal);
                 let expected = if output_coupled {
                     axis.component(output_offset)
                 } else {
@@ -1264,11 +1270,12 @@ fn conflict_resolver_three_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 } else {
                     px(0.0)
                 };
-                let output_expected = if axis.includes(mode) {
-                    axis.component(base_offset)
-                } else {
-                    px(0.0)
-                };
+                let output_expected =
+                    if axis.includes(mode) && matches!(axis, ScrollSyncAxis::Horizontal) {
+                        axis.component(base_offset)
+                    } else {
+                        px(0.0)
+                    };
                 assert_eq!(
                     axis.component(uniform_list_offset(&pane.conflict_resolver_diff_scroll)),
                     axis.component(base_offset),
@@ -1457,7 +1464,13 @@ fn conflict_resolver_two_way_scroll_sync_matrix_covers_all_modes_and_axes(
                 let coupled = axis.includes(mode);
                 // The editable resolved output has a content-width horizontal
                 // range, so it participates in both axes when output sync is on.
-                let output_coupled = coupled && output_sync_on;
+                // The resolved output is a different document from the
+                // aligned columns and is only coupled to them horizontally,
+                // where the correspondence is exact (same pixel column).
+                // Vertically it scrolls on its own; see
+                // `sync_conflict_preview_axis`.
+                let output_coupled =
+                    coupled && output_sync_on && matches!(axis, ScrollSyncAxis::Horizontal);
 
                 let output_offset = axis.offset(px(72.0));
                 reset_offsets(cx, &view);
@@ -6252,10 +6265,16 @@ fn build_multi_conflict_sides() -> (String, String, String, String) {
     (join(base), join(ours), join(theirs), join(current))
 }
 
-/// Scrolling steadily downwards must move the resolved output steadily
-/// downwards. A step that moves it back up is the visible "jump".
+/// The resolved output scrolls entirely on its own: walking a source column
+/// down must leave it exactly where it was, and vice versa.
+///
+/// This is the KDiff3 behaviour — its merge result window owns a scrollbar the
+/// diff windows are not connected to. Offsets are never mapped between the two
+/// documents, because on a real conflict, where a changed block can occur every
+/// few rows, no continuous mapping between them exists. Navigation is what
+/// brings the two panes onto the same block.
 #[gpui::test]
-fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::TestAppContext) {
+fn conflict_resolver_output_scrolls_independently_of_the_columns(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -6263,17 +6282,17 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
 
     let repo_id = gitcomet_state::model::RepoId(192);
     let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_resolver_monotonic_output_scroll",
+        "gitcomet_ui_test_{}_resolver_independent_output_scroll",
         std::process::id()
     ));
-    let file_rel = std::path::PathBuf::from("fixtures/conflict_monotonic_output_scroll.txt");
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_independent_output_scroll.txt");
     let abs_path = workdir.join(&file_rel);
     let (base_text, ours_text, theirs_text, current_text) = build_multi_conflict_sides();
 
     let _ = std::fs::remove_dir_all(&workdir);
     std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
-        .expect("create resolver monotonic fixture dir");
-    std::fs::write(&abs_path, &current_text).expect("write resolver monotonic fixture");
+        .expect("create resolver independence fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver independence fixture");
 
     seed_unresolved_conflict_state(
         cx,
@@ -6290,7 +6309,7 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
     wait_for_main_pane_condition(
         cx,
         &view,
-        "resolver monotonic fixture initialized",
+        "resolver independence fixture initialized",
         |pane| {
             pane.conflict_resolver.path.as_ref() == Some(&file_rel)
                 && pane.conflict_resolver.three_way_visible_len() >= 4
@@ -6298,7 +6317,7 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
         },
         |pane| {
             format!(
-                "path={:?} three_way_visible={} resolved_lines={}",
+                "path={:?} visible={} lines={}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.three_way_visible_len(),
                 pane.conflict_resolved_preview_line_count,
@@ -6319,7 +6338,7 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
     wait_for_main_pane_condition_with_timeout(
         cx,
         &view,
-        "resolver monotonic vertical overflow",
+        "resolver independence overflow",
         BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
         |pane| {
             pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay
@@ -6329,11 +6348,9 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
         },
         |pane| {
             format!(
-                "view_mode={:?} base_max={:?} output_max={:?} conflicts={}",
-                pane.conflict_resolver.view_mode,
+                "base_max={:?} output_max={:?}",
                 uniform_list_max_offset(&pane.conflict_resolver_diff_scroll),
                 scroll_handle_max_offset(&pane.conflict_resolved_output_editor_scroll),
-                pane.conflict_resolver_conflict_count(),
             )
         },
     );
@@ -6343,13 +6360,36 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
+                // Output scroll sync on, which is the demanding case: even
+                // then the vertical axis carries no relationship between the
+                // resolved output and the columns.
+                pane.mergetool_output_scroll_sync = true;
                 reset_conflict_scroll_matrix_offsets(pane);
+                // Park the output partway down so a stray coupling would show
+                // up as movement in either direction.
+                set_scroll_handle_offset(
+                    &pane.conflict_resolved_output_editor_scroll,
+                    point(px(0.0), px(-400.0)),
+                );
                 cx.notify();
             });
         });
     });
     draw_and_drain_test_window(cx);
 
+    let parked_output = cx.update(|_window, app| {
+        scroll_handle_offset(
+            &view
+                .read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolved_output_editor_scroll,
+        )
+        .y
+    });
+
+    // Walk the base column the length of the file. The output must not budge,
+    // and the other two columns must track the base exactly.
     let column_max = cx.update(|_window, app| {
         uniform_list_max_offset(
             &view
@@ -6360,29 +6400,6 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
         )
         .height
     });
-
-    // Guard the fixture itself: with every conflict resolved there are no
-    // output markers, the anchor list collapses to the (0, 0) seed and the
-    // sync degenerates to a raw 1:1 copy, which would make the walk below
-    // prove nothing about the anchored remap.
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let anchors = pane.conflict_resolver.conflict_output_row_anchors.clone();
-        assert!(
-            anchors.len() > 2,
-            "fixture must produce a real anchor list, got {anchors:?}",
-        );
-        assert!(
-            anchors
-                .iter()
-                .any(|(aligned, output)| (aligned - output).abs() > 1.0),
-            "fixture must make the aligned and output row spaces diverge, got {anchors:?}",
-        );
-    });
-
-    // Walk the base column down one 20px row at a time, the way a wheel gesture
-    // does, and watch where the output lands on each step.
-    let mut previous_output = px(0.0);
     let mut row = 0.0f32;
     while px(row * 20.0) < column_max {
         let target = point(px(0.0), px(-row * 20.0));
@@ -6397,48 +6414,23 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
         });
         draw_and_drain_test_window(cx);
 
-        let output = cx.update(|_window, app| {
-            scroll_handle_offset(
-                &view
-                    .read(app)
-                    .main_pane
-                    .read(app)
-                    .conflict_resolved_output_editor_scroll,
-            )
-            .y
-        });
+        let snapshot = read_conflict_scroll_snapshot(cx, &view);
         assert!(
-            output <= previous_output,
-            "scrolling the base column down to row {row} moved the resolved output back up, \
-             from {previous_output:?} to {output:?}",
+            (f32::from(snapshot.output) - f32::from(parked_output)).abs() < 0.5,
+            "scrolling the base column to row {row} moved the resolved output from \
+             {parked_output:?} to {:?}",
+            snapshot.output,
         );
-        // One row of column scroll must not move the output by several rows.
-        // The anchored remap legitimately compresses and stretches between
-        // conflicts, but a step far larger than the gesture is a discontinuity
-        // in the mapping -- the visible "the output jumped a few lines".
-        let step = f32::from(previous_output) - f32::from(output);
         assert!(
-            step <= 2.0 * 20.0,
-            "one row of base-column scroll at row {row} moved the resolved output {step}px \
-             ({:.1} lines)",
-            step / 20.0,
+            (f32::from(snapshot.ours) - f32::from(snapshot.base)).abs() < 0.5
+                && (f32::from(snapshot.theirs) - f32::from(snapshot.base)).abs() < 0.5,
+            "the aligned columns share one row space and must stay together: {snapshot:?}",
         );
-        previous_output = output;
         row += 1.0;
     }
 
-    // The inverse direction: a wheel over the resolved output drives the
-    // columns through the same anchors, mapped output -> aligned.
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                reset_conflict_scroll_matrix_offsets(pane);
-                cx.notify();
-            });
-        });
-    });
-    draw_and_drain_test_window(cx);
-
+    // And the reverse: scrolling the output leaves the columns alone.
+    let parked_columns = read_conflict_scroll_snapshot(cx, &view).base;
     let output_max = cx.update(|_window, app| {
         scroll_handle_max_offset(
             &view
@@ -6449,8 +6441,6 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
         )
         .height
     });
-
-    let mut previous_column = px(0.0);
     let mut row = 0.0f32;
     while px(row * 20.0) < output_max {
         let target = point(px(0.0), px(-row * 20.0));
@@ -6465,134 +6455,17 @@ fn conflict_resolver_output_follows_column_scroll_monotonically(cx: &mut gpui::T
         });
         draw_and_drain_test_window(cx);
 
-        let column = cx.update(|_window, app| {
-            uniform_list_offset(
-                &view
-                    .read(app)
-                    .main_pane
-                    .read(app)
-                    .conflict_resolver_diff_scroll,
-            )
-            .y
-        });
+        let snapshot = read_conflict_scroll_snapshot(cx, &view);
         assert!(
-            column <= previous_column,
-            "scrolling the resolved output down to row {row} moved the base column back up, \
-             from {previous_column:?} to {column:?}",
+            (f32::from(snapshot.base) - f32::from(parked_columns)).abs() < 0.5,
+            "scrolling the resolved output to row {row} moved the base column from \
+             {parked_columns:?} to {:?}",
+            snapshot.base,
         );
-        let step = f32::from(previous_column) - f32::from(column);
-        assert!(
-            step <= 2.0 * 20.0,
-            "one row of resolved-output scroll at row {row} moved the base column {step}px \
-             ({:.1} lines)",
-            step / 20.0,
-        );
-        previous_column = column;
         row += 1.0;
     }
 
-    // Alternating which pane drives must not drift: hand control back and forth
-    // at a fixed position and everything should stay put.
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                reset_conflict_scroll_matrix_offsets(pane);
-                set_uniform_list_offset(
-                    &pane.conflict_resolver_diff_scroll,
-                    point(px(0.0), px(-613.4)),
-                );
-                pane.record_conflict_vertical_wheel_master(0);
-                cx.notify();
-            });
-        });
-    });
-    draw_and_drain_test_window(cx);
-
-    let settled = read_conflict_scroll_snapshot(cx, &view);
-    for round in 1..=60 {
-        // Re-assert the same offset from the other side, as a wheel that lands
-        // on the output after one that landed on a column would.
-        let output_y = settled.output;
-        cx.update(|_window, app| {
-            view.update(app, |this, cx| {
-                this.main_pane.update(cx, |pane, cx| {
-                    set_scroll_handle_offset(
-                        &pane.conflict_resolved_output_editor_scroll,
-                        point(px(0.0), output_y),
-                    );
-                    pane.record_conflict_vertical_wheel_master(3);
-                    cx.notify();
-                });
-            });
-        });
-        draw_and_drain_test_window(cx);
-        let after = read_conflict_scroll_snapshot(cx, &view);
-        // Sub-pixel f32 error in the row-space round trip is expected and
-        // converges; anything visible is a drift bug.
-        let drift = f32::from(after.base) - f32::from(settled.base);
-        assert!(
-            drift.abs() < 1.0,
-            "round {round}: handing scroll mastery back to the output drifted the \
-             panes by {drift}px ({after:?} vs {settled:?})",
-        );
-    }
-
-    // Regenerating the resolved output from the session -- what every pick
-    // does -- must not move a view the user scrolled somewhere else. The
-    // rewrite goes in as a text replacement, and an implicit cursor autoscroll
-    // on that edit lands during paint, after any explicit reveal, dragging the
-    // output (and behind it the source columns, which follow the output) to
-    // the end of the replaced span.
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                reset_conflict_scroll_matrix_offsets(pane);
-                set_uniform_list_offset(
-                    &pane.conflict_resolver_diff_scroll,
-                    point(px(0.0), px(-600.0)),
-                );
-                pane.record_conflict_vertical_wheel_master(0);
-                cx.notify();
-            });
-        });
-    });
-    draw_and_drain_test_window(cx);
-
-    let before_rewrite = read_conflict_scroll_snapshot(cx, &view);
-
-    // A whole-document rewrite, as "choose everywhere" produces: the changed
-    // span reaches the last line, so an autoscroll here goes to the bottom.
-    let rewritten = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let text = pane.conflict_resolver_input.read(app).text().to_string();
-        text.replace("context ", "CONTEXT ")
-    });
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                pane.conflict_resolver_set_output(rewritten, cx);
-                cx.notify();
-            });
-        });
-    });
-    draw_and_drain_test_window(cx);
-    draw_and_drain_test_window(cx);
-
-    let after_rewrite = read_conflict_scroll_snapshot(cx, &view);
-    cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        let input = pane.conflict_resolver_input.read(app);
-        assert!(
-            input.text().contains("CONTEXT "),
-            "the rewrite must actually reach the output, or this proves nothing",
-        );
-    });
-    assert_eq!(
-        after_rewrite, before_rewrite,
-        "regenerating the resolved output threw the view to the end of the rewritten span",
-    );
-
-    std::fs::remove_dir_all(&workdir).expect("cleanup resolver monotonic fixture");
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver independence fixture");
 }
 
 /// A freshly materialized resolved output must not leave the caret parked at
@@ -6698,14 +6571,19 @@ fn seed_unresolved_conflict_state(
                 theirs_text.to_string(),
                 current_text.to_string(),
             );
-            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
-                file_rel.to_path_buf(),
-                gitcomet_core::domain::FileConflictKind::BothModified,
-                ConflictPayload::Text(base_text.to_string().into()),
-                ConflictPayload::Text(ours_text.to_string().into()),
-                ConflictPayload::Text(theirs_text.to_string().into()),
-                current_text,
-            ));
+            // Plan-backed, the way the app builds a full-text conflict:
+            // `from_merged_text` derives geometry from whatever markers happen
+            // to be in the worktree and leaves `merge_plan` empty, which would
+            // silently exercise only the marker-only anchor fallback.
+            repo.conflict_state.conflict_session =
+                Some(ConflictSession::from_stage_inputs_with_current(
+                    file_rel.to_path_buf(),
+                    gitcomet_core::domain::FileConflictKind::BothModified,
+                    ConflictPayload::Text(base_text.to_string().into()),
+                    ConflictPayload::Text(ours_text.to_string().into()),
+                    ConflictPayload::Text(theirs_text.to_string().into()),
+                    Some(ConflictPayload::Text(current_text.to_string().into())),
+                ));
 
             push_test_state(this, app_state_with_repo(repo, repo_id), cx);
         });
