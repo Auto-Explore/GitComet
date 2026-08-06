@@ -650,6 +650,11 @@ pub struct CommandLogEntry {
     pub summary: String,
     pub stdout: String,
     pub stderr: String,
+    /// Whether finishing this command is worth telling the user about. Routine,
+    /// user-initiated edits announce themselves through the change they make —
+    /// a toast per staged line is noise — but they still belong in the log.
+    /// Failures are always surfaced, whatever this says.
+    pub announce_success: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

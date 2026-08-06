@@ -170,6 +170,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
+        | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::RebaseOntoConfirm { repo_id, .. }
         | PopoverKind::CommitOptionsMenu { repo_id }
@@ -336,6 +337,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::BrowseHistoryMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
+        | PopoverKind::StageConflictMarkersConfirm { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
@@ -512,6 +514,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             hash_diff_area(*area, hasher);
             path.hash(hasher);
+        }
+        PopoverKind::StageConflictMarkersConfirm {
+            repo_id,
+            paths,
+            unresolved,
+        } => {
+            81u8.hash(hasher);
+            repo_id.hash(hasher);
+            paths.hash(hasher);
+            unresolved.hash(hasher);
         }
         PopoverKind::PullReconcilePrompt { repo_id } => {
             35u8.hash(hasher);

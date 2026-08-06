@@ -784,6 +784,17 @@ impl PopoverHost {
             } => {
                 let (paths, used_selection) =
                     self.take_status_paths_for_action(repo_id, area, &path, cx);
+                // Staging is what marks a conflict resolved, so confirm first if
+                // any of these files still has conflict markers in the worktree.
+                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &self.state,
+                    repo_id,
+                    paths.clone(),
+                ) {
+                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+                    self.open_popover_at(confirm, anchor, window, cx);
+                    return;
+                }
                 if used_selection {
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     self.store.dispatch(Msg::StagePaths {

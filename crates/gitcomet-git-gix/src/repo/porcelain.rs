@@ -813,11 +813,39 @@ impl GixRepo {
         let repo = self._repo.to_thread_local();
         let has_commits = super::history::gix_head_id_or_none(&repo)?.is_some();
 
+        // Unstaging changes what is staged. It must never touch a merge in
+        // progress: resetting an unmerged path collapses its stage 1/2/3 entries
+        // to HEAD, so the file stops being conflicted and reappears as an
+        // ordinary modification still full of conflict markers — and a bare
+        // `git reset` additionally clears MERGE_HEAD, silently aborting the
+        // merge. Conflicted paths are therefore left exactly as they are.
+        let conflicted: HashSet<PathBuf> = super::status::gix_unmerged_conflicts(&repo)?
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+
         if paths.is_empty() {
             if has_commits {
-                let mut cmd = self.git_workdir_cmd();
-                cmd.arg("reset");
-                return run_git_simple(cmd, "git reset");
+                if conflicted.is_empty() {
+                    let mut cmd = self.git_workdir_cmd();
+                    cmd.arg("reset");
+                    return run_git_simple(cmd, "git reset");
+                }
+
+                // `staged_status_impl` already excludes conflicted paths, so it
+                // is exactly the set "unstage everything" may act on.
+                let staged = self.staged_status_impl()?;
+                let staged_paths: Vec<&Path> =
+                    staged.iter().map(|entry| entry.path.as_path()).collect();
+                if staged_paths.is_empty() {
+                    return Ok(());
+                }
+                return run_git_simple_with_paths(
+                    &self.spec.workdir,
+                    "git reset HEAD",
+                    &["reset", "HEAD"],
+                    &staged_paths,
+                );
             }
 
             let mut cmd = self.git_workdir_cmd();
@@ -825,19 +853,28 @@ impl GixRepo {
             return run_git_simple(cmd, "git rm --cached -r");
         }
 
+        let requested: Vec<&Path> = paths
+            .iter()
+            .copied()
+            .filter(|path| !conflicted.contains(*path))
+            .collect();
+        if requested.is_empty() {
+            return Ok(());
+        }
+
         if has_commits {
             run_git_simple_with_paths(
                 &self.spec.workdir,
                 "git reset HEAD",
                 &["reset", "HEAD"],
-                paths,
+                &requested,
             )
         } else {
             run_git_simple_with_paths(
                 &self.spec.workdir,
                 "git rm --cached",
                 &["rm", "--cached"],
-                paths,
+                &requested,
             )
         }
     }

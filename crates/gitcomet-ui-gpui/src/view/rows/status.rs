@@ -278,7 +278,7 @@ impl DetailsPaneView {
         self.status_multi_selection.remove(&repo_id);
     }
 
-    fn take_status_selected_paths_for_action(
+    pub(in crate::view) fn take_status_selected_paths_for_action(
         &mut self,
         repo_id: RepoId,
         area: DiffArea,
@@ -549,6 +549,20 @@ fn status_row(
 
             let (paths, _used_selection) =
                 this.take_status_selected_paths_for_action(repo_id, area, path_for_stage.as_ref());
+
+            // Staging is what marks a conflict resolved, so confirm first if any
+            // of these files still has conflict markers in the worktree.
+            if area == DiffArea::Unstaged
+                && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &this.state,
+                    repo_id,
+                    paths.clone(),
+                )
+            {
+                this.open_popover_at(confirm, e.position(), window, cx);
+                cx.notify();
+                return;
+            }
 
             match area {
                 DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {

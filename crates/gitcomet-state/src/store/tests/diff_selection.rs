@@ -1387,6 +1387,76 @@ fn stage_hunk_command_finished_reloads_current_diff() {
 }
 
 #[test]
+fn stage_hunk_command_finished_keeps_loaded_diff_visible_while_reloading() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    let target = DiffTarget::WorkingTree {
+        path: PathBuf::from("a.txt"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    repo_state.diff_state.diff_target = Some(target.clone());
+    repo_state.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+        target: target.clone(),
+        lines: vec![gitcomet_core::domain::DiffLine {
+            kind: gitcomet_core::domain::DiffLineKind::Add,
+            text: "+one".into(),
+        }],
+    }));
+    repo_state.diff_state.diff_file =
+        Loadable::Ready(Some(Arc::new(gitcomet_core::domain::FileDiffText::new(
+            PathBuf::from("a.txt"),
+            Some("one\n".to_string()),
+            Some("two\n".to_string()),
+        ))));
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id: RepoId(1),
+            command: crate::msg::RepoCommandKind::StageHunk,
+            result: Ok(CommandOutput::default()),
+        }),
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == RepoId(1)).unwrap();
+    // Staging reloads the same target, so the pane keeps rendering what it has
+    // until the fresh payload lands instead of flashing a loading placeholder.
+    assert!(
+        matches!(repo_state.diff_state.diff, Loadable::Ready(_)),
+        "the loaded patch diff must survive a same-target reload"
+    );
+    assert!(
+        matches!(repo_state.diff_state.diff_file, Loadable::Ready(_)),
+        "the loaded file text must survive a same-target reload"
+    );
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiff {
+            repo_id: RepoId(1),
+            ..
+        }
+    )));
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadDiffFile {
+            repo_id: RepoId(1),
+            ..
+        }
+    )));
+}
+
+#[test]
 fn clear_diff_selection_resets_diff_state() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(2);

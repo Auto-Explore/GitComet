@@ -2241,10 +2241,20 @@ impl MainPaneView {
         self.file_diff_cache_rev = diff_file_rev;
         self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
         self.file_diff_cache_target = Some(diff_target);
-        self.reset_file_diff_cache_data();
 
-        // Reset the segment cache to avoid mixing patch/file indices.
-        self.clear_diff_text_style_caches();
+        // Rebuilding the same file keeps the rows that are already on screen:
+        // they are a complete, self-consistent generation, the completion below
+        // swaps every field of the next one in atomically, and dropping them
+        // first is what makes the pane flash "Processing file…" on every staged
+        // line. A different file — or one with no content to rebuild from — must
+        // still clear immediately, since its rows are not this file's.
+        let keep_rows_while_rebuilding = same_repo_and_target && file.is_some();
+        if !keep_rows_while_rebuilding {
+            self.reset_file_diff_cache_data();
+
+            // Reset the segment cache to avoid mixing patch/file indices.
+            self.clear_diff_text_style_caches();
+        }
 
         let Some(file) = file else {
             return;

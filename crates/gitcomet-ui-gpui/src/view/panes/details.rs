@@ -13,7 +13,7 @@ struct PendingCommitAmend {
 
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
-    state: Arc<AppState>,
+    pub(in super::super) state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) ui_scale_percent: u32,
@@ -1241,6 +1241,7 @@ mod tests {
             summary: format!("{command}: test"),
             stdout: String::new(),
             stderr: String::new(),
+            announce_success: true,
         }
     }
 

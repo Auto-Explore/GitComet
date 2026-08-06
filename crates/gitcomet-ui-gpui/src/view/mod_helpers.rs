@@ -3608,6 +3608,14 @@ pub(super) enum PopoverKind {
         area: DiffArea,
         path: Option<std::path::PathBuf>,
     },
+    /// Staging would mark files resolved that still contain conflict markers.
+    /// `paths` is the stage request as issued (empty means everything);
+    /// `unresolved` is what the user is being warned about.
+    StageConflictMarkersConfirm {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+        unresolved: Vec<std::path::PathBuf>,
+    },
     PullReconcilePrompt {
         repo_id: RepoId,
     },

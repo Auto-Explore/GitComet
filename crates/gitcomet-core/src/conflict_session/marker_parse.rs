@@ -172,6 +172,61 @@ pub fn parse_conflict_marker_ranges(text: &str) -> Vec<ParsedConflictSegmentRang
 ///
 /// Parsing is intentionally conservative. If a marker block is malformed,
 /// all consumed marker text is preserved as context and parsing continues.
+/// Whether `reader` yields a complete conflict block, following the same marker
+/// rules as [`parse_conflict_marker_ranges`] but streaming, so a file of any
+/// size is scanned in constant memory and the answer comes as soon as the first
+/// block closes.
+///
+/// `budget_bytes` bounds the read. Running out of budget having already seen an
+/// opening marker answers `true`: for a file the caller already knows git
+/// reports as conflicted, markers that do not close within the budget cannot be
+/// taken as resolved.
+pub fn reader_has_conflict_markers<R: std::io::BufRead>(
+    mut reader: R,
+    budget_bytes: u64,
+) -> std::io::Result<bool> {
+    // Bytes, not `read_line`: the scan must not fail on a file that is not valid
+    // UTF-8, and the markers are ASCII at the start of a line either way.
+    let mut line = Vec::new();
+    let mut consumed = 0u64;
+    let mut saw_opener = false;
+    let mut saw_separator = false;
+
+    loop {
+        line.clear();
+        let read = reader.read_until(b'\n', &mut line)?;
+        if read == 0 {
+            // A block left open at end of file is malformed, and the strict
+            // parser treats it as ordinary text.
+            return Ok(false);
+        }
+        consumed = consumed.saturating_add(read as u64);
+
+        if line.starts_with(b"<<<<<<<") {
+            saw_opener = true;
+            saw_separator = false;
+        } else if saw_opener && line.starts_with(b"=======") {
+            saw_separator = true;
+        } else if saw_separator && line.starts_with(b">>>>>>>") {
+            return Ok(true);
+        }
+
+        if consumed >= budget_bytes {
+            return Ok(saw_opener);
+        }
+    }
+}
+
+/// Whether `text` still holds at least one complete conflict block, i.e. a merge
+/// whose markers were never resolved — or were resolved by hand with the markers
+/// left behind. Uses the same conservative parse as the conflict session, so a
+/// malformed block reads as ordinary text rather than a false alarm.
+pub fn text_has_conflict_markers(text: &str) -> bool {
+    parse_conflict_marker_ranges(text)
+        .iter()
+        .any(|segment| matches!(segment, ParsedConflictSegmentRanges::Conflict(_)))
+}
+
 pub fn parse_conflict_marker_segments(text: &str) -> Vec<ParsedConflictSegment> {
     parse_conflict_marker_ranges(text)
         .into_iter()
@@ -217,4 +272,83 @@ pub(super) fn parse_conflict_regions_from_shared_text(text: Arc<str>) -> Vec<Con
             }),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod marker_detection_tests {
+    use super::{reader_has_conflict_markers, text_has_conflict_markers};
+
+    const BUDGET: u64 = 128 * 1024 * 1024;
+
+    fn scan(text: &str) -> bool {
+        reader_has_conflict_markers(std::io::BufReader::new(text.as_bytes()), BUDGET).expect("scan")
+    }
+
+    #[test]
+    fn streamed_scan_agrees_with_the_strict_parser() {
+        for text in [
+            "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nb\n",
+            "a\nours\nb\n",
+            "a\n<<<<<<< HEAD\nours\n",
+            "a\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> other\n",
+        ] {
+            assert_eq!(
+                scan(text),
+                text_has_conflict_markers(text),
+                "streamed and strict scans disagree on {text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn streamed_scan_finds_a_block_spanning_a_large_file() {
+        // The conflict of a generated file can span nearly all of it, which is
+        // what sizing a file out of the scan used to miss.
+        let mut text = String::from("<<<<<<< HEAD\n");
+        for i in 0..200_000 {
+            text.push_str(&format!("line {i}\n"));
+        }
+        text.push_str("=======\n");
+        for i in 0..200_000 {
+            text.push_str(&format!("other {i}\n"));
+        }
+        text.push_str(">>>>>>> feature\n");
+        assert!(text.len() > 4 * 1024 * 1024, "fixture should be multi-MB");
+        assert!(scan(&text));
+    }
+
+    #[test]
+    fn streamed_scan_warns_when_the_budget_runs_out_after_an_opener() {
+        let text = "<<<<<<< HEAD\nours\nmore\n";
+        // Too small to reach a closing marker: an open block cannot be called
+        // resolved, so the caller is warned.
+        assert!(
+            reader_has_conflict_markers(std::io::BufReader::new(text.as_bytes()), 16)
+                .expect("scan")
+        );
+        // Nothing seen at all within the budget stays quiet.
+        assert!(
+            !reader_has_conflict_markers(std::io::BufReader::new("plain text\n".as_bytes()), 4)
+                .expect("scan")
+        );
+    }
+
+    #[test]
+    fn detects_a_complete_conflict_block() {
+        assert!(text_has_conflict_markers(
+            "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nb\n"
+        ));
+    }
+
+    #[test]
+    fn ignores_resolved_text() {
+        assert!(!text_has_conflict_markers("a\nours\nb\n"));
+    }
+
+    #[test]
+    fn ignores_a_lone_opener() {
+        // The parser keeps malformed marker text as context, so an unterminated
+        // block must not raise a false alarm.
+        assert!(!text_has_conflict_markers("a\n<<<<<<< HEAD\nours\n"));
+    }
 }

@@ -1499,6 +1499,18 @@ impl DetailsPaneView {
                     return;
                 };
                 this.status_multi_selection.remove(&repo_id);
+                // Staging is what marks a conflict resolved, so confirm first if
+                // any of it still has conflict markers in the worktree.
+                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &this.state,
+                    repo_id,
+                    Vec::new(),
+                ) {
+                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
+                    this.open_popover_at(confirm, anchor, _w, cx);
+                    cx.notify();
+                    return;
+                }
                 this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                 this.store.dispatch(Msg::StagePaths {
                     repo_id,
@@ -1522,6 +1534,16 @@ impl DetailsPaneView {
                 .take_status_section_action_selection(repo_id, StatusSection::CombinedUnstaged)
                 .paths;
             if paths.is_empty() {
+                return;
+            }
+            if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                &this.state,
+                repo_id,
+                paths.clone(),
+            ) {
+                let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
+                this.open_popover_at(confirm, anchor, _w, cx);
+                cx.notify();
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
@@ -1597,6 +1619,16 @@ impl DetailsPaneView {
             if paths.is_empty() {
                 return;
             }
+            if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                &this.state,
+                repo_id,
+                paths.clone(),
+            ) {
+                let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
+                this.open_popover_at(confirm, anchor, _w, cx);
+                cx.notify();
+                return;
+            }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
             this.store.dispatch(Msg::StagePaths {
                 repo_id,
@@ -1668,6 +1700,16 @@ impl DetailsPaneView {
                 .take_status_section_action_selection(repo_id, StatusSection::Unstaged)
                 .paths;
             if paths.is_empty() {
+                return;
+            }
+            if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                &this.state,
+                repo_id,
+                paths.clone(),
+            ) {
+                let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
+                this.open_popover_at(confirm, anchor, _w, cx);
+                cx.notify();
                 return;
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });

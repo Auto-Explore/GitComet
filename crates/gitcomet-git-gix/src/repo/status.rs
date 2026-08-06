@@ -517,7 +517,9 @@ fn set_index_stat_discriminators(stamp: &mut RepoFileStamp, metadata: &std::fs::
 #[cfg(not(unix))]
 fn set_index_stat_discriminators(_stamp: &mut RepoFileStamp, _metadata: &std::fs::Metadata) {}
 
-fn gix_unmerged_conflicts(repo: &gix::Repository) -> Result<Vec<(PathBuf, FileConflictKind)>> {
+pub(super) fn gix_unmerged_conflicts(
+    repo: &gix::Repository,
+) -> Result<Vec<(PathBuf, FileConflictKind)>> {
     let index = repo
         .index_or_load_from_head_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;

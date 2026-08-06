@@ -104,7 +104,9 @@ impl GitCometView {
                 }
 
                 if entry.ok {
-                    self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
+                    if entry.announce_success {
+                        self.push_toast(components::ToastKind::Success, entry.summary.clone(), cx);
+                    }
                 } else {
                     self.show_error_banner(Some(next_repo.id), entry.summary.clone());
                 }

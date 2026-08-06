@@ -753,7 +753,13 @@ pub(super) fn build_unified_patch_for_hunk_selection(
     )
 }
 
-pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
+/// Patch for a selection that will be applied **in reverse**, where the side
+/// that has to match is the diff's *new* side: the worktree for a discard, the
+/// index for an unstage. Unselected additions are therefore kept as context
+/// (they are present in that side and must survive) and unselected removals are
+/// dropped (they are not). Applying the forward build in reverse instead makes
+/// git reject the patch, because its context would describe the old side.
+pub(super) fn build_unified_patch_for_hunk_selection_for_reverse_apply(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
     selected_src_ixs: &HashSet<usize>,
@@ -767,6 +773,9 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_worktree_discard(
     )
 }
 
+/// Patch for a selection that will be applied **forward**, i.e. staging into the
+/// index. See [`build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply`]
+/// for the unstage/discard direction, which is not the same patch.
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
     diff: &[AnnotatedDiffLine],
     selected_src_ixs: &HashSet<usize>,
@@ -804,7 +813,8 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
     (!out.trim().is_empty()).then_some(out)
 }
 
-pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
+/// Multi-hunk form of [`build_unified_patch_for_hunk_selection_for_reverse_apply`].
+pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
     diff: &[AnnotatedDiffLine],
     selected_src_ixs: &HashSet<usize>,
 ) -> Option<String> {
@@ -831,11 +841,9 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_worktree_d
 
     let mut out = String::new();
     for (hunk_src_ix, src_ixs) in by_hunk {
-        let Some(patch) = build_unified_patch_for_hunk_selection_for_worktree_discard(
-            diff,
-            hunk_src_ix,
-            &src_ixs,
-        ) else {
+        let Some(patch) =
+            build_unified_patch_for_hunk_selection_for_reverse_apply(diff, hunk_src_ix, &src_ixs)
+        else {
             continue;
         };
         out.push_str(&patch);
@@ -1129,15 +1137,13 @@ mod tests {
     }
 
     #[test]
-    fn build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard_keeps_unselected_changes_as_worktree_context()
-     {
+    fn reverse_apply_patch_keeps_unselected_additions_as_context() {
         let diff = example_two_mods_one_hunk_diff();
         let selected: HashSet<usize> = [6, 7].into_iter().collect();
 
-        let patch = build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
-            &diff, &selected,
-        )
-        .expect("patch");
+        let patch =
+            build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(&diff, &selected)
+                .expect("patch");
 
         assert!(patch.contains("-line2"));
         assert!(patch.contains("+line2_mod"));

@@ -389,8 +389,8 @@ pub(in crate::view) use diff_text::{
 
 pub(in crate::view) use self::diff_canvas::{
     AnnotArea, DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX,
-    DIFF_ANNOTATION_MIN_WIDTH_PX, DiffTextWrapSlice, DiffWrapByteRange,
-    diff_inline_text_start as diff_canvas_inline_text_start,
+    DIFF_ANNOTATION_MIN_WIDTH_PX, DiffStageHover, DiffStageSlot, DiffTextWrapSlice,
+    DiffWrapByteRange, diff_inline_text_start as diff_canvas_inline_text_start,
     diff_row_horizontal_padding as diff_canvas_row_horizontal_padding,
     diff_single_column_text_start as diff_canvas_single_column_text_start,
     diff_text_wrap_char_width as diff_canvas_text_wrap_char_width, is_streamable_diff_text,

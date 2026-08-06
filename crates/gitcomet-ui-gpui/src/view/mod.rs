@@ -141,6 +141,7 @@ pub(crate) mod clone_progress;
 mod color;
 mod command_palette;
 pub(crate) mod components;
+mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
 mod diff_navigation;
@@ -219,7 +220,7 @@ use diff_text_selection::{
 };
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
-    build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard,
+    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
     parse_diff_git_header_path, parse_unified_hunk_header_for_display,
