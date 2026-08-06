@@ -460,6 +460,39 @@ impl DetailsPaneView {
         ui_scale::UiScale::from_percent(self.ui_scale_percent)
     }
 
+    /// The "Stage all" buttons: drop the row selection, then stage — but confirm
+    /// first if any of what is about to be staged still has conflict markers in
+    /// the worktree, since staging is what tells git the conflict is resolved.
+    /// An empty `paths` means everything, matching `Msg::StagePaths`.
+    ///
+    /// Shared so the combined and split change-tracking views cannot answer this
+    /// question differently; they differ only in which section they stage.
+    pub(in crate::view) fn stage_all_with_conflict_confirmation(
+        &mut self,
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.status_multi_selection.remove(&repo_id);
+        if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+            &self.state,
+            repo_id,
+            paths.clone(),
+        ) {
+            let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+            self.open_popover_at(confirm, anchor, window, cx);
+            cx.notify();
+            return;
+        }
+        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        self.store.dispatch(Msg::StagePaths {
+            repo_id,
+            paths: paths.into(),
+        });
+        cx.notify();
+    }
+
     pub(in super::super) fn set_date_settings(
         &mut self,
         format: crate::view::date_time::DateTimeFormat,

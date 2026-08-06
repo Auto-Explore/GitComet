@@ -832,11 +832,15 @@ impl GixRepo {
                     return run_git_simple(cmd, "git reset");
                 }
 
-                // `staged_status_impl` already excludes conflicted paths, so it
-                // is exactly the set "unstage everything" may act on.
-                let staged = self.staged_status_impl()?;
-                let staged_paths: Vec<&Path> =
-                    staged.iter().map(|entry| entry.path.as_path()).collect();
+                // Enumerated from the index rather than from the status list:
+                // the latter reports a staged rename as its destination alone,
+                // and resetting only that half leaves the source path's staged
+                // deletion behind. Conflicted paths are excluded there too, so
+                // this is exactly the set "unstage everything" may act on — and
+                // a path-limited `git reset` only rewrites those index entries,
+                // leaving MERGE_HEAD and every worktree file untouched.
+                let staged = self.staged_index_paths_impl()?;
+                let staged_paths: Vec<&Path> = staged.iter().map(|path| path.as_path()).collect();
                 if staged_paths.is_empty() {
                     return Ok(());
                 }

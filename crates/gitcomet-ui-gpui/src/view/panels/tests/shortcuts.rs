@@ -4920,6 +4920,112 @@ fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
     });
 }
 
+/// Ctrl+S must resolve the multi-file selection before confirming, the way
+/// space does. Confirming on the shown file first makes the dialog describe —
+/// and then stage — one file out of a selection of three, leaving the rest
+/// unstaged and the selection stranded.
+#[gpui::test]
+fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70614);
+    let commit_id = CommitId("abcdef00112233ee".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_s_multi_select_conflict",
+        std::process::id()
+    ));
+    let conflicted = std::path::PathBuf::from("conflicted.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let third = std::path::PathBuf::from("src/third.rs");
+    std::fs::create_dir_all(&workdir).unwrap();
+    std::fs::write(
+        workdir.join(&conflicted),
+        "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nb\n",
+    )
+    .unwrap();
+
+    // The conflicted file is the one the diff pane is showing, so the buggy
+    // order confirms on it alone.
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[conflicted.clone(), second.clone(), third.clone()],
+        &conflicted,
+    );
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![
+                gitcomet_core::domain::FileStatus {
+                    path: conflicted.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: second.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: third.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+            ],
+        }
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    // Stands in for ctrl-clicking all three rows.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![conflicted.clone(), second.clone(), third.clone()],
+                        unstaged_anchor: Some(conflicted.clone()),
+                        ..Default::default()
+                    },
+                );
+                cx.notify();
+            });
+        });
+    });
+
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("ctrl-s");
+    draw_and_drain_test_window(cx);
+
+    let kind =
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+    let Some(PopoverKind::StageConflictMarkersConfirm {
+        paths, unresolved, ..
+    }) = kind
+    else {
+        panic!("expected the unresolved-conflict confirmation, got {kind:?}");
+    };
+    assert_eq!(
+        paths,
+        vec![conflicted.clone(), second.clone(), third.clone()],
+        "going ahead must stage the whole selection, not just the shown file"
+    );
+    assert_eq!(
+        unresolved,
+        vec![conflicted.clone()],
+        "only the file with markers left in it is unresolved"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 #[gpui::test]
 fn detached_window_focus_space_stages_and_advances_diff(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));

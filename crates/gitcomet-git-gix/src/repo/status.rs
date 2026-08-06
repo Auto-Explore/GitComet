@@ -271,6 +271,36 @@ impl GixRepo {
         Ok(staged)
     }
 
+    /// Every index path a staged change occupies, both sides of a staged rename
+    /// included. `staged_status_impl` reports a rename as its destination alone,
+    /// which is all a status list needs but not enough to reset one: the source
+    /// path still carries the staged deletion, and resetting only the
+    /// destination leaves half a rename in the index.
+    ///
+    /// Conflicted paths are excluded, as they are from `staged_status_impl`.
+    pub(super) fn staged_index_paths_impl(&self) -> Result<Vec<PathBuf>> {
+        let repo = self._repo.to_thread_local();
+        let Some(head_oid) = super::history::gix_head_id_or_none(&repo)? else {
+            return Ok(self
+                .status_impl()?
+                .staged
+                .into_iter()
+                .map(|entry| entry.path)
+                .collect());
+        };
+
+        let head_tree_id = tree_id_for_commit(&repo, &head_oid)?;
+        let mut paths = collect_staged_index_paths_from_tree_index(&repo, &head_tree_id)?;
+        let conflicted: HashSet<PathBuf> = gix_unmerged_conflicts(&repo)?
+            .into_iter()
+            .map(|(path, _)| path)
+            .collect();
+        paths.retain(|path| !conflicted.contains(path));
+        paths.sort_unstable();
+        paths.dedup();
+        Ok(paths)
+    }
+
     pub(super) fn upstream_divergence_impl(&self) -> Result<Option<UpstreamDivergence>> {
         self.upstream_divergence_cancellable_impl(&CancellationToken::new())
     }
@@ -405,6 +435,71 @@ fn collect_staged_status_from_tree_index(
     )
     .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree/index status: {e}"))))?;
     Ok(staged)
+}
+
+fn collect_staged_index_paths_from_tree_index(
+    repo: &gix::Repository,
+    head_tree_id: &gix::ObjectId,
+) -> Result<Vec<PathBuf>> {
+    let index = repo
+        .index_or_empty()
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+    let mut paths = Vec::new();
+    repo.tree_index_status(
+        head_tree_id,
+        &index,
+        None,
+        gix::status::tree_index::TrackRenames::AsConfigured,
+        |change, _, _| {
+            collect_tree_index_change_paths(change, &mut paths)?;
+            Ok::<_, Error>(std::ops::ControlFlow::Continue(()))
+        },
+    )
+    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree/index status: {e}"))))?;
+    Ok(paths)
+}
+
+/// Collect the index paths a single TreeIndex change occupies.
+fn collect_tree_index_change_paths(
+    change: gix::diff::index::ChangeRef<'_, '_>,
+    paths: &mut Vec<PathBuf>,
+) -> Result<()> {
+    use gix::diff::index::ChangeRef;
+
+    match change {
+        ChangeRef::Addition { location, .. } => paths.push(path_buf_from_git_bytes(
+            location.as_ref(),
+            "gix status staged addition path",
+        )?),
+        ChangeRef::Deletion { location, .. } => paths.push(path_buf_from_git_bytes(
+            location.as_ref(),
+            "gix status staged deletion path",
+        )?),
+        ChangeRef::Modification { location, .. } => paths.push(path_buf_from_git_bytes(
+            location.as_ref(),
+            "gix status staged modification path",
+        )?),
+        ChangeRef::Rewrite {
+            location,
+            source_location,
+            copy,
+            ..
+        } => {
+            paths.push(path_buf_from_git_bytes(
+                location.as_ref(),
+                "gix status staged rewrite path",
+            )?);
+            // A rename stages a deletion of the source; a copy leaves the source
+            // exactly as HEAD has it, so it is not staged and must not be reset.
+            if !copy {
+                paths.push(path_buf_from_git_bytes(
+                    source_location.as_ref(),
+                    "gix status staged rewrite source path",
+                )?);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn kind_priority(kind: FileStatusKind) -> u8 {

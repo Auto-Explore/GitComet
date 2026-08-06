@@ -441,6 +441,83 @@ fn command_palette_rename_branch_opens_prompt_for_current_branch(cx: &mut gpui::
     });
 }
 
+/// Staging is what marks a conflict resolved, so every stage entry point has to
+/// warn about markers left in the worktree — including the command palette's
+/// "Stage all", which reaches conflicted files just as the buttons do.
+#[gpui::test]
+fn command_palette_stage_all_asks_before_staging_unresolved_conflicts(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_command_stage_all_conflict",
+        std::process::id()
+    ));
+    let conflicted = PathBuf::from("conflicted.rs");
+    std::fs::create_dir_all(&workdir).unwrap();
+    std::fs::write(
+        workdir.join(&conflicted),
+        "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nb\n",
+    )
+    .unwrap();
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.repos[0].spec.workdir = workdir.clone();
+    state.repos[0].status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![gitcomet_core::domain::FileStatus {
+                path: conflicted.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+            }],
+        }
+        .into(),
+    );
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("stage-all", Some(window), cx)
+        });
+    });
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        let kind = test_support::popover_kind(view.read(app), app);
+        assert!(
+            matches!(
+                kind,
+                Some(PopoverKind::StageConflictMarkersConfirm { ref unresolved, .. })
+                    if unresolved == &vec![conflicted.clone()]
+            ),
+            "expected the unresolved-conflict confirmation, got {kind:?}"
+        );
+    });
+
+    // The stage itself must wait for the user's answer.
+    assert!(
+        cx.update(|_window, app| {
+            view.read(app)
+                .store
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == RepoId(1))
+                .is_some_and(|repo| repo.local_actions_in_flight == 0)
+        }),
+        "nothing may be staged until the confirmation is answered"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 #[gpui::test]
 fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
     cx: &mut gpui::TestAppContext,

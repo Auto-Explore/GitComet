@@ -2107,6 +2107,14 @@ impl MainPaneView {
         self.file_diff_inline_cache.clear();
         self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
+        self.reset_file_diff_word_highlight_caches();
+    }
+
+    /// Drop the memoized intra-line word-diff ranges. They are keyed by bare row
+    /// index, so they only describe the rows they were computed from: anything
+    /// that changes what row *n* holds has to clear them or row *n* keeps ranges
+    /// measured against text it no longer shows.
+    pub(in crate::view) fn reset_file_diff_word_highlight_caches(&mut self) {
         self.file_diff_inline_word_highlights =
             rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
         self.file_diff_split_word_highlights =
@@ -2327,6 +2335,12 @@ impl MainPaneView {
                     this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
+                    // The rows just changed under their own indices. On the
+                    // clearing path `reset_file_diff_cache_data` already did
+                    // this; the kept-rows path deliberately skips it, so without
+                    // this a staged line leaves every row holding the previous
+                    // generation's word ranges.
+                    this.reset_file_diff_word_highlight_caches();
                     #[cfg(test)]
                     {
                         this.file_diff_cache_rows = rebuild.rows;

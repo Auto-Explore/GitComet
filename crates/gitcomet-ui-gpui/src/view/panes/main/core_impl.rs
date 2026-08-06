@@ -3719,10 +3719,7 @@ impl MainPaneView {
         self.rebuild_patch_visual_line_kinds_from_current_diff();
         self.diff_word_highlights.clear();
         self.diff_word_highlights_inflight = None;
-        self.file_diff_inline_word_highlights =
-            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
-        self.file_diff_split_word_highlights =
-            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
+        self.reset_file_diff_word_highlight_caches();
         self.clear_diff_text_style_caches();
         self.clear_diff_text_query_overlay_cache();
         self.clear_conflict_diff_style_caches();

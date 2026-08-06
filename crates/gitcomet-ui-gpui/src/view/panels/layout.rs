@@ -1498,25 +1498,8 @@ impl DetailsPaneView {
                 let Some(repo_id) = this.active_repo_id() else {
                     return;
                 };
-                this.status_multi_selection.remove(&repo_id);
-                // Staging is what marks a conflict resolved, so confirm first if
-                // any of it still has conflict markers in the worktree.
-                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
-                    &this.state,
-                    repo_id,
-                    Vec::new(),
-                ) {
-                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
-                    this.open_popover_at(confirm, anchor, _w, cx);
-                    cx.notify();
-                    return;
-                }
-                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                this.store.dispatch(Msg::StagePaths {
-                    repo_id,
-                    paths: Default::default(),
-                });
-                cx.notify();
+                // Empty paths: this button stages every change there is.
+                this.stage_all_with_conflict_confirmation(repo_id, Vec::new(), _w, cx);
             })
             .gitcomet_tooltip(theme, "Stage all changes".into());
 
@@ -1664,8 +1647,7 @@ impl DetailsPaneView {
             cx.notify();
         });
 
-        let split_unstaged_paths_for_stage_all =
-            gitcomet_state::msg::RepoPathList::from(split_unstaged_paths.clone());
+        let split_unstaged_paths_for_stage_all = split_unstaged_paths.clone();
         let stage_all_split_unstaged =
             components::Button::new("stage_all_split_unstaged", "Stage all")
                 .style(components::ButtonStyle::Subtle)
@@ -1677,13 +1659,15 @@ impl DetailsPaneView {
                     if split_unstaged_paths_for_stage_all.is_empty() {
                         return;
                     }
-                    this.status_multi_selection.remove(&repo_id);
-                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    this.store.dispatch(Msg::StagePaths {
+                    // Named paths: this button stages the tracked-changes
+                    // section only — conflicted files among them, so it needs
+                    // the same confirmation the combined view's button gets.
+                    this.stage_all_with_conflict_confirmation(
                         repo_id,
-                        paths: split_unstaged_paths_for_stage_all.clone(),
-                    });
-                    cx.notify();
+                        split_unstaged_paths_for_stage_all.clone(),
+                        _w,
+                        cx,
+                    );
                 });
 
         let stage_selected_split_unstaged = components::Button::new(

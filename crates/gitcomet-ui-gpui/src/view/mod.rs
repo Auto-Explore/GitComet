@@ -896,20 +896,38 @@ impl GitCometView {
                 });
             }
             "stage-all" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
-                {
-                    let paths: Vec<_> = repo
-                        .worktree_status_entries()
-                        .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    if !paths.is_empty() {
-                        self.store.dispatch(Msg::StagePaths {
-                            repo_id,
-                            paths: paths.into(),
-                        });
-                    }
+                let Some(repo_id) = self.active_repo_id() else {
+                    return;
+                };
+                let paths: Vec<_> = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == repo_id)
+                    .and_then(|repo| repo.worktree_status_entries())
+                    .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if paths.is_empty() {
+                    return;
                 }
+                // Staging is what marks a conflict resolved, so confirm first if
+                // any of it still has conflict markers in the worktree. With no
+                // window there is nothing to confirm in, and staging unasked is
+                // the one outcome this must not have.
+                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &self.state,
+                    repo_id,
+                    paths.clone(),
+                ) {
+                    if let Some(window) = window {
+                        self.open_popover_centered(confirm, window, cx);
+                    }
+                    return;
+                }
+                self.store.dispatch(Msg::StagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                });
             }
             "unstage-all" => {
                 if let Some(repo_id) = self.active_repo_id()

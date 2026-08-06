@@ -4194,3 +4194,123 @@ fn split_unstaged_scroll_viewport_updates_after_outer_resize_shrink(cx: &mut gpu
         "expected split unstaged uniform list viewport to match the visible clipped height after shrinking the outer resize (viewport_height={viewport_height}, visible_height={visible_height})"
     );
 }
+
+/// Both "Stage all" buttons go through the same helper, so the confirmation
+/// cannot be present on one and missing on the other. The split view's button
+/// names its section's paths; the combined one passes an empty set meaning
+/// "everything". Either way a conflicted file with markers left in it has to
+/// stop the stage.
+#[gpui::test]
+fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assertions = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(70615);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_stage_all_conflict_confirm",
+        std::process::id()
+    ));
+    let conflicted = std::path::PathBuf::from("conflicted.rs");
+    let clean = std::path::PathBuf::from("clean.rs");
+    std::fs::create_dir_all(&workdir).unwrap();
+    std::fs::write(
+        workdir.join(&conflicted),
+        "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nb\n",
+    )
+    .unwrap();
+    std::fs::write(workdir.join(&clean), "resolved\n").unwrap();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![
+                        gitcomet_core::domain::FileStatus {
+                            path: conflicted.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+                        },
+                        gitcomet_core::domain::FileStatus {
+                            path: clean.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        },
+                    ],
+                }
+                .into(),
+            );
+            let state = app_state_with_repo(repo, repo_id);
+            // Both sides: the pane renders from the UI model, while the
+            // "nothing was staged" assertion reads the store's own snapshot.
+            this.store.replace_snapshot_for_test(Arc::clone(&state));
+            push_test_state(this, state, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    // The split view's "Stage all": the tracked-changes section by name.
+    let split_paths = vec![conflicted.clone(), clean.clone()];
+    cx.update(|window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.stage_all_with_conflict_confirmation(repo_id, split_paths, window, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let kind =
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+    assert!(
+        matches!(
+            kind,
+            Some(PopoverKind::StageConflictMarkersConfirm { ref unresolved, .. })
+                if unresolved == &vec![conflicted.clone()]
+        ),
+        "the split view's Stage all must warn about the conflicted file, got {kind:?}"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    // The combined view's "Stage all": everything, expressed as an empty set.
+    cx.update(|window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        details_pane.update(app, |pane, cx| {
+            pane.stage_all_with_conflict_confirmation(repo_id, Vec::new(), window, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let kind =
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+    assert!(
+        matches!(
+            kind,
+            Some(PopoverKind::StageConflictMarkersConfirm { ref unresolved, .. })
+                if unresolved == &vec![conflicted.clone()]
+        ),
+        "the combined view's Stage all must warn about the conflicted file, got {kind:?}"
+    );
+
+    assert!(
+        store_for_assertions
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .is_some_and(|repo| repo.local_actions_in_flight == 0),
+        "nothing may be staged until the confirmation is answered"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}

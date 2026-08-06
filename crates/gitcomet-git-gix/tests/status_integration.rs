@@ -8645,6 +8645,89 @@ fn unstage_all_leaves_conflicted_paths_and_the_merge_alone() {
     );
 }
 
+/// The conflict-safe unstage-all resets named paths rather than everything, so
+/// it has to name *both* sides of a staged rename. The status list reports only
+/// the destination, and resetting that alone leaves the source path staged as
+/// deleted — half a rename in the index.
+#[test]
+fn unstage_all_during_a_merge_resets_both_sides_of_a_staged_rename() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "c.txt", "base\n");
+    // Long enough that rename detection scores the move as a rename.
+    write(
+        repo,
+        "old.txt",
+        "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\n",
+    );
+    run_git(repo, &["add", "."]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    let base_branch = run_git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let base_branch = base_branch.trim().to_string();
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "c.txt", "theirs\n");
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "theirs"],
+    );
+    run_git(repo, &["checkout", &base_branch]);
+    write(repo, "c.txt", "ours\n");
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "ours"],
+    );
+
+    // Conflict on c.txt, plus a staged rename that has nothing to do with it.
+    let _ = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["merge", "feature"])
+        .output();
+    run_git(repo, &["mv", "old.txt", "new.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.unstage(&[]).unwrap();
+
+    let staged = run_git_output(repo, &["diff", "--cached", "--name-only"]);
+    assert!(
+        !staged.lines().any(|line| line == "old.txt"),
+        "unstage-all must not leave old.txt staged as deleted:\n{staged}"
+    );
+    assert!(
+        !staged.lines().any(|line| line == "new.txt"),
+        "unstage-all must unstage the rename destination too:\n{staged}"
+    );
+
+    // The rename itself stays on disk: unstaging only rewrites the index.
+    assert!(
+        repo.join("new.txt").exists() && !repo.join("old.txt").exists(),
+        "unstage-all must not touch the worktree"
+    );
+
+    let conflicted_after = run_git_output(repo, &["ls-files", "-u"]);
+    assert!(
+        conflicted_after.contains("c.txt"),
+        "unstage-all must leave the conflict in the index:\n{conflicted_after}"
+    );
+    assert!(
+        repo.join(".git").join("MERGE_HEAD").exists(),
+        "unstage-all must not abort the merge"
+    );
+}
+
 /// A line-level unstage applies its patch in reverse, so the side it has to
 /// match is the index. The patch therefore keeps the additions it is *not*
 /// unstaging as context and drops the removals, which the index does not have.
