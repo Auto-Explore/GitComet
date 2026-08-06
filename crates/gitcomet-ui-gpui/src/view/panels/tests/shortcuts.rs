@@ -133,7 +133,7 @@ fn context_menu_model_for(
     })
 }
 
-fn apply_state(
+pub(super) fn apply_state(
     cx: &mut gpui::VisualTestContext,
     view: &gpui::Entity<super::super::GitCometView>,
     state: Arc<AppState>,
@@ -162,7 +162,7 @@ fn sync_store_snapshot(
     draw_and_drain_test_window(cx);
 }
 
-fn wait_until(
+pub(super) fn wait_until(
     cx: &mut gpui::VisualTestContext,
     description: &str,
     ready: impl Fn(&mut gpui::VisualTestContext) -> bool,
@@ -212,7 +212,7 @@ fn wait_until_store_diff_target_path(
     });
 }
 
-fn app_state_with_active_repo(repo: RepoState) -> Arc<AppState> {
+pub(super) fn app_state_with_active_repo(repo: RepoState) -> Arc<AppState> {
     let repo_id = repo.id;
     Arc::new(AppState {
         repos: vec![repo],
@@ -4712,6 +4712,361 @@ fn detached_window_focus_uses_global_diff_shortcut_fallback(cx: &mut gpui::TestA
         Some(second),
         "expected F4 from detached focus to select the next diff target"
     );
+}
+
+#[gpui::test]
+fn space_asks_before_staging_a_file_with_conflict_markers(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70613);
+    let commit_id = CommitId("abcdef00112233dd".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_stage_conflict_markers",
+        std::process::id()
+    ));
+    let conflicted = std::path::PathBuf::from("conflicted.rs");
+    std::fs::create_dir_all(&workdir).unwrap();
+    // Multi-megabyte, with the conflict spanning nearly the whole file: sizing a
+    // file out of the scan used to skip the warning entirely.
+    let mut content = String::from("a\n<<<<<<< HEAD\n");
+    for i in 0..120_000 {
+        content.push_str(&format!("ours {i}\n"));
+    }
+    content.push_str("=======\n");
+    for i in 0..120_000 {
+        content.push_str(&format!("theirs {i}\n"));
+    }
+    content.push_str(">>>>>>> other\nb\n");
+    assert!(content.len() > 2 * 1024 * 1024);
+    std::fs::write(workdir.join(&conflicted), &content).unwrap();
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[conflicted.clone()],
+        &conflicted,
+    );
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![gitcomet_core::domain::FileStatus {
+                path: conflicted.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+            }],
+        }
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("space");
+    draw_and_drain_test_window(cx);
+
+    let kind =
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+    assert!(
+        matches!(
+            kind,
+            Some(PopoverKind::StageConflictMarkersConfirm { ref unresolved, .. })
+                if unresolved == &vec![conflicted.clone()]
+        ),
+        "expected the unresolved-conflict confirmation, got {kind:?}"
+    );
+
+    // The stage itself must wait for the user's answer.
+    assert!(
+        cx.update(|_window, app| {
+            let snapshot = view.read(app).store.snapshot();
+            snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| repo.local_actions_in_flight == 0)
+        }),
+        "nothing may be staged until the confirmation is answered"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn space_stages_a_resolved_conflict_without_asking(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70614);
+    let commit_id = CommitId("abcdef00112233ee".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_stage_resolved_conflict",
+        std::process::id()
+    ));
+    let resolved = std::path::PathBuf::from("resolved.rs");
+    std::fs::create_dir_all(&workdir).unwrap();
+    std::fs::write(workdir.join(&resolved), "a\nours\nb\n").unwrap();
+
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[resolved.clone()],
+        &resolved,
+    );
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![gitcomet_core::domain::FileStatus {
+                path: resolved.clone(),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+            }],
+        }
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("space");
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app))
+            .is_none(),
+        "a conflict whose markers are gone must stage without a prompt"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+fn space_stages_every_ctrl_selected_file(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70612);
+    let commit_id = CommitId("abcdef00112233cc".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_space_multi_select",
+        std::process::id()
+    ));
+    let first = std::path::PathBuf::from("src/first.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let third = std::path::PathBuf::from("src/third.rs");
+    let repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[first.clone(), second.clone(), third.clone()],
+        &first,
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    // Stands in for ctrl-clicking the first two rows.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![first.clone(), second.clone()],
+                        unstaged_anchor: Some(first.clone()),
+                        ..Default::default()
+                    },
+                );
+                cx.notify();
+            });
+        });
+    });
+
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("space");
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.update(|_window, app| {
+            view.read(app)
+                .details_pane
+                .read(app)
+                .status_multi_selection
+                .get(&repo_id)
+                .is_none()
+        }),
+        "staging the selection must consume it"
+    );
+
+    // The single-file path would advance the diff to the next unstaged file;
+    // acting on the whole selection clears it instead.
+    wait_until(cx, "the diff selection to be cleared", |cx| {
+        cx.update(|_window, app| {
+            let snapshot = view.read(app).store.snapshot();
+            snapshot
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| repo.diff_state.diff_target.is_none())
+        })
+    });
+}
+
+/// Ctrl+S must resolve the multi-file selection before confirming, the way
+/// space does. Confirming on the shown file first makes the dialog describe —
+/// and then stage — one file out of a selection of three, leaving the rest
+/// unstaged and the selection stranded.
+#[gpui::test]
+fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70614);
+    let commit_id = CommitId("abcdef00112233ee".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_ctrl_s_multi_select_conflict",
+        std::process::id()
+    ));
+    let conflicted = std::path::PathBuf::from("conflicted.rs");
+    let second = std::path::PathBuf::from("src/second.rs");
+    let third = std::path::PathBuf::from("src/third.rs");
+    std::fs::create_dir_all(&workdir).unwrap();
+    std::fs::write(
+        workdir.join(&conflicted),
+        "a\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> other\nb\n",
+    )
+    .unwrap();
+
+    // The conflicted file is the one the diff pane is showing, so the buggy
+    // order confirms on it alone.
+    let mut repo = simple_worktree_repo(
+        repo_id,
+        &workdir,
+        &commit_id,
+        &[conflicted.clone(), second.clone(), third.clone()],
+        &conflicted,
+    );
+    repo.status = Loadable::Ready(
+        gitcomet_core::domain::RepoStatus {
+            staged: vec![],
+            unstaged: vec![
+                gitcomet_core::domain::FileStatus {
+                    path: conflicted.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: Some(gitcomet_core::domain::FileConflictKind::BothModified),
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: second.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+                gitcomet_core::domain::FileStatus {
+                    path: third.clone(),
+                    kind: gitcomet_core::domain::FileStatusKind::Modified,
+                    conflict: None,
+                },
+            ],
+        }
+        .into(),
+    );
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    // Stands in for ctrl-clicking all three rows.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![conflicted.clone(), second.clone(), third.clone()],
+                        unstaged_anchor: Some(conflicted.clone()),
+                        ..Default::default()
+                    },
+                );
+                cx.notify();
+            });
+        });
+    });
+
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_diff_panel(cx, &view);
+    cx.simulate_keystrokes("ctrl-s");
+    draw_and_drain_test_window(cx);
+
+    let kind =
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app));
+    let Some(PopoverKind::StageConflictMarkersConfirm {
+        paths, unresolved, ..
+    }) = kind
+    else {
+        panic!("expected the unresolved-conflict confirmation, got {kind:?}");
+    };
+    assert_eq!(
+        paths,
+        vec![conflicted.clone(), second.clone(), third.clone()],
+        "going ahead must stage the whole selection, not just the shown file"
+    );
+    assert_eq!(
+        unresolved,
+        vec![conflicted.clone()],
+        "only the file with markers left in it is unresolved"
+    );
+
+    // The dialog is still up, and the selection it describes is still the user's:
+    // resolving the paths must not have consumed it.
+    assert_eq!(
+        ctrl_selected_unstaged_paths(cx, &view, repo_id),
+        vec![conflicted.clone(), second.clone(), third.clone()],
+        "the selection must survive while the confirmation is undecided"
+    );
+
+    // Cancelling stages nothing and costs the user nothing: dismissing the
+    // dialog is the whole of what "Cancel" does.
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.update(app, |host, cx| host.close_popover(cx));
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app))
+            .is_none(),
+        "the confirmation must be gone"
+    );
+    assert_eq!(
+        ctrl_selected_unstaged_paths(cx, &view, repo_id),
+        vec![conflicted.clone(), second.clone(), third.clone()],
+        "cancelling must leave the selection exactly as the user built it"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// The paths currently ctrl-selected in the unstaged list.
+fn ctrl_selected_unstaged_paths(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+) -> Vec<std::path::PathBuf> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .status_multi_selection
+            .get(&repo_id)
+            .map(|selection| selection.unstaged.clone())
+            .unwrap_or_default()
+    })
 }
 
 #[gpui::test]

@@ -8,6 +8,7 @@ mod conflict_actions;
 mod core_impl;
 pub(in crate::view) mod diff_cache;
 pub(in crate::view) mod diff_search;
+mod diff_stage;
 mod diff_text;
 mod helpers;
 mod interactive_rebase;

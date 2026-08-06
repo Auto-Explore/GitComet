@@ -80,6 +80,19 @@ impl MainPaneView {
         self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
     }
 
+    /// Record where a row painted its stage/unstage gutter button. Hover and
+    /// click routing go through the row's hitbox; this map exists so tests can
+    /// aim at the button without re-deriving its geometry.
+    pub(in super::super::super) fn set_diff_stage_gutter_cell(
+        &mut self,
+        visible_ix: usize,
+        slot: rows::DiffStageSlot,
+        bounds: gpui::Bounds<Pixels>,
+    ) {
+        self.diff_stage_gutter_cells
+            .insert((visible_ix, slot), bounds);
+    }
+
     fn diff_text_pos_from_hitbox(
         &self,
         visible_ix: usize,
@@ -1623,12 +1636,24 @@ impl MainPaneView {
                     .map(|_| selected_hunks.len())
                     .unwrap_or(0);
 
-                let lines_patch = build_unified_patch_for_selected_lines_across_hunks(
-                    &materialized_diff,
-                    &selected_change_src_ixs,
-                );
+                // "Stage line(s)" applies forward to the index; "Unstage
+                // line(s)" applies the same selection in reverse, which needs
+                // the opposite treatment of the unselected changes around it or
+                // git rejects the patch.
+                let lines_patch = match area {
+                    DiffArea::Unstaged => build_unified_patch_for_selected_lines_across_hunks(
+                        &materialized_diff,
+                        &selected_change_src_ixs,
+                    ),
+                    DiffArea::Staged => {
+                        build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
+                            &materialized_diff,
+                            &selected_change_src_ixs,
+                        )
+                    }
+                };
                 let discard_lines_patch = if area == DiffArea::Unstaged {
-                    build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
+                    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
                         &materialized_diff,
                         &selected_change_src_ixs,
                     )

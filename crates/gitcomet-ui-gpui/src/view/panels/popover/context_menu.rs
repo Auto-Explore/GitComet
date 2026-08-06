@@ -229,6 +229,35 @@ impl PopoverHost {
         }
     }
 
+    /// The paths a context-menu action on `clicked_path` covers, plus whether
+    /// they came out of the row selection. Reads only — see
+    /// [`Self::clear_status_multi_selection`] for the other half.
+    fn status_paths_for_action(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+        clicked_path: &std::path::PathBuf,
+        cx: &gpui::App,
+    ) -> (Vec<std::path::PathBuf>, bool) {
+        self.details_pane
+            .read(cx)
+            .status_selected_paths_for_action(repo_id, area, clicked_path)
+    }
+
+    /// Drop the row selection because an action has gone ahead with it. Never
+    /// call this before the action is settled: a confirmation the user cancels
+    /// must leave the selection standing.
+    pub(super) fn clear_status_multi_selection(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.details_pane.update(cx, |pane, cx| {
+            pane.clear_status_multi_selection(repo_id);
+            cx.notify();
+        });
+    }
+
     fn take_status_paths_for_action(
         &mut self,
         repo_id: RepoId,
@@ -236,27 +265,11 @@ impl PopoverHost {
         clicked_path: &std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) -> (Vec<std::path::PathBuf>, bool) {
-        let selection = self.details_pane.update(cx, |pane, cx| {
-            let selection = pane
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|sel| sel.selected_paths_for_area(area))
-                .unwrap_or(&[]);
-
-            let use_selection = selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
-            if !use_selection {
-                return None;
-            }
-
-            let sel = pane.status_multi_selection.remove(&repo_id)?;
-            cx.notify();
-            Some(sel.take_selected_paths_for_area(area))
-        });
-
-        match selection {
-            Some(paths) if !paths.is_empty() => (paths, true),
-            _ => (vec![clicked_path.clone()], false),
+        let (paths, used_selection) = self.status_paths_for_action(repo_id, area, clicked_path, cx);
+        if used_selection {
+            self.clear_status_multi_selection(repo_id, cx);
         }
+        (paths, used_selection)
     }
 
     pub(in super::super) fn context_menu_model(
@@ -782,9 +795,24 @@ impl PopoverHost {
                 area,
                 path,
             } => {
+                // Staging is what marks a conflict resolved, so confirm first if
+                // any of these files still has conflict markers in the worktree.
+                // Resolved without consuming the selection, which the dialog
+                // takes over responsibility for.
                 let (paths, used_selection) =
-                    self.take_status_paths_for_action(repo_id, area, &path, cx);
+                    self.status_paths_for_action(repo_id, area, &path, cx);
+                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &self.state,
+                    repo_id,
+                    paths.clone(),
+                    used_selection,
+                ) {
+                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+                    self.open_popover_at(confirm, anchor, window, cx);
+                    return;
+                }
                 if used_selection {
+                    self.clear_status_multi_selection(repo_id, cx);
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     self.store.dispatch(Msg::StagePaths {
                         repo_id,

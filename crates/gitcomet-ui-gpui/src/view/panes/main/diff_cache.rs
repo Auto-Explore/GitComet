@@ -2107,6 +2107,14 @@ impl MainPaneView {
         self.file_diff_inline_cache.clear();
         self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
+        self.reset_file_diff_word_highlight_caches();
+    }
+
+    /// Drop the memoized intra-line word-diff ranges. They are keyed by bare row
+    /// index, so they only describe the rows they were computed from: anything
+    /// that changes what row *n* holds has to clear them or row *n* keeps ranges
+    /// measured against text it no longer shows.
+    pub(in crate::view) fn reset_file_diff_word_highlight_caches(&mut self) {
         self.file_diff_inline_word_highlights =
             rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
         self.file_diff_split_word_highlights =
@@ -2241,10 +2249,20 @@ impl MainPaneView {
         self.file_diff_cache_rev = diff_file_rev;
         self.file_diff_cache_whitespace_mode = self.diff_whitespace_mode;
         self.file_diff_cache_target = Some(diff_target);
-        self.reset_file_diff_cache_data();
 
-        // Reset the segment cache to avoid mixing patch/file indices.
-        self.clear_diff_text_style_caches();
+        // Rebuilding the same file keeps the rows that are already on screen:
+        // they are a complete, self-consistent generation, the completion below
+        // swaps every field of the next one in atomically, and dropping them
+        // first is what makes the pane flash "Processing file…" on every staged
+        // line. A different file — or one with no content to rebuild from — must
+        // still clear immediately, since its rows are not this file's.
+        let keep_rows_while_rebuilding = same_repo_and_target && file.is_some();
+        if !keep_rows_while_rebuilding {
+            self.reset_file_diff_cache_data();
+
+            // Reset the segment cache to avoid mixing patch/file indices.
+            self.clear_diff_text_style_caches();
+        }
 
         let Some(file) = file else {
             return;
@@ -2317,6 +2335,12 @@ impl MainPaneView {
                     this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
+                    // The rows just changed under their own indices. On the
+                    // clearing path `reset_file_diff_cache_data` already did
+                    // this; the kept-rows path deliberately skips it, so without
+                    // this a staged line leaves every row holding the previous
+                    // generation's word ranges.
+                    this.reset_file_diff_word_highlight_caches();
                     #[cfg(test)]
                     {
                         this.file_diff_cache_rows = rebuild.rows;
@@ -2670,10 +2694,15 @@ impl MainPaneView {
                     let Some(line) = diff.lines.get(src_ix) else {
                         continue;
                     };
-                    let display = parse_diff_git_header_path(line.text.as_ref())
-                        .unwrap_or_else(|| line.text.as_ref().to_string());
-                    self.diff_header_display_cache
-                        .insert(src_ix, display.into());
+                    // The header row opens its own file section, so the path
+                    // resolved for it above is exactly what to show.
+                    let display: SharedString = self
+                        .diff_file_for_src_ix
+                        .get(src_ix)
+                        .and_then(|path| path.as_ref())
+                        .map(|path| SharedString::new(Arc::clone(path)))
+                        .unwrap_or_else(|| SharedString::from(line.text.as_ref().to_string()));
+                    self.diff_header_display_cache.insert(src_ix, display);
                 }
                 DiffClickKind::HunkHeader => {
                     let Some(line) = diff.lines.get(src_ix) else {

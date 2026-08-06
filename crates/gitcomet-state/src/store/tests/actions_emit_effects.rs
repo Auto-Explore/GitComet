@@ -3979,6 +3979,65 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
 }
 
 #[test]
+fn hunk_staging_is_logged_without_announcing_success() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    for command in [RepoCommandKind::StageHunk, RepoCommandKind::UnstageHunk] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command,
+                result: Ok(CommandOutput::default()),
+            }),
+        );
+    }
+
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    assert_eq!(
+        repo_state.command_log.len(),
+        2,
+        "staging a hunk still belongs in the command log"
+    );
+    assert!(
+        repo_state
+            .command_log
+            .iter()
+            .all(|entry| !entry.announce_success),
+        "a staged hunk shows itself in the diff; it must not raise a toast"
+    );
+
+    // A failure is still surfaced.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: RepoCommandKind::StageHunk,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("patch does not apply".into()),
+            )),
+        }),
+    );
+    let repo_state = state.repos.iter().find(|r| r.id == repo_id).unwrap();
+    let last = repo_state.command_log.last().unwrap();
+    assert!(!last.ok, "the failure must be recorded as such");
+}
+
+#[test]
 fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

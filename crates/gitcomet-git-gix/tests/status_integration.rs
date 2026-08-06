@@ -8562,6 +8562,324 @@ fn unstage_hunk_reverts_only_that_part_in_index() {
     assert!(unstaged_after_unstage.contains("+L25-mod"));
 }
 
+/// Unstaging must not disturb a merge in progress: a bare `git reset` collapses
+/// unmerged index entries and clears MERGE_HEAD, which turns conflicted files
+/// into ordinary modifications still full of conflict markers.
+#[test]
+fn unstage_all_leaves_conflicted_paths_and_the_merge_alone() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "c.txt", "base\n");
+    write(repo, "other.txt", "other\n");
+    run_git(repo, &["add", "."]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    let base_branch = run_git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let base_branch = base_branch.trim().to_string();
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "c.txt", "theirs\n");
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "theirs"],
+    );
+    run_git(repo, &["checkout", &base_branch]);
+    write(repo, "c.txt", "ours\n");
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "ours"],
+    );
+
+    // Conflict on c.txt, plus an unrelated staged change.
+    let _ = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["merge", "feature"])
+        .output();
+    write(repo, "other.txt", "other\nstaged\n");
+    run_git(repo, &["add", "other.txt"]);
+
+    let conflicted_before = run_git_output(repo, &["ls-files", "-u"]);
+    assert!(
+        conflicted_before.contains("c.txt"),
+        "expected c.txt to be unmerged before unstaging:\n{conflicted_before}"
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.unstage(&[]).unwrap();
+
+    let conflicted_after = run_git_output(repo, &["ls-files", "-u"]);
+    assert!(
+        conflicted_after.contains("c.txt"),
+        "unstage-all must leave the conflict in the index:\n{conflicted_after}"
+    );
+    assert!(
+        repo.join(".git").join("MERGE_HEAD").exists(),
+        "unstage-all must not abort the merge"
+    );
+
+    let status = opened.status().unwrap();
+    assert!(
+        status
+            .unstaged
+            .iter()
+            .any(|entry| entry.path == PathBuf::from("c.txt") && entry.conflict.is_some()),
+        "c.txt must still be reported as conflicted: {:?}",
+        status.unstaged
+    );
+    assert!(
+        status.staged.is_empty(),
+        "the unrelated staged change must still have been unstaged: {:?}",
+        status.staged
+    );
+}
+
+/// The conflict-safe unstage-all resets named paths rather than everything, so
+/// it has to name *both* sides of a staged rename. The status list reports only
+/// the destination, and resetting that alone leaves the source path staged as
+/// deleted — half a rename in the index.
+#[test]
+fn unstage_all_during_a_merge_resets_both_sides_of_a_staged_rename() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "c.txt", "base\n");
+    // Long enough that rename detection scores the move as a rename.
+    write(
+        repo,
+        "old.txt",
+        "alpha\nbravo\ncharlie\ndelta\necho\nfoxtrot\n",
+    );
+    run_git(repo, &["add", "."]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    let base_branch = run_git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"]);
+    let base_branch = base_branch.trim().to_string();
+
+    run_git(repo, &["checkout", "-b", "feature"]);
+    write(repo, "c.txt", "theirs\n");
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "theirs"],
+    );
+    run_git(repo, &["checkout", &base_branch]);
+    write(repo, "c.txt", "ours\n");
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-am", "ours"],
+    );
+
+    // Conflict on c.txt, plus a staged rename that has nothing to do with it.
+    let _ = std::process::Command::new("git")
+        .current_dir(repo)
+        .args(["merge", "feature"])
+        .output();
+    run_git(repo, &["mv", "old.txt", "new.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened.unstage(&[]).unwrap();
+
+    let staged = run_git_output(repo, &["diff", "--cached", "--name-only"]);
+    assert!(
+        !staged.lines().any(|line| line == "old.txt"),
+        "unstage-all must not leave old.txt staged as deleted:\n{staged}"
+    );
+    assert!(
+        !staged.lines().any(|line| line == "new.txt"),
+        "unstage-all must unstage the rename destination too:\n{staged}"
+    );
+
+    // The rename itself stays on disk: unstaging only rewrites the index.
+    assert!(
+        repo.join("new.txt").exists() && !repo.join("old.txt").exists(),
+        "unstage-all must not touch the worktree"
+    );
+
+    let conflicted_after = run_git_output(repo, &["ls-files", "-u"]);
+    assert!(
+        conflicted_after.contains("c.txt"),
+        "unstage-all must leave the conflict in the index:\n{conflicted_after}"
+    );
+    assert!(
+        repo.join(".git").join("MERGE_HEAD").exists(),
+        "unstage-all must not abort the merge"
+    );
+}
+
+/// A line-level unstage applies its patch in reverse, so the side it has to
+/// match is the index. The patch therefore keeps the additions it is *not*
+/// unstaging as context and drops the removals, which the index does not have.
+/// Built the staging way instead, git rejects it with "patch does not apply".
+#[test]
+fn unstage_line_patch_must_describe_the_index_side() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(
+        repo,
+        "a.txt",
+        "context one\nold one\nold two\ncontext two\n",
+    );
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    // Stage a two-line modification, then unstage only the first of them.
+    write(
+        repo,
+        "a.txt",
+        "context one\nnew one\nnew two\ncontext two\n",
+    );
+    run_git(repo, &["add", "a.txt"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let staging_shaped = concat!(
+        "diff --git a/a.txt b/a.txt\n",
+        "--- a/a.txt\n",
+        "+++ b/a.txt\n",
+        "@@ -1,4 +1,4 @@\n",
+        " context one\n",
+        " old one\n",
+        " old two\n",
+        "+new one\n",
+        " context two\n",
+    );
+    assert!(
+        opened
+            .apply_unified_patch_to_index_with_output(staging_shaped, true)
+            .is_err(),
+        "a patch describing the HEAD side cannot be reverse-applied to the index"
+    );
+
+    let unstage_shaped = concat!(
+        "diff --git a/a.txt b/a.txt\n",
+        "--- a/a.txt\n",
+        "+++ b/a.txt\n",
+        "@@ -1,4 +1,4 @@\n",
+        " context one\n",
+        "+new one\n",
+        " new two\n",
+        " context two\n",
+    );
+    opened
+        .apply_unified_patch_to_index_with_output(unstage_shaped, true)
+        .expect("a patch describing the index side reverse-applies");
+
+    let staged_after = opened
+        .diff_unified(&DiffTarget::WorkingTree {
+            path: PathBuf::from("a.txt"),
+            area: DiffArea::Staged,
+        })
+        .unwrap();
+    assert!(
+        staged_after.contains("+new two") && !staged_after.contains("+new one"),
+        "only the unstaged line should have left the index:\n{staged_after}"
+    );
+}
+
+/// A space in a path makes the `diff --git` line ambiguous, so git disambiguates
+/// by repeating the name on the `---`/`+++` lines and terminating it with a TAB.
+/// Both the diff we hand to the UI and the patch that comes back have to carry
+/// that shape for a line-level stage to work at all.
+#[test]
+fn line_level_staging_round_trips_a_path_containing_spaces() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    let rel = "src/rules - Copy.rs";
+    write(repo, rel, "context one\nold one\nold two\ncontext two\n");
+    run_git(repo, &["add", rel]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    write(repo, rel, "context one\nnew one\nnew two\ncontext two\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let unstaged = opened
+        .diff_unified(&DiffTarget::WorkingTree {
+            path: PathBuf::from(rel),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert!(
+        unstaged.contains(&format!("+++ b/{rel}\t")),
+        "git must repeat the spaced name with a terminating TAB:\n{unstaged}"
+    );
+
+    // Stage only the first of the two changed lines, keeping the second's
+    // addition out and demoting both removals to context.
+    let one_line = format!(
+        "diff --git a/{rel} b/{rel}\n\
+         --- a/{rel}\t\n\
+         +++ b/{rel}\t\n\
+         @@ -1,4 +1,4 @@\n\
+         \x20context one\n\
+         -old one\n\
+         \x20old two\n\
+         +new one\n\
+         \x20context two\n"
+    );
+    opened
+        .apply_unified_patch_to_index_with_output(&one_line, false)
+        .expect("a per-line patch for a spaced path must apply to the index");
+
+    let staged_after = opened
+        .diff_unified(&DiffTarget::WorkingTree {
+            path: PathBuf::from(rel),
+            area: DiffArea::Staged,
+        })
+        .unwrap();
+    assert!(
+        staged_after.contains("+new one") && !staged_after.contains("+new two"),
+        "only the staged line should have reached the index:\n{staged_after}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // End-to-end conflict resolution workflow tests
 // ---------------------------------------------------------------------------

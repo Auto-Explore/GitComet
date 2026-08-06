@@ -150,6 +150,94 @@ fn push_regular_diff_content_mode_state_with_rev(
     target
 }
 
+#[gpui::test]
+fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(70720);
+    let path = PathBuf::from("src/lib.rs");
+
+    let unified_before = concat!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n",
+        "--- a/src/lib.rs\n",
+        "+++ b/src/lib.rs\n",
+        "@@ -1,3 +1,3 @@\n",
+        " one\n",
+        "-two\n",
+        "+two_mod\n",
+        " three\n",
+    );
+    push_regular_diff_content_mode_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        "keep_rows",
+        path.clone(),
+        1,
+        unified_before.to_string(),
+        "one\ntwo\nthree\n".to_string(),
+        "one\ntwo_mod\nthree\n".to_string(),
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the file diff rows to be built",
+        |pane| pane.file_diff_cache_content_signature.is_some() && pane.diff_visible_len() > 0,
+        |pane| format!("visible_len={}", pane.diff_visible_len()),
+    );
+
+    // Staging a line reloads the same file with different content. The rebuild
+    // must not blank the pane: the previous rows stay up until the new ones land.
+    let unified_after = concat!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n",
+        "--- a/src/lib.rs\n",
+        "+++ b/src/lib.rs\n",
+        "@@ -1,3 +1,3 @@\n",
+        " one\n",
+        "-three\n",
+        "+three_mod\n",
+    );
+    push_regular_diff_content_mode_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        "keep_rows",
+        path,
+        2,
+        unified_after.to_string(),
+        "one\ntwo_mod\nthree\n".to_string(),
+        "one\ntwo_mod\nthree_mod\n".to_string(),
+    );
+
+    // Draw without draining, so the rebuild is still in flight.
+    crate::view::test_support::redraw(cx);
+    let (inflight, has_rows) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.file_diff_cache_inflight.is_some(),
+            pane.file_diff_cache_content_signature.is_some(),
+        )
+    });
+    assert!(inflight, "expected the same-file rebuild to be in flight");
+    assert!(
+        has_rows,
+        "the previous rows must survive the rebuild, or the pane flashes a placeholder"
+    );
+
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(|_window, app| view
+            .read(app)
+            .main_pane
+            .read(app)
+            .file_diff_cache_content_signature
+            .is_some()),
+        "the rebuilt rows must be in place once the refresh lands"
+    );
+}
+
 fn build_collapsed_diff_fixture_texts() -> (String, String, String) {
     let old_lines = (1..=70usize)
         .map(|line| {

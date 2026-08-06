@@ -141,6 +141,7 @@ pub(crate) mod clone_progress;
 mod color;
 mod command_palette;
 pub(crate) mod components;
+mod conflict_markers;
 pub(crate) mod conflict_resolver;
 mod date_time;
 mod diff_navigation;
@@ -219,11 +220,11 @@ use diff_text_selection::{
 };
 use diff_utils::{
     build_unified_patch_for_hunks, build_unified_patch_for_selected_lines_across_hunks,
-    build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard,
+    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
-    parse_diff_git_header_path, parse_unified_hunk_header_for_display,
-    scrollbar_markers_from_flags, scrollbar_markers_from_visible_ranges,
+    parse_unified_hunk_header_for_display, scrollbar_markers_from_flags,
+    scrollbar_markers_from_visible_ranges,
 };
 use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,
@@ -895,20 +896,40 @@ impl GitCometView {
                 });
             }
             "stage-all" => {
-                if let Some(repo_id) = self.active_repo_id()
-                    && let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id)
-                {
-                    let paths: Vec<_> = repo
-                        .worktree_status_entries()
-                        .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
-                        .unwrap_or_default();
-                    if !paths.is_empty() {
-                        self.store.dispatch(Msg::StagePaths {
-                            repo_id,
-                            paths: paths.into(),
-                        });
-                    }
+                let Some(repo_id) = self.active_repo_id() else {
+                    return;
+                };
+                let paths: Vec<_> = self
+                    .state
+                    .repos
+                    .iter()
+                    .find(|r| r.id == repo_id)
+                    .and_then(|repo| repo.worktree_status_entries())
+                    .map(|entries| entries.iter().map(|e| e.path.clone()).collect::<Vec<_>>())
+                    .unwrap_or_default();
+                if paths.is_empty() {
+                    return;
                 }
+                // Staging is what marks a conflict resolved, so confirm first if
+                // any of it still has conflict markers in the worktree. With no
+                // window there is nothing to confirm in, and staging unasked is
+                // the one outcome this must not have.
+                // No row selection is involved here, so there is none to consume.
+                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &self.state,
+                    repo_id,
+                    paths.clone(),
+                    false,
+                ) {
+                    if let Some(window) = window {
+                        self.open_popover_centered(confirm, window, cx);
+                    }
+                    return;
+                }
+                self.store.dispatch(Msg::StagePaths {
+                    repo_id,
+                    paths: paths.into(),
+                });
             }
             "unstage-all" => {
                 if let Some(repo_id) = self.active_repo_id()

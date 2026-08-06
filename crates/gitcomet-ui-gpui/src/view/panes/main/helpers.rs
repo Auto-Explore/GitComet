@@ -2466,6 +2466,14 @@ pub(crate) struct MainPaneView {
     /// Blame annotation sub-area currently hovered (row index + area). Drives the
     /// accent highlight and tooltip for the annotation column on the next paint.
     pub(in crate::view) blame_annot_hover: Option<(usize, crate::view::rows::AnnotArea)>,
+    /// Diff row whose stage/unstage gutter button is currently hovered, as the
+    /// row index plus which column's gutter it sits in. Drives painting the
+    /// button and its tooltip on the next paint; `None` means none is showing.
+    pub(in crate::view) diff_stage_gutter_hover: Option<crate::view::rows::DiffStageHover>,
+    /// Painted bounds of each row's stage-gutter cell, recorded during paint so
+    /// tests can drive the button without duplicating its geometry.
+    pub(in crate::view) diff_stage_gutter_cells:
+        HashMap<(usize, crate::view::rows::DiffStageSlot), gpui::Bounds<Pixels>>,
     /// Memoized `(min, max)` author-time range for the currently loaded blame,
     /// keyed by a clone of the blame `Arc`. The range never changes after load,
     /// so this avoids rescanning all blame lines on every render frame. Holding

@@ -5,8 +5,12 @@ fn file_diff_ready_shows_processing(
     has_file: bool,
     cache_active: bool,
     cache_inflight: bool,
+    has_rendered_rows: bool,
 ) -> bool {
-    has_file && (!cache_active || cache_inflight)
+    // Rows already built for this file stay on screen while a refresh rebuilds
+    // them, so a reload does not blink through a placeholder. The placeholder is
+    // only for having nothing to show.
+    has_file && (!cache_active || cache_inflight) && !has_rendered_rows
 }
 
 fn image_diff_ready_shows_processing(has_file: bool, cache_active: bool) -> bool {
@@ -375,6 +379,7 @@ impl MainPaneView {
                         has_file,
                         text_cache_active,
                         self.file_diff_cache_inflight.is_some(),
+                        self.file_diff_cache_content_signature.is_some(),
                     ) {
                         components::empty_state(theme, "Diff", "Processing file...")
                             .into_any_element()
@@ -1160,10 +1165,14 @@ mod tests {
 
     #[test]
     fn file_diff_ready_state_prefers_processing_when_cache_is_stale() {
-        assert!(file_diff_ready_shows_processing(true, false, false));
-        assert!(file_diff_ready_shows_processing(true, true, true));
-        assert!(!file_diff_ready_shows_processing(true, true, false));
-        assert!(!file_diff_ready_shows_processing(false, false, true));
+        assert!(file_diff_ready_shows_processing(true, false, false, false));
+        assert!(file_diff_ready_shows_processing(true, true, true, false));
+        assert!(!file_diff_ready_shows_processing(true, true, false, false));
+        assert!(!file_diff_ready_shows_processing(false, false, true, false));
+        // Rows from the previous build are shown instead of a placeholder while
+        // the same file is rebuilt.
+        assert!(!file_diff_ready_shows_processing(true, true, true, true));
+        assert!(!file_diff_ready_shows_processing(true, false, false, true));
     }
 
     #[test]

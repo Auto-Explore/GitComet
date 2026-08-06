@@ -29,6 +29,7 @@ pub use history::{HistoryAutosolveOptions, history_merge_region};
 pub use marker_parse::{
     ParsedConflictBlock, ParsedConflictBlockRanges, ParsedConflictSegment,
     ParsedConflictSegmentRanges, parse_conflict_marker_ranges, parse_conflict_marker_segments,
+    reader_has_conflict_markers, text_has_conflict_markers,
 };
 pub use region_edit::{
     ConflictRegionEditOutcome, ConflictRegionSplitBoundaries, join_conflict_regions_text,

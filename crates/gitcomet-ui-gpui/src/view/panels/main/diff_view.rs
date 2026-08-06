@@ -366,6 +366,37 @@ impl MainPaneView {
             .and_then(|navigation| navigation.next_or_prev_path());
             let status_ready = repo.status_entries_for_area(area).is_some();
 
+            // A multi-file status selection wins over the single shown file, so
+            // the shortcut matches what the status row button and context menu
+            // already do with the same selection.
+            if let Some(paths) = self.status_selection_for_shortcut(repo_id, area, &path, cx) {
+                if self.confirm_stage_conflict_markers(
+                    repo_id,
+                    area,
+                    paths.clone(),
+                    true,
+                    window,
+                    cx,
+                ) {
+                    return true;
+                }
+                self.clear_status_selection_for_shortcut(repo_id, cx);
+                self.stage_or_unstage_status_paths(repo_id, area, paths);
+                self.rebuild_diff_cache(cx);
+                return true;
+            }
+
+            if self.confirm_stage_conflict_markers(
+                repo_id,
+                area,
+                vec![path.clone()],
+                false,
+                window,
+                cx,
+            ) {
+                return true;
+            }
+
             match (status_ready, area) {
                 (true, DiffArea::Unstaged) => {
                     self.store.dispatch(Msg::StagePath {
@@ -464,6 +495,40 @@ impl MainPaneView {
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
+                    // A multi-file status selection wins over the single shown
+                    // file, matching the status row button and context menu.
+                    // Resolved before confirming, or the dialog would describe —
+                    // and then stage — only the shown file out of the selection.
+                    if let Some(paths) =
+                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
+                    {
+                        if self.confirm_stage_conflict_markers(
+                            repo_id,
+                            area,
+                            paths.clone(),
+                            true,
+                            window,
+                            cx,
+                        ) {
+                            return true;
+                        }
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        self.rebuild_diff_cache(cx);
+                        return true;
+                    }
+
+                    if self.confirm_stage_conflict_markers(
+                        repo_id,
+                        area,
+                        vec![path.clone()],
+                        false,
+                        window,
+                        cx,
+                    ) {
+                        return true;
+                    }
+
                     if status_ready {
                         self.store.dispatch(Msg::StagePath {
                             repo_id,
@@ -497,6 +562,27 @@ impl MainPaneView {
                         change_tracking_view,
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
+
+                    // A multi-file status selection wins over the single shown
+                    // file, matching the status row button and context menu.
+                    if let Some(paths) =
+                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
+                    {
+                        if self.confirm_stage_conflict_markers(
+                            repo_id,
+                            area,
+                            paths.clone(),
+                            true,
+                            window,
+                            cx,
+                        ) {
+                            return true;
+                        }
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        self.rebuild_diff_cache(cx);
+                        return true;
+                    }
 
                     if status_ready {
                         self.store.dispatch(Msg::UnstagePath {
@@ -3182,6 +3268,13 @@ impl MainPaneView {
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.prune_diff_text_layout_cache();
         self.diff_text_hitboxes.clear();
+        // The map still holds last frame's buttons, so it is the one place that
+        // knows a hovered button has stopped being painted — the row itself
+        // clears its hover on the next mouse move, but a row that scrolled away
+        // or stopped being a change line paints no handler to do it, and a wheel
+        // scroll delivers no mouse move at all.
+        self.clear_diff_stage_gutter_hover_if_unpainted(cx);
+        self.diff_stage_gutter_cells.clear();
         let diff_editor_menu_active = self
             .active_context_menu_invoker
             .as_ref()

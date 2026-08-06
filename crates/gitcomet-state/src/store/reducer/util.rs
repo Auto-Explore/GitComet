@@ -269,28 +269,71 @@ pub(super) fn apply_selected_diff_load_plan_state(
     repo_state: &mut RepoState,
     load_plan: SelectedDiffLoadPlan,
 ) {
+    apply_selected_diff_load_plan_state_with_reload_mode(
+        repo_state,
+        load_plan,
+        DiffReloadMode::Blank,
+    );
+}
+
+/// What a reload does with content that is already on screen.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DiffReloadMode {
+    /// Drop it: the diff is switching to something else, so the old content is
+    /// not what the user asked for and must not linger.
+    Blank,
+    /// Keep it until the new content arrives. For a reload of the *same* target
+    /// — after staging a hunk or line, say — blanking makes the pane flash a
+    /// "Loading" placeholder for a frame or two even when almost nothing about
+    /// the file changed.
+    ///
+    /// What stays on screen is then a generation behind the index, so this also
+    /// raises `diff_reload_in_flight` for as long as that is true.
+    KeepLoaded,
+}
+
+pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
+    repo_state: &mut RepoState,
+    load_plan: SelectedDiffLoadPlan,
+    mode: DiffReloadMode,
+) {
+    fn reloading<T>(current: &Loadable<T>, mode: DiffReloadMode) -> Loadable<T>
+    where
+        T: Clone,
+    {
+        match (mode, current) {
+            (DiffReloadMode::KeepLoaded, Loadable::Ready(value)) => Loadable::Ready(value.clone()),
+            _ => Loadable::Loading,
+        }
+    }
+
+    // Blanking leaves nothing stale to build a patch out of, so only the keeping
+    // mode raises the flag — and it lowers it again, which is what stops a
+    // target change from stranding it set.
+    repo_state.diff_state.diff_reload_in_flight = matches!(mode, DiffReloadMode::KeepLoaded);
+
     repo_state.diff_state.diff = if load_plan.load_patch_diff {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.diff_file = if load_plan.load_file_text {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff_file, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.diff_preview_text_file = if load_plan.preview_text_side.is_some() {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff_preview_text_file, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.submodule_summary = if load_plan.load_submodule_summary {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.submodule_summary, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.diff_file_image = if load_plan.load_file_image {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff_file_image, mode)
     } else {
         Loadable::NotLoaded
     };
@@ -872,6 +915,16 @@ pub(super) fn handle_session_persist_result(
     }
 }
 
+/// Staging and unstaging a hunk or line is a direct, visible edit: the diff
+/// redraws without the change, which is the whole feedback the user needs. A
+/// toast for each one just stacks up while working through a file.
+fn command_success_is_worth_announcing(command: &RepoCommandKind) -> bool {
+    !matches!(
+        command,
+        RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk
+    )
+}
+
 pub(super) fn push_command_log(
     repo_state: &mut RepoState,
     ok: bool,
@@ -894,6 +947,7 @@ pub(super) fn push_command_log(
         } else {
             output.stderr.clone()
         },
+        announce_success: command_success_is_worth_announcing(command),
     });
     if repo_state.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
@@ -917,6 +971,7 @@ pub(super) fn push_action_log(
         summary,
         stdout: String::new(),
         stderr: error.map(format_error_for_user).unwrap_or_default(),
+        announce_success: true,
     });
     if repo_state.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
@@ -1615,6 +1670,7 @@ mod tests {
             summary: String::new(),
             stdout: String::new(),
             stderr: String::new(),
+            announce_success: true,
         }
     }
 

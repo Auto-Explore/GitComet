@@ -32,6 +32,7 @@ mod repo_picker;
 mod reset_prompt;
 mod search_inputs;
 mod squash_prompt;
+mod stage_conflict_markers_confirm;
 mod stash_drop_confirm;
 mod stash_picker_prompt;
 mod stash_prompt;
@@ -413,6 +414,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
+            | PopoverKind::StageConflictMarkersConfirm { .. }
             | PopoverKind::ResetPrompt { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::TerminalShutdownConfirm(_)
@@ -722,7 +724,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
-        | PopoverKind::DiscardChangesConfirm { .. } => Some(DIALOG_420_WIDTH),
+        | PopoverKind::DiscardChangesConfirm { .. }
+        | PopoverKind::StageConflictMarkersConfirm { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::PushSetUpstreamPrompt { .. } => Some(DIALOG_320_WIDTH),
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
@@ -3661,6 +3664,19 @@ impl PopoverHost {
                 area,
                 path,
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::StageConflictMarkersConfirm {
+                repo_id,
+                paths,
+                unresolved,
+                clear_selection,
+            } => stage_conflict_markers_confirm::panel(
+                self,
+                repo_id,
+                paths.clone(),
+                unresolved.clone(),
+                clear_selection,
+                cx,
+            ),
             PopoverKind::PullReconcilePrompt { repo_id } => {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }

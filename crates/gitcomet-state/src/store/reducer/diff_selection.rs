@@ -584,6 +584,11 @@ pub(super) fn diff_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
+        // The reload this was waiting for has arrived, whatever it carries and
+        // whichever branch below claims it: the rows on screen are about to stop
+        // being a generation behind the index.
+        repo_state.diff_state.diff_reload_in_flight = false;
+
         if selected_conflict_target(repo_state, &target).is_some() {
             return Vec::new();
         }

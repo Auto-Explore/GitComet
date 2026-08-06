@@ -1,5 +1,6 @@
 use super::util::{
-    SelectedConflictTarget, apply_selected_diff_load_plan_state, clear_banner_error_for_repo,
+    DiffReloadMode, SelectedConflictTarget, apply_selected_diff_load_plan_state,
+    apply_selected_diff_load_plan_state_with_reload_mode, clear_banner_error_for_repo,
     diff_reload_effects, format_failure_summary, push_action_log, push_command_log,
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
@@ -1207,6 +1208,8 @@ pub(super) fn repo_command_finished(
         // shows, so staging/unstaging/patching must invalidate blame too.
         invalidate_loaded_blame(repo_state);
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+            // Blanked, so there is nothing stale left to guard against.
+            repo_state.diff_state.diff_reload_in_flight = false;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
@@ -1224,7 +1227,14 @@ pub(super) fn repo_command_finished(
             }
         } else {
             let load_plan = selected_diff_load_plan(repo_state, &target);
-            apply_selected_diff_load_plan_state(repo_state, load_plan);
+            // The diff target did not change — only its contents did — so the
+            // reload keeps showing what is already there. Blanking it would make
+            // the pane flash "Loading" on every staged hunk or line.
+            apply_selected_diff_load_plan_state_with_reload_mode(
+                repo_state,
+                load_plan,
+                DiffReloadMode::KeepLoaded,
+            );
             repo_state.bump_diff_state_rev();
             extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
