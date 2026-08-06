@@ -225,15 +225,6 @@ pub(super) fn rasterize_svg_preview_png(svg_bytes: &[u8]) -> Option<Vec<u8>> {
     )
 }
 
-pub(super) fn parse_diff_git_header_path(text: &str) -> Option<String> {
-    let text = text.strip_prefix("diff --git ")?;
-    let mut parts = text.split_whitespace();
-    let a = parts.next()?;
-    let b = parts.next().unwrap_or(a);
-    let b = b.strip_prefix("b/").unwrap_or(b);
-    Some(b.to_string())
-}
-
 #[derive(Clone, Debug)]
 pub(super) struct ParsedHunkHeader {
     pub(super) old: String,
@@ -315,11 +306,16 @@ pub(super) fn compute_diff_file_for_src_ix(diff: &[impl UnifiedDiffLine]) -> Vec
     let mut out: Vec<Option<Arc<str>>> = Vec::with_capacity(diff.len());
     let mut current_file: Option<Arc<str>> = None;
 
-    for line in diff {
+    for (ix, line) in diff.iter().enumerate() {
         let is_file_header = matches!(line.kind(), gitcomet_core::domain::DiffLineKind::Header)
             && line.text().starts_with("diff --git ");
         if is_file_header {
-            current_file = parse_diff_git_header_path(line.text()).map(Arc::<str>::from);
+            // The name a `diff --git` line carries is only unambiguous once the
+            // `---`/`+++` lines below it are taken into account, so resolve the
+            // whole section at once.
+            current_file =
+                gitcomet_core::diff::unified_diff_file_path(diff[ix..].iter().map(|l| l.text()))
+                    .map(Arc::<str>::from);
         }
         out.push(current_file.clone());
     }
@@ -1034,12 +1030,78 @@ mod tests {
         assert_eq!(flags, vec![false, true, false]);
     }
 
+    /// A path containing spaces cannot be recovered from the `diff --git` line
+    /// alone, and getting it wrong used to collapse every such file onto the
+    /// same bogus name — which broke every row-to-patch-line lookup.
     #[test]
-    fn parse_diff_and_hunk_headers_reject_malformed_inputs() {
-        for text in ["", "diff --git", "diff --git ", "index 123..456 100644"] {
-            assert_eq!(parse_diff_git_header_path(text), None, "{text:?}");
-        }
+    fn file_for_src_ix_resolves_paths_containing_spaces() {
+        let diff = vec![
+            dl(K::Header, "diff --git a/my notes.md b/my notes.md"),
+            dl(K::Header, "index 1111111..2222222 100644"),
+            dl(K::Header, "--- a/my notes.md\t"),
+            dl(K::Header, "+++ b/my notes.md\t"),
+            dl(K::Hunk, "@@ -1 +1 @@"),
+            dl(K::Add, "+one"),
+            dl(K::Header, "diff --git a/other notes.md b/other notes.md"),
+            dl(K::Header, "--- a/other notes.md\t"),
+            dl(K::Header, "+++ b/other notes.md\t"),
+            dl(K::Hunk, "@@ -1 +1 @@"),
+            dl(K::Add, "+two"),
+        ];
 
+        let files = compute_diff_file_for_src_ix(diff.as_slice());
+        let names = files
+            .iter()
+            .map(|file| file.as_deref().unwrap_or("<none>"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            vec![
+                "my notes.md",
+                "my notes.md",
+                "my notes.md",
+                "my notes.md",
+                "my notes.md",
+                "my notes.md",
+                "other notes.md",
+                "other notes.md",
+                "other notes.md",
+                "other notes.md",
+                "other notes.md",
+            ]
+        );
+
+        // The two files must stay distinct identities: state that resets on a
+        // file boundary compares them by pointer.
+        let first = files[0].clone().expect("first file path");
+        let second = files[6].clone().expect("second file path");
+        assert!(!Arc::ptr_eq(&first, &second));
+    }
+
+    #[test]
+    fn file_for_src_ix_keeps_the_post_image_name_of_a_rename() {
+        let diff = vec![
+            dl(K::Header, "diff --git a/old.txt b/new name.txt"),
+            dl(K::Header, "similarity index 94%"),
+            dl(K::Header, "rename from old.txt"),
+            dl(K::Header, "rename to new name.txt"),
+            dl(K::Header, "--- a/old.txt"),
+            dl(K::Header, "+++ b/new name.txt\t"),
+            dl(K::Hunk, "@@ -1 +1 @@"),
+            dl(K::Add, "+one"),
+        ];
+
+        let files = compute_diff_file_for_src_ix(diff.as_slice());
+        assert!(
+            files
+                .iter()
+                .all(|file| file.as_deref() == Some("new name.txt")),
+            "{files:?}"
+        );
+    }
+
+    #[test]
+    fn parse_hunk_headers_reject_malformed_inputs() {
         for text in [
             "",
             "@@",

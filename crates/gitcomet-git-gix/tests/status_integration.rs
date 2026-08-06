@@ -8811,6 +8811,75 @@ fn unstage_line_patch_must_describe_the_index_side() {
     );
 }
 
+/// A space in a path makes the `diff --git` line ambiguous, so git disambiguates
+/// by repeating the name on the `---`/`+++` lines and terminating it with a TAB.
+/// Both the diff we hand to the UI and the patch that comes back have to carry
+/// that shape for a line-level stage to work at all.
+#[test]
+fn line_level_staging_round_trips_a_path_containing_spaces() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    let rel = "src/rules - Copy.rs";
+    write(repo, rel, "context one\nold one\nold two\ncontext two\n");
+    run_git(repo, &["add", rel]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    write(repo, rel, "context one\nnew one\nnew two\ncontext two\n");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let unstaged = opened
+        .diff_unified(&DiffTarget::WorkingTree {
+            path: PathBuf::from(rel),
+            area: DiffArea::Unstaged,
+        })
+        .unwrap();
+    assert!(
+        unstaged.contains(&format!("+++ b/{rel}\t")),
+        "git must repeat the spaced name with a terminating TAB:\n{unstaged}"
+    );
+
+    // Stage only the first of the two changed lines, keeping the second's
+    // addition out and demoting both removals to context.
+    let one_line = format!(
+        "diff --git a/{rel} b/{rel}\n\
+         --- a/{rel}\t\n\
+         +++ b/{rel}\t\n\
+         @@ -1,4 +1,4 @@\n\
+         \x20context one\n\
+         -old one\n\
+         \x20old two\n\
+         +new one\n\
+         \x20context two\n"
+    );
+    opened
+        .apply_unified_patch_to_index_with_output(&one_line, false)
+        .expect("a per-line patch for a spaced path must apply to the index");
+
+    let staged_after = opened
+        .diff_unified(&DiffTarget::WorkingTree {
+            path: PathBuf::from(rel),
+            area: DiffArea::Staged,
+        })
+        .unwrap();
+    assert!(
+        staged_after.contains("+new one") && !staged_after.contains("+new two"),
+        "only the staged line should have reached the index:\n{staged_after}"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // End-to-end conflict resolution workflow tests
 // ---------------------------------------------------------------------------

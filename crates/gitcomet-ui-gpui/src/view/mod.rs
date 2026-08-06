@@ -223,8 +223,8 @@ use diff_utils::{
     build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply,
     compute_diff_file_for_src_ix, compute_diff_file_stats,
     context_menu_selection_range_from_diff_text, diff_content_text, image_format_for_path,
-    parse_diff_git_header_path, parse_unified_hunk_header_for_display,
-    scrollbar_markers_from_flags, scrollbar_markers_from_visible_ranges,
+    parse_unified_hunk_header_for_display, scrollbar_markers_from_flags,
+    scrollbar_markers_from_visible_ranges,
 };
 use file_diff_display::{
     LARGE_DIFF_TEXT_MIN_BYTES, append_diff_display_text_slice, append_file_diff_display_text_slice,

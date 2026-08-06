@@ -4,29 +4,44 @@ use super::shortcuts::{app_state_with_active_repo, apply_state, wait_until};
 use crate::view::rows::{DiffStageHover, DiffStageSlot};
 use gitcomet_core::domain::DiffLineKind;
 
-/// One hunk with two removals and two additions, so a per-line patch has to
-/// prove it dropped the other addition and demoted the other removal.
-const STAGE_GUTTER_UNIFIED: &str = concat!(
-    "diff --git a/src/lib.rs b/src/lib.rs\n",
-    "--- a/src/lib.rs\n",
-    "+++ b/src/lib.rs\n",
-    "@@ -1,4 +1,4 @@\n",
-    " context one\n",
-    "-old one\n",
-    "-old two\n",
-    "+new one\n",
-    "+new two\n",
-    " context two\n",
-);
+const STAGE_GUTTER_PATH: &str = "src/lib.rs";
+/// A path git cannot write unambiguously on the `diff --git` line, taken from a
+/// real repository where staging single lines used to fail because of it.
+const STAGE_GUTTER_SPACED_PATH: &str = "src/rules - Copy - Copy - Copy.rs";
 const STAGE_GUTTER_OLD_TEXT: &str = "context one\nold one\nold two\ncontext two\n";
 const STAGE_GUTTER_NEW_TEXT: &str = "context one\nnew one\nnew two\ncontext two\n";
+
+/// One hunk with two removals and two additions, so a per-line patch has to
+/// prove it dropped the other addition and demoted the other removal. Shaped
+/// exactly like `git diff` writes it, including the TAB it appends after a name
+/// containing a space so the two halves of the header can be told apart.
+fn stage_gutter_unified(path: &str) -> String {
+    let tab = if path.contains(' ') { "\t" } else { "" };
+    format!(
+        "diff --git a/{path} b/{path}\n\
+         --- a/{path}{tab}\n\
+         +++ b/{path}{tab}\n\
+         @@ -1,4 +1,4 @@\n\
+         \x20context one\n\
+         -old one\n\
+         -old two\n\
+         +new one\n\
+         +new two\n\
+         \x20context two\n"
+    )
+}
 
 fn stage_gutter_repo(
     repo_id: RepoId,
     workdir: &Path,
     target: DiffTarget,
 ) -> gitcomet_state::model::RepoState {
-    let path = std::path::PathBuf::from("src/lib.rs");
+    let path = match &target {
+        DiffTarget::WorkingTree { path, .. } => path.clone(),
+        DiffTarget::Commit { path, .. } => path.clone().unwrap_or_default(),
+        DiffTarget::CommitRange { path, .. } => path.clone().unwrap_or_default(),
+    };
+    let unified = stage_gutter_unified(&path.to_string_lossy());
     let mut repo = opening_repo_state(repo_id, workdir);
     repo.open = Loadable::Ready(());
     repo.head_branch = Loadable::Ready("main".into());
@@ -45,8 +60,7 @@ fn stage_gutter_repo(
     repo.diff_state.diff_state_rev = 1;
     repo.diff_state.diff_rev = 1;
     repo.diff_state.diff = Loadable::Ready(Arc::new(gitcomet_core::domain::Diff::from_unified(
-        target,
-        STAGE_GUTTER_UNIFIED,
+        target, &unified,
     )));
     repo.diff_state.diff_file_rev = 1;
     repo.diff_state.diff_file =
@@ -59,8 +73,12 @@ fn stage_gutter_repo(
 }
 
 fn worktree_target(area: DiffArea) -> DiffTarget {
+    worktree_target_at(STAGE_GUTTER_PATH, area)
+}
+
+fn worktree_target_at(path: &str, area: DiffArea) -> DiffTarget {
     DiffTarget::WorkingTree {
-        path: std::path::PathBuf::from("src/lib.rs"),
+        path: std::path::PathBuf::from(path),
         area,
     }
 }
@@ -188,6 +206,50 @@ fn stage_gutter_patch_keeps_only_the_clicked_added_line(cx: &mut gpui::TestAppCo
             " context two\n",
         ),
         "the other addition must be dropped and both removals kept as context"
+    );
+}
+
+/// Regression: the whole-file view matches a rendered row back to its patch
+/// line by file path, so a path the header parser could not read left every
+/// lookup empty and the gutter button could only report that it had failed.
+#[gpui::test]
+fn stage_gutter_patch_works_for_a_path_containing_spaces(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_stage_gutter_view(
+        cx,
+        worktree_target_at(STAGE_GUTTER_SPACED_PATH, DiffArea::Unstaged),
+        DiffViewMode::Inline,
+    );
+
+    let path = STAGE_GUTTER_SPACED_PATH;
+    assert_eq!(
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            pane.diff_file_for_src_ix
+                .iter()
+                .filter_map(|file| file.as_deref().map(str::to_string))
+                .collect::<std::collections::BTreeSet<_>>()
+        }),
+        std::collections::BTreeSet::from([path.to_string()]),
+        "every patch line must resolve to the spaced path"
+    );
+
+    let patch = stage_gutter_patch(cx, &view, "+new two", DiffLineKind::Add)
+        .expect("a spaced path must still build a per-line patch");
+
+    assert_eq!(
+        patch,
+        format!(
+            "diff --git a/{path} b/{path}\n\
+             --- a/{path}\t\n\
+             +++ b/{path}\t\n\
+             @@ -1,4 +1,4 @@\n\
+             \x20context one\n\
+             \x20old one\n\
+             \x20old two\n\
+             +new two\n\
+             \x20context two\n"
+        ),
+        "the header lines must be copied through verbatim, tabs included"
     );
 }
 

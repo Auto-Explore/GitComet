@@ -2694,10 +2694,15 @@ impl MainPaneView {
                     let Some(line) = diff.lines.get(src_ix) else {
                         continue;
                     };
-                    let display = parse_diff_git_header_path(line.text.as_ref())
-                        .unwrap_or_else(|| line.text.as_ref().to_string());
-                    self.diff_header_display_cache
-                        .insert(src_ix, display.into());
+                    // The header row opens its own file section, so the path
+                    // resolved for it above is exactly what to show.
+                    let display: SharedString = self
+                        .diff_file_for_src_ix
+                        .get(src_ix)
+                        .and_then(|path| path.as_ref())
+                        .map(|path| SharedString::new(Arc::clone(path)))
+                        .unwrap_or_else(|| SharedString::from(line.text.as_ref().to_string()));
+                    self.diff_header_display_cache.insert(src_ix, display);
                 }
                 DiffClickKind::HunkHeader => {
                     let Some(line) = diff.lines.get(src_ix) else {
