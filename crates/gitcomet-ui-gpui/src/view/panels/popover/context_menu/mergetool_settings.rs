@@ -8,24 +8,26 @@ pub(super) fn model(host: &PopoverHost, cx: &gpui::App) -> ContextMenuModel {
         pane.mergetool_preferences();
     let collapse_context = pane.conflict_resolver_collapse_context();
     let three_way_view = pane.conflict_resolver.view_mode == ConflictResolverViewMode::ThreeWay;
-    let unsolved_whitespace = pane.conflict_resolver_unsolved_whitespace_conflicts();
     model_for_mergetool_settings(
         three_way_view,
         auto_advance,
         collapse_context,
         output_scroll_sync,
         show_line_numbers,
-        unsolved_whitespace,
+        host.diff_whitespace_mode,
+        host.diff_reveal_whitespace_chars,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn model_for_mergetool_settings(
     three_way_view: bool,
     auto_advance: bool,
     collapse_context: bool,
     output_scroll_sync: bool,
     show_line_numbers: bool,
-    unsolved_whitespace: usize,
+    whitespace_mode: DiffWhitespaceMode,
+    reveal_whitespace_chars: bool,
 ) -> ContextMenuModel {
     let mut items = vec![
         ContextMenuItem::Header("Merge tool settings".into()),
@@ -88,75 +90,50 @@ fn model_for_mergetool_settings(
                 enabled: !show_line_numbers,
             }),
         },
-    ]);
-    items.extend(whitespace_conflict_items(
-        three_way_view,
-        unsolved_whitespace,
-    ));
-    ContextMenuModel::new(items)
-}
-
-/// kdiff3's Choose A/B/C for All Unsolved Whitespace Conflicts.
-///
-/// Whitespace-only conflicts are never auto-picked (see the auto-solve policy
-/// in UI_DESIGN.md section 30), so this is the bulk escape hatch for a file
-/// full of reindented lines. Hidden when the file has none left.
-fn whitespace_conflict_items(
-    three_way_view: bool,
-    unsolved_whitespace: usize,
-) -> Vec<ContextMenuItem> {
-    if unsolved_whitespace == 0 {
-        return Vec::new();
-    }
-
-    let noun = if unsolved_whitespace == 1 {
-        "whitespace conflict"
-    } else {
-        "whitespace conflicts"
-    };
-    let mut items = vec![
-        ContextMenuItem::Separator,
-        ContextMenuItem::Header(format!("{unsolved_whitespace} unsolved {noun}").into()),
-    ];
-
-    let choices: &[(conflict_resolver::ConflictChoice, &str)] = if three_way_view {
-        &[
-            (conflict_resolver::ConflictChoice::Base, "A (Base)"),
-            (conflict_resolver::ConflictChoice::Ours, "B (Local)"),
-            (conflict_resolver::ConflictChoice::Theirs, "C (Remote)"),
-        ]
-    } else {
-        &[
-            (conflict_resolver::ConflictChoice::Ours, "A (Local)"),
-            (conflict_resolver::ConflictChoice::Theirs, "B (Remote)"),
-        ]
-    };
-
-    items.extend(
-        choices
-            .iter()
-            .map(|(choice, label)| ContextMenuItem::Entry {
-                label: format!("Choose {label} for all").into(),
-                icon: None,
-                shortcut: None,
-                disabled: false,
-                action: Box::new(
-                    ContextMenuAction::ConflictResolverChooseForWhitespaceConflicts {
-                        choice: *choice,
-                    },
-                ),
+        // The source columns honour the diff view's whitespace options, so the
+        // cog offers the same two toggles rather than making the user leave the
+        // merge tool to reach them.
+        ContextMenuItem::Entry {
+            label: "Show whitespace changes".into(),
+            icon: (whitespace_mode == DiffWhitespaceMode::Show).then_some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetDiffWhitespaceMode {
+                mode: whitespace_mode.toggled(),
             }),
-    );
-    items
+        },
+        ContextMenuItem::Entry {
+            label: "Reveal whitespace characters".into(),
+            icon: reveal_whitespace_chars.then_some("icons/check.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::SetDiffRevealWhitespaceChars {
+                enabled: !reveal_whitespace_chars,
+            }),
+        },
+    ]);
+    ContextMenuModel::new(items)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn model(three_way_view: bool) -> ContextMenuModel {
+        model_for_mergetool_settings(
+            three_way_view,
+            true,
+            false,
+            true,
+            true,
+            DiffWhitespaceMode::Show,
+            false,
+        )
+    }
+
     #[test]
     fn model_marks_enabled_options_and_toggles_them() {
-        let model = model_for_mergetool_settings(true, true, false, true, true, 0);
+        let model = model(true);
 
         assert!(model.items.iter().any(|item| {
             matches!(
@@ -196,61 +173,71 @@ mod tests {
         }));
     }
 
-    fn whitespace_entry_labels(model: &ContextMenuModel) -> Vec<&str> {
+    fn entry_labels(model: &ContextMenuModel) -> Vec<&str> {
         model
             .items
             .iter()
             .filter_map(|item| match item {
-                ContextMenuItem::Entry { label, action, .. }
-                    if matches!(
-                        action.as_ref(),
-                        ContextMenuAction::ConflictResolverChooseForWhitespaceConflicts { .. }
-                    ) =>
-                {
-                    Some(label.as_ref())
-                }
+                ContextMenuItem::Entry { label, .. } => Some(label.as_ref()),
                 _ => None,
             })
             .collect()
     }
 
     #[test]
-    fn whitespace_bulk_picks_are_offered_per_side_with_a_count_header() {
-        let model = model_for_mergetool_settings(true, true, false, true, true, 3);
-
-        assert_eq!(
-            whitespace_entry_labels(&model),
-            vec![
-                "Choose A (Base) for all",
-                "Choose B (Local) for all",
-                "Choose C (Remote) for all",
-            ],
+    fn whitespace_options_mirror_the_diff_view_and_drive_its_settings() {
+        let model = model_for_mergetool_settings(
+            true,
+            true,
+            false,
+            true,
+            true,
+            DiffWhitespaceMode::Ignore,
+            true,
         );
-        assert!(model.items.iter().any(|item| matches!(
-            item,
-            ContextMenuItem::Header(label) if label.as_ref() == "3 unsolved whitespace conflicts"
-        )));
+
+        assert!(model.items.iter().any(|item| {
+            matches!(
+                item,
+                ContextMenuItem::Entry { label, icon, action, .. }
+                    if label.as_ref() == "Show whitespace changes"
+                        && icon.is_none()
+                        && matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetDiffWhitespaceMode {
+                                mode: DiffWhitespaceMode::Show
+                            }
+                        )
+            )
+        }));
+        assert!(model.items.iter().any(|item| {
+            matches!(
+                item,
+                ContextMenuItem::Entry { label, icon, action, .. }
+                    if label.as_ref() == "Reveal whitespace characters"
+                        && icon.is_some()
+                        && matches!(
+                            action.as_ref(),
+                            ContextMenuAction::SetDiffRevealWhitespaceChars { enabled: false }
+                        )
+            )
+        }));
     }
 
     #[test]
-    fn whitespace_bulk_picks_drop_base_in_the_two_way_view() {
-        let model = model_for_mergetool_settings(false, true, false, true, true, 1);
-
-        assert_eq!(
-            whitespace_entry_labels(&model),
-            vec!["Choose A (Local) for all", "Choose B (Remote) for all"],
-        );
-        assert!(model.items.iter().any(|item| matches!(
-            item,
-            ContextMenuItem::Header(label) if label.as_ref() == "1 unsolved whitespace conflict"
-        )));
-    }
-
-    #[test]
-    fn whitespace_bulk_picks_are_omitted_when_none_remain() {
-        let model = model_for_mergetool_settings(true, true, false, true, true, 0);
-
-        assert!(whitespace_entry_labels(&model).is_empty());
+    fn the_whitespace_conflict_bulk_picks_are_gone() {
+        // Whitespace-only conflicts are the user's call, one block at a time;
+        // the cog is for view options, not for resolving.
+        for three_way_view in [true, false] {
+            let model = model(three_way_view);
+            assert!(
+                !entry_labels(&model)
+                    .iter()
+                    .any(|label| label.contains("for all")),
+                "{:?}",
+                entry_labels(&model)
+            );
+        }
     }
 
     fn segments<'a>(model: &'a ContextMenuModel, row: &str) -> &'a [ContextMenuSegment] {
@@ -268,7 +255,7 @@ mod tests {
 
     #[test]
     fn view_row_selects_the_active_mode_and_offers_the_other() {
-        let model = model_for_mergetool_settings(false, true, false, true, true, 0);
+        let model = model(false);
         let view = segments(&model, "View");
 
         assert_eq!(view.len(), 2);
@@ -288,7 +275,7 @@ mod tests {
     fn the_minimap_has_no_settings_row() {
         // The minimap always shows the merge itself; kdiff3's pairwise
         // overview modes are not offered.
-        let model = model_for_mergetool_settings(true, true, false, true, true, 0);
+        let model = model(true);
 
         assert!(!model.items.iter().any(|item| matches!(
             item,

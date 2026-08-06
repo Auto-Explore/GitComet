@@ -3225,19 +3225,6 @@ impl MainPaneView {
         Some(conflict_resolver::conflict_session_summary_counts(session))
     }
 
-    /// Whitespace-only conflicts still awaiting a decision, KDiff3's status-line
-    /// convention. Drops as the user resolves them, unlike the plan-wide
-    /// classification count.
-    pub(in crate::view) fn conflict_resolver_unsolved_whitespace_conflicts(&self) -> usize {
-        let Some(resolver_path) = self.conflict_resolver.path.as_ref() else {
-            return 0;
-        };
-        self.active_repo()
-            .and_then(|repo| repo.conflict_state.conflict_session.as_ref())
-            .filter(|session| session.path.as_path() == resolver_path.as_path())
-            .map_or(0, |session| session.unsolved_whitespace_conflict_count())
-    }
-
     pub(super) fn conflict_resolver_active_block_mut(
         &mut self,
     ) -> Option<&mut conflict_resolver::ConflictBlock> {
@@ -3905,24 +3892,6 @@ impl MainPaneView {
         self.conflict_resolver_dispatch_bulk_choice(
             choice,
             gitcomet_state::msg::ConflictBulkScope::AllDeltas,
-            cx,
-        );
-    }
-
-    /// KDiff3's Choose A/B/C for All Unsolved Whitespace Conflicts: clear the
-    /// whitespace-only blocks the on-open pass deliberately left alone, without
-    /// touching real conflicts or hand-edited blocks.
-    pub(in crate::view) fn conflict_resolver_choose_for_whitespace_conflicts(
-        &mut self,
-        choice: conflict_resolver::ConflictChoice,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.conflict_resolver.output_is_protected {
-            return;
-        }
-        self.conflict_resolver_dispatch_bulk_choice(
-            choice,
-            gitcomet_state::msg::ConflictBulkScope::UnsolvedWhitespace,
             cx,
         );
     }

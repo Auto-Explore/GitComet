@@ -1051,11 +1051,6 @@ impl PopoverHost {
                     pane.conflict_resolver_join_regions(target, cx);
                 });
             }
-            ContextMenuAction::ConflictResolverChooseForWhitespaceConflicts { choice } => {
-                self.main_pane.update(cx, |pane, cx| {
-                    pane.conflict_resolver_choose_for_whitespace_conflicts(choice, cx);
-                });
-            }
             ContextMenuAction::SetMergetoolAutoAdvance { enabled } => {
                 close_after_action = false;
                 self.main_pane.update(cx, |pane, cx| {
