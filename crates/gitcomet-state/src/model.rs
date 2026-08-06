@@ -762,6 +762,15 @@ pub struct DiffState {
     pub content_preview: bool,
     pub diff_target_rev: u64,
     pub diff_state_rev: u64,
+    /// A reload of the *same* target is in flight and the content still on
+    /// screen is the generation from before it. Set when a reload keeps that
+    /// content rather than blanking it, and cleared when the reload lands.
+    ///
+    /// Anything that builds a patch out of the rendered rows — staging a line or
+    /// a hunk out of the diff — has to sit out this window: those rows describe
+    /// the index as it was before the last command, so a patch cut from them no
+    /// longer applies.
+    pub diff_reload_in_flight: bool,
     pub diff_rev: u64,
     pub diff: Loadable<Shared<Diff>>,
     pub diff_file_rev: u64,
@@ -782,6 +791,7 @@ impl Default for DiffState {
             content_preview: false,
             diff_target_rev: 0,
             diff_state_rev: 0,
+            diff_reload_in_flight: false,
             diff_rev: 0,
             diff: Loadable::NotLoaded,
             diff_file_rev: 0,

@@ -1513,9 +1513,11 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let paths = this
-                .take_status_section_action_selection(repo_id, StatusSection::CombinedUnstaged)
-                .paths;
+            // Read without consuming: the confirmation below can still be
+            // cancelled, and that must leave the selection as the user built it.
+            let selection =
+                this.status_section_action_selection(repo_id, StatusSection::CombinedUnstaged);
+            let paths = selection.paths;
             if paths.is_empty() {
                 return;
             }
@@ -1523,11 +1525,15 @@ impl DetailsPaneView {
                 &this.state,
                 repo_id,
                 paths.clone(),
+                selection.from_explicit_selection,
             ) {
                 let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
                 this.open_popover_at(confirm, anchor, _w, cx);
                 cx.notify();
                 return;
+            }
+            if selection.from_explicit_selection {
+                this.clear_status_multi_selection(repo_id);
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
             this.store.dispatch(Msg::StagePaths {
@@ -1596,9 +1602,10 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let paths = this
-                .take_status_section_action_selection(repo_id, StatusSection::Untracked)
-                .paths;
+            // Read without consuming: the confirmation below can still be
+            // cancelled, and that must leave the selection as the user built it.
+            let selection = this.status_section_action_selection(repo_id, StatusSection::Untracked);
+            let paths = selection.paths;
             if paths.is_empty() {
                 return;
             }
@@ -1606,11 +1613,15 @@ impl DetailsPaneView {
                 &this.state,
                 repo_id,
                 paths.clone(),
+                selection.from_explicit_selection,
             ) {
                 let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
                 this.open_popover_at(confirm, anchor, _w, cx);
                 cx.notify();
                 return;
+            }
+            if selection.from_explicit_selection {
+                this.clear_status_multi_selection(repo_id);
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
             this.store.dispatch(Msg::StagePaths {
@@ -1680,9 +1691,10 @@ impl DetailsPaneView {
             let Some(repo_id) = this.active_repo_id() else {
                 return;
             };
-            let paths = this
-                .take_status_section_action_selection(repo_id, StatusSection::Unstaged)
-                .paths;
+            // Read without consuming: the confirmation below can still be
+            // cancelled, and that must leave the selection as the user built it.
+            let selection = this.status_section_action_selection(repo_id, StatusSection::Unstaged);
+            let paths = selection.paths;
             if paths.is_empty() {
                 return;
             }
@@ -1690,11 +1702,15 @@ impl DetailsPaneView {
                 &this.state,
                 repo_id,
                 paths.clone(),
+                selection.from_explicit_selection,
             ) {
                 let anchor = crate::view::conflict_markers::centered_dialog_anchor(_w);
                 this.open_popover_at(confirm, anchor, _w, cx);
                 cx.notify();
                 return;
+            }
+            if selection.from_explicit_selection {
+                this.clear_status_multi_selection(repo_id);
             }
             this.store.dispatch(Msg::ClearDiffSelection { repo_id });
             this.store.dispatch(Msg::StagePaths {

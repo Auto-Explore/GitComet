@@ -1208,6 +1208,8 @@ pub(super) fn repo_command_finished(
         // shows, so staging/unstaging/patching must invalidate blame too.
         invalidate_loaded_blame(repo_state);
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+            // Blanked, so there is nothing stale left to guard against.
+            repo_state.diff_state.diff_reload_in_flight = false;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;

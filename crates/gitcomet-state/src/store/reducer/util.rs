@@ -286,6 +286,9 @@ pub(super) enum DiffReloadMode {
     /// — after staging a hunk or line, say — blanking makes the pane flash a
     /// "Loading" placeholder for a frame or two even when almost nothing about
     /// the file changed.
+    ///
+    /// What stays on screen is then a generation behind the index, so this also
+    /// raises `diff_reload_in_flight` for as long as that is true.
     KeepLoaded,
 }
 
@@ -303,6 +306,11 @@ pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
             _ => Loadable::Loading,
         }
     }
+
+    // Blanking leaves nothing stale to build a patch out of, so only the keeping
+    // mode raises the flag — and it lowers it again, which is what stops a
+    // target change from stranding it set.
+    repo_state.diff_state.diff_reload_in_flight = matches!(mode, DiffReloadMode::KeepLoaded);
 
     repo_state.diff_state.diff = if load_plan.load_patch_diff {
         reloading(&repo_state.diff_state.diff, mode)

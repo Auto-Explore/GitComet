@@ -364,6 +364,62 @@ fn stage_gutter_is_disabled_for_commit_diffs(cx: &mut gpui::TestAppContext) {
     assert_eq!(cells, 0, "no stage button may be painted for a commit diff");
 }
 
+/// The button sits in the line-number gutter's empty slack, but hiding line
+/// numbers must not take it away with them: it then overlaps the first
+/// characters of the line instead, which is the lesser cost of the two. Sizing
+/// the button out of a row it has no room in is the failure this guards.
+#[gpui::test]
+fn stage_gutter_is_painted_whether_or_not_line_numbers_are_shown(cx: &mut gpui::TestAppContext) {
+    let (view, cx) = open_stage_gutter_view(
+        cx,
+        worktree_target(DiffArea::Unstaged),
+        DiffViewMode::Inline,
+    );
+
+    // With line numbers shown the button fits in the gutter, clear of the text.
+    let (visible_ix, cell) = stage_gutter_cell(cx, &view, "+new one", DiffStageSlot::Inline);
+    let text_left =
+        diff_row_text_left(cx, &view, visible_ix).expect("the row must have painted a text hitbox");
+    assert!(
+        cell.right() <= text_left,
+        "with a gutter to sit in the button must stay left of the diff text: cell ends at {:?}, text starts at {text_left:?}",
+        cell.right(),
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_show_line_numbers = false;
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let (_, narrow_cell) = stage_gutter_cell(cx, &view, "+new one", DiffStageSlot::Inline);
+    assert_eq!(
+        narrow_cell.size, cell.size,
+        "the button must still be painted, at full size, with the gutter gone"
+    );
+}
+
+/// Left edge of a row's diff text, as its hitbox reports it.
+fn diff_row_text_left(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    visible_ix: usize,
+) -> Option<Pixels> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_text_hitboxes
+            .iter()
+            .filter(|((row_ix, _), _)| *row_ix == visible_ix)
+            .map(|(_, hitbox)| hitbox.bounds.left())
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+    })
+}
+
 #[gpui::test]
 fn stage_gutter_button_hover_follows_the_pointer(cx: &mut gpui::TestAppContext) {
     let (view, cx) = open_stage_gutter_view(

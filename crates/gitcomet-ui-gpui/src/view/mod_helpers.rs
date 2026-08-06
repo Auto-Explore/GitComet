@@ -3611,10 +3611,15 @@ pub(super) enum PopoverKind {
     /// Staging would mark files resolved that still contain conflict markers.
     /// `paths` is the stage request as issued (empty means everything);
     /// `unresolved` is what the user is being warned about.
+    ///
+    /// `clear_selection` says whether `paths` came out of the status row
+    /// selection. The selection is deliberately left intact while this dialog is
+    /// up — cancelling must not cost it — so going ahead is what consumes it.
     StageConflictMarkersConfirm {
         repo_id: RepoId,
         paths: Vec<std::path::PathBuf>,
         unresolved: Vec<std::path::PathBuf>,
+        clear_selection: bool,
     },
     PullReconcilePrompt {
         repo_id: RepoId,

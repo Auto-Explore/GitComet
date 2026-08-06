@@ -5023,7 +5023,50 @@ fn ctrl_s_confirms_for_the_whole_ctrl_selected_set(cx: &mut gpui::TestAppContext
         "only the file with markers left in it is unresolved"
     );
 
+    // The dialog is still up, and the selection it describes is still the user's:
+    // resolving the paths must not have consumed it.
+    assert_eq!(
+        ctrl_selected_unstaged_paths(cx, &view, repo_id),
+        vec![conflicted.clone(), second.clone(), third.clone()],
+        "the selection must survive while the confirmation is undecided"
+    );
+
+    // Cancelling stages nothing and costs the user nothing: dismissing the
+    // dialog is the whole of what "Cancel" does.
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.clone();
+        host.update(app, |host, cx| host.close_popover(cx));
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(|_window, app| crate::view::test_support::popover_kind(view.read(app), app))
+            .is_none(),
+        "the confirmation must be gone"
+    );
+    assert_eq!(
+        ctrl_selected_unstaged_paths(cx, &view, repo_id),
+        vec![conflicted.clone(), second.clone(), third.clone()],
+        "cancelling must leave the selection exactly as the user built it"
+    );
+
     let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// The paths currently ctrl-selected in the unstaged list.
+fn ctrl_selected_unstaged_paths(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+) -> Vec<std::path::PathBuf> {
+    cx.update(|_window, app| {
+        view.read(app)
+            .details_pane
+            .read(app)
+            .status_multi_selection
+            .get(&repo_id)
+            .map(|selection| selection.unstaged.clone())
+            .unwrap_or_default()
+    })
 }
 
 #[gpui::test]

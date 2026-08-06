@@ -8,10 +8,17 @@
 use super::*;
 
 /// How far into a worktree file the marker scan reads before giving up. The scan
-/// streams and stops at the first closing marker, so this only bites on a file
-/// whose markers never close — generous enough that a real conflict, which can
-/// span a whole large file, is always resolved one way or the other.
-const MAX_SCANNED_BYTES: u64 = 128 * 1024 * 1024;
+/// runs on the UI thread while a click waits on it, and it reads to the end of a
+/// file whose markers are already resolved — the common case — so this is what
+/// bounds that. Big enough for a conflict spanning a whole ordinary source file,
+/// small enough that a handful of them cost milliseconds; past it an unclosed
+/// opener still warns rather than passing as resolved.
+const MAX_SCANNED_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Read buffer for the scan. Larger than the 8KB default because the scan is a
+/// straight sequential walk, and the file it walks furthest is the resolved one
+/// it has to read to the end of.
+const SCAN_BUFFER_BYTES: usize = 64 * 1024;
 
 /// Of `paths`, the ones git still reports as conflicted **and** whose worktree
 /// file still contains conflict markers. An empty `paths` means "everything",
@@ -31,12 +38,16 @@ pub(in crate::view) fn unresolved_conflict_marker_paths(
         return Vec::new();
     };
 
+    // Set rather than a scan of `paths` per entry: "stage all" during a large
+    // merge puts every changed path in both lists.
+    let requested: HashSet<&std::path::Path> =
+        paths.iter().map(std::path::PathBuf::as_path).collect();
     let workdir = &repo.spec.workdir;
     status
         .unstaged
         .iter()
         .filter(|entry| entry.conflict.is_some())
-        .filter(|entry| paths.is_empty() || paths.contains(&entry.path))
+        .filter(|entry| requested.is_empty() || requested.contains(entry.path.as_path()))
         .filter(|entry| worktree_file_has_conflict_markers(&workdir.join(&entry.path)))
         .map(|entry| entry.path.clone())
         .collect()
@@ -52,7 +63,7 @@ fn worktree_file_has_conflict_markers(path: &std::path::Path) -> bool {
         return false;
     };
     gitcomet_core::conflict_session::reader_has_conflict_markers(
-        std::io::BufReader::new(file),
+        std::io::BufReader::with_capacity(SCAN_BUFFER_BYTES, file),
         MAX_SCANNED_BYTES,
     )
     .unwrap_or(false)
@@ -60,16 +71,22 @@ fn worktree_file_has_conflict_markers(path: &std::path::Path) -> bool {
 
 /// The confirmation to show before staging `paths`, or `None` when nothing about
 /// the stage is unresolved and it can go ahead as issued.
+///
+/// `clear_selection` is passed through to the dialog: callers must resolve
+/// `paths` out of the status row selection *without* consuming it, then hand
+/// that answer over here, so a cancelled dialog leaves the selection standing.
 pub(in crate::view) fn stage_confirm_popover(
     state: &AppState,
     repo_id: RepoId,
     paths: Vec<std::path::PathBuf>,
+    clear_selection: bool,
 ) -> Option<PopoverKind> {
     let unresolved = unresolved_conflict_marker_paths(state, repo_id, &paths);
     (!unresolved.is_empty()).then_some(PopoverKind::StageConflictMarkersConfirm {
         repo_id,
         paths,
         unresolved,
+        clear_selection,
     })
 }
 

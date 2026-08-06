@@ -88,10 +88,13 @@ impl MainPaneView {
         // the pane does not flash), which means they still describe the index as
         // it was. A patch built from them would no longer apply, so drop the
         // click and let the reload land first.
-        if self
-            .active_repo()
-            .is_some_and(|repo| repo.local_actions_in_flight > 0)
-        {
+        //
+        // Both halves matter: the command finishing is what clears
+        // `local_actions_in_flight`, and the reload it asks for only starts
+        // there, so between them the rows are at their most stale.
+        if self.active_repo().is_some_and(|repo| {
+            repo.local_actions_in_flight > 0 || repo.diff_state.diff_reload_in_flight
+        }) {
             return;
         }
         let Some(patch) = self.diff_stage_gutter_patch(visible_ix, kind) else {

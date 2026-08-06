@@ -1454,6 +1454,75 @@ fn stage_hunk_command_finished_keeps_loaded_diff_visible_while_reloading() {
             ..
         }
     )));
+
+    // Kept content is content from before the command: it describes the index as
+    // it was, so a patch cut out of it no longer applies. The command itself is
+    // already done by this point, so the flag is the only thing that says so.
+    assert!(
+        repo_state.diff_state.diff_reload_in_flight,
+        "rows kept from before the reload must be flagged as a generation behind"
+    );
+    assert_eq!(
+        repo_state.local_actions_in_flight, 0,
+        "the command is finished here — the flag is what covers the rest of the window"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
+            repo_id: RepoId(1),
+            target: target.clone(),
+            result: Ok(gitcomet_core::domain::Diff {
+                target: target.clone(),
+                lines: vec![gitcomet_core::domain::DiffLine {
+                    kind: gitcomet_core::domain::DiffLineKind::Add,
+                    text: "+two".into(),
+                }],
+            }),
+        }),
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == RepoId(1)).unwrap();
+    assert!(
+        !repo_state.diff_state.diff_reload_in_flight,
+        "the reload landing must clear the flag"
+    );
+}
+
+/// A target change blanks the diff outright, so there are no stale rows to guard
+/// and the flag must not be left set by a reload that will never land.
+#[test]
+fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.diff_state.diff_reload_in_flight = true;
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("b.txt"),
+                area: gitcomet_core::domain::DiffArea::Unstaged,
+            },
+        },
+    );
+
+    let repo_state = state.repos.iter().find(|r| r.id == RepoId(1)).unwrap();
+    assert!(!repo_state.diff_state.diff_reload_in_flight);
 }
 
 #[test]

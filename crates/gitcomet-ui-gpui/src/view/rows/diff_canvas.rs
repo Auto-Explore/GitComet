@@ -531,9 +531,15 @@ impl StageGutterSpec {
     }
 }
 
-/// Cell the stage/unstage button occupies: the empty slack at the far left of a
-/// row, ahead of the right-aligned line number. Shared by painting and
-/// hit-testing so the two cannot drift apart.
+/// Cell the stage/unstage button occupies: the far left of a row, which with
+/// line numbers shown is the empty slack ahead of the right-aligned number.
+/// Shared by painting and hit-testing so the two cannot drift apart.
+///
+/// With line numbers hidden there is no such slack — the diff text starts here
+/// — so the button overlaps its first characters and takes the clicks landing on
+/// them. That is deliberate: reaching the button everywhere is worth more than
+/// the couple of characters it sits on, and the chip is painted opaque so what
+/// it covers reads as covered rather than as garbled text.
 fn stage_gutter_cell(
     content_left: Pixels,
     row_top: Pixels,
@@ -560,8 +566,8 @@ struct StageGutterPrepaint {
 }
 
 /// Reserve the button's hitbox during prepaint. Called after the text hitbox so
-/// the button's pointer cursor wins over the text I-beam, and clipped to the
-/// content mask so a scrolled-away button cannot be hovered.
+/// the button's pointer cursor — and its clicks — win over the text I-beam, and
+/// clipped to the content mask so a scrolled-away button cannot be hovered.
 fn build_stage_gutter(
     window: &mut Window,
     spec: Option<StageGutterSpec>,

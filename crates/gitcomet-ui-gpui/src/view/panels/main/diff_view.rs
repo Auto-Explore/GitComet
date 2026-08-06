@@ -369,16 +369,31 @@ impl MainPaneView {
             // A multi-file status selection wins over the single shown file, so
             // the shortcut matches what the status row button and context menu
             // already do with the same selection.
-            if let Some(paths) = self.take_status_selection_for_shortcut(repo_id, area, &path, cx) {
-                if self.confirm_stage_conflict_markers(repo_id, area, paths.clone(), window, cx) {
+            if let Some(paths) = self.status_selection_for_shortcut(repo_id, area, &path, cx) {
+                if self.confirm_stage_conflict_markers(
+                    repo_id,
+                    area,
+                    paths.clone(),
+                    true,
+                    window,
+                    cx,
+                ) {
                     return true;
                 }
+                self.clear_status_selection_for_shortcut(repo_id, cx);
                 self.stage_or_unstage_status_paths(repo_id, area, paths);
                 self.rebuild_diff_cache(cx);
                 return true;
             }
 
-            if self.confirm_stage_conflict_markers(repo_id, area, vec![path.clone()], window, cx) {
+            if self.confirm_stage_conflict_markers(
+                repo_id,
+                area,
+                vec![path.clone()],
+                false,
+                window,
+                cx,
+            ) {
                 return true;
             }
 
@@ -485,17 +500,19 @@ impl MainPaneView {
                     // Resolved before confirming, or the dialog would describe —
                     // and then stage — only the shown file out of the selection.
                     if let Some(paths) =
-                        self.take_status_selection_for_shortcut(repo_id, area, &path, cx)
+                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
                     {
                         if self.confirm_stage_conflict_markers(
                             repo_id,
                             area,
                             paths.clone(),
+                            true,
                             window,
                             cx,
                         ) {
                             return true;
                         }
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
                         self.stage_or_unstage_status_paths(repo_id, area, paths);
                         self.rebuild_diff_cache(cx);
                         return true;
@@ -505,6 +522,7 @@ impl MainPaneView {
                         repo_id,
                         area,
                         vec![path.clone()],
+                        false,
                         window,
                         cx,
                     ) {
@@ -548,17 +566,19 @@ impl MainPaneView {
                     // A multi-file status selection wins over the single shown
                     // file, matching the status row button and context menu.
                     if let Some(paths) =
-                        self.take_status_selection_for_shortcut(repo_id, area, &path, cx)
+                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
                     {
                         if self.confirm_stage_conflict_markers(
                             repo_id,
                             area,
                             paths.clone(),
+                            true,
                             window,
                             cx,
                         ) {
                             return true;
                         }
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
                         self.stage_or_unstage_status_paths(repo_id, area, paths);
                         self.rebuild_diff_cache(cx);
                         return true;

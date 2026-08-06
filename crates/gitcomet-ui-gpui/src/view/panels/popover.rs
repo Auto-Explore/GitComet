@@ -3668,11 +3668,13 @@ impl PopoverHost {
                 repo_id,
                 paths,
                 unresolved,
+                clear_selection,
             } => stage_conflict_markers_confirm::panel(
                 self,
                 repo_id,
                 paths.clone(),
                 unresolved.clone(),
+                clear_selection,
                 cx,
             ),
             PopoverKind::PullReconcilePrompt { repo_id } => {

@@ -173,46 +173,47 @@ pub fn parse_conflict_marker_ranges(text: &str) -> Vec<ParsedConflictSegmentRang
 /// Parsing is intentionally conservative. If a marker block is malformed,
 /// all consumed marker text is preserved as context and parsing continues.
 /// Whether `reader` yields a complete conflict block, following the same marker
-/// rules as [`parse_conflict_marker_ranges`] but streaming, so a file of any
-/// size is scanned in constant memory and the answer comes as soon as the first
-/// block closes.
+/// rules as [`parse_conflict_marker_ranges`] but streaming, so the answer comes
+/// as soon as the first block closes rather than after reading the whole file.
 ///
-/// `budget_bytes` bounds the read. Running out of budget having already seen an
-/// opening marker answers `true`: for a file the caller already knows git
-/// reports as conflicted, markers that do not close within the budget cannot be
-/// taken as resolved.
+/// `budget_bytes` bounds the read, and with it the memory used: a file with no
+/// line breaks in it is one `read_until` call, so the bound has to sit under the
+/// reader rather than being checked between lines. Running out of budget having
+/// already seen an opening marker answers `true`: for a file the caller already
+/// knows git reports as conflicted, markers that do not close within the budget
+/// cannot be taken as resolved.
 pub fn reader_has_conflict_markers<R: std::io::BufRead>(
-    mut reader: R,
+    reader: R,
     budget_bytes: u64,
 ) -> std::io::Result<bool> {
+    use std::io::BufRead as _;
+
+    let mut reader = reader.take(budget_bytes);
     // Bytes, not `read_line`: the scan must not fail on a file that is not valid
     // UTF-8, and the markers are ASCII at the start of a line either way.
     let mut line = Vec::new();
-    let mut consumed = 0u64;
     let mut saw_opener = false;
     let mut saw_separator = false;
 
     loop {
         line.clear();
-        let read = reader.read_until(b'\n', &mut line)?;
-        if read == 0 {
-            // A block left open at end of file is malformed, and the strict
-            // parser treats it as ordinary text.
-            return Ok(false);
+        if reader.read_until(b'\n', &mut line)? == 0 {
+            // Nothing left to read: either the end of the file, where a block
+            // left open is malformed and the strict parser treats it as ordinary
+            // text, or the budget running out, where an opener that never closed
+            // cannot be called resolved.
+            return Ok(saw_opener && reader.limit() == 0);
         }
-        consumed = consumed.saturating_add(read as u64);
 
         if line.starts_with(b"<<<<<<<") {
+            // Deliberately does not reset `saw_separator`: past the separator the
+            // strict parser scans only for a closing marker, so an opener nested
+            // in the `theirs` side is content, not the start of a new block.
             saw_opener = true;
-            saw_separator = false;
         } else if saw_opener && line.starts_with(b"=======") {
             saw_separator = true;
         } else if saw_separator && line.starts_with(b">>>>>>>") {
             return Ok(true);
-        }
-
-        if consumed >= budget_bytes {
-            return Ok(saw_opener);
         }
     }
 }
@@ -291,6 +292,16 @@ mod marker_detection_tests {
             "a\nours\nb\n",
             "a\n<<<<<<< HEAD\nours\n",
             "a\n<<<<<<< HEAD\nours\n||||||| base\nbase\n=======\ntheirs\n>>>>>>> other\n",
+            // Merging a file that already had markers committed to it nests one
+            // block inside another's `theirs` side. The strict parser reads the
+            // inner opener as content and still closes the outer block, so a
+            // scan that restarted on it would miss the whole thing.
+            "<<<<<<< a\nours\n=======\ntheirs\n<<<<<<< c\nmore\n>>>>>>> d\n",
+            // The same nesting on the `ours` side, which neither scan counts
+            // until a separator shows up.
+            "<<<<<<< a\n<<<<<<< c\nours\n",
+            // A closing marker before any separator closes nothing.
+            "<<<<<<< a\nours\n>>>>>>> b\n",
         ] {
             assert_eq!(
                 scan(text),
@@ -315,6 +326,49 @@ mod marker_detection_tests {
         text.push_str(">>>>>>> feature\n");
         assert!(text.len() > 4 * 1024 * 1024, "fixture should be multi-MB");
         assert!(scan(&text));
+    }
+
+    /// A minified file is a single enormous line, so a budget only checked
+    /// between lines would not bound the read at all.
+    #[test]
+    fn streamed_scan_budget_bounds_a_file_with_no_line_breaks() {
+        let mut text = String::from("<<<<<<< HEAD");
+        text.push_str(&"x".repeat(4 * 1024 * 1024));
+
+        let mut reader = CountingReader {
+            inner: std::io::Cursor::new(text.as_bytes()),
+            read: 0,
+        };
+        // An opener with nothing after it to close it: the caller is warned.
+        const BUDGET_BYTES: u64 = 4096;
+        const BUFFER_BYTES: usize = 1024;
+        assert!(
+            reader_has_conflict_markers(
+                std::io::BufReader::with_capacity(BUFFER_BYTES, &mut reader),
+                BUDGET_BYTES,
+            )
+            .expect("scan")
+        );
+        // Bounded by the budget (plus whatever the last buffer refill overshot
+        // by), not by the 4MB behind it.
+        assert!(
+            reader.read <= BUDGET_BYTES as usize + BUFFER_BYTES,
+            "the budget must bound the read itself, not just the line count: read {}",
+            reader.read
+        );
+    }
+
+    struct CountingReader<R> {
+        inner: R,
+        read: usize,
+    }
+
+    impl<R: std::io::Read> std::io::Read for CountingReader<R> {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let n = self.inner.read(buf)?;
+            self.read += n;
+            Ok(n)
+        }
     }
 
     #[test]

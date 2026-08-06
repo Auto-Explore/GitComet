@@ -914,10 +914,12 @@ impl GitCometView {
                 // any of it still has conflict markers in the worktree. With no
                 // window there is nothing to confirm in, and staging unasked is
                 // the one outcome this must not have.
+                // No row selection is involved here, so there is none to consume.
                 if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
                     &self.state,
                     repo_id,
                     paths.clone(),
+                    false,
                 ) {
                     if let Some(window) = window {
                         self.open_popover_centered(confirm, window, cx);

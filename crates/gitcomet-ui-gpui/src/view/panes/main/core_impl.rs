@@ -4646,11 +4646,15 @@ impl MainPaneView {
     }
 
     /// Paths a stage/unstage shortcut should act on when the file it targets is
-    /// part of a multi-file status selection: the whole selection, consumed the
-    /// same way the status row button and the context menu consume it. `None`
+    /// part of a multi-file status selection: the whole selection, resolved the
+    /// same way the status row button and the context menu resolve it. `None`
     /// means there is no such selection and the caller keeps acting on the one
     /// file it already resolved.
-    pub(in crate::view) fn take_status_selection_for_shortcut(
+    ///
+    /// Reads only. The shortcut may still raise a confirmation the user cancels,
+    /// so [`Self::clear_status_selection_for_shortcut`] is a separate step the
+    /// caller owes once it commits to the action.
+    pub(in crate::view) fn status_selection_for_shortcut(
         &mut self,
         repo_id: RepoId,
         area: DiffArea,
@@ -4659,17 +4663,28 @@ impl MainPaneView {
     ) -> Option<Vec<std::path::PathBuf>> {
         self.root_view
             .update(cx, |root, cx| {
-                root.details_pane.update(cx, |pane, cx| {
-                    let (paths, used_selection) =
-                        pane.take_status_selected_paths_for_action(repo_id, area, path);
-                    used_selection.then(|| {
-                        cx.notify();
-                        paths
-                    })
-                })
+                let (paths, used_selection) = root
+                    .details_pane
+                    .read(cx)
+                    .status_selected_paths_for_action(repo_id, area, path);
+                used_selection.then_some(paths)
             })
             .ok()
             .flatten()
+    }
+
+    /// Drop the row selection a shortcut has just acted on.
+    pub(in crate::view) fn clear_status_selection_for_shortcut(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.details_pane.update(cx, |pane, cx| {
+                pane.clear_status_multi_selection(repo_id);
+                cx.notify();
+            });
+        });
     }
 
     /// Raise the unresolved-conflict confirmation if staging `paths` would mark
@@ -4682,15 +4697,19 @@ impl MainPaneView {
         repo_id: RepoId,
         area: DiffArea,
         paths: Vec<std::path::PathBuf>,
+        clear_selection: bool,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         if area != DiffArea::Unstaged {
             return false;
         }
-        let Some(confirm) =
-            crate::view::conflict_markers::stage_confirm_popover(&self.state, repo_id, paths)
-        else {
+        let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+            &self.state,
+            repo_id,
+            paths,
+            clear_selection,
+        ) else {
             return false;
         };
         let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);

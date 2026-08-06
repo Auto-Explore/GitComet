@@ -8,6 +8,7 @@ pub(super) fn panel(
     repo_id: RepoId,
     paths: Vec<std::path::PathBuf>,
     unresolved: Vec<std::path::PathBuf>,
+    clear_selection: bool,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -51,6 +52,12 @@ pub(super) fn panel(
             components::Button::new("stage_conflict_markers_go", "Stage anyway")
                 .style(components::ButtonStyle::Danger)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
+                    // The stage is going ahead, so the row selection it came out
+                    // of has been spent. Cancelling reaches none of this and
+                    // leaves the selection exactly as the user built it.
+                    if clear_selection {
+                        this.clear_status_multi_selection(repo_id, cx);
+                    }
                     this.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     this.store.dispatch(Msg::StagePaths {
                         repo_id,
