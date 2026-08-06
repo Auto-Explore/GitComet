@@ -2270,51 +2270,12 @@ fn uses_unresolved_merge_conflict_placeholder(block: &ConflictBlock) -> bool {
     !block.resolved && block.choice.is_empty()
 }
 
-/// Output rows an unresolved block occupies.
+/// The single `<Merge Conflict>` row an unresolved block occupies, kdiff3's
+/// `MergeBlockList::buildFromDiff3` (one `MergeEditLine` per block).
 ///
-/// kdiff3 draws exactly one `<Merge Conflict>` line per block
-/// (`MergeBlockList::buildFromDiff3` pushes a single `MergeEditLine`), which it
-/// can afford because its merge window has no line numbers — `m_bShowLineNumbers`
-/// is read only by `difftextwindow.cpp`. Ours is numbered against the source
-/// columns, so a block that covers several aligned rows must cover the same
-/// rows here, or every line below it reads one number early.
-///
-/// The widest side's line count *is* the aligned row span — the planner never
-/// groups more rows into a block than its widest side contributes, which
-/// `unresolved_block_row_span_matches_its_widest_side` (gitcomet-core) pins
-/// down. That is what lets this size a block from its three texts alone,
-/// without reaching for plan rows the resolved output never sees.
-fn unresolved_placeholder_row_count(block: &ConflictBlock) -> usize {
-    block_max_line_count(block).max(1)
-}
-
-/// The line terminator the placeholder rows use, taken from the block's own
-/// sides so a CRLF file does not gain LF rows.
-fn unresolved_placeholder_line_ending(block: &ConflictBlock) -> &'static str {
-    use gitcomet_core::conflict_output::{
-        ConflictOutputBlockRef, detect_conflict_block_line_ending,
-    };
-
-    match detect_conflict_block_line_ending(ConflictOutputBlockRef {
-        base: block.base.as_deref(),
-        ours: &block.ours,
-        theirs: &block.theirs,
-        choice: block.choice,
-        resolved: block.resolved,
-    }) {
-        "\r\n" => "\r\n",
-        "\r" => "\r",
-        _ => "\n",
-    }
-}
-
-/// Blank rows that follow the named placeholder row, padding the block out to
-/// its row span. They carry no text: the `?` gutter badge and the conflict
-/// bracket already show how far the block reaches.
-fn unresolved_placeholder_filler_rows(block: &ConflictBlock) -> usize {
-    unresolved_placeholder_row_count(block).saturating_sub(1)
-}
-
+/// A block that spans several aligned source rows still collapses to this one
+/// row, so the output's line numbers count the output's own lines rather than
+/// the source columns'.
 fn unresolved_merge_conflict_placeholder_text(block: &ConflictBlock) -> &'static str {
     use gitcomet_core::conflict_output::{
         ConflictOutputBlockRef, detect_conflict_block_line_ending,
@@ -2348,12 +2309,7 @@ fn editable_conflict_block_len(block: &ConflictBlock) -> usize {
     use gitcomet_core::conflict_output::ConflictOutputSource;
 
     if uses_unresolved_merge_conflict_placeholder(block) {
-        return unresolved_merge_conflict_placeholder_text(block)
-            .len()
-            .saturating_add(
-                unresolved_placeholder_line_ending(block).len()
-                    * unresolved_placeholder_filler_rows(block),
-            );
+        return unresolved_merge_conflict_placeholder_text(block).len();
     }
     block.choice.iter().fold(0usize, |len, source| {
         len.saturating_add(match source {
@@ -2366,11 +2322,11 @@ fn editable_conflict_block_len(block: &ConflictBlock) -> usize {
 
 /// Generate the editable merge-output projection.
 ///
-/// A truly unresolved block has no selected sources and occupies a named
-/// KDiff3-style placeholder row followed by blank rows out to its aligned row
-/// span (see [`unresolved_placeholder_row_count`]). Resolved blocks retain
-/// their ordered source selection, while marker-preserving save/export use
-/// [`generate_resolved_text_with_options`] directly.
+/// A truly unresolved block has no selected sources and occupies one named
+/// KDiff3-style placeholder row, however many aligned rows it spans in the
+/// source columns. Resolved blocks retain their ordered source selection, while
+/// marker-preserving save/export use [`generate_resolved_text_with_options`]
+/// directly.
 pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
     use gitcomet_core::conflict_output::ConflictOutputSource;
 
@@ -2380,10 +2336,6 @@ pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
             ConflictSegment::Text(text) => output.push_str(text),
             ConflictSegment::Block(block) if uses_unresolved_merge_conflict_placeholder(block) => {
                 output.push_str(unresolved_merge_conflict_placeholder_text(block));
-                let line_ending = unresolved_placeholder_line_ending(block);
-                for _ in 0..unresolved_placeholder_filler_rows(block) {
-                    output.push_str(line_ending);
-                }
             }
             ConflictSegment::Block(block) => {
                 for source in block.choice.iter() {
@@ -3051,7 +3003,7 @@ impl ResolvedOutputProjection {
                 ConflictSegment::Block(block)
                     if uses_unresolved_merge_conflict_placeholder(block) =>
                 {
-                    unresolved_placeholder_row_count(block)
+                    1
                 }
                 ConflictSegment::Block(block) => block
                     .choice
@@ -3204,23 +3156,10 @@ impl ResolvedOutputProjection {
                     let fragment_sources: Vec<_> =
                         if uses_unresolved_merge_conflict_placeholder(block) {
                             let text = unresolved_merge_conflict_placeholder_text(block);
-                            let line_ending = unresolved_placeholder_line_ending(block);
-                            // The named row, then one bare terminator per filler
-                            // row so the block spans its aligned rows here too.
-                            std::iter::once((
+                            vec![(
                                 ResolvedOutputFragmentSource::UnresolvedPlaceholder { text },
                                 text,
-                            ))
-                            .chain(std::iter::repeat_n(
-                                (
-                                    ResolvedOutputFragmentSource::UnresolvedPlaceholder {
-                                        text: line_ending,
-                                    },
-                                    line_ending,
-                                ),
-                                unresolved_placeholder_filler_rows(block),
-                            ))
-                            .collect()
+                            )]
                         } else {
                             block
                                 .choice
@@ -3593,10 +3532,9 @@ pub(super) fn block_max_line_count(block: &ConflictBlock) -> usize {
 
 /// Conservative line budget for materializing an unresolved output.
 ///
-/// An unresolved block occupies its widest side's row count as placeholder rows
-/// ([`unresolved_placeholder_row_count`]), which is also the most any single
-/// A/B/C pick can expand it to. Account for that before moving a streamed
-/// document into the editable buffer.
+/// An unresolved block draws one placeholder row, but any single A/B/C pick can
+/// expand it to its widest side's line count. Account for that before moving a
+/// streamed document into the editable buffer.
 /// Summing fragment line counts can over-count at fragment boundaries, which is
 /// intentional: this is a safety limit rather than an exact output projection.
 pub(super) fn single_source_output_line_upper_bound(segments: &[ConflictSegment]) -> usize {

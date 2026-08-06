@@ -15,10 +15,8 @@ fn parses_and_generates_conflicts() {
     assert!(initial_block.choice.is_empty());
     assert!(!initial_block.resolved);
 
-    // Two lines a side, so the placeholder covers two rows: the named one and a
-    // blank one (see `unresolved_placeholder_spans_the_blocks_widest_side`).
     let unresolved = generate_resolved_text(&segments);
-    assert_eq!(unresolved, "a\n<Merge Conflict>\n\nb\n");
+    assert_eq!(unresolved, "a\n<Merge Conflict>\nb\n");
 
     {
         let ConflictSegment::Block(block) = segments
@@ -142,36 +140,35 @@ fn unresolved_placeholder_preserves_crlf_output_rows() {
     );
 }
 
-/// An unresolved block covers as many output rows as its widest side, so the
-/// output stays line-for-line with the source columns it is numbered against.
-/// Only the first row is named; the rest are blank.
+/// However many aligned rows a block spans in the source columns, it collapses
+/// to a single row in the output.
 #[test]
-fn unresolved_placeholder_spans_the_blocks_widest_side() {
+fn unresolved_placeholder_collapses_a_multi_line_block_to_one_row() {
     let segments = parse_conflict_markers(
         "a\n<<<<<<< ours\none\ntwo\nthree\n=======\nuno\n>>>>>>> theirs\nb\n",
     );
 
     assert_eq!(
         generate_resolved_text(&segments),
-        "a\n<Merge Conflict>\n\n\nb\n"
+        "a\n<Merge Conflict>\nb\n"
     );
 }
 
 #[test]
-fn multi_row_unresolved_placeholder_preserves_crlf_output_rows() {
+fn multi_line_unresolved_placeholder_preserves_crlf_output_rows() {
     let segments = parse_conflict_markers(
         "a\r\n<<<<<<< ours\r\none\r\ntwo\r\n=======\r\nuno\r\n>>>>>>> theirs\r\nb\r\n",
     );
 
     assert_eq!(
         generate_resolved_text(&segments),
-        "a\r\n<Merge Conflict>\r\n\r\nb\r\n"
+        "a\r\n<Merge Conflict>\r\nb\r\n"
     );
 }
 
 /// The byte map sizes blocks itself (`editable_conflict_block_len`) rather than
 /// measuring the generated text. The two must agree, or every conflict after a
-/// multi-row placeholder owns the wrong bytes.
+/// placeholder owns the wrong bytes.
 #[test]
 fn resolved_output_block_map_agrees_with_the_generated_text() {
     let segments = parse_conflict_markers(
@@ -187,8 +184,8 @@ fn resolved_output_block_map_agrees_with_the_generated_text() {
     assert_eq!(map.text_len, output.len());
     let ranges = map.ranges();
     assert_eq!(ranges.len(), 2);
-    assert_eq!(&output[ranges[0].clone()], "<Merge Conflict>\n\n\n");
-    assert_eq!(&output[ranges[1].clone()], "<Merge Conflict>\n\n");
+    assert_eq!(&output[ranges[0].clone()], "<Merge Conflict>\n");
+    assert_eq!(&output[ranges[1].clone()], "<Merge Conflict>\n");
 }
 
 #[test]

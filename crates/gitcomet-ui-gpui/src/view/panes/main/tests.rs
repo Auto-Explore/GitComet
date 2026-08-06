@@ -1064,10 +1064,11 @@ fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
     );
 }
 
-/// A multi-row placeholder is one conflict across all of its rows: the `?`
-/// gutter and the bracket must run the whole span, not just the named first row.
+/// A block whose sides run over several lines still collapses to one
+/// placeholder row, and that row carries the whole conflict's `?` gutter and
+/// bracket.
 #[test]
-fn build_resolved_output_conflict_markers_cover_every_placeholder_row() {
+fn build_resolved_output_conflict_markers_cover_a_multi_line_block() {
     let segments = vec![
         ConflictSegment::Text("top\n".to_string().into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1082,7 +1083,7 @@ fn build_resolved_output_conflict_markers_cover_every_placeholder_row() {
     ];
 
     let output = conflict_resolver::generate_resolved_text(&segments);
-    assert_eq!(output, "top\n<Merge Conflict>\n\n\nbottom\n");
+    assert_eq!(output, "top\n<Merge Conflict>\nbottom\n");
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
@@ -1091,25 +1092,21 @@ fn build_resolved_output_conflict_markers_cover_every_placeholder_row() {
         &block_map_for(&segments),
     );
 
-    for (line_ix, expected_start, expected_end) in
-        [(1, true, false), (2, false, false), (3, false, true)]
-    {
-        assert_eq!(
-            markers[line_ix],
-            Some(ResolvedOutputConflictMarker {
-                conflict_ix: 0,
-                range_start: 1,
-                range_end: 4,
-                is_start: expected_start,
-                is_end: expected_end,
-                unresolved: true,
-            }),
-            "row {line_ix} belongs to the placeholder block"
-        );
-    }
+    assert_eq!(
+        markers[1],
+        Some(ResolvedOutputConflictMarker {
+            conflict_ix: 0,
+            range_start: 1,
+            range_end: 2,
+            is_start: true,
+            is_end: true,
+            unresolved: true,
+        }),
+        "the placeholder row is the whole block"
+    );
     assert_eq!(markers[0], None);
     assert_eq!(
-        markers[4], None,
+        markers[2], None,
         "the text after the block is not part of it"
     );
 }

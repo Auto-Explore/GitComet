@@ -1259,10 +1259,9 @@ fn resolved_output_projection_matches_generated_text_lines() {
 }
 
 /// An unresolved block contributes no source lines to the output — only its
-/// placeholder rows, one named and the rest blank, spanning the block's widest
-/// side so the output stays numbered with the columns.
+/// single named placeholder row, however many lines its sides hold.
 #[test]
-fn resolved_output_projection_uses_placeholder_rows_for_unresolved_block() {
+fn resolved_output_projection_uses_a_placeholder_row_for_unresolved_block() {
     let segments = vec![
         ConflictSegment::Text("head\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1288,15 +1287,14 @@ fn resolved_output_projection_uses_placeholder_rows_for_unresolved_block() {
     assert_eq!(
         projection
             .line_text(&segments, 2)
-            .expect("placeholder filler row")
+            .expect("the line after the placeholder")
             .as_ref(),
-        "",
-        "the rows after the named one are blank"
+        "tail"
     );
-    assert_eq!(projection.conflict_line_range(0), Some(1..3));
+    assert_eq!(projection.conflict_line_range(0), Some(1..2));
     assert_eq!(
         generate_resolved_text(&segments),
-        "head\n<Merge Conflict>\n\ntail\n"
+        "head\n<Merge Conflict>\ntail\n"
     );
 }
 
