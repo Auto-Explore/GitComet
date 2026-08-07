@@ -308,6 +308,7 @@ fn render_conflict_markdown_preview_rows(
             ui_scale_percent: crate::ui_scale::current(cx).percent,
             view: None,
             text_region: DiffTextRegion::Inline,
+            wrap_plan: None,
         },
     )
 }

@@ -236,9 +236,34 @@ impl MainPaneView {
         };
 
         match self.diff_view {
-            DiffViewMode::Inline => preview.inline.rows.len(),
-            DiffViewMode::Split => preview.old.rows.len().max(preview.new.rows.len()),
+            DiffViewMode::Inline => self
+                .markdown_preview_wrap
+                .plan(MarkdownPreviewList::Inline)
+                .map(|plan| plan.len())
+                .unwrap_or(preview.inline.rows.len()),
+            DiffViewMode::Split => self
+                .markdown_preview_wrapped_len(MarkdownPreviewList::Old, preview.old.rows.len())
+                .max(self.markdown_preview_wrapped_len(
+                    MarkdownPreviewList::New,
+                    preview.new.rows.len(),
+                )),
         }
+    }
+
+    fn markdown_preview_wrapped_len(&self, list: MarkdownPreviewList, row_len: usize) -> usize {
+        self.markdown_preview_wrap
+            .plan(list)
+            .map(|plan| plan.len())
+            .unwrap_or(row_len)
+    }
+
+    /// Translate a source row index into the row the list actually scrolls to,
+    /// which differs once word wrap has split earlier rows.
+    fn markdown_preview_visual_ix(&self, list: MarkdownPreviewList, row_ix: usize) -> usize {
+        self.markdown_preview_wrap
+            .plan(list)
+            .map(|plan| plan.visual_ix_for_row(row_ix))
+            .unwrap_or(row_ix)
     }
 
     fn markdown_preview_change_visible_indices(&self) -> Vec<usize> {
@@ -253,6 +278,9 @@ impl MainPaneView {
                         row.change_hint != crate::view::markdown_preview::MarkdownChangeHint::None
                     })
                 })
+                .into_iter()
+                .map(|row_ix| self.markdown_preview_visual_ix(MarkdownPreviewList::Inline, row_ix))
+                .collect()
             }
             DiffViewMode::Split => {
                 let visible_len = preview.old.rows.len().max(preview.new.rows.len());
@@ -263,6 +291,9 @@ impl MainPaneView {
                         row.change_hint != crate::view::markdown_preview::MarkdownChangeHint::None
                     })
                 })
+                .into_iter()
+                .map(|row_ix| self.markdown_preview_visual_ix(MarkdownPreviewList::Old, row_ix))
+                .collect()
             }
         }
     }

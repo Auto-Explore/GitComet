@@ -1153,6 +1153,87 @@ pub(super) type LoadableMarkdownDiff =
 
 pub(super) type LoadableImagePreview = Loadable<Option<Arc<gpui::Image>>>;
 
+/// Which markdown preview list a wrap plan belongs to. Split view wraps its
+/// two columns to different widths, and the inline and worktree lists have
+/// their own row sets, so each keeps its own plan.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum MarkdownPreviewList {
+    Worktree,
+    Inline,
+    Old,
+    New,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct MarkdownPreviewWrapKey {
+    pub(in crate::view) width_px: u32,
+    pub(in crate::view) ui_scale_percent: u32,
+    pub(in crate::view) theme_is_dark: bool,
+    pub(in crate::view) editor_font_family_hash: u64,
+    pub(in crate::view) document_rev: u64,
+}
+
+/// Cached visual-row mappings for the wrapped markdown preview lists.
+///
+/// The plans are rebuilt whenever the viewport width, UI scale, font, or the
+/// underlying document changes; the key makes that a cheap equality check on
+/// every frame instead of a re-wrap.
+#[derive(Debug, Default)]
+pub(in crate::view) struct MarkdownPreviewWrapCache {
+    keys: [Option<MarkdownPreviewWrapKey>; 4],
+    plans: [crate::view::markdown_preview::MarkdownPreviewWrapPlan; 4],
+}
+
+impl MarkdownPreviewWrapCache {
+    fn slot(list: MarkdownPreviewList) -> usize {
+        match list {
+            MarkdownPreviewList::Worktree => 0,
+            MarkdownPreviewList::Inline => 1,
+            MarkdownPreviewList::Old => 2,
+            MarkdownPreviewList::New => 3,
+        }
+    }
+
+    pub(in crate::view) fn plan(
+        &self,
+        list: MarkdownPreviewList,
+    ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
+        let slot = Self::slot(list);
+        self.keys[slot].is_some().then(|| &self.plans[slot])
+    }
+
+    pub(in crate::view) fn is_current(
+        &self,
+        list: MarkdownPreviewList,
+        key: MarkdownPreviewWrapKey,
+    ) -> bool {
+        self.keys[Self::slot(list)] == Some(key)
+    }
+
+    pub(in crate::view) fn store(
+        &mut self,
+        list: MarkdownPreviewList,
+        key: MarkdownPreviewWrapKey,
+        plan: crate::view::markdown_preview::MarkdownPreviewWrapPlan,
+    ) {
+        let slot = Self::slot(list);
+        self.keys[slot] = Some(key);
+        self.plans[slot] = plan;
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn plan_len(&self, list: MarkdownPreviewList) -> Option<usize> {
+        self.plan(list).map(|plan| plan.len())
+    }
+
+    pub(in crate::view) fn clear_list(&mut self, list: MarkdownPreviewList) {
+        let slot = Self::slot(list);
+        if self.keys[slot].take().is_some() {
+            self.plans[slot] = Default::default();
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ConflictResolverMarkdownPreviewState {
     pub(super) source_hash: Option<u64>,

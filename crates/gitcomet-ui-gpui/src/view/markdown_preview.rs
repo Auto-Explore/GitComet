@@ -238,6 +238,88 @@ impl PartialEq for MarkdownPreviewRowStyledTextCache {
 
 impl Eq for MarkdownPreviewRowStyledTextCache {}
 
+// ── Word wrap ───────────────────────────────────────────────────────────
+
+/// One rendered row of a wrapped preview document.
+///
+/// Preview rows are painted into a uniform (fixed row height) list, so word
+/// wrap works the same way it does in the text diff: a source row that does
+/// not fit is split into several visual rows, each carrying the byte range of
+/// `MarkdownPreviewRow::text` it paints. `wrap_ix > 0` marks a continuation,
+/// which drops the list marker and alert badge so the text keeps its indent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MarkdownPreviewVisualRow {
+    pub(super) row_ix: usize,
+    pub(super) wrap_ix: u32,
+    pub(super) byte_range: Range<usize>,
+}
+
+impl MarkdownPreviewVisualRow {
+    pub(super) fn is_continuation(&self) -> bool {
+        self.wrap_ix > 0
+    }
+}
+
+/// Source-row to visual-row mapping for one wrapped preview document.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct MarkdownPreviewWrapPlan {
+    rows: Vec<MarkdownPreviewVisualRow>,
+}
+
+impl MarkdownPreviewWrapPlan {
+    pub(super) fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(super) fn get(&self, visual_ix: usize) -> Option<&MarkdownPreviewVisualRow> {
+        self.rows.get(visual_ix)
+    }
+
+    /// First visual row painted for `row_ix`, for scroll and autoscroll targets.
+    pub(super) fn visual_ix_for_row(&self, row_ix: usize) -> usize {
+        self.rows.partition_point(|row| row.row_ix < row_ix)
+    }
+}
+
+/// Build the visual-row mapping for `document`.
+///
+/// `wrap_row` returns the byte ranges `row.text` splits into at the current
+/// width; an empty result (or a row that fits) yields a single visual row
+/// covering the whole text, so every source row keeps at least one row.
+pub(super) fn build_markdown_preview_wrap_plan(
+    document: &MarkdownPreviewDocument,
+    mut wrap_row: impl FnMut(&MarkdownPreviewRow) -> Vec<Range<usize>>,
+) -> MarkdownPreviewWrapPlan {
+    let mut rows = Vec::with_capacity(document.rows.len());
+    for (row_ix, row) in document.rows.iter().enumerate() {
+        let ranges = wrap_row(row);
+        if ranges.len() < 2 {
+            rows.push(MarkdownPreviewVisualRow {
+                row_ix,
+                wrap_ix: 0,
+                byte_range: 0..row.text.len(),
+            });
+            continue;
+        }
+        for (wrap_ix, byte_range) in ranges.into_iter().enumerate() {
+            rows.push(MarkdownPreviewVisualRow {
+                row_ix,
+                wrap_ix: u32::try_from(wrap_ix).unwrap_or(u32::MAX),
+                byte_range,
+            });
+            if rows.len() >= MAX_PREVIEW_WRAPPED_ROWS {
+                return MarkdownPreviewWrapPlan { rows };
+            }
+        }
+    }
+    MarkdownPreviewWrapPlan { rows }
+}
+
+/// Upper bound on visual rows in a wrapped document. A pathological window
+/// width (a few pixels wide) would otherwise wrap every character onto its own
+/// row and blow up the uniform list.
+const MAX_PREVIEW_WRAPPED_ROWS: usize = MAX_PREVIEW_ROWS * 8;
+
 // ── Error messages ──────────────────────────────────────────────────────
 
 /// Return a user-facing reason why a single-document markdown preview is
@@ -3754,5 +3836,264 @@ code line
             reason.contains("row limit"),
             "should mention row limit: {reason}"
         );
+    }
+
+    // ── Word wrap ───────────────────────────────────────────────────────
+
+    #[test]
+    fn wrap_plan_keeps_one_visual_row_per_unwrapped_source_row() {
+        let doc = parse("# Title\n\nParagraph one.\n\nParagraph two.\n");
+        let plan = build_markdown_preview_wrap_plan(&doc, |_| Vec::new());
+
+        assert_eq!(plan.len(), doc.rows.len());
+        for (visual_ix, row) in doc.rows.iter().enumerate() {
+            let visual = plan.get(visual_ix).expect("visual row");
+            assert_eq!(visual.row_ix, visual_ix);
+            assert_eq!(visual.wrap_ix, 0);
+            assert_eq!(visual.byte_range, 0..row.text.len());
+            assert!(!visual.is_continuation());
+        }
+    }
+
+    #[test]
+    fn wrap_plan_expands_split_rows_and_maps_source_rows_to_their_first_visual_row() {
+        let doc = parse("First paragraph.\n\nSecond paragraph.\n");
+        // Split every row with text into two halves at a char boundary.
+        let plan = build_markdown_preview_wrap_plan(&doc, |row| {
+            let len = row.text.len();
+            if len < 4 {
+                return Vec::new();
+            }
+            let mut mid = len / 2;
+            while mid > 0 && !row.text.is_char_boundary(mid) {
+                mid -= 1;
+            }
+            vec![0..mid, mid..len]
+        });
+
+        let split_rows = doc.rows.iter().filter(|row| row.text.len() >= 4).count();
+        assert_eq!(plan.len(), doc.rows.len() + split_rows);
+
+        for row_ix in 0..doc.rows.len() {
+            let visual_ix = plan.visual_ix_for_row(row_ix);
+            let visual = plan.get(visual_ix).expect("first visual row");
+            assert_eq!(visual.row_ix, row_ix);
+            assert_eq!(visual.wrap_ix, 0);
+            assert!(!visual.is_continuation());
+        }
+
+        let continuations = (0..plan.len())
+            .filter_map(|ix| plan.get(ix))
+            .filter(|visual| visual.is_continuation())
+            .count();
+        assert_eq!(continuations, split_rows);
+    }
+
+    #[test]
+    fn wrap_plan_slices_cover_the_whole_row_text() {
+        let doc = parse("A paragraph with several words in it.\n");
+        let plan = build_markdown_preview_wrap_plan(&doc, |row| {
+            let len = row.text.len();
+            if len >= 8 {
+                vec![0..4, 4..len]
+            } else {
+                Vec::new()
+            }
+        });
+
+        let mut covered: Vec<(usize, Range<usize>)> = Vec::new();
+        for ix in 0..plan.len() {
+            let visual = plan.get(ix).expect("visual row");
+            covered.push((visual.row_ix, visual.byte_range.clone()));
+        }
+        for (row_ix, row) in doc.rows.iter().enumerate() {
+            let mut cursor = 0usize;
+            for (_, range) in covered.iter().filter(|(ix, _)| *ix == row_ix) {
+                assert_eq!(range.start, cursor, "slices must be contiguous");
+                cursor = range.end;
+            }
+            assert_eq!(cursor, row.text.len(), "slices must cover the row text");
+        }
+    }
+
+    // ── Inline span integrity ───────────────────────────────────────────
+
+    /// Inline spans become `gpui` text runs, and `gpui` shapes a line by
+    /// splitting the text at each run boundary. A span that lands inside a
+    /// multi-byte character aborts the process in `str::split_at`, so the
+    /// parser must never emit one — see [`crate::text_runs`] for the guard on
+    /// the render side.
+    fn assert_rows_span_aligned(source: &str, doc: &MarkdownPreviewDocument) {
+        for (row_ix, row) in doc.rows.iter().enumerate() {
+            let text = row.text.as_ref();
+            let mut prev_end = 0usize;
+            for span in row.inline_spans.iter() {
+                assert!(
+                    span.byte_range.start <= span.byte_range.end,
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} inverted"
+                );
+                assert!(
+                    span.byte_range.end <= text.len(),
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} out of bounds"
+                );
+                assert!(
+                    text.is_char_boundary(span.byte_range.start),
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} start not boundary"
+                );
+                assert!(
+                    text.is_char_boundary(span.byte_range.end),
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} end not boundary"
+                );
+                assert!(
+                    span.byte_range.start >= prev_end,
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} overlaps previous"
+                );
+                prev_end = span.byte_range.end;
+            }
+        }
+    }
+
+    #[test]
+    fn inline_spans_stay_on_char_boundaries_for_multibyte_markdown() {
+        const FRAGMENTS: &[&str] = &[
+            "plain — text",
+            "**bold — run**",
+            "*em — run*",
+            "~~strike —~~",
+            "`code — span`",
+            "[link — text](https://example.com)",
+            "text with é中😀 mix",
+            "# Heading — one",
+            "## Heading **—** two",
+            "- list — item",
+            "- [ ] task — item",
+            "- [x] done **—** item",
+            "1. ordered — item",
+            "> quote — line",
+            "> [!NOTE]\n> alert — body",
+            "| a — | b |\n| --- | --- |\n| **c—** | d |",
+            "| ——— | short |\n| --- | --- |\n| x | *y—z* |",
+            "```rust\nlet x = \"—\";\n```",
+            "---",
+            "<b>html — bold</b>",
+            "<details><summary>sum — **mary**</summary></details>",
+            "<img alt=\"alt — text\" src=\"x.png\">",
+            "text[^1] — ref\n\n[^1]: note — body",
+            "line one —  \nline two —",
+            "a—b   c—d",
+            "  —indented — paragraph",
+            "—",
+            "**—**",
+            "*—*text—",
+            "| — |\n| --- |\n| **—** |",
+        ];
+
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        for _ in 0..20_000 {
+            let count = 1 + (next() % 5) as usize;
+            let mut source = String::new();
+            for _ in 0..count {
+                let fragment = FRAGMENTS[(next() % FRAGMENTS.len() as u64) as usize];
+                source.push_str(fragment);
+                source.push_str(if next() % 2 == 0 { "\n\n" } else { "\n" });
+            }
+            let Some(doc) = parse_markdown(&source) else {
+                continue;
+            };
+            assert_rows_span_aligned(&source, &doc);
+        }
+    }
+
+    #[test]
+    fn inline_spans_stay_on_char_boundaries_for_random_markdown_soup() {
+        const ALPHABET: &[&str] = &[
+            "—",
+            "é",
+            "中",
+            "😀",
+            "…",
+            "\u{a0}",
+            "a",
+            "b",
+            "x",
+            " ",
+            "  ",
+            "\t",
+            "\n",
+            "\n\n",
+            "#",
+            "##",
+            "*",
+            "**",
+            "_",
+            "__",
+            "~~",
+            "`",
+            "```",
+            "[",
+            "]",
+            "(",
+            ")",
+            "<",
+            ">",
+            "|",
+            "-",
+            "- ",
+            "1. ",
+            "!",
+            "\\",
+            "&amp;",
+            "<b>",
+            "</b>",
+            "<i>",
+            "</i>",
+            "<br>",
+            "<summary>",
+            "</summary>",
+            "<details>",
+            "</details>",
+            "[^1]",
+            "[^1]: ",
+            "---",
+            "> ",
+            "[!NOTE]",
+            "[ ] ",
+            "[x] ",
+            ":",
+            "\"",
+            "'",
+            "/",
+            "=",
+            "img ",
+            "alt=",
+            "http://x",
+        ];
+
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        for _ in 0..60_000 {
+            let token_count = 4 + (next() % 60) as usize;
+            let mut source = String::with_capacity(token_count * 3);
+            for _ in 0..token_count {
+                source.push_str(ALPHABET[(next() % ALPHABET.len() as u64) as usize]);
+            }
+            let Some(doc) = parse_markdown(&source) else {
+                continue;
+            };
+            assert_rows_span_aligned(&source, &doc);
+        }
     }
 }

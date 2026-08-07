@@ -2611,6 +2611,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_markdown_preview: LoadableMarkdownDiff,
     pub(in crate::view) file_markdown_preview_seq: u64,
     pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
+    pub(in crate::view) markdown_preview_wrap: MarkdownPreviewWrapCache,
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,

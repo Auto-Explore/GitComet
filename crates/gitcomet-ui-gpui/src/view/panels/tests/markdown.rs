@@ -2054,3 +2054,286 @@ fn conflict_markdown_preview_scroll_sync_matrix_covers_all_modes_and_axes(
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict markdown matrix fixture");
 }
+
+#[gpui::test]
+fn worktree_markdown_preview_word_wrap_splits_long_rows_within_the_viewport(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(74);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_word_wrap",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/wrap.md");
+    let abs_path = workdir.join(&file_rel);
+    // One paragraph far wider than any test viewport, so wrapping it has to
+    // produce several visual rows.
+    let source = format!("{}\n", "wrap this paragraph across many rows ".repeat(40));
+    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
+        .expect("create markdown word wrap workdir");
+    std::fs::write(&abs_path, source.as_bytes()).expect("write markdown word wrap fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "worktree markdown word wrap target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "active_repo={:?} diff_target={:?}",
+                pane.active_repo().map(|repo| repo.id),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+            )
+        },
+    );
+
+    let document = crate::view::markdown_preview::parse_markdown(&source)
+        .expect("long paragraph markdown preview should parse");
+    let source_row_count = document.rows.len();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::clone(&preview_lines),
+                    source.len(),
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.worktree_markdown_preview_path = Some(abs_path.clone());
+                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown_preview =
+                    gitcomet_state::model::Loadable::Ready(Arc::new(document));
+                pane.worktree_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        for _ in 0..3 {
+            cx.update(|window, app| {
+                let _ = window.draw(app);
+            });
+            cx.run_until_parked();
+        }
+    };
+    draw(cx);
+
+    let wrap_plan_len = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane
+                    .read(cx)
+                    .markdown_preview_wrap
+                    .plan_len(MarkdownPreviewList::Worktree)
+            })
+        })
+    };
+
+    // Without wrapping the paragraph stays on one row that overflows the
+    // viewport, which is what the horizontal scrollbar is for.
+    assert_eq!(
+        wrap_plan_len(cx),
+        None,
+        "no wrap plan should exist while word wrap is off"
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    draw(cx);
+
+    let wrapped_len = wrap_plan_len(cx).expect("word wrap should build a preview wrap plan");
+    assert!(
+        wrapped_len > source_row_count,
+        "wrapping a paragraph wider than the viewport should add visual rows; \
+         wrapped={wrapped_len} source={source_row_count}"
+    );
+
+    let container_bounds = cx
+        .debug_bounds("worktree_markdown_preview_scroll_container")
+        .expect("expected worktree markdown preview container bounds");
+    let row_bounds = cx
+        .debug_bounds("markdown_preview_row_box_0")
+        .expect("expected bounds for the first wrapped markdown preview row");
+    assert!(
+        row_bounds.size.width <= container_bounds.size.width + px(1.0),
+        "wrapped rows must fit the viewport; row={row_bounds:?} container={container_bounds:?}"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown word wrap workdir");
+}
+
+#[gpui::test]
+fn worktree_markdown_preview_change_bar_is_unbroken_for_a_wholly_added_file(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(75);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_change_bar",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/added.md");
+    let abs_path = workdir.join(&file_rel);
+    // A top-level heading makes the preview insert a spacer row, and headings
+    // carry vertical insets — both used to punch holes in the change bar.
+    let source = "# Title\n\nBody paragraph.\n\n## Section\n\nMore body.\n";
+    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
+        .expect("create markdown change bar workdir");
+    std::fs::write(&abs_path, source).expect("write markdown change bar fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+
+            let next_state = app_state_with_repo(repo, repo_id);
+
+            push_test_state(this, next_state, cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "worktree markdown change bar target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "active_repo={:?} diff_target={:?}",
+                pane.active_repo().map(|repo| repo.id),
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone()),
+            )
+        },
+    );
+
+    let document = crate::view::markdown_preview::parse_markdown(source)
+        .expect("headed markdown preview should parse");
+    let row_count = document.rows.len();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::clone(&preview_lines),
+                    source.len(),
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.worktree_markdown_preview_path = Some(abs_path.clone());
+                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown_preview =
+                    gitcomet_state::model::Loadable::Ready(Arc::new(document));
+                pane.worktree_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let mut bars = Vec::new();
+    for row_ix in 0..row_count {
+        let selector: &'static str =
+            Box::leak(format!("markdown_preview_change_bar_{row_ix}").into_boxed_str());
+        let Some(bar) = cx.debug_bounds(selector) else {
+            continue;
+        };
+        bars.push((row_ix, bar));
+    }
+
+    assert!(
+        bars.len() >= 3,
+        "every rendered preview row of an added file should carry a change bar, got {} of {row_count}",
+        bars.len()
+    );
+
+    bars.sort_by(|(_, a), (_, b)| a.top().partial_cmp(&b.top()).expect("finite bounds"));
+    for pair in bars.windows(2) {
+        let (prev_ix, prev) = &pair[0];
+        let (next_ix, next) = &pair[1];
+        assert!(
+            next.top() <= prev.bottom() + px(0.5),
+            "change bar must be continuous between rows {prev_ix} and {next_ix}; \
+             prev={prev:?} next={next:?}"
+        );
+        assert_eq!(
+            next.left(),
+            prev.left(),
+            "change bar must stay in the same gutter column between rows {prev_ix} and {next_ix}"
+        );
+    }
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown change bar workdir");
+}

@@ -2502,9 +2502,23 @@ impl MainPaneView {
                                     components::empty_state(theme, "Preview", message)
                                         .into_any_element()
                                 } else {
+                                    let document = std::sync::Arc::clone(document);
+                                    let document_rev = self.worktree_markdown_preview_seq;
+                                    let (wrap_width, _) = self.markdown_preview_wrap_widths(cx);
+                                    let bar_color =
+                                        rows::worktree_markdown_preview_bar_color(self, theme);
+                                    let row_len = self.ensure_markdown_preview_wrap_plan(
+                                        MarkdownPreviewList::Worktree,
+                                        document.as_ref(),
+                                        document_rev,
+                                        wrap_width,
+                                        bar_color,
+                                        window,
+                                        cx,
+                                    );
                                     let list = uniform_list(
                                         "worktree_markdown_preview_list",
-                                        document.rows.len(),
+                                        row_len,
                                         cx.processor(Self::render_markdown_preview_rows),
                                     )
                                     .h_full()

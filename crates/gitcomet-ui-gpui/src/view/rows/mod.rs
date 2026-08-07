@@ -367,6 +367,7 @@ mod status;
 pub(crate) mod benchmarks;
 
 pub(in crate::view) use self::conflict_resolver::resolved_output_gutter_width;
+pub(in crate::view) use self::history::worktree_markdown_preview_bar_color;
 pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 

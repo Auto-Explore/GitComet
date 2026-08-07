@@ -16,6 +16,7 @@ pub mod perf_ram_guard;
 pub mod perf_sidecar;
 mod press_gesture;
 mod startup_probe;
+mod text_runs;
 mod text_selection;
 mod theme;
 mod ui_runtime;

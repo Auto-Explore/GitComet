@@ -1598,6 +1598,7 @@ fn render_markdown_preview_window(
             ui_scale_percent: crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
             view: None,
             text_region: DiffTextRegion::Inline,
+            wrap_plan: None,
         },
     )
 }
