@@ -13286,6 +13286,88 @@ fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads
     });
 }
 
+/// An untracked SVG is preview-only, so no patch is loaded for it — but an SVG
+/// never reaches the text-file preview path, so the diff pane's Code view is
+/// the only place its source is ever shown. It has to render the file text in
+/// either diff mode, and the Image/Code toggle has to stay reachable.
+#[gpui::test]
+fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(151);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_untracked_svg_code_view",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = PathBuf::from("assets/diagram.svg");
+    let source = String::from_utf8(image_diff_svg_fixture(64, 64, "#22cc66"))
+        .expect("svg fixture should be utf-8");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = 1;
+            // Preview-only: the state layer loads no patch for an untracked file.
+            repo.diff_state.diff = gitcomet_state::model::Loadable::NotLoaded;
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(path.clone(), None, Some(source.clone())),
+            )));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, next_state, cx);
+
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.diff_content_mode = DiffContentMode::Collapsed;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Svg, RenderedPreviewMode::Source);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.is_file_preview_active(),
+            "an SVG is classified as an image, so it must not take the text-file preview path"
+        );
+        // Nothing to collapse without a patch, so the pane falls back to Full.
+        assert_eq!(pane.effective_diff_content_mode(), DiffContentMode::Full);
+        assert!(pane.wants_file_diff_view(false));
+        assert!(!pane.is_collapsed_diff_projection_active());
+        assert_eq!(
+            crate::view::main_diff_rendered_preview_toggle_kind(
+                pane.wants_file_diff_view(false),
+                pane.wants_collapsed_diff_view(false),
+                false,
+                crate::view::diff_target_rendered_preview_kind(Some(&target)),
+            ),
+            Some(RenderedPreviewKind::Svg),
+            "the Image/Code toggle must stay available while Collapsed is selected"
+        );
+        assert!(
+            pane.file_diff_inline_row_len() > 0,
+            "the Code view should have the SVG source to render"
+        );
+    });
+}
+
 #[gpui::test]
 fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
     cx: &mut gpui::TestAppContext,

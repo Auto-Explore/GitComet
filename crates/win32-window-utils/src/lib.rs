@@ -1,7 +1,9 @@
 use std::ptr::null;
+use std::sync::OnceLock;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
+use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, TRUE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
+use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, HTCAPTION, IsIconic,
@@ -11,6 +13,37 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WINDOW_STYLE, WM_NULL, WM_SYSCOMMAND, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_SYSMENU,
     WS_THICKFRAME,
 };
+use windows_sys::core::BOOL;
+
+pub use windows_sys::Win32::System::Console::{
+    CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+};
+
+type ConsoleCtrlCallback = fn(event: u32) -> bool;
+
+static CONSOLE_CTRL_CALLBACK: OnceLock<ConsoleCtrlCallback> = OnceLock::new();
+
+unsafe extern "system" fn console_ctrl_handler(event: u32) -> BOOL {
+    match CONSOLE_CTRL_CALLBACK.get() {
+        Some(callback) if callback(event) => TRUE,
+        _ => FALSE,
+    }
+}
+
+/// Install a process-wide console control handler. Windows has no SIGINT: it
+/// delivers Ctrl+C, Ctrl+Break and console close as console control events.
+///
+/// The callback runs on a thread created by the console host and receives the
+/// raw `CTRL_*_EVENT` code. Returning `false` from it declines the event so the
+/// default handler still runs, terminating the process with its usual status.
+///
+/// Only the first call installs a handler; later calls report failure.
+pub fn install_console_ctrl_handler(callback: ConsoleCtrlCallback) -> bool {
+    if CONSOLE_CTRL_CALLBACK.set(callback).is_err() {
+        return false;
+    }
+    unsafe { SetConsoleCtrlHandler(Some(console_ctrl_handler), TRUE) != 0 }
+}
 
 /// Restore a Win32 window from the maximized state.
 pub fn restore_window(hwnd: isize) -> bool {

@@ -63,16 +63,17 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let rendered_preview_kind =
             crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
-        let wants_rendered_file_content = self.diff_content_mode == DiffContentMode::Full;
         let has_image = self
             .rendered_file_image_diff_loadable()
             .is_some_and(|file| !matches!(file, Loadable::NotLoaded));
-        let wants_image = wants_rendered_file_content
-            && has_image
+        // An image has no collapsed form — the rendered picture is the whole
+        // file — so the image view stays available in either diff mode. Only
+        // the SVG Image/Code toggle can send an image target down the text path.
+        let wants_image = has_image
             && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
-        let wants_markdown_preview = wants_rendered_file_content
+        let wants_markdown_preview = self.diff_content_mode == DiffContentMode::Full
             && rendered_preview_kind == Some(RenderedPreviewKind::Markdown)
             && self
                 .rendered_preview_modes
@@ -290,14 +291,6 @@ impl MainPaneView {
                 },
             };
 
-            if !wants_markdown_preview
-                && rendered_preview_kind == Some(RenderedPreviewKind::Svg)
-                && matches!(diff_file_state, DiffFileState::NotLoaded)
-            {
-                return components::empty_state(theme, "Diff", "SVG code view is not available.")
-                    .into_any_element();
-            }
-
             if !wants_markdown_preview {
                 self.ensure_file_diff_cache(cx);
             }
@@ -391,7 +384,7 @@ impl MainPaneView {
                     }
                 }
                 DiffFileState::Ready { has_file } => {
-                    let text_cache_active = match self.diff_content_mode {
+                    let text_cache_active = match self.effective_diff_content_mode() {
                         DiffContentMode::Full => self.is_file_diff_view_active(),
                         DiffContentMode::Collapsed => self.is_collapsed_diff_projection_active(),
                     };

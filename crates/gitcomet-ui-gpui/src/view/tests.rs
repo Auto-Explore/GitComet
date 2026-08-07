@@ -2053,15 +2053,34 @@ fn diff_target_rendered_preview_kind_reads_diff_target_paths() {
 #[test]
 fn main_diff_rendered_preview_toggle_kind_matches_supported_modes() {
     assert_eq!(
-        main_diff_rendered_preview_toggle_kind(true, false, Some(RenderedPreviewKind::Svg),),
+        main_diff_rendered_preview_toggle_kind(true, false, false, Some(RenderedPreviewKind::Svg),),
+        Some(RenderedPreviewKind::Svg)
+    );
+    // The SVG Image/Code toggle is independent of the Full/Collapsed diff mode.
+    assert_eq!(
+        main_diff_rendered_preview_toggle_kind(false, true, false, Some(RenderedPreviewKind::Svg),),
         Some(RenderedPreviewKind::Svg)
     );
     assert_eq!(
-        main_diff_rendered_preview_toggle_kind(true, false, Some(RenderedPreviewKind::Markdown),),
+        main_diff_rendered_preview_toggle_kind(false, false, false, Some(RenderedPreviewKind::Svg),),
+        None
+    );
+    assert_eq!(
+        main_diff_rendered_preview_toggle_kind(
+            true,
+            false,
+            false,
+            Some(RenderedPreviewKind::Markdown),
+        ),
         Some(RenderedPreviewKind::Markdown)
     );
     assert_eq!(
-        main_diff_rendered_preview_toggle_kind(false, true, Some(RenderedPreviewKind::Markdown),),
+        main_diff_rendered_preview_toggle_kind(
+            false,
+            false,
+            true,
+            Some(RenderedPreviewKind::Markdown),
+        ),
         Some(RenderedPreviewKind::Markdown)
     );
 }

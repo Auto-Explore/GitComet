@@ -3915,13 +3915,29 @@ impl MainPaneView {
             && Self::is_file_diff_target(self.rendered_diff_target())
     }
 
+    /// The diff mode actually in effect. Collapsed hides the unchanged parts of
+    /// a patch, so a target the state layer loads as whole-file content — an
+    /// added, deleted, or untracked file, which has no patch — has nothing to
+    /// collapse and stays on Full however the setting is set.
+    pub(in crate::view) fn effective_diff_content_mode(&self) -> DiffContentMode {
+        if self.diff_content_mode == DiffContentMode::Collapsed
+            && matches!(
+                self.rendered_patch_diff_loadable(),
+                Some(Loadable::NotLoaded)
+            )
+        {
+            return DiffContentMode::Full;
+        }
+        self.diff_content_mode
+    }
+
     pub(in crate::view) fn wants_file_diff_view(&self, is_file_preview: bool) -> bool {
-        self.diff_content_mode == DiffContentMode::Full
+        self.effective_diff_content_mode() == DiffContentMode::Full
             && self.supports_diff_content_mode_toggle(is_file_preview)
     }
 
     pub(in crate::view) fn wants_collapsed_diff_view(&self, is_file_preview: bool) -> bool {
-        self.diff_content_mode == DiffContentMode::Collapsed
+        self.effective_diff_content_mode() == DiffContentMode::Collapsed
             && self.supports_diff_content_mode_toggle(is_file_preview)
     }
 
@@ -3984,7 +4000,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_collapsed_diff_projection_active(&self) -> bool {
-        self.diff_content_mode == DiffContentMode::Collapsed
+        self.effective_diff_content_mode() == DiffContentMode::Collapsed
             && self.current_main_diff_supports_diff_content_toggle()
             && self.rendered_patch_diff_cache_is_current()
             && self.rendered_file_diff_cache_is_current()
@@ -5061,14 +5077,14 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_file_diff_view_active(&self) -> bool {
-        self.diff_content_mode == DiffContentMode::Full
+        self.effective_diff_content_mode() == DiffContentMode::Full
             && self.rendered_file_diff_cache_is_current()
     }
 
+    /// Whether the rasterized image diff on screen belongs to the current
+    /// target. Deliberately not gated on [`DiffContentMode`]: an image has no
+    /// collapsed form, so its rendered view is the same in either diff mode.
     pub(in crate::view) fn is_file_image_diff_view_active(&self) -> bool {
-        if self.diff_content_mode != DiffContentMode::Full {
-            return false;
-        }
         let Some((repo_id, diff_file_rev, diff_target, _workdir, abs_path)) =
             self.rendered_file_diff_identity()
         else {
