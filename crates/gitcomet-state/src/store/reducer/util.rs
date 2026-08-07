@@ -258,7 +258,13 @@ pub(super) fn selected_diff_load_plan(
 
     SelectedDiffLoadPlan {
         load_patch_diff: !preview_only,
-        load_file_text: supports_file && !preview_only && (!preview.wants_image || preview.is_svg),
+        // An SVG counts as an image, so it never reaches the text-file preview
+        // path and the diff pane's Code view is the only place its source is
+        // ever shown. That view reads the loaded file text, so it has to load
+        // even for the preview-only targets — added, deleted, untracked — that
+        // a plain text file would render straight from the worktree instead.
+        load_file_text: supports_file
+            && (preview.is_svg || (!preview.wants_image && !preview_only)),
         preview_text_side,
         load_submodule_summary: false,
         load_file_image: supports_file && preview.wants_image,
@@ -1762,6 +1768,60 @@ mod tests {
         // Without the flag, a tracked file still gets a normal patch diff.
         repo.diff_state.content_preview = false;
         assert!(selected_diff_load_plan(&repo, &worktree).load_patch_diff);
+    }
+
+    #[test]
+    fn preview_only_svg_still_loads_file_text_for_the_code_view() {
+        use crate::model::Shared;
+        use gitcomet_core::domain::{FileStatus, RepoStatus};
+
+        let mut repo = repo_state(11);
+        let svg_path = PathBuf::from("assets/diagram.svg");
+        let png_path = PathBuf::from("assets/logo.png");
+        repo.status = Loadable::Ready(Shared::new(RepoStatus {
+            unstaged: vec![
+                FileStatus {
+                    path: svg_path.clone(),
+                    kind: FileStatusKind::Untracked,
+                    conflict: None,
+                },
+                FileStatus {
+                    path: png_path.clone(),
+                    kind: FileStatusKind::Untracked,
+                    conflict: None,
+                },
+            ],
+            staged: vec![],
+        }));
+
+        // An untracked SVG has no patch, but its source still has to load: the
+        // Code view is the only place an SVG's text is ever shown.
+        let svg = DiffTarget::WorkingTree {
+            path: svg_path,
+            area: DiffArea::Unstaged,
+        };
+        let plan = selected_diff_load_plan(&repo, &svg);
+        assert!(!plan.load_patch_diff);
+        assert!(plan.load_file_text);
+        assert!(plan.load_file_image);
+        // Image + preview text + file text is the widest SVG fan-out; it has to
+        // stay inside the reload cap that `diff_reload_effect_count` asserts.
+        assert!(plan.preview_text_side.is_some());
+        assert_eq!(diff_reload_effect_count(&repo, &svg), 3);
+
+        // A non-SVG image has no text view at all.
+        let png = DiffTarget::WorkingTree {
+            path: png_path,
+            area: DiffArea::Unstaged,
+        };
+        let plan = selected_diff_load_plan(&repo, &png);
+        assert!(!plan.load_patch_diff);
+        assert!(!plan.load_file_text);
+        assert!(plan.load_file_image);
+
+        // Content preview does not suppress the SVG file text either.
+        repo.diff_state.content_preview = true;
+        assert!(selected_diff_load_plan(&repo, &svg).load_file_text);
     }
 
     #[test]
