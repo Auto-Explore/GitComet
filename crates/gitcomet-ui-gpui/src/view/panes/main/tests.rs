@@ -1,24 +1,26 @@
-use super::core_impl::resolved_output_highlight_provider_binding_key;
 use super::{
     ClearDiffSelectionAction, FocusedMergetoolOutput, RenderableConflictFile,
     ResolvedOutputConflictMarker, ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
     apply_conflict_choice_provenance_hints, apply_focused_mergetool_output,
+    apply_resolved_output_unresolved_highlights,
     apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
     build_line_starts, build_resolved_output_conflict_markers,
     build_resolved_output_conflict_markers_from_block_ranges,
-    build_resolved_output_syntax_state_for_snapshot,
-    build_resolved_output_syntax_state_for_snapshot_with_budget, clear_diff_selection_action,
+    clear_diff_selection_action, coalesce_resolved_output_edit_deltas,
     conflict_file_is_binary, conflict_marker_nav_entries_from_markers,
     conflict_resolver_output_context_line, conflict_strategy_needs_full_side_payloads,
     dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
     focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
     pane_content_width_for_layout, parse_conflict_canvas_rows_env,
-    remap_line_keyed_cache_for_delta, remap_resolved_output_conflict_block_ranges_for_delta,
+    remap_resolved_output_conflict_block_ranges_for_delta,
     renderable_conflict_file, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
+    resolved_output_live_highlight_provider, resolved_output_live_provider_binding_key,
+    resolved_output_live_syntax_mask,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
     resolved_output_placeholder_protected_ranges, resolved_output_snapshot_is_modified,
-    resolved_output_unresolved_byte_ranges, split_target_conflict_block_into_subchunks,
+    resolved_output_unresolved_byte_ranges, resolved_output_unresolved_highlight_style,
+    split_target_conflict_block_into_subchunks,
     versioned_cached_diff_styled_text_is_current,
     versioned_query_cached_diff_styled_text_is_current, worktree_output_requires_protection,
 };
@@ -32,7 +34,6 @@ use crate::view::rows;
 use crate::view::{ConflictResolverUiState, GitCometViewMode};
 use gitcomet_core::domain::RepoSpec;
 use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
-use rustc_hash::FxHashMap as HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -699,47 +700,6 @@ fn dirty_byte_range_to_line_range_includes_line_join_delete() {
     // Delete the newline between "a" and "b".
     let dirty = dirty_byte_range_to_line_range(&line_starts, text.len(), 1..2);
     assert_eq!(dirty, 0..2);
-}
-
-#[test]
-fn remap_line_keyed_cache_for_delta_shifts_suffix_entries() {
-    let mut cache: HashMap<usize, usize> = HashMap::default();
-    cache.insert(0, 10);
-    cache.insert(4, 40);
-    cache.insert(7, 70);
-
-    remap_line_keyed_cache_for_delta(&mut cache, 2..5, 2..3);
-    assert_eq!(cache.get(&0), Some(&10));
-    assert_eq!(cache.get(&4), None);
-    assert_eq!(cache.get(&5), Some(&70));
-}
-
-#[test]
-fn remap_line_keyed_cache_for_delta_preserves_versioned_preview_entries() {
-    let mut cache: HashMap<usize, VersionedCachedDiffStyledText> = HashMap::default();
-    let make_entry = |text: &str| VersionedCachedDiffStyledText {
-        syntax_epoch: 7,
-        query_generation: 0,
-        styled: crate::view::diff_text_model::CachedDiffStyledText {
-            text: text.to_string().into(),
-            highlights: Arc::from(Vec::new()),
-            highlights_hash: 11,
-            text_hash: 22,
-        },
-    };
-    cache.insert(0, make_entry("keep"));
-    cache.insert(7, make_entry("shift"));
-
-    remap_line_keyed_cache_for_delta(&mut cache, 2..5, 2..3);
-
-    let keep = versioned_cached_diff_styled_text_is_current(cache.get(&0), 7)
-        .expect("unchanged prefix entry should stay current");
-    assert_eq!(keep.text.as_ref(), "keep");
-
-    let shifted = versioned_cached_diff_styled_text_is_current(cache.get(&5), 7)
-        .expect("suffix entry should move and keep its syntax epoch");
-    assert_eq!(shifted.text.as_ref(), "shift");
-    assert!(!cache.contains_key(&7));
 }
 
 #[test]
@@ -2097,54 +2057,6 @@ fn empty_base_conflict_hint_overrides_false_a_badge() {
 }
 
 #[test]
-fn resolved_output_syntax_state_uses_prepared_document_for_multiline_comment() {
-    let theme = AppTheme::gitcomet_dark();
-    let output = "/* open comment\nstill comment */ let x = 1;";
-    let output_model = TextModel::from(output);
-    let output_snapshot = output_model.snapshot();
-    let line_starts = output_snapshot.shared_line_starts();
-    let second_line_start = line_starts[1];
-
-    let syntax_state = build_resolved_output_syntax_state_for_snapshot(
-        theme,
-        &output_snapshot,
-        Some(rows::DiffSyntaxLanguage::Rust),
-        None,
-        None,
-    );
-
-    let document = syntax_state.prepared_document.expect(
-        "resolved output should keep a prepared document when full-document syntax is available",
-    );
-    // The state now returns a lazy provider instead of materialized highlights.
-    // Call the provider for the second line's byte range to verify multiline comment
-    // highlighting works correctly through the provider path.
-    let provider = syntax_state
-        .highlight_provider
-        .expect("resolved output should return a highlight provider when prepared document exists");
-    let mut result = provider.resolve(second_line_start..output.len());
-    if result.pending {
-        let started = std::time::Instant::now();
-        while rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document) == 0
-            && started.elapsed() < std::time::Duration::from_secs(2)
-        {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        result = provider.resolve(second_line_start..output.len());
-    }
-
-    let highlights = result.highlights;
-    assert!(
-        highlights.iter().any(|(range, style)| {
-            range.start <= second_line_start
-                && range.end > second_line_start
-                && style.color == Some(theme.syntax.comment.into())
-        }),
-        "second line should inherit comment highlighting from the multiline document parse"
-    );
-}
-
-#[test]
 fn unresolved_output_ranges_cover_placeholders_and_selected_unresolved_rows() {
     let segments = vec![
         ConflictSegment::Text("head\n".into()),
@@ -2178,258 +2090,6 @@ fn unresolved_output_ranges_cover_placeholders_and_selected_unresolved_rows() {
     let highlighted_text: Vec<&str> = ranges.iter().map(|range| &output[range.clone()]).collect();
 
     assert_eq!(highlighted_text, ["<Merge Conflict>", "selected"]);
-}
-
-#[test]
-fn resolved_output_syntax_provider_replaces_placeholder_syntax_with_danger() {
-    let theme = AppTheme::gitcomet_dark();
-    let output = "<div>clean</div>\n<Merge Conflict>\n<span>tail</span>\n";
-    let placeholder_start = output.find("<Merge Conflict>").expect("placeholder");
-    let placeholder_range = placeholder_start
-        ..placeholder_start + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
-    let output_model = TextModel::from(output);
-    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
-        theme,
-        &output_model.snapshot(),
-        Some(rows::DiffSyntaxLanguage::Html),
-        None,
-        None,
-        rows::DiffSyntaxBudget::default(),
-        Arc::from([placeholder_range.clone()]),
-    );
-    let document = syntax_state
-        .prepared_document
-        .expect("HTML output should prepare document syntax");
-    let provider = syntax_state
-        .highlight_provider
-        .expect("prepared output should expose a highlight provider");
-    let mut result = provider.resolve(0..output.len());
-    if result.pending {
-        let started = std::time::Instant::now();
-        while rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document) == 0
-            && started.elapsed() < std::time::Duration::from_secs(2)
-        {
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        }
-        result = provider.resolve(0..output.len());
-    }
-
-    let danger = theme.colors.danger.into();
-    let placeholder_highlights: Vec<_> = result
-        .highlights
-        .iter()
-        .filter(|(range, _)| {
-            range.start < placeholder_range.end && range.end > placeholder_range.start
-        })
-        .collect();
-    assert_eq!(placeholder_highlights.len(), 1);
-    assert_eq!(placeholder_highlights[0].0, placeholder_range);
-    assert_eq!(placeholder_highlights[0].1.color, Some(danger));
-    assert!(
-        result.highlights.iter().any(|(range, _)| {
-            range.end <= placeholder_range.start || range.start >= placeholder_range.end
-        }),
-        "normal HTML lines should retain syntax highlights"
-    );
-}
-
-#[test]
-fn unresolved_output_uses_danger_highlight_without_a_syntax_language() {
-    let theme = AppTheme::gitcomet_dark();
-    let output = "head\n<Merge Conflict>\ntail\n";
-    let placeholder_start = output.find("<Merge Conflict>").expect("placeholder");
-    let placeholder_range = placeholder_start
-        ..placeholder_start + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
-    let output_model = TextModel::from(output);
-    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
-        theme,
-        &output_model.snapshot(),
-        None,
-        None,
-        None,
-        rows::DiffSyntaxBudget::default(),
-        Arc::from([placeholder_range.clone()]),
-    );
-
-    assert!(syntax_state.highlight_provider.is_none());
-    assert_eq!(syntax_state.highlights.len(), 1);
-    assert_eq!(syntax_state.highlights[0].0, placeholder_range);
-    assert_eq!(
-        syntax_state.highlights[0].1.color,
-        Some(theme.colors.danger.into())
-    );
-}
-
-#[test]
-fn resolved_output_syntax_state_requests_background_prepare_for_large_documents() {
-    let theme = AppTheme::gitcomet_dark();
-    let output = "let value = Some(42);\n".repeat(4_001);
-    let output_model = TextModel::from(output.clone());
-    let output_snapshot = output_model.snapshot();
-
-    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
-        theme,
-        &output_snapshot,
-        Some(rows::DiffSyntaxLanguage::Rust),
-        None,
-        None,
-        rows::DiffSyntaxBudget {
-            foreground_parse: std::time::Duration::ZERO,
-        },
-        Arc::default(),
-    );
-
-    assert!(
-        syntax_state.needs_background_prepare,
-        "large resolved output should stay eligible for document syntax and continue in the background when the foreground budget times out"
-    );
-    assert!(
-        syntax_state.prepared_document.is_none(),
-        "timed out foreground parses should not claim a prepared document"
-    );
-    assert!(
-        syntax_state.highlight_provider.is_none(),
-        "provider should only be installed once a prepared document exists"
-    );
-    assert!(
-        syntax_state.highlights.is_empty(),
-        "pending document syntax should paint plain text instead of materializing a full fallback highlight vector"
-    );
-}
-
-#[test]
-fn pending_resolved_output_syntax_keeps_unresolved_danger_highlights() {
-    let theme = AppTheme::gitcomet_dark();
-    let placeholder = conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER;
-    let output = format!(
-        "{placeholder}\n{}",
-        "let value = Some(42);\n".repeat(rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1)
-    );
-    let output_model = TextModel::from(output);
-    let placeholder_range = 0..placeholder.len();
-    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
-        theme,
-        &output_model.snapshot(),
-        Some(rows::DiffSyntaxLanguage::Rust),
-        None,
-        None,
-        rows::DiffSyntaxBudget {
-            foreground_parse: std::time::Duration::ZERO,
-        },
-        Arc::from([placeholder_range.clone()]),
-    );
-
-    assert!(syntax_state.needs_background_prepare);
-    assert!(syntax_state.highlight_provider.is_none());
-    assert_eq!(syntax_state.highlights.len(), 1);
-    assert_eq!(syntax_state.highlights[0].0, placeholder_range);
-    assert_eq!(
-        syntax_state.highlights[0].1.color,
-        Some(theme.colors.danger.into())
-    );
-}
-
-#[test]
-fn resolved_output_syntax_state_retains_old_document_while_background_prepare_is_pending() {
-    let theme = AppTheme::gitcomet_dark();
-    let old_output = TextModel::from("fn existing() -> usize { 1 }\n");
-    let old_state = build_resolved_output_syntax_state_for_snapshot(
-        theme,
-        &old_output.snapshot(),
-        Some(rows::DiffSyntaxLanguage::Rust),
-        None,
-        None,
-    );
-    let old_document = old_state
-        .prepared_document
-        .expect("initial resolved output should prepare syntax");
-
-    let large_output =
-        "let value = Some(42);\n".repeat(rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING + 1);
-    let large_model = TextModel::from(large_output);
-    let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
-        theme,
-        &large_model.snapshot(),
-        Some(rows::DiffSyntaxLanguage::Rust),
-        Some(old_document),
-        None,
-        rows::DiffSyntaxBudget {
-            foreground_parse: std::time::Duration::ZERO,
-        },
-        Arc::default(),
-    );
-
-    assert!(syntax_state.needs_background_prepare);
-    assert_eq!(syntax_state.prepared_document, Some(old_document));
-    assert!(
-        syntax_state.highlight_provider.is_some(),
-        "pending background syntax should keep the previous provider instead of flashing to plain text"
-    );
-    assert!(syntax_state.highlights.is_empty());
-}
-
-#[test]
-fn resolved_output_highlight_provider_binding_key_tracks_all_style_inputs() {
-    let theme = AppTheme::gitcomet_dark();
-    let output_a = TextModel::from("fn alpha() -> usize { 1 }\n");
-    let state_a = build_resolved_output_syntax_state_for_snapshot(
-        theme,
-        &output_a.snapshot(),
-        Some(rows::DiffSyntaxLanguage::Rust),
-        None,
-        None,
-    );
-    let document_a = state_a
-        .prepared_document
-        .expect("small Rust output should produce a prepared document");
-
-    let key_a = resolved_output_highlight_provider_binding_key(
-        1,
-        rows::DiffSyntaxLanguage::Rust,
-        document_a,
-        &[],
-    );
-    let key_theme_changed = resolved_output_highlight_provider_binding_key(
-        2,
-        rows::DiffSyntaxLanguage::Rust,
-        document_a,
-        &[],
-    );
-    let key_language_changed = resolved_output_highlight_provider_binding_key(
-        1,
-        rows::DiffSyntaxLanguage::Html,
-        document_a,
-        &[],
-    );
-
-    let output_b = TextModel::from("fn beta() -> usize { 2 }\n");
-    let state_b = build_resolved_output_syntax_state_for_snapshot(
-        theme,
-        &output_b.snapshot(),
-        Some(rows::DiffSyntaxLanguage::Rust),
-        None,
-        None,
-    );
-    let document_b = state_b
-        .prepared_document
-        .expect("different Rust output should produce a prepared document");
-    let key_document_changed = resolved_output_highlight_provider_binding_key(
-        1,
-        rows::DiffSyntaxLanguage::Rust,
-        document_b,
-        &[],
-    );
-    let key_unresolved_ranges_changed = resolved_output_highlight_provider_binding_key(
-        1,
-        rows::DiffSyntaxLanguage::Rust,
-        document_a,
-        &[3..8],
-    );
-
-    assert_ne!(key_a, key_theme_changed);
-    assert_ne!(key_a, key_language_changed);
-    assert_ne!(key_a, key_document_changed);
-    assert_ne!(key_a, key_unresolved_ranges_changed);
 }
 
 #[test]
@@ -2533,3 +2193,166 @@ fn placeholder_protected_ranges_are_empty_without_a_placeholder() {
         resolved_output_placeholder_protected_ranges(output, line_starts.as_slice()).is_empty()
     );
 }
+
+#[test]
+fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
+    // HTML is the worst case for the old behaviour: handed `<Merge Conflict>`
+    // verbatim, the grammar reads it as an opening element and swallows the
+    // rest of the document, so the `<span>` below lost its highlighting.
+    let theme = AppTheme::gitcomet_dark();
+    let output = "<div>clean</div>\n<Merge Conflict>\n<span>tail</span>\n";
+    let model = TextModel::from(output);
+    let snapshot = model.snapshot();
+    let line_starts = snapshot.shared_line_starts();
+
+    let protected = resolved_output_placeholder_protected_ranges(output, line_starts.as_ref());
+    let mask = resolved_output_live_syntax_mask(protected.as_ref(), output);
+
+    let placeholder_start = output.find("<Merge Conflict>").expect("placeholder");
+    let placeholder_range = placeholder_start
+        ..placeholder_start + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
+    assert_eq!(
+        mask.as_ref(),
+        std::slice::from_ref(&placeholder_range),
+        "the mask should cover the placeholder text but not its newline"
+    );
+
+    let document = rows::LiveSyntaxDocument::new(
+        rows::DiffSyntaxLanguage::Html,
+        Arc::from(output),
+        line_starts,
+        mask,
+        None,
+    )
+    .expect("html output should build a live syntax document");
+    let provider = resolved_output_live_highlight_provider(
+        theme,
+        document.snapshot(theme),
+        Arc::from([placeholder_range.clone()]),
+    );
+
+    let result = provider.resolve(0..output.len());
+    assert!(
+        !result.pending,
+        "the live provider is always exact for its text and must never report pending"
+    );
+
+    let placeholder_highlights: Vec<_> = result
+        .highlights
+        .iter()
+        .filter(|(range, _)| {
+            range.start < placeholder_range.end && range.end > placeholder_range.start
+        })
+        .collect();
+    assert_eq!(placeholder_highlights.len(), 1);
+    assert_eq!(placeholder_highlights[0].0, placeholder_range);
+    assert_eq!(
+        placeholder_highlights[0].1.color,
+        Some(theme.colors.danger.into())
+    );
+
+    let tail_start = output.find("<span>").expect("tail element");
+    assert!(
+        result
+            .highlights
+            .iter()
+            .any(|(range, _)| range.start >= tail_start),
+        "the element after an unresolved conflict must still be highlighted: {:?}",
+        result.highlights
+    );
+}
+
+#[test]
+fn resolved_output_without_a_language_still_marks_unresolved_rows() {
+    let theme = AppTheme::gitcomet_dark();
+    let output = "head\n<Merge Conflict>\ntail\n";
+    let placeholder_start = output.find("<Merge Conflict>").expect("placeholder");
+    let placeholder_range = placeholder_start
+        ..placeholder_start + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
+
+    let highlights = apply_resolved_output_unresolved_highlights(
+        Vec::new(),
+        std::slice::from_ref(&placeholder_range),
+        0..output.len(),
+        resolved_output_unresolved_highlight_style(theme),
+    );
+
+    assert_eq!(highlights.len(), 1);
+    assert_eq!(highlights[0].0, placeholder_range);
+    assert_eq!(highlights[0].1.color, Some(theme.colors.danger.into()));
+}
+
+#[test]
+fn coalescing_edit_deltas_covers_every_edit_in_the_batch() {
+    // One delta passes through unchanged.
+    assert_eq!(
+        coalesce_resolved_output_edit_deltas(&[(3..3, 3..4)]),
+        Some((3..3, 3..4))
+    );
+    assert_eq!(
+        coalesce_resolved_output_edit_deltas(&[(3..4, 3..3)]),
+        Some((3..4, 3..3))
+    );
+    assert_eq!(coalesce_resolved_output_edit_deltas(&[]), None);
+
+    // A run of single-character inserts at one caret collapses exactly: the
+    // replaced span stays empty while the inserted span grows. This is the
+    // dominant typing case, so getting it wrong would widen every reparse.
+    assert_eq!(
+        coalesce_resolved_output_edit_deltas(&[(3..3, 3..4), (4..4, 4..5), (5..5, 5..6)]),
+        Some((3..3, 3..6))
+    );
+
+    // Two edits far apart widen to their union rather than being dropped.
+    // Reparsing more than strictly necessary is sound; missing an edit is not.
+    let (replaced, inserted) = coalesce_resolved_output_edit_deltas(&[(2..4, 2..2), (10..10, 10..13)])
+        .expect("a non-empty batch always coalesces");
+    assert!(
+        replaced.start <= 2 && inserted.start <= 2,
+        "the union must start at or before the earliest edit: {replaced:?} {inserted:?}"
+    );
+    assert!(
+        inserted.end >= 13,
+        "the union must reach past the latest edit: {inserted:?}"
+    );
+    assert_eq!(
+        inserted.len() as isize - replaced.len() as isize,
+        1,
+        "the coalesced span must carry the batch's net length change (-2 then +3)"
+    );
+}
+
+#[test]
+fn the_live_provider_binding_key_is_stable_for_unchanged_inputs() {
+    // Installing a provider notifies the input, which re-enters the
+    // `cx.observe` that installed it. If the key were freshly minted each time,
+    // that re-entry would rebind, notify again, and spin forever — the observe
+    // loop would never settle and the pane would hang. The key must therefore
+    // be a function of what the provider closes over, not a counter.
+    let theme = AppTheme::gitcomet_dark();
+    let ranges: Arc<[std::ops::Range<usize>]> = Arc::from([5..21usize]);
+
+    let key = resolved_output_live_provider_binding_key(7, theme, ranges.as_ref());
+    assert_eq!(
+        key,
+        resolved_output_live_provider_binding_key(7, theme, ranges.as_ref()),
+        "identical inputs must produce an identical key, or the observe cycle never settles"
+    );
+
+    assert_ne!(
+        key,
+        resolved_output_live_provider_binding_key(8, theme, ranges.as_ref()),
+        "a new document version must rebind so interpolation is reset"
+    );
+    assert_ne!(
+        key,
+        resolved_output_live_provider_binding_key(7, AppTheme::gitcomet_light(), ranges.as_ref()),
+        "the theme is baked into the provider's palette, so it must rebind"
+    );
+    assert_ne!(
+        key,
+        resolved_output_live_provider_binding_key(7, theme, &[5..21usize, 40..56]),
+        "the unresolved overlay is baked into the closure, so it must rebind"
+    );
+}
+

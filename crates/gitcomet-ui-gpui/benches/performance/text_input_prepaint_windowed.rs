@@ -7,6 +7,7 @@ pub(crate) fn bench_text_input_prepaint_windowed(c: &mut Criterion) {
     let wrap_width = env_usize("GITCOMET_BENCH_TEXT_INPUT_WRAP_WIDTH_PX", 720);
 
     let mut windowed_fixture = TextInputPrepaintWindowedFixture::new(lines, line_bytes, wrap_width);
+    let mut typing_fixture = TextInputPrepaintWindowedFixture::new(lines, line_bytes, wrap_width);
     let mut full_fixture = TextInputPrepaintWindowedFixture::new(lines, line_bytes, wrap_width);
 
     let mut group = c.benchmark_group("text_input_prepaint_windowed");
@@ -25,6 +26,15 @@ pub(crate) fn bench_text_input_prepaint_windowed(c: &mut Criterion) {
             })
         },
     );
+    // The windowed case above re-runs prepaint over unchanged text, so it never
+    // pays for the shaped-row invalidation an edit causes. This one types.
+    group.bench_with_input(
+        BenchmarkId::new("steady_typing", window_rows),
+        &window_rows,
+        |b, &window_rows| {
+            b.iter(|| typing_fixture.run_steady_typing_step(0, window_rows.max(1)))
+        },
+    );
     group.bench_function(BenchmarkId::from_parameter("full_document_control"), |b| {
         b.iter(|| full_fixture.run_full_document_step())
     });
@@ -38,6 +48,15 @@ pub(crate) fn bench_text_input_prepaint_windowed(c: &mut Criterion) {
     emit_text_input_prepaint_windowed_sidecar(
         &format!("text_input_prepaint_windowed/window_rows/{window_rows}"),
         &windowed_metrics,
+    );
+
+    let mut sidecar_typing = TextInputPrepaintWindowedFixture::new(lines, line_bytes, wrap_width);
+    let (_, typing_metrics) = measure_sidecar_allocations(|| {
+        sidecar_typing.run_steady_typing_step_with_metrics(0, window_rows.max(1))
+    });
+    emit_text_input_prepaint_windowed_sidecar(
+        &format!("text_input_prepaint_windowed/steady_typing/{window_rows}"),
+        &typing_metrics,
     );
 
     let mut sidecar_full = TextInputPrepaintWindowedFixture::new(lines, line_bytes, wrap_width);

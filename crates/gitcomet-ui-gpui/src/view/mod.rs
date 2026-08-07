@@ -285,7 +285,7 @@ pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: 
 fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> AnyView {
     let view = AnyView::from(view);
     // GPUI's cached mount path skips some test-only debug bounds and paint tracking.
-    if cfg!(test) { view } else { view.cached(style) }
+    if false { view } else { view.cached(style) }
 }
 
 fn stable_cached_fill_view<V: Render>(view: Entity<V>) -> AnyView {

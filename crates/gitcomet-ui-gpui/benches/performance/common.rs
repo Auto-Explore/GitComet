@@ -6,6 +6,7 @@ pub(crate) use gitcomet_ui_gpui::benchmarks::{
     CommitDetailsMetrics, CommitSearchFilterFixture, CommitSearchFilterMetrics,
     CommitSelectReplaceFixture, CommitSelectReplaceMetrics, ConflictCompareFirstWindowMetrics,
     ConflictLoadDuplicationFixture, ConflictResolvedOutputGutterScrollFixture,
+    ConflictResolvedOutputLiveSyntaxFixture,
     ConflictSearchQueryUpdateFixture, ConflictSplitResizeStepFixture,
     ConflictStreamedProviderFixture, ConflictStreamedResolvedOutputFixture,
     ConflictThreeWayScrollFixture, ConflictThreeWayVisibleMapBuildFixture,

@@ -1468,7 +1468,6 @@ impl ResolvedOutputRecomputeIncrementalFixture {
                     ConflictSegment::Block(ConflictBlock {
                         choice: ConflictChoice::Both,
                         ..
-                        whitespace_only: false,
                     })
                 )
             })
@@ -3190,4 +3189,155 @@ fn build_synthetic_whole_file_conflict_segments(total_lines: usize) -> Vec<Confl
         resolved: false,
         whitespace_only: false,
     })]
+}
+
+/// Measures the live syntax engine on the merge tool's editable resolved output.
+///
+/// The number that matters is `run_keystroke_step`: under the prepared-document
+/// engine this view rebuilt the whole document on every edit (new content hash,
+/// all 64-line token chunks discarded) and fell back to heuristic tokens until a
+/// worker thread caught up. Here it is `tree.edit` plus an incremental reparse.
+pub struct ConflictResolvedOutputLiveSyntaxFixture {
+    text: Arc<str>,
+    line_starts: Arc<[usize]>,
+    mask: Arc<[Range<usize>]>,
+    document: Option<super::diff_text::LiveSyntaxDocument>,
+    theme: AppTheme,
+    caret: usize,
+}
+
+impl ConflictResolvedOutputLiveSyntaxFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let mut text = String::new();
+        let mut mask = Vec::new();
+        let conflict_every = if conflict_blocks == 0 {
+            usize::MAX
+        } else {
+            (lines / conflict_blocks).max(1)
+        };
+        for ix in 0..lines {
+            if ix > 0 && conflict_every != usize::MAX && ix % conflict_every == 0 {
+                // An unresolved block renders as one placeholder row, which the
+                // parser must not see as code.
+                let start = text.len();
+                text.push_str(crate::view::conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER);
+                mask.push(start..text.len());
+                text.push('\n');
+                continue;
+            }
+            text.push_str(&format!(
+                "    let resolved_{ix}: usize = compute_{ix}(shared_{ix}());\n"
+            ));
+        }
+
+        let text: Arc<str> = Arc::from(text.as_str());
+        let line_starts = live_syntax_line_starts(text.as_ref());
+        let mask: Arc<[Range<usize>]> = mask.into();
+        let theme = AppTheme::gitcomet_dark();
+        let document = super::diff_text::LiveSyntaxDocument::new(
+            super::diff_text::DiffSyntaxLanguage::Rust,
+            Arc::clone(&text),
+            Arc::clone(&line_starts),
+            Arc::clone(&mask),
+            None,
+        );
+        let caret = text.len() / 2;
+        Self {
+            text,
+            line_starts,
+            mask,
+            document,
+            theme,
+            caret,
+        }
+    }
+
+    /// One keystroke: insert a character, edit the tree, reparse incrementally.
+    pub fn run_keystroke_step(&mut self) -> u64 {
+        let Some(document) = self.document.as_mut() else {
+            return 0;
+        };
+        // Land the insert on a character boundary near the middle of the
+        // document, which is where an incremental reparse has the most tree to
+        // preserve on either side.
+        let mut at = self.caret.min(self.text.len());
+        while at < self.text.len() && !self.text.is_char_boundary(at) {
+            at += 1;
+        }
+        let mut next = String::with_capacity(self.text.len() + 1);
+        next.push_str(&self.text[..at]);
+        next.push('x');
+        next.push_str(&self.text[at..]);
+
+        let next: Arc<str> = Arc::from(next.as_str());
+        let line_starts = live_syntax_line_starts(next.as_ref());
+        let mask: Arc<[Range<usize>]> = self
+            .mask
+            .iter()
+            .map(|span| {
+                if span.start >= at {
+                    span.start + 1..span.end + 1
+                } else {
+                    span.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        document.sync(
+            Arc::clone(&next),
+            Arc::clone(&line_starts),
+            Arc::clone(&mask),
+            Some((at..at, at..at + 1)),
+            Some(Duration::from_millis(1)),
+        );
+        self.text = next;
+        self.line_starts = line_starts;
+        self.mask = mask;
+        document.version()
+    }
+
+    /// One frame: highlight the bytes covering a visible window of rows.
+    pub fn run_visible_window_resolve(&self, start_line: usize, rows: usize) -> u64 {
+        let Some(document) = self.document.as_ref() else {
+            return 0;
+        };
+        let start = self
+            .line_starts
+            .get(start_line)
+            .copied()
+            .unwrap_or(self.text.len());
+        let end = self
+            .line_starts
+            .get(start_line.saturating_add(rows))
+            .copied()
+            .unwrap_or(self.text.len());
+        let highlights = document
+            .snapshot(self.theme)
+            .highlights_for_byte_range(start..end);
+        highlights.len() as u64
+    }
+
+    /// A parse with no tree to reuse, for comparison against the keystroke path.
+    pub fn run_cold_parse(&self) -> u64 {
+        super::diff_text::LiveSyntaxDocument::new(
+            super::diff_text::DiffSyntaxLanguage::Rust,
+            Arc::clone(&self.text),
+            Arc::clone(&self.line_starts),
+            Arc::clone(&self.mask),
+            None,
+        )
+        .map(|document| document.version())
+        .unwrap_or(0)
+    }
+}
+
+fn live_syntax_line_starts(text: &str) -> Arc<[usize]> {
+    let mut starts = vec![0usize];
+    for (ix, byte) in text.bytes().enumerate() {
+        if byte == b'\n' && ix + 1 < text.len() {
+            starts.push(ix + 1);
+        }
+    }
+    starts.into()
 }

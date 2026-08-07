@@ -47,24 +47,33 @@ pub(in crate::view) use prepared::{
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds,
-    has_pending_prepared_diff_syntax_chunk_builds_for_document,
     inject_background_prepared_diff_syntax_document,
     prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
     prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
     prepared_diff_syntax_reparse_seed, request_syntax_highlights_for_prepared_document_byte_range,
-    request_syntax_highlights_for_prepared_document_line_range,
 };
+/// Neither is the "are chunks still building?" query: only the resolved output
+/// ever polled it, and the live engine has no pending state to poll.
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) use prepared::has_pending_prepared_diff_syntax_chunk_builds_for_document;
+/// Line-range highlights are no longer a render path — the resolved output is
+/// the only view that ever asked for them, and it now goes through the live
+/// engine. Kept for the diff-scroll bench warmup and its own unit tests; the
+/// production request API is the byte-range one above.
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) use prepared::request_syntax_highlights_for_prepared_document_line_range;
 #[cfg(test)]
 pub(in crate::view) use prepared::{
     prepared_diff_syntax_parse_mode, prepared_diff_syntax_source_version,
     syntax_highlights_for_prepared_document_byte_range,
 };
 pub(in crate::view) use syntax::{
-    DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode,
-    PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, diff_syntax_language_for_code_fence_info,
-    diff_syntax_language_for_path,
+    DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument,
+    LiveSyntaxSnapshot, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
+    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
 };
+pub(in crate::view) use syntax::live_syntax_reparse;
 
 pub(super) fn syntax_highlights_for_streamed_line_slice_heuristic(
     theme: AppTheme,

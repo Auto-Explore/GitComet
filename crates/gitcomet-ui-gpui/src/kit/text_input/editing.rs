@@ -42,6 +42,22 @@ fn utf8_edit_delta_between_texts(
     ))
 }
 
+/// The span of a highlight source that covers a live window.
+///
+/// A deletion since the source was installed makes it longer than the buffer
+/// over the edited span, so reach that much further or the bottom of the window
+/// comes back short.
+fn interpolated_source_window(
+    interpolation: &HighlightInterpolation,
+    byte_range: &Range<usize>,
+) -> Range<usize> {
+    let mut source_range = interpolation.to_source_range(byte_range);
+    source_range.end = source_range
+        .end
+        .saturating_add(interpolation.source_lookahead());
+    source_range
+}
+
 impl TextInput {
     pub fn new(options: TextInputOptions, _window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self::from_options(options, cx)
@@ -92,7 +108,6 @@ impl TextInput {
 
     pub(super) fn clear_shaped_row_caches(&mut self) {
         self.layout.plain_line_cache.clear();
-        self.layout.wrapped_line_cache.clear();
         self.highlight.prepaint_runs_cache = None;
     }
 
@@ -149,18 +164,220 @@ impl TextInput {
         }
     }
 
+    /// Background syntax chunks landed for the text the provider already
+    /// describes. Its tokens improved; the text it was built over did not, so
+    /// the interpolation anchor must survive — resetting it here would snap
+    /// every highlight to coordinates the buffer left behind.
     pub(super) fn note_provider_highlights_changed(&mut self) {
+        self.highlight.interpolated_cache = None;
         self.invalidate_highlights(true);
     }
 
-    pub(super) fn invalidate_provider_highlights_for_text_change(&mut self) {
-        if self.highlight.provider.is_none() {
+    /// Record a text edit against the highlights currently on screen.
+    ///
+    /// The highlight source is not recomputed here — that is debounced by the
+    /// owner. Instead the edit is folded into the interpolation so the stale
+    /// highlights keep pointing at the tokens they describe.
+    pub(super) fn note_text_edit_for_highlights(
+        &mut self,
+        replaced: &Range<usize>,
+        inserted: &Range<usize>,
+    ) {
+        if self.highlight.provider.is_none()
+            && self.highlight.highlights.is_empty()
+            && self.highlight.superseded.is_none()
+        {
             return;
         }
 
-        self.highlight.provider_cache = None;
+        self.highlight.interpolation.record_edit(replaced, inserted);
+        // A source held in reserve has to keep tracking the buffer too, or it
+        // would answer in coordinates that stopped being true the moment it
+        // was set aside.
+        if let Some(superseded) = self.highlight.superseded.as_mut() {
+            superseded.interpolation.record_edit(replaced, inserted);
+        }
+        self.highlight.interpolated_cache = None;
         self.highlight.prepaint_runs_cache = None;
-        self.highlight.epoch = self.highlight.epoch.wrapping_add(1).max(1);
+    }
+
+    /// Drop the accumulated edits because the highlight source was replaced by
+    /// one built over the buffer's current text.
+    fn reset_highlight_interpolation(&mut self) {
+        self.highlight.interpolation.reset();
+        self.highlight.interpolated_cache = None;
+    }
+
+    /// Set the outgoing highlight source aside so it can cover for its
+    /// replacement until that replacement has tokens to show. See
+    /// `SupersededHighlights`.
+    fn supersede_current_highlight_source(&mut self) {
+        if !self.highlight.answered {
+            // This source never settled either, so it is no better a fallback
+            // than the incoming one. Keep whatever reserve is already held.
+            return;
+        }
+        if self.highlight.provider.is_none() && self.highlight.highlights.is_empty() {
+            self.highlight.superseded = None;
+            return;
+        }
+
+        self.highlight.superseded = Some(SupersededHighlights {
+            provider: self.highlight.provider.clone(),
+            highlights: Arc::clone(&self.highlight.highlights),
+            interpolation: std::mem::take(&mut self.highlight.interpolation),
+        });
+    }
+
+    /// The highlights covering `byte_range`, in the buffer's live coordinates.
+    ///
+    /// Collapses the provider and static-vector paths so both interpolate: a
+    /// text edit moves highlights published through `set_highlights` exactly as
+    /// it moves a provider's.
+    pub(super) fn effective_highlights_for_window(
+        &mut self,
+        byte_range: Range<usize>,
+    ) -> ResolvedProviderHighlights {
+        let resolved = self.resolve_current_highlight_source(&byte_range);
+        if !resolved.pending {
+            // The source has settled, so it is now the truth and is fit to
+            // stand in for its own replacement later.
+            self.highlight.answered = true;
+            self.highlight.superseded = None;
+            return resolved;
+        }
+
+        // Still waiting on tokens. Rather than paint the viewport in the base
+        // color for a frame or two, answer from the source this one replaced,
+        // carried across the edits since by its own interpolation.
+        let Some(superseded) = self.highlight.superseded.take() else {
+            return resolved;
+        };
+        let stale = self.resolve_superseded_highlight_source(&superseded, &byte_range);
+        self.highlight.superseded = Some(superseded);
+        ResolvedProviderHighlights {
+            // Keep the caller polling: this is a stopgap, not the answer.
+            pending: true,
+            highlights: stale,
+        }
+    }
+
+    fn resolve_current_highlight_source(
+        &mut self,
+        byte_range: &Range<usize>,
+    ) -> ResolvedProviderHighlights {
+        if self.highlight.interpolation.is_exact() {
+            return if self.highlight.provider.is_some() {
+                self.resolve_provider_highlights(byte_range.start, byte_range.end)
+            } else {
+                ResolvedProviderHighlights {
+                    pending: false,
+                    highlights: Arc::clone(&self.highlight.highlights),
+                }
+            };
+        }
+
+        if let Some(cache) = self.highlight.interpolated_cache.as_ref()
+            && cache.highlight_epoch == self.highlight.epoch
+            && cache.interpolation_generation == self.highlight.interpolation.generation()
+            && cache.byte_start <= byte_range.start
+            && cache.byte_end >= byte_range.end
+        {
+            return ResolvedProviderHighlights {
+                pending: cache.pending,
+                highlights: Arc::clone(&cache.highlights),
+            };
+        }
+
+        let source_range = interpolated_source_window(&self.highlight.interpolation, byte_range);
+        let source = if self.highlight.provider.is_some() {
+            self.resolve_provider_highlights(source_range.start, source_range.end)
+        } else {
+            ResolvedProviderHighlights {
+                pending: false,
+                highlights: Arc::clone(&self.highlight.highlights),
+            }
+        };
+        let highlights = Arc::new(
+            self.highlight
+                .interpolation
+                .map_highlights(source.highlights.as_slice(), self.content.len()),
+        );
+        self.debug_assert_highlights_on_char_boundaries(&highlights);
+
+        self.highlight.interpolated_cache = Some(InterpolatedHighlightCache {
+            highlight_epoch: self.highlight.epoch,
+            interpolation_generation: self.highlight.interpolation.generation(),
+            byte_start: byte_range.start,
+            byte_end: byte_range.end,
+            pending: source.pending,
+            highlights: Arc::clone(&highlights),
+        });
+        ResolvedProviderHighlights {
+            pending: source.pending,
+            highlights,
+        }
+    }
+
+    /// Answer a window from the source that is being replaced.
+    ///
+    /// Deliberately uncached: `provider_cache` belongs to the source that
+    /// replaced this one, and mixing two providers' answers under one key would
+    /// outlive the handoff. This runs for the frame or two the replacement
+    /// needs to build its tokens.
+    fn resolve_superseded_highlight_source(
+        &self,
+        superseded: &SupersededHighlights,
+        byte_range: &Range<usize>,
+    ) -> Arc<Vec<(Range<usize>, gpui::HighlightStyle)>> {
+        let source_range = interpolated_source_window(&superseded.interpolation, byte_range);
+        let highlights = match superseded.provider.as_ref() {
+            Some(provider) => {
+                let mut resolved = provider.resolve(source_range).highlights;
+                resolved.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+                superseded
+                    .interpolation
+                    .map_highlights(&resolved, self.content.len())
+            }
+            None => superseded
+                .interpolation
+                .map_highlights(superseded.highlights.as_slice(), self.content.len()),
+        };
+        let highlights = Arc::new(highlights);
+        self.debug_assert_highlights_on_char_boundaries(&highlights);
+        highlights
+    }
+
+    /// A bound landing mid-character would corrupt the byte-length runs
+    /// `text_run_for_style` builds from these ranges.
+    #[inline]
+    fn debug_assert_highlights_on_char_boundaries(
+        &self,
+        highlights: &[(Range<usize>, gpui::HighlightStyle)],
+    ) {
+        #[cfg(debug_assertions)]
+        {
+            let text = self.content.as_ref();
+            for (range, _) in highlights {
+                debug_assert!(
+                    text.is_char_boundary(range.start) && text.is_char_boundary(range.end),
+                    "interpolated highlight {range:?} must land on character boundaries"
+                );
+            }
+        }
+        #[cfg(not(debug_assertions))]
+        let _ = highlights;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn debug_effective_highlights_for_range(
+        &mut self,
+        byte_range: Range<usize>,
+    ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+        self.effective_highlights_for_window(byte_range)
+            .highlights
+            .as_ref()
+            .clone()
     }
 
     pub fn set_theme(&mut self, theme: AppTheme, cx: &mut Context<Self>) {
@@ -183,6 +400,9 @@ impl TextInput {
         if self.content.as_ref() == text.as_ref() {
             return;
         }
+        // Computed before the overwrite so highlights already on screen can ride
+        // along; the equality check above keeps this O(n) scan off the hot path.
+        let text_edit_delta = utf8_edit_delta_between_texts(self.content.as_ref(), text.as_ref());
         self.content.set_text(text.as_ref());
         self.protected_ranges = Arc::from([]);
         self.rebuild_content_width_cache_if_present();
@@ -197,7 +417,9 @@ impl TextInput {
             self.request_wrap_recompute();
         }
         self.selection.pending_text_edit_deltas.clear();
-        self.invalidate_provider_highlights_for_text_change();
+        if let Some((replaced, inserted)) = text_edit_delta {
+            self.note_text_edit_for_highlights(&replaced, &inserted);
+        }
         cx.notify();
     }
 
@@ -212,10 +434,16 @@ impl TextInput {
         {
             return;
         }
+        self.supersede_current_highlight_source();
         self.highlight.highlights = Arc::new(highlights);
         self.highlight.provider = None;
         self.highlight.provider_binding_key = None;
         self.highlight.provider_poll_task.take();
+        // A materialized vector answers the moment it is published.
+        self.highlight.answered = true;
+        self.highlight.superseded = None;
+        // A fresh highlight source describes the buffer as it stands now.
+        self.reset_highlight_interpolation();
         self.invalidate_highlights(false);
         cx.notify();
     }
@@ -247,12 +475,23 @@ impl TextInput {
         cx.notify();
     }
 
+    /// `source_len` is the byte length of the text the provider answers in.
+    /// Highlight interpolation anchors edits to that text, so a provider built
+    /// over a snapshot the buffer has since moved past would be mapped with the
+    /// wrong origin — callers must read the buffer immediately before building.
     pub(super) fn install_highlight_provider(
         &mut self,
         provider: HighlightProvider,
         binding_key: Option<u64>,
+        source_len: usize,
         cx: &mut Context<Self>,
     ) {
+        debug_assert_eq!(
+            source_len,
+            self.content.len(),
+            "a highlight provider must describe the buffer's current text"
+        );
+
         if !should_reset_highlight_provider_binding(
             self.highlight.provider.is_some(),
             self.highlight.provider_binding_key,
@@ -261,30 +500,39 @@ impl TextInput {
             return;
         }
 
+        // A provider over a freshly prepared document cannot answer until its
+        // token chunks are built, so hold the outgoing source to cover the gap.
+        self.supersede_current_highlight_source();
         self.highlight.provider = Some(provider);
         self.highlight.provider_binding_key = binding_key;
         self.highlight.provider_poll_task.take();
         self.highlight.highlights = Arc::new(Vec::new());
+        self.highlight.answered = false;
+        // Only past the early return: an unchanged binding key means the same
+        // closure over the same text, so its anchor must survive.
+        self.reset_highlight_interpolation();
         self.invalidate_highlights(false);
         cx.notify();
     }
 
-    /// Replace the full highlight vector with a lazy provider that generates highlights
-    /// on demand for only the visible byte range. Use this for large documents where
-    /// materializing all highlights is wasteful.
-    pub fn set_highlight_provider(&mut self, provider: HighlightProvider, cx: &mut Context<Self>) {
-        self.install_highlight_provider(provider, None, cx);
-    }
-
-    /// Like `set_highlight_provider`, but lets callers provide a stable binding key so
-    /// repeated reapplication of the same provider can keep the existing highlight cache.
+    /// Replace the full highlight vector with a lazy provider that generates
+    /// highlights on demand for only the visible byte range. Use this for large
+    /// documents where materializing all highlights is wasteful.
+    ///
+    /// `binding_key` identifies the source the provider speaks for. Reinstalling
+    /// under the same key keeps the existing highlight cache; a new key resets
+    /// it, along with the edit interpolation that was tracking the old source.
+    ///
+    /// `source_len` is the byte length of the text the provider was built over;
+    /// see `install_highlight_provider`.
     pub fn set_highlight_provider_with_key(
         &mut self,
         binding_key: u64,
         provider: HighlightProvider,
+        source_len: usize,
         cx: &mut Context<Self>,
     ) {
-        self.install_highlight_provider(provider, Some(binding_key), cx);
+        self.install_highlight_provider(provider, Some(binding_key), source_len, cx);
     }
 
     pub fn set_line_height(&mut self, line_height: Option<Pixels>, cx: &mut Context<Self>) {
@@ -677,9 +925,6 @@ impl TextInput {
         if self.layout.plain_line_cache.len() > TEXT_INPUT_SHAPE_CACHE_LIMIT {
             self.layout.plain_line_cache.clear();
         }
-        if self.layout.wrapped_line_cache.len() > TEXT_INPUT_SHAPE_CACHE_LIMIT {
-            self.layout.wrapped_line_cache.clear();
-        }
     }
 
     pub(super) fn streamed_highlight_runs_for_visible_window(
@@ -704,6 +949,8 @@ impl TextInput {
 
         if let Some(cache) = self.highlight.prepaint_runs_cache.as_ref()
             && cache.highlight_epoch == self.highlight.epoch
+            && cache.interpolation_generation == self.highlight.interpolation.generation()
+            && cache.shape_style_epoch == self.layout.shape_style_epoch
             && cache.visible_start == visible_line_range.start
             && cache.visible_end == visible_line_range.end
         {
@@ -720,6 +967,8 @@ impl TextInput {
         ));
         self.highlight.prepaint_runs_cache = Some(PrepaintHighlightRunsCache {
             highlight_epoch: self.highlight.epoch,
+            interpolation_generation: self.highlight.interpolation.generation(),
+            shape_style_epoch: self.layout.shape_style_epoch,
             visible_start: visible_line_range.start,
             visible_end: visible_line_range.end,
             line_runs: Arc::clone(&line_runs),
@@ -736,7 +985,6 @@ impl TextInput {
     ) -> ShapedLine {
         let key = ShapedRowCacheKey {
             line_ix: line.line_ix,
-            wrap_width_key: i32::MIN,
             font_size_key: f32::from(shape_style.font_size).round() as i32,
         };
         if let Some(cached) = self.layout.plain_line_cache.get(&key) {
@@ -764,49 +1012,6 @@ impl TextInput {
         self.layout.plain_line_cache.insert(key, shaped.clone());
         self.trim_shape_caches();
         shaped
-    }
-
-    pub(super) fn shape_wrapped_line_cached(
-        &mut self,
-        line: LineShapeInput<'_>,
-        wrap_width: Pixels,
-        precomputed_runs: Option<&[TextRun]>,
-        shape_style: &TextShapeStyle<'_>,
-        window: &mut Window,
-    ) -> WrappedLine {
-        let key = ShapedRowCacheKey {
-            line_ix: line.line_ix,
-            wrap_width_key: wrap_width_cache_key(wrap_width),
-            font_size_key: f32::from(shape_style.font_size).round() as i32,
-        };
-        let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
-        let owned_runs;
-        let runs = if let Some(precomputed_runs) = precomputed_runs {
-            precomputed_runs
-        } else {
-            owned_runs = runs_for_line(
-                shape_style.base_font,
-                shape_style.text_color,
-                line.line_start,
-                capped_text.as_ref(),
-                shape_style.highlights,
-            );
-            owned_runs.as_slice()
-        };
-        let shaped = window
-            .text_system()
-            .shape_text(
-                capped_text,
-                shape_style.font_size,
-                runs,
-                Some(wrap_width),
-                None,
-            )
-            .unwrap_or_default();
-        let wrapped = shaped.into_iter().next().unwrap_or_default();
-        self.layout.wrapped_line_cache.insert(key, ());
-        self.trim_shape_caches();
-        wrapped
     }
 
     pub(super) fn mark_wrap_dirty_from_edit(
@@ -1859,7 +2064,7 @@ impl TextInput {
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
-        self.invalidate_provider_highlights_for_text_change();
+        self.note_text_edit_for_highlights(&range, &inserted);
         if !preserve_view {
             self.queue_cursor_autoscroll();
         }
@@ -2070,9 +2275,9 @@ impl TextInput {
             self.request_wrap_recompute();
         }
         if let Some(delta) = text_edit_delta {
+            self.note_text_edit_for_highlights(&delta.0, &delta.1);
             self.selection.pending_text_edit_deltas.push(delta);
         }
-        self.invalidate_provider_highlights_for_text_change();
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -2718,10 +2923,15 @@ impl TextInput {
             TextInputLayout::Plain(lines) => {
                 let ratio = f32::from(position.y - bounds.top()) / f32::from(line_height);
                 let mut line_ix = ratio.floor() as isize;
-                line_ix = line_ix.clamp(0, lines.len().saturating_sub(1) as isize);
+                line_ix = line_ix.clamp(0, lines.line_count().saturating_sub(1) as isize);
                 let line_ix = line_ix as usize;
                 let local_x = position.x - bounds.left() + self.layout.scroll_x;
-                let local_ix = lines[line_ix].closest_index_for_x(local_x);
+                // A row that was never shaped was never on screen to be hit;
+                // fall back to its start offset.
+                let local_ix = lines
+                    .get(line_ix)
+                    .map(|line| line.closest_index_for_x(local_x))
+                    .unwrap_or(0);
                 let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
                 doc_ix.min(self.content.len())
             }
@@ -2773,10 +2983,15 @@ impl TextInput {
             TextInputLayout::Plain(lines) => {
                 let ratio = f32::from(position.y - bounds.top()) / f32::from(line_height);
                 let mut line_ix = ratio.floor() as isize;
-                line_ix = line_ix.clamp(0, lines.len().saturating_sub(1) as isize);
+                line_ix = line_ix.clamp(0, lines.line_count().saturating_sub(1) as isize);
                 let line_ix = line_ix as usize;
                 let local_x = position.x - bounds.left() + self.layout.scroll_x;
-                let local_ix = lines[line_ix].closest_index_for_x(local_x);
+                // A row that was never shaped was never on screen to be hit;
+                // fall back to its start offset.
+                let local_ix = lines
+                    .get(line_ix)
+                    .map(|line| line.closest_index_for_x(local_x))
+                    .unwrap_or(0);
                 let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local_ix;
                 doc_ix.min(self.content.len())
             }
@@ -2920,7 +3135,7 @@ impl EntityInputHandler for TextInput {
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
-        self.invalidate_provider_highlights_for_text_change();
+        self.note_text_edit_for_highlights(&range, &inserted);
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -2972,7 +3187,7 @@ impl EntityInputHandler for TextInput {
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
         self.invalidate_layout_caches_preserving_wrap_rows();
-        self.invalidate_provider_highlights_for_text_change();
+        self.note_text_edit_for_highlights(&range, &inserted);
         self.queue_cursor_autoscroll();
         cx.notify();
     }
@@ -3052,7 +3267,7 @@ impl EntityInputHandler for TextInput {
         match layout {
             TextInputLayout::Plain(lines) => {
                 let mut line_ix = (local.y / line_height).floor() as isize;
-                line_ix = line_ix.clamp(0, lines.len().saturating_sub(1) as isize);
+                line_ix = line_ix.clamp(0, lines.line_count().saturating_sub(1) as isize);
                 let line_ix = line_ix as usize;
                 let line = lines.get(line_ix)?;
                 let local_x = local.x + self.layout.scroll_x;

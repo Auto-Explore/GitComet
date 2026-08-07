@@ -1740,6 +1740,7 @@ pub(in super::super) fn drain_completed_prepared_syntax_chunk_builds_for_documen
     })
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in super::super) fn has_pending_prepared_syntax_chunk_builds_for_document(
     document: PreparedSyntaxDocument,
 ) -> bool {

@@ -2,11 +2,10 @@ use super::shaping::with_alpha;
 use super::*;
 
 // Text or display-mode changes always clear shaped-row caches, so cache keys
-// only need the line index plus wrap identity.
+// only need the line index.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct ShapedRowCacheKey {
     pub(super) line_ix: usize,
-    pub(super) wrap_width_key: i32,
     /// Rounded font size: zoom changes reshape instead of replaying stale
     /// lines (most visible on never-edited placeholder text).
     pub(super) font_size_key: i32,
@@ -85,6 +84,11 @@ impl ProviderHighlightCacheEntry {
     }
 }
 
+/// Windows already fetched from the highlight provider, keyed by byte range.
+///
+/// Those ranges are in the provider's own *source* coordinates, not the
+/// buffer's live ones — `HighlightInterpolation` maps between the two — so this
+/// cache survives edits that have not yet reached the provider.
 #[derive(Clone)]
 pub(super) struct ProviderHighlightCache {
     pub(super) highlight_epoch: u64,
@@ -161,6 +165,229 @@ impl ProviderHighlightCache {
     }
 }
 
+/// The single byte span separating "text the current highlight source still
+/// describes" from "text edited since it was installed". A replace leaves the
+/// prefix identical in both spaces, so one `start` suffices.
+///
+/// `old_len` is the span's length in source coordinates, `new_len` its length
+/// in the buffer's live coordinates.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct HighlightEditPatch {
+    pub(super) start: usize,
+    pub(super) old_len: usize,
+    pub(super) new_len: usize,
+}
+
+/// Keeps stale highlights pinned to their tokens between the edit that moved
+/// them and the debounced recompute that catches up.
+///
+/// Mirrors `WrapState::interpolated_patches`: cheap, synchronous, applied on
+/// every edit so rendering gets stale-but-positionally-correct highlights.
+///
+/// Deliberately one coalesced interval rather than a sorted disjoint list. A
+/// run of single-character inserts at a fixed caret collapses into it exactly
+/// (`old_len` stays 0 while `new_len` grows), which is the dominant typing
+/// case. Two edits far apart widen the interval to their union, so the
+/// untouched text between them renders in the base color instead of keeping
+/// its highlights — still strictly better than the smear it replaces, and the
+/// debounced recompute restores it. Upgrading to a disjoint list later is a
+/// local change behind this same API.
+#[derive(Debug, Default)]
+pub(super) struct HighlightInterpolation {
+    patch: Option<HighlightEditPatch>,
+    generation: u64,
+}
+
+impl HighlightInterpolation {
+    /// True while the highlight source still describes the buffer verbatim, so
+    /// callers can hand its ranges straight through.
+    pub(super) fn is_exact(&self) -> bool {
+        self.patch.is_none()
+    }
+
+    pub(super) fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    #[cfg(test)]
+    pub(super) fn debug_patch(&self) -> Option<HighlightEditPatch> {
+        self.patch
+    }
+
+    /// Drop the accumulated edits. Only correct where the highlight source is
+    /// itself replaced by one describing the buffer's current text.
+    pub(super) fn reset(&mut self) {
+        if self.patch.is_none() {
+            return;
+        }
+        self.patch = None;
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Fold one edit into the patch. `replaced` is in the pre-edit buffer's
+    /// coordinates and `inserted` in the post-edit buffer's; they always share
+    /// a start.
+    pub(super) fn record_edit(&mut self, replaced: &Range<usize>, inserted: &Range<usize>) {
+        debug_assert_eq!(
+            replaced.start, inserted.start,
+            "an edit replaces a span with text beginning at the same offset"
+        );
+
+        self.patch = Some(match self.patch {
+            None => HighlightEditPatch {
+                start: replaced.start,
+                old_len: replaced.end.saturating_sub(replaced.start),
+                new_len: inserted.end.saturating_sub(inserted.start),
+            },
+            Some(patch) => {
+                // Widen to the union of the two edited spans, in the pre-edit
+                // coordinates both are expressed in.
+                let union_start = patch.start.min(replaced.start);
+                let union_right = patch.start.saturating_add(patch.new_len).max(replaced.end);
+
+                // `union_right >= patch.start + patch.new_len >= patch.new_len`
+                // and `union_right >= replaced.end >= union_start + replaced.len()`,
+                // so both subtractions below stay non-negative in this order.
+                let source_right = union_right - patch.new_len + patch.old_len;
+                let live_right =
+                    union_right - (replaced.end - replaced.start) + (inserted.end - inserted.start);
+                HighlightEditPatch {
+                    start: union_start,
+                    old_len: source_right.saturating_sub(union_start),
+                    new_len: live_right.saturating_sub(union_start),
+                }
+            }
+        });
+        // Edits that cancel out — typing then undoing it — leave the source
+        // describing the buffer verbatim again, so hand the fast path back.
+        if self
+            .patch
+            .is_some_and(|patch| patch.old_len == 0 && patch.new_len == 0)
+        {
+            self.patch = None;
+        }
+        self.generation = self.generation.wrapping_add(1);
+    }
+
+    /// Translate a live buffer offset into the coordinates the highlight source
+    /// still speaks. Monotone, and the identity outside the patch.
+    pub(super) fn to_source_offset(&self, offset: usize) -> usize {
+        let Some(patch) = self.patch else {
+            return offset;
+        };
+        if offset <= patch.start {
+            offset
+        } else if offset >= patch.start.saturating_add(patch.new_len) {
+            offset - patch.new_len + patch.old_len
+        } else {
+            // Inside the edited span, which the source describes with different
+            // text: clamp to the span so the map stays monotone.
+            patch
+                .start
+                .saturating_add((offset - patch.start).min(patch.old_len))
+        }
+    }
+
+    pub(super) fn to_source_range(&self, range: &Range<usize>) -> Range<usize> {
+        self.to_source_offset(range.start)..self.to_source_offset(range.end)
+    }
+
+    /// How much further into the source a live window may reach, so a deletion
+    /// since install does not under-fetch the bottom of the visible window.
+    pub(super) fn source_lookahead(&self) -> usize {
+        self.patch
+            .map(|patch| patch.old_len.saturating_sub(patch.new_len))
+            .unwrap_or(0)
+    }
+
+    /// Rewrite source-coordinate highlights into live coordinates, clamped to
+    /// `clamp_len`.
+    ///
+    /// A range straddling the edit is split rather than dropped. The stale
+    /// window here lasts a full recompute debounce, so collapsing the range
+    /// would make a block comment or string around the caret vanish for that
+    /// whole time. The edited bytes themselves are left to the base color
+    /// until the recompute catches up.
+    pub(super) fn map_highlights(
+        &self,
+        source: &[(Range<usize>, gpui::HighlightStyle)],
+        clamp_len: usize,
+    ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+        let Some(patch) = self.patch else {
+            let mut mapped = source.to_vec();
+            mapped.retain(|(range, _)| range.start < clamp_len && !range.is_empty());
+            for (range, _) in mapped.iter_mut() {
+                range.end = range.end.min(clamp_len);
+            }
+            return mapped;
+        };
+
+        let source_end = patch.start.saturating_add(patch.old_len);
+        let mut mapped = Vec::with_capacity(source.len());
+        let mut push = |range: Range<usize>, style: &gpui::HighlightStyle| {
+            let range = range.start.min(clamp_len)..range.end.min(clamp_len);
+            if range.is_empty() {
+                return;
+            }
+            debug_assert!(
+                range.start <= range.end,
+                "interpolated highlight ranges must stay ordered"
+            );
+            mapped.push((range, *style));
+        };
+
+        for (range, style) in source {
+            // Before the edit: identical in both spaces.
+            if range.start < patch.start {
+                push(range.start..range.end.min(patch.start), style);
+            }
+            // After the edit: shifted by the length delta.
+            if range.end > source_end {
+                let start = range.start.max(source_end) - patch.old_len + patch.new_len;
+                let end = range.end - patch.old_len + patch.new_len;
+                push(start..end, style);
+            }
+        }
+
+        // Splitting breaks source order — a range's right piece can land after
+        // a later range's left piece — and `HighlightCursor` binary-searches.
+        mapped.sort_by(|(a, _), (b, _)| a.start.cmp(&b.start).then(a.end.cmp(&b.end)));
+        mapped
+    }
+}
+
+/// The highlight source a rebind replaced, kept until its replacement can
+/// actually answer.
+///
+/// The rule is that the live highlight source is swapped from old tokens
+/// straight to new ones, never through an empty state, so a query landing
+/// mid-handoff gets stale colors rather than none.
+///
+/// A provider over a freshly prepared document needs that cover: its
+/// token chunks are built in the background, so until they land it can only
+/// answer with silence — which paints the viewport in the base color for a
+/// frame or two. This keeps the outgoing source available to cover that gap.
+pub(super) struct SupersededHighlights {
+    pub(super) provider: Option<HighlightProvider>,
+    pub(super) highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+    /// Edits between the text this source describes and the buffer now. It goes
+    /// on accumulating them while the source is held in reserve.
+    pub(super) interpolation: HighlightInterpolation,
+}
+
+/// Highlights already mapped into live coordinates for one visible window.
+///
+/// Keyed in live coordinates, unlike `ProviderHighlightCache`, which is keyed
+/// in the source's.
+pub(super) struct InterpolatedHighlightCache {
+    pub(super) highlight_epoch: u64,
+    pub(super) interpolation_generation: u64,
+    pub(super) byte_start: usize,
+    pub(super) byte_end: usize,
+    pub(super) pending: bool,
+    pub(super) highlights: Arc<Vec<(Range<usize>, gpui::HighlightStyle)>>,
+}
+
 #[derive(Clone)]
 pub(super) struct ResolvedProviderHighlights {
     pub(super) pending: bool,
@@ -178,9 +405,16 @@ pub(super) fn should_reset_highlight_provider_binding(
     }
 }
 
+/// Text runs built for one visible window.
+///
+/// A text edit no longer bumps `highlight_epoch` — the highlights survive it by
+/// interpolation — so the run identity has to name what actually changed:
+/// which edits have been folded in, and the styling they were built with.
 #[derive(Clone, Debug)]
 pub(super) struct PrepaintHighlightRunsCache {
     pub(super) highlight_epoch: u64,
+    pub(super) interpolation_generation: u64,
+    pub(super) shape_style_epoch: u64,
     pub(super) visible_start: usize,
     pub(super) visible_end: usize,
     pub(super) line_runs: Arc<VisibleWindowTextRuns>,
@@ -342,9 +576,75 @@ pub(super) struct InterpolatedWrapPatch {
     pub(super) new_rows: Vec<usize>,
 }
 
+/// The shaped lines a frame actually touches, addressed by absolute line index.
+///
+/// A plain multiline input only shapes its visible window, plus the caret's own
+/// line when that has been scrolled out of view. `ShapedLine` carries an inline
+/// `SmallVec` of decoration runs and is ~3 KB, so a document-length vector costs
+/// megabytes of zeroing per frame for rows that are never painted — which made
+/// the per-keystroke frame scale with the file instead of the viewport.
+#[derive(Debug, Default)]
+pub(super) struct PlainLineLayouts {
+    line_count: usize,
+    window_start: usize,
+    window: Vec<ShapedLine>,
+    /// The caret's line when it sits outside the visible window. Boxed so one
+    /// stray line does not widen every `TextInputLayout` by ~3 KB.
+    stray: Option<(usize, Box<ShapedLine>)>,
+}
+
+impl PlainLineLayouts {
+    pub(super) fn new(line_count: usize, window_start: usize, window_len: usize) -> Self {
+        Self {
+            line_count,
+            window_start,
+            window: Vec::with_capacity(window_len),
+            stray: None,
+        }
+    }
+
+    /// Append the next shaped line of the visible window. Callers shape the
+    /// window in ascending line order, so position follows from `window_start`.
+    pub(super) fn push(&mut self, line: ShapedLine) {
+        self.window.push(line);
+    }
+
+    pub(super) fn set_stray(&mut self, line_ix: usize, line: ShapedLine) {
+        self.stray = Some((line_ix, Box::new(line)));
+    }
+
+    pub(super) fn get(&self, line_ix: usize) -> Option<&ShapedLine> {
+        if let Some(offset) = line_ix.checked_sub(self.window_start)
+            && let Some(line) = self.window.get(offset)
+        {
+            return Some(line);
+        }
+        self.stray
+            .as_ref()
+            .filter(|(ix, _)| *ix == line_ix)
+            .map(|(_, line)| line.as_ref())
+    }
+
+    /// The document's line count — not the number of shaped lines.
+    pub(super) fn line_count(&self) -> usize {
+        self.line_count
+    }
+
+    /// How many lines this frame actually shaped. Only the viewport (plus the
+    /// caret's line) should ever be shaped, whatever the document's size.
+    #[cfg(test)]
+    pub(super) fn shaped_line_count(&self) -> usize {
+        self.window.len() + usize::from(self.stray.is_some())
+    }
+
+    pub(super) fn is_empty(&self) -> bool {
+        self.line_count == 0
+    }
+}
+
 #[derive(Debug)]
 pub(super) enum TextInputLayout {
-    Plain(Vec<ShapedLine>),
+    Plain(PlainLineLayouts),
     TruncatedSingleLine(Arc<TruncatedLineLayout>),
     Wrapped {
         lines: Vec<WrappedLine>,
@@ -361,6 +661,13 @@ pub(super) struct HighlightState {
     pub(super) epoch: u64,
     pub(super) prepaint_runs_cache: Option<PrepaintHighlightRunsCache>,
     pub(super) provider_poll_task: Option<gpui::Task<()>>,
+    /// Edits applied since `highlights`/`provider` were installed.
+    pub(super) interpolation: HighlightInterpolation,
+    pub(super) interpolated_cache: Option<InterpolatedHighlightCache>,
+    /// Whether the current source has ever returned a settled (non-pending)
+    /// answer. Until it has, it is not fit to become anyone's fallback.
+    pub(super) answered: bool,
+    pub(super) superseded: Option<SupersededHighlights>,
 }
 
 impl HighlightState {
@@ -373,6 +680,10 @@ impl HighlightState {
             epoch: 1,
             prepaint_runs_cache: None,
             provider_poll_task: None,
+            interpolation: HighlightInterpolation::default(),
+            interpolated_cache: None,
+            answered: false,
+            superseded: None,
         }
     }
 }
@@ -385,7 +696,6 @@ pub(super) struct LayoutState {
     pub(super) line_height: Pixels,
     pub(super) shape_style_epoch: u64,
     pub(super) plain_line_cache: HashMap<ShapedRowCacheKey, ShapedLine>,
-    pub(super) wrapped_line_cache: HashMap<ShapedRowCacheKey, ()>,
 }
 
 impl LayoutState {
@@ -398,7 +708,6 @@ impl LayoutState {
             line_height: px(0.0),
             shape_style_epoch: 1,
             plain_line_cache: HashMap::default(),
-            wrapped_line_cache: HashMap::default(),
         }
     }
 }

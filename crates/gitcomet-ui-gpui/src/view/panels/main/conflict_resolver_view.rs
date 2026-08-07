@@ -564,6 +564,8 @@ impl MainPaneView {
         editor_font_family: String,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let _perf_scope =
+            crate::view::perf::span(crate::view::perf::ViewPerfSpan::RenderConflictResolverPane);
         let repo = self.active_repo();
         match (repo, conflict_target_path) {
             (None, _) => {

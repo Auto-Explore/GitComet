@@ -1,3 +1,5 @@
+use super::highlight::runs_for_line;
+use super::state::{LineShapeInput, PlainLineLayouts, TextShapeStyle};
 use super::*;
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -146,6 +148,45 @@ pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -
     hash_shaping_slice(text, max_bytes)
 }
 
+/// Shape one soft-wrapped source line.
+///
+/// Unlike the plain path there is no cache here: `WrappedLine` shaping is
+/// driven by wrap width as well as text, and the wrapped-row cache it used to
+/// write was never read back.
+pub(super) fn shape_wrapped_line(
+    line: LineShapeInput<'_>,
+    wrap_width: Pixels,
+    precomputed_runs: Option<&[TextRun]>,
+    shape_style: &TextShapeStyle<'_>,
+    window: &mut Window,
+) -> WrappedLine {
+    let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
+    let owned_runs;
+    let runs = if let Some(precomputed_runs) = precomputed_runs {
+        precomputed_runs
+    } else {
+        owned_runs = runs_for_line(
+            shape_style.base_font,
+            shape_style.text_color,
+            line.line_start,
+            capped_text.as_ref(),
+            shape_style.highlights,
+        );
+        owned_runs.as_slice()
+    };
+    let shaped = window
+        .text_system()
+        .shape_text(
+            capped_text,
+            shape_style.font_size,
+            runs,
+            Some(wrap_width),
+            None,
+        )
+        .unwrap_or_default();
+    shaped.into_iter().next().unwrap_or_default()
+}
+
 pub(super) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color.a = alpha;
     color
@@ -249,17 +290,27 @@ pub(super) fn truncated_line_source_offset_for_x(line: &TruncatedLineLayout, x: 
         .display_to_source_start_offset(display_offset)
 }
 
+/// The line index and line-local byte offset for a document offset.
+///
+/// The local offset is clamped to the shaped line's length when that line is
+/// one of the shaped ones; for a line outside the shaped window callers pair
+/// this with `PlainLineLayouts::get`, which yields `None`, so the unclamped
+/// offset is never turned into geometry.
 pub(super) fn line_for_offset(
     starts: &[usize],
-    lines: &[ShapedLine],
+    lines: &PlainLineLayouts,
     offset: usize,
 ) -> (usize, usize) {
     let mut ix = starts.partition_point(|&s| s <= offset);
     if ix == 0 {
         ix = 1;
     }
-    let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+    let line_ix = (ix - 1).min(lines.line_count().saturating_sub(1));
     let start = starts.get(line_ix).copied().unwrap_or(0);
-    let local = offset.saturating_sub(start).min(lines[line_ix].len());
+    let local = offset.saturating_sub(start);
+    let local = match lines.get(line_ix) {
+        Some(line) => local.min(line.len()),
+        None => local,
+    };
     (line_ix, local)
 }

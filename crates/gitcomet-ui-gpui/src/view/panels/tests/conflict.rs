@@ -3878,12 +3878,14 @@ fn large_conflict_bootstrap_populates_resolved_outline_in_background(
         },
         |pane| {
             format!(
-                "path={:?} preview_lines={} meta={} markers={} prepared_document={:?}",
+                "path={:?} preview_lines={} meta={} markers={} live_syntax={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolved_preview_line_count,
                 pane.conflict_resolver.resolved_outline.meta.len(),
                 pane.conflict_resolver.resolved_outline.markers.len(),
-                pane.conflict_resolved_preview_prepared_syntax_document,
+                pane.conflict_resolved_output_live_syntax
+                    .as_ref()
+                    .map(|document| document.version()),
             )
         },
     );
@@ -4652,7 +4654,7 @@ fn giant_two_way_resync_rebuilds_split_index_after_manual_session_edit(
 }
 
 #[gpui::test]
-fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_background_syntax(
+fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -4722,7 +4724,7 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, _cx| {
                 pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
-                    foreground_parse: std::time::Duration::ZERO,
+                    foreground_parse: std::time::Duration::from_secs(1),
                 });
             });
 
@@ -4755,11 +4757,11 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
         |pane| pane.conflict_resolver.path.as_ref() == Some(&file_rel),
         |pane| {
             format!(
-                "path={:?} line_count={} syntax_language={:?} prepared_document={:?} source_revision={:?}",
+                "path={:?} line_count={} syntax_language={:?} live_syntax={} source_revision={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolved_preview_line_count,
                 pane.conflict_resolved_preview_syntax_language,
-                pane.conflict_resolved_preview_prepared_syntax_document,
+                pane.conflict_resolved_output_live_syntax.is_some(),
                 pane.conflict_resolved_preview_source_revision,
             )
         },
@@ -4783,8 +4785,9 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
                     "resolved output should still use the file-derived Rust syntax language"
                 );
                 assert!(
-                    pane.conflict_resolved_preview_prepared_syntax_document.is_none(),
-                    "zero foreground budget should leave resolved-output syntax pending until the background parse completes"
+                    pane.conflict_resolved_output_live_syntax.is_some(),
+                    "a 20k-line output should get a live syntax document: the old 4000-line \
+                     `MAX_LINES_FOR_SYNTAX_HIGHLIGHTING` gate no longer applies to this view"
                 );
             });
         });
@@ -4835,59 +4838,62 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
         let _ = window.draw(app);
     });
 
-    let comment_highlight_ready = |pane: &MainPaneView| {
-        let Some(document) = pane.conflict_resolved_preview_prepared_syntax_document else {
-            return false;
-        };
-        rows::request_syntax_highlights_for_prepared_document_line_range(
-            pane.theme,
-            pane.conflict_resolved_preview_text.as_ref(),
-            pane.conflict_resolved_preview_line_starts.as_ref(),
-            document,
-            rows::DiffSyntaxLanguage::Rust,
-            target_ix..target_ix + 1,
-        )
-        .and_then(|lines| lines.into_iter().next())
-        .is_some_and(|line| {
-            !line.pending
-                && line.highlights.iter().any(|(range, style)| {
-                    range.start == 0
-                        && range.end == comment_line.len()
-                        && style.color == Some(pane.theme.syntax.comment.into())
-                })
-        })
-    };
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "large conflict resolved output background syntax upgrade",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| {
-            pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some()
-                && pane.conflict_resolved_preview_syntax_inflight.is_none()
-                && comment_highlight_ready(pane)
-        },
-        |pane| {
-            format!(
-                "prepared_document={:?} inflight={:?} comment_ready={}",
-                pane.conflict_resolved_preview_prepared_syntax_document,
-                pane.conflict_resolved_preview_syntax_inflight,
-                comment_highlight_ready(pane),
-            )
-        },
-    );
-
+    // The row is the *continuation* of a block comment opened on the line
+    // above, so getting it right requires the whole-document tree — a per-line
+    // parse would read it as bare identifiers.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let comment_color = pane.theme.syntax.comment;
+                let text = pane.conflict_resolver_input.read(cx).text().to_string();
+                let line_start = text
+                    .find(comment_line)
+                    .expect("fixture should contain the comment continuation line");
+                let line_end = line_start + comment_line.len();
+                let highlights = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..line_end + 1)
+                });
+                assert!(
+                    highlights.iter().any(|(range, style)| {
+                        range.start <= line_start
+                            && range.end >= line_end
+                            && style.color == Some(comment_color.into())
+                    }),
+                    "row {target_ix} continues a block comment and should be comment-coloured \
+                     straight away: {highlights:?}"
+                );
+            });
+        });
+    });
+
+    // Settling must be idempotent. Installing a highlight provider notifies the
+    // input, which re-enters the `cx.observe` that installed it; if a quiet
+    // cycle still reparsed and rebound, that notify would trigger another, and
+    // the pane would spin forever instead of ever finishing a frame.
+    let settled_version = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .conflict_resolved_output_live_syntax
+            .as_ref()
+            .map(|document| document.version())
+            .expect("a materialized Rust output has a live syntax document")
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
         assert_eq!(
-            pane.conflict_resolved_preview_text.lines().nth(target_ix),
-            Some(comment_line),
-            "prepared syntax should retain the expected resolved-output text",
-        );
-        assert!(
-            comment_highlight_ready(pane),
-            "background syntax should classify the multiline comment row"
+            view.read(app)
+                .main_pane
+                .read(app)
+                .conflict_resolved_output_live_syntax
+                .as_ref()
+                .map(|document| document.version()),
+            Some(settled_version),
+            "an idle frame must not reparse or rebind the resolved output"
         );
     });
 
@@ -4895,7 +4901,7 @@ fn large_conflict_resolved_output_renders_plain_text_then_upgrades_after_backgro
 }
 
 #[gpui::test]
-fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background_syntax(
+fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -4991,10 +4997,9 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
         |pane| pane.conflict_resolver.path.as_ref() == Some(&file_rel),
         |pane| {
             format!(
-                "path={:?} line_count={} prepared_document={:?} source_revision={:?}",
+                "path={:?} line_count={} source_revision={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolved_preview_line_count,
-                pane.conflict_resolved_preview_prepared_syntax_document,
                 pane.conflict_resolved_preview_source_revision,
             )
         },
@@ -5016,10 +5021,10 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
         |pane| pane.conflict_resolved_output_projection.is_none(),
         |pane| {
             format!(
-                "projection_present={} line_count={} prepared_document={:?}",
+                "projection_present={} line_count={} live_syntax={}",
                 pane.conflict_resolved_output_projection.is_some(),
                 pane.conflict_resolved_preview_line_count,
-                pane.conflict_resolved_preview_prepared_syntax_document,
+                pane.conflict_resolved_output_live_syntax.is_some(),
             )
         },
     );
@@ -5036,44 +5041,29 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
         });
     });
 
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "edited conflict resolved output initial syntax ready",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| {
-            pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some()
-                && pane.conflict_resolved_preview_syntax_language
-                    == Some(rows::DiffSyntaxLanguage::Rust)
-        },
-        |pane| {
-            format!(
-                "prepared_document={:?} style_epoch={} syntax_language={:?} line_count={}",
-                pane.conflict_resolved_preview_prepared_syntax_document,
-                pane.conflict_resolved_preview_style_cache_epoch,
-                pane.conflict_resolved_preview_syntax_language,
-                pane.conflict_resolved_preview_line_count,
-            )
-        },
-    );
-
-    let initial_epoch = cx.update(|_window, app| {
+    // Under the live engine there is no plain-then-upgrade window to wait for:
+    // the tree is parsed on materialization and edited in place afterwards.
+    cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some(),
-            "initial recompute should build a prepared syntax document before the edit"
+            pane.conflict_resolved_output_live_syntax.is_some(),
+            "materializing an editable Rust output should build a live syntax document"
         );
-        pane.conflict_resolved_preview_style_cache_epoch
+        assert_eq!(
+            pane.conflict_resolved_preview_syntax_language,
+            Some(rows::DiffSyntaxLanguage::Rust)
+        );
     });
 
+    // Insert a block comment whose body runs onto the next row. Getting that row
+    // right needs the reparse to have happened — `tree.edit` alone only shifts
+    // existing nodes, it cannot invent a comment node — so this is a test that
+    // the keystroke path reparses synchronously within its budget. (The
+    // budget-exhausted path is covered by `syntax::live`'s own tests, where the
+    // deferred tree keeps painting until a background pass catches up.)
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             this.main_pane.update(cx, |pane, cx| {
-                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
-                    foreground_parse: std::time::Duration::ZERO,
-                });
                 pane.conflict_resolver_input.update(cx, |input, cx| {
                     input.replace_utf8_range(0..0, &inserted_prefix, cx);
                 });
@@ -5081,106 +5071,30 @@ fn edited_conflict_resolved_output_retains_syntax_then_upgrades_after_background
         });
     });
 
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "edited conflict resolved output keeps syntax after edit",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| {
-            pane.conflict_resolved_preview_text
-                .as_ref()
-                .starts_with(inserted_prefix.as_str())
-                && pane
-                    .conflict_resolved_preview_prepared_syntax_document
-                    .is_some()
-        },
-        |pane| {
-            let preview_prefix: Vec<&str> = pane
-                .conflict_resolved_preview_text
-                .as_ref()
-                .lines()
-                .take(3)
-                .collect();
-            format!(
-                "preview_prefix={preview_prefix:?} prepared_document={:?} style_epoch={} initial_epoch={initial_epoch} inflight={:?}",
-                pane.conflict_resolved_preview_prepared_syntax_document,
-                pane.conflict_resolved_preview_style_cache_epoch,
-                pane.conflict_resolved_preview_syntax_inflight,
-            )
-        },
-    );
-
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
-
-    let target_ix = 1usize;
-    let comment_highlight_ready = |pane: &MainPaneView| {
-        let Some(document) = pane.conflict_resolved_preview_prepared_syntax_document else {
-            return false;
-        };
-        rows::request_syntax_highlights_for_prepared_document_line_range(
-            pane.theme,
-            pane.conflict_resolved_preview_text.as_ref(),
-            pane.conflict_resolved_preview_line_starts.as_ref(),
-            document,
-            rows::DiffSyntaxLanguage::Rust,
-            target_ix..target_ix + 1,
-        )
-        .and_then(|lines| lines.into_iter().next())
-        .is_some_and(|line| {
-            !line.pending
-                && line.highlights.iter().any(|(range, style)| {
-                    range.start == 0
-                        && range.end == inserted_comment_line.len()
-                        && style.color == Some(pane.theme.syntax.comment.into())
-                })
-        })
-    };
-    let pending_epoch = cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some(),
-            "resolved-output syntax should retain a prepared document instead of dropping to plain text after edit"
-        );
-        pane.conflict_resolved_preview_style_cache_epoch
-    });
-
-    wait_for_main_pane_condition_with_timeout(
-        cx,
-        &view,
-        "edited conflict resolved output background syntax upgrade",
-        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
-        |pane| {
-            pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some()
-                && pane.conflict_resolved_preview_style_cache_epoch >= pending_epoch
-                && pane.conflict_resolved_preview_syntax_inflight.is_none()
-                && comment_highlight_ready(pane)
-        },
-        |pane| {
-            format!(
-                "prepared_document={:?} style_epoch={} pending_epoch={pending_epoch} inflight={:?} comment_ready={}",
-                pane.conflict_resolved_preview_prepared_syntax_document,
-                pane.conflict_resolved_preview_style_cache_epoch,
-                pane.conflict_resolved_preview_syntax_inflight,
-                comment_highlight_ready(pane),
-            )
-        },
-    );
-
+    // No `wait_for_*`: the assertion is that this is already true, on the very
+    // next look, with no background pass and no debounce elapsed.
     cx.update(|_window, app| {
-        let pane = view.read(app).main_pane.read(app);
-        assert!(
-            pane.conflict_resolved_preview_prepared_syntax_document
-                .is_some(),
-            "background syntax completion should leave a prepared document"
-        );
-        assert!(
-            comment_highlight_ready(pane),
-            "the inserted comment continuation row should upgrade to multiline comment highlighting after background reparsing"
-        );
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let comment_color = pane.theme.syntax.comment;
+                let line_start = inserted_prefix
+                    .find(inserted_comment_line)
+                    .expect("fixture prefix should contain the continuation line");
+                let line_end = line_start + inserted_comment_line.len();
+                let highlights = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..inserted_prefix.len())
+                });
+                assert!(
+                    highlights.iter().any(|(range, style)| {
+                        range.start <= line_start
+                            && range.end >= line_end
+                            && style.color == Some(comment_color.into())
+                    }),
+                    "the row inside the inserted block comment should be comment-coloured \
+                     on the keystroke, not after a background upgrade: {highlights:?}"
+                );
+            });
+        });
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict resolver fixture");
@@ -6995,4 +6909,215 @@ fn the_conflict_highlight_stays_inside_the_conflict_it_belongs_to(cx: &mut gpui:
     assert_conflict_highlight_ranges_are_bounded(cx, &view, "with nothing selected");
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict highlight fixture");
+}
+
+#[gpui::test]
+fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(917);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_typing_rerender",
+        std::process::id()
+    ));
+    // A real source file, so the syntax-highlighting path a user actually hits
+    // is in the measurement.
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_typing_rerender.rs");
+    let abs_path = workdir.join(&file_rel);
+    let side_lines: usize = std::env::var("GITCOMET_MEASURE_LINES")
+        .ok()
+        .and_then(|value| value.parse().ok())
+        .unwrap_or(2000);
+    let big = |label: &str, fill: char| -> String {
+        (0..side_lines)
+            .map(|ix| {
+                format!(
+                    "fn {label}_{ix:05}(value: usize) -> String {{ format!(\"{}{ix}\", value) }}",
+                    fill.to_string().repeat(20)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+    let base_text = big("base", 'B');
+    let ours_text = big("ours", 'O');
+    let theirs_text = big("theirs", 'T');
+    let current_text = build_conflict_scroll_matrix_current_text(&ours_text, &theirs_text);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create typing fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write typing fixture");
+
+    seed_conflict_scroll_matrix_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        &base_text,
+        &ours_text,
+        &theirs_text,
+        &current_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "typing fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolved_preview_line_count >= 1
+        },
+        |pane| format!("path={:?}", pane.conflict_resolver.path.clone()),
+    );
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+            cx.notify();
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    // Confirm the resolver columns really render in this window before trusting
+    // any of the numbers below.
+    crate::view::perf::reset();
+    cx.update(|window, app| {
+        main_pane.update(app, |_pane, cx| cx.notify());
+        let _ = window.draw(app);
+    });
+    eprintln!(
+        "MEASURE cold full draw perf: {:?}",
+        crate::view::perf::snapshot()
+    );
+    cx.run_until_parked();
+
+    let main_notifies = Arc::new(AtomicUsize::new(0));
+    let _main_notify_sub = cx.update(|_window, app| {
+        let main_notifies = Arc::clone(&main_notifies);
+        main_pane.update(app, |_pane, cx| {
+            cx.observe_self(move |_pane, _cx| {
+                main_notifies.fetch_add(1, Ordering::Relaxed);
+            })
+        })
+    });
+
+    let streamed =
+        cx.update(|_window, app| main_pane.read(app).conflict_resolved_output_is_streamed());
+    eprintln!("MEASURE streamed={streamed}");
+    eprintln!(
+        "MEASURE size_of::<ShapedLine>()={} lines={}",
+        std::mem::size_of::<gpui::ShapedLine>(),
+        cx.update(|_window, app| main_pane
+            .read(app)
+            .conflict_resolver_input
+            .read(app)
+            .text()
+            .lines()
+            .count()),
+    );
+
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, _cx| {
+            pane.set_conflict_resolved_outline_background_delay_override_for_tests(
+                std::time::Duration::from_millis(500),
+            );
+        });
+    });
+
+    // Idle baseline: draws with no edits at all.
+    main_notifies.store(0, Ordering::Relaxed);
+    let idle_started = std::time::Instant::now();
+    for _ in 0..5 {
+        draw_and_drain_test_window(cx);
+    }
+    eprintln!(
+        "MEASURE idle: 5 draws in {:?}, main notifies={}",
+        idle_started.elapsed(),
+        main_notifies.load(Ordering::Relaxed)
+    );
+
+    // Cost of a bare main-pane re-render (notify, no edit).
+    main_notifies.store(0, Ordering::Relaxed);
+    for ix in 0..5usize {
+        cx.update(|_window, app| {
+            main_pane.update(app, |_pane, cx| cx.notify());
+        });
+        let draw_started = std::time::Instant::now();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        eprintln!(
+            "MEASURE notify-only draw {ix}: {:?}",
+            draw_started.elapsed()
+        );
+        cx.run_until_parked();
+    }
+
+    // Typing: one character at a time, each followed by a frame.
+    main_notifies.store(0, Ordering::Relaxed);
+    let typing_started = std::time::Instant::now();
+    for ix in 0..5usize {
+        let before = main_notifies.load(Ordering::Relaxed);
+        crate::view::perf::reset();
+        let keystroke_started = std::time::Instant::now();
+        let buffer_elapsed = cx.update(|_window, app| {
+            main_pane.update(app, |pane, cx| {
+                pane.conflict_resolver_input.update(cx, |input, cx| {
+                    let at = input.text().len().min(40);
+                    let started = std::time::Instant::now();
+                    input.replace_utf8_range(at..at, "x", cx);
+                    started.elapsed()
+                })
+            })
+        });
+        // Everything after the buffer edit but before the frame: the
+        // `cx.observe(conflict_resolver_input)` closure and any other flushed
+        // effects.
+        let effects_elapsed = keystroke_started.elapsed() - buffer_elapsed;
+        // `flush_effects` auto-draws dirty windows in test builds, so the frame
+        // the keystroke causes is already inside `effects_elapsed`.
+        let effects_perf = crate::view::perf::snapshot();
+        let after_edit = main_notifies.load(Ordering::Relaxed);
+        crate::view::perf::reset();
+        let draw_started = std::time::Instant::now();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let draw_elapsed = draw_started.elapsed();
+        let perf = crate::view::perf::snapshot();
+        // Debounced follow-up work (outline recompute, syntax refresh) plus the
+        // frame it schedules.
+        crate::view::perf::reset();
+        let settle_started = std::time::Instant::now();
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(600));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        let settle_elapsed = settle_started.elapsed();
+        let settle_perf = crate::view::perf::snapshot();
+        cx.run_until_parked();
+        eprintln!(
+            "MEASURE keystroke {ix}: buffer={buffer_elapsed:?} effects={effects_elapsed:?} (notifies {}) draw={draw_elapsed:?} settle={settle_elapsed:?} (notifies {})",
+            after_edit - before,
+            main_notifies.load(Ordering::Relaxed) - before,
+        );
+        eprintln!("MEASURE keystroke {ix} effects perf: {effects_perf:?}");
+        eprintln!("MEASURE keystroke {ix} draw perf: {perf:?}");
+        eprintln!("MEASURE keystroke {ix} settle perf: {settle_perf:?}");
+    }
+    eprintln!(
+        "MEASURE typing: 5 keystrokes in {:?}, main notifies={}",
+        typing_started.elapsed(),
+        main_notifies.load(Ordering::Relaxed)
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup typing fixture");
 }

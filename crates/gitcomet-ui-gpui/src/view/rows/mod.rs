@@ -370,17 +370,17 @@ pub(in crate::view) use self::conflict_resolver::resolved_output_gutter_width;
 pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 
-#[cfg(test)]
-pub(in crate::view) use diff_text::request_syntax_highlights_for_prepared_document_line_range;
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document;
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage,
-    DiffSyntaxMode, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, PrepareDiffSyntaxDocumentResult,
+    DiffSyntaxMode, LiveSyntaxDocument, LiveSyntaxSnapshot,
+    PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, PrepareDiffSyntaxDocumentResult,
     PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine, PreparedDiffSyntaxReparseSeed,
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
-    diff_wrap_ranges_for_text, drain_completed_prepared_diff_syntax_chunk_builds,
+    diff_wrap_ranges_for_text, live_syntax_reparse, drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds,
-    has_pending_prepared_diff_syntax_chunk_builds_for_document,
     inject_background_prepared_diff_syntax_document,
     prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,

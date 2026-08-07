@@ -30,6 +30,225 @@ fn truncate_line_for_shaping_respects_utf8_boundary_and_appends_suffix() {
     assert_eq!(hash, hash2);
 }
 
+fn styled(range: Range<usize>) -> (Range<usize>, gpui::HighlightStyle) {
+    (
+        range,
+        gpui::HighlightStyle {
+            color: Some(gpui::hsla(0.0, 1.0, 0.5, 1.0)),
+            ..gpui::HighlightStyle::default()
+        },
+    )
+}
+
+fn mapped_ranges(
+    interpolation: &HighlightInterpolation,
+    source: &[(Range<usize>, gpui::HighlightStyle)],
+    clamp_len: usize,
+) -> Vec<Range<usize>> {
+    interpolation
+        .map_highlights(source, clamp_len)
+        .into_iter()
+        .map(|(range, _)| range)
+        .collect()
+}
+
+#[test]
+fn highlight_interpolation_starts_exact() {
+    let interpolation = HighlightInterpolation::default();
+    assert!(interpolation.is_exact());
+    assert_eq!(interpolation.to_source_offset(7), 7);
+    assert_eq!(interpolation.debug_patch(), None);
+}
+
+#[test]
+fn highlight_interpolation_shifts_highlights_after_an_insert() {
+    let mut interpolation = HighlightInterpolation::default();
+    // Two characters typed at offset 4.
+    interpolation.record_edit(&(4..4), &(4..6));
+
+    assert!(!interpolation.is_exact());
+    // Before the caret: untouched. After it: shifted by the inserted length.
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(0..3), styled(8..12)], 32),
+        vec![0..3, 10..14]
+    );
+}
+
+#[test]
+fn highlight_interpolation_shifts_highlights_after_a_delete() {
+    let mut interpolation = HighlightInterpolation::default();
+    // Three characters deleted at offset 4.
+    interpolation.record_edit(&(4..7), &(4..4));
+
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(0..3), styled(10..14)], 32),
+        vec![0..3, 7..11]
+    );
+    // A highlight entirely inside the deleted span has nothing left to describe.
+    assert!(mapped_ranges(&interpolation, &[styled(5..6)], 32).is_empty());
+}
+
+#[test]
+fn highlight_interpolation_shifts_highlights_after_a_replace() {
+    let mut interpolation = HighlightInterpolation::default();
+    // Two characters replaced by five at offset 4.
+    interpolation.record_edit(&(4..6), &(4..9));
+
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(0..4), styled(6..10)], 32),
+        vec![0..4, 9..13]
+    );
+}
+
+#[test]
+fn highlight_interpolation_splits_a_highlight_straddling_the_edit() {
+    let mut interpolation = HighlightInterpolation::default();
+    // Source bytes 4..6 became live bytes 4..8.
+    interpolation.record_edit(&(4..6), &(4..8));
+
+    // The surviving halves keep their color; the freshly typed bytes 4..8 fall
+    // back to the base color rather than taking the whole range down with them.
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(0..10)], 32),
+        vec![0..4, 8..12]
+    );
+}
+
+#[test]
+fn highlight_interpolation_sorts_split_pieces_across_overlapping_sources() {
+    let mut interpolation = HighlightInterpolation::default();
+    interpolation.record_edit(&(4..6), &(4..8));
+
+    // The first range's right piece (8..12) lands after the second range's left
+    // piece (2..4), so source order is not output order — and `HighlightCursor`
+    // binary-searches these.
+    let mapped = mapped_ranges(&interpolation, &[styled(0..10), styled(2..3)], 32);
+    assert_eq!(mapped, vec![0..4, 2..3, 8..12]);
+    assert!(mapped.windows(2).all(|pair| pair[0].start <= pair[1].start));
+}
+
+#[test]
+fn highlight_interpolation_clamps_to_the_live_text_length() {
+    let mut interpolation = HighlightInterpolation::default();
+    interpolation.record_edit(&(0..6), &(0..2));
+
+    // The source described a longer buffer; nothing may point past the end of
+    // the one being rendered.
+    assert_eq!(mapped_ranges(&interpolation, &[styled(6..20)], 8), vec![2..8]);
+}
+
+#[test]
+fn highlight_interpolation_coalesces_a_run_of_single_character_inserts() {
+    let mut interpolation = HighlightInterpolation::default();
+    for offset in 0..10 {
+        // A caret at 4 that advances one byte per keystroke.
+        let caret = 4 + offset;
+        interpolation.record_edit(&(caret..caret), &(caret..caret + 1));
+    }
+
+    assert_eq!(interpolation.generation(), 10);
+    let patch = interpolation
+        .debug_patch()
+        .expect("typing should leave one patch");
+    assert_eq!(patch.start, 4);
+    assert_eq!(
+        patch.old_len, 0,
+        "an insert run replaces nothing, so the source span stays empty"
+    );
+    assert_eq!(patch.new_len, 10);
+    // Highlights past the caret are shifted by the whole run at once.
+    assert_eq!(mapped_ranges(&interpolation, &[styled(4..8)], 64), vec![14..18]);
+}
+
+#[test]
+fn highlight_interpolation_collapses_when_typing_is_backspaced_away() {
+    let mut interpolation = HighlightInterpolation::default();
+    interpolation.record_edit(&(4..4), &(4..5));
+    interpolation.record_edit(&(4..5), &(4..4));
+
+    assert!(
+        interpolation.is_exact(),
+        "an insert and the backspace undoing it leave the source describing the buffer verbatim"
+    );
+    assert_eq!(mapped_ranges(&interpolation, &[styled(2..8)], 32), vec![2..8]);
+}
+
+#[test]
+fn highlight_interpolation_widens_to_the_union_across_disjoint_edits() {
+    let mut interpolation = HighlightInterpolation::default();
+    interpolation.record_edit(&(4..4), &(4..5));
+    interpolation.record_edit(&(20..20), &(20..21));
+
+    let patch = interpolation
+        .debug_patch()
+        .expect("two edits should leave one widened patch");
+    assert_eq!(patch.start, 4);
+    // The documented degradation: text between two disjoint edits is inside the
+    // union, so it renders in the base color until the recompute lands, rather
+    // than keeping highlights that would now sit on the wrong bytes.
+    assert_eq!(patch.old_len, 15);
+    assert_eq!(patch.new_len, 17);
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(0..2), styled(8..12), styled(24..28)], 64),
+        vec![0..2, 26..30]
+    );
+}
+
+#[test]
+fn highlight_interpolation_reset_restores_the_identity_map() {
+    let mut interpolation = HighlightInterpolation::default();
+    interpolation.record_edit(&(4..4), &(4..6));
+    let generation = interpolation.generation();
+
+    interpolation.reset();
+
+    assert!(interpolation.is_exact());
+    assert_eq!(mapped_ranges(&interpolation, &[styled(8..12)], 32), vec![8..12]);
+    assert!(
+        interpolation.generation() > generation,
+        "a reset changes the coordinates callers cached against"
+    );
+}
+
+#[test]
+fn highlight_interpolation_source_offsets_are_monotone_and_locally_exact() {
+    // Every shape of edit — insert, delete, replace, both directions — against
+    // every offset in a small buffer.
+    for old_len in 0..5usize {
+        for new_len in 0..5usize {
+            let mut interpolation = HighlightInterpolation::default();
+            interpolation.record_edit(&(4..4 + old_len), &(4..4 + new_len));
+
+            let mut previous = 0usize;
+            for offset in 0..24usize {
+                let source = interpolation.to_source_offset(offset);
+                assert!(
+                    source >= previous,
+                    "to_source_offset must be monotone (old_len={old_len}, new_len={new_len}, offset={offset})"
+                );
+                previous = source;
+
+                if offset <= 4 {
+                    assert_eq!(
+                        source, offset,
+                        "offsets before the patch are unchanged (old_len={old_len}, new_len={new_len})"
+                    );
+                }
+                // Strict: with `new_len == 0` the offset at the patch start is
+                // both "before" and "past" the edit, and the map answers with
+                // the lower of the two. Only monotonicity binds there.
+                if offset > 4 + new_len {
+                    assert_eq!(
+                        source,
+                        offset + old_len - new_len,
+                        "offsets past the patch shift by the length delta (old_len={old_len}, new_len={new_len})"
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn visible_plain_line_range_applies_guard_rows() {
     let range = visible_plain_line_range(100, px(20.0), px(200.0), px(260.0), 2);
@@ -135,8 +354,109 @@ fn multiline_crlf_plain_layout_draws_without_painting_carriage_returns(
         else {
             panic!("expected plain text input layout");
         };
-        assert_eq!(lines[0].text.as_ref(), "[server]");
-        assert_eq!(lines[1].text.as_ref(), "host=local-api.internal");
+        assert_eq!(
+            lines.get(0).expect("shaped line 0").text.as_ref(),
+            "[server]"
+        );
+        assert_eq!(
+            lines.get(1).expect("shaped line 1").text.as_ref(),
+            "host=local-api.internal"
+        );
+    });
+}
+
+/// A plain multiline input inside a fixed-height scrolling viewport, the way
+/// the merge tool hosts its resolved-output editor.
+struct ScrolledPlainInputView {
+    input: Entity<TextInput>,
+    scroll_handle: ScrollHandle,
+}
+
+impl ScrolledPlainInputView {
+    fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let scroll_handle = ScrollHandle::new();
+        let input = cx.new({
+            let scroll_handle = scroll_handle.clone();
+            move |cx| {
+                let mut input = TextInput::new(
+                    TextInputOptions {
+                        multiline: true,
+                        soft_wrap: false,
+                        ..Default::default()
+                    },
+                    window,
+                    cx,
+                );
+                input.set_vertical_scroll_handle(Some(scroll_handle));
+                input
+            }
+        });
+        Self {
+            input,
+            scroll_handle,
+        }
+    }
+}
+
+impl Render for ScrolledPlainInputView {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            div()
+                .id("plain_input_viewport")
+                .w(px(600.0))
+                .h(px(400.0))
+                .overflow_y_scroll()
+                .track_scroll(&self.scroll_handle)
+                .child(self.input.clone()),
+        )
+    }
+}
+
+#[gpui::test]
+fn plain_multiline_layout_shapes_only_the_viewport_of_a_large_document(
+    cx: &mut gpui::TestAppContext,
+) {
+    // `ShapedLine` is ~3 KB, so a layout kept per document line costs megabytes
+    // of zeroing on every frame of a large buffer — which is what made typing in
+    // the merge tool's resolved output scale with the file instead of the
+    // viewport.
+    let line_count = 5_000;
+    let text = (0..line_count)
+        .map(|ix| format!("fn line_{ix:05}(value: usize) -> usize {{ value + {ix} }}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (view, cx) = cx.add_window_view(ScrolledPlainInputView::new);
+    let input = cx.update(|_window, app| view.read(app).input.clone());
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.clone(), cx);
+            input.set_selected_range(0..0, false, cx);
+        });
+        let _ = window.draw(app);
+
+        let input = input.read(app);
+        let TextInputLayout::Plain(lines) = input
+            .layout
+            .last
+            .as_ref()
+            .expect("expected plain text input layout")
+        else {
+            panic!("expected plain text input layout");
+        };
+        assert_eq!(lines.line_count(), line_count);
+        assert!(
+            lines.shaped_line_count() < line_count / 4,
+            "shaped {} of {line_count} lines — the layout should cover the viewport, not the document",
+            lines.shaped_line_count(),
+        );
+        // The rows that are on screen still resolve, and off-screen rows report
+        // no geometry rather than a bogus zero-width line.
+        assert_eq!(
+            lines.get(0).expect("shaped line 0").text.as_ref(),
+            "fn line_00000(value: usize) -> usize { value + 0 }"
+        );
+        assert!(lines.get(line_count - 1).is_none());
     });
 }
 
@@ -1042,7 +1362,7 @@ fn hotspot_hit_test_includes_right_side_of_final_glyph(cx: &mut gpui::TestAppCon
         else {
             panic!("expected plain text input layout");
         };
-        let line = lines.first().expect("expected first shaped line");
+        let line = lines.get(0).expect("expected first shaped line");
         let final_glyph_left = line.x_for_index(6);
         let final_glyph_right = line.x_for_index(7);
         let final_glyph_width = final_glyph_right - final_glyph_left;
@@ -1287,6 +1607,47 @@ fn focused_truncated_line_hit_testing_snaps_both_ellipsis_segments_to_hidden_bou
             right_hidden_range.end
         );
     });
+}
+
+const TOKEN_COLOR: gpui::Hsla = gpui::Hsla {
+    h: 0.33,
+    s: 1.0,
+    l: 0.5,
+    a: 1.0,
+};
+
+/// A provider shaped like a real syntax one: it answers in the coordinates of
+/// the text it was built over, not of whatever the buffer holds now.
+fn token_highlight_provider(source: &str, token: &'static str) -> HighlightProvider {
+    let source = source.to_string();
+    HighlightProvider::from_fn(move |range: Range<usize>| {
+        source
+            .match_indices(token)
+            .map(|(start, matched)| start..start + matched.len())
+            .filter(|found| found.start < range.end && found.end > range.start)
+            .map(|found| {
+                (
+                    found,
+                    gpui::HighlightStyle {
+                        color: Some(TOKEN_COLOR),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )
+            })
+            .collect()
+    })
+}
+
+/// What the highlighted byte ranges actually cover in the buffer's live text —
+/// the only assertion that catches a smear, since a wrong offset is still a
+/// perfectly plausible-looking number.
+fn highlighted_slices(input: &mut TextInput, window: Range<usize>) -> Vec<String> {
+    let text = input.text().to_string();
+    input
+        .debug_effective_highlights_for_range(window)
+        .into_iter()
+        .map(|(range, _)| text[range].to_string())
+        .collect()
 }
 
 struct DualProviders {
@@ -1546,7 +1907,7 @@ fn stable_highlight_provider_binding_key_preserves_existing_provider_and_cache(
     cx.update(|_window, app| {
         input.update(app, |input, cx| {
             input.set_text("alpha\nbeta", cx);
-            input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
 
             let initial_resolved = input.resolve_provider_highlights(0, 5);
             assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
@@ -1569,7 +1930,7 @@ fn stable_highlight_provider_binding_key_preserves_existing_provider_and_cache(
             let initial_shape_epoch = input.layout.shape_style_epoch;
             let initial_cached_highlights = Arc::clone(&initial_entry.highlights);
 
-            input.set_highlight_provider_with_key(41, dp.second.clone(), cx);
+            input.set_highlight_provider_with_key(41, dp.second.clone(), input.text().len(), cx);
 
             assert_eq!(
                 input.highlight.epoch, initial_highlight_epoch,
@@ -1635,32 +1996,18 @@ fn replace_utf8_range_clears_shaped_row_caches(cx: &mut gpui::TestAppContext) {
             input.layout.plain_line_cache.insert(
                 ShapedRowCacheKey {
                     line_ix: 0,
-                    wrap_width_key: i32::MIN,
                     font_size_key: 13,
                 },
                 ShapedLine::default(),
             );
-            input.layout.wrapped_line_cache.insert(
-                ShapedRowCacheKey {
-                    line_ix: 0,
-                    wrap_width_key: wrap_width_cache_key(px(320.0)),
-                    font_size_key: 13,
-                },
-                (),
-            );
 
             assert_eq!(input.layout.plain_line_cache.len(), 1);
-            assert_eq!(input.layout.wrapped_line_cache.len(), 1);
 
             input.replace_utf8_range(0..5, "gamma", cx);
 
             assert!(
                 input.layout.plain_line_cache.is_empty(),
                 "text edits must invalidate cached plain shaped rows"
-            );
-            assert!(
-                input.layout.wrapped_line_cache.is_empty(),
-                "text edits must invalidate cached wrapped shaped rows"
             );
         });
     });
@@ -1688,13 +2035,13 @@ fn changed_highlight_provider_binding_key_rebinds_and_clears_cached_range(
     cx.update(|_window, app| {
         input.update(app, |input, cx| {
             input.set_text("alpha\nbeta", cx);
-            input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
             let _ = input.resolve_provider_highlights(0, 5);
             assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
             let previous_highlight_epoch = input.highlight.epoch;
             let previous_shape_epoch = input.layout.shape_style_epoch;
 
-            input.set_highlight_provider_with_key(42, dp.second.clone(), cx);
+            input.set_highlight_provider_with_key(42, dp.second.clone(), input.text().len(), cx);
 
             assert!(
                 input.highlight.provider_cache.is_none(),
@@ -1739,8 +2086,492 @@ fn changed_highlight_provider_binding_key_rebinds_and_clears_cached_range(
     });
 }
 
+fn multiline_input(cx: &mut gpui::TestAppContext) -> (Entity<TextInput>, &mut gpui::VisualTestContext) {
+    cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    })
+}
+
 #[gpui::test]
-fn replace_utf8_range_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+fn typing_keeps_provider_highlights_aligned(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            let text = "let value = incoming;\n// keep incoming aligned\n";
+            input.set_text(text, cx);
+            input.set_highlight_provider_with_key(
+                7,
+                token_highlight_provider(input.text(), "incoming"),
+                input.text().len(),
+                cx,
+            );
+
+            assert_eq!(
+                highlighted_slices(input, 0..text.len()),
+                vec!["incoming", "incoming"]
+            );
+
+            // Type inside the first line, ahead of both tokens, without letting
+            // the owner's debounced provider rebuild run.
+            input.replace_utf8_range(4..4, "X", cx);
+            assert_eq!(input.text(), "let Xvalue = incoming;\n// keep incoming aligned\n");
+
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["incoming", "incoming"],
+                "colors must stay pinned to their tokens between the edit and the recompute"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn typing_a_newline_keeps_provider_highlights_aligned(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            let text = "let value = incoming;\n// keep incoming aligned\n";
+            input.set_text(text, cx);
+            input.set_highlight_provider_with_key(
+                7,
+                token_highlight_provider(input.text(), "incoming"),
+                input.text().len(),
+                cx,
+            );
+            let _ = highlighted_slices(input, 0..text.len());
+
+            // The case that defeats reading the live text through the old
+            // closure: the provider's line index no longer matches the buffer's,
+            // so every line below would take its neighbour's tokens.
+            input.replace_utf8_range(4..4, "\n", cx);
+            assert_eq!(
+                input.text(),
+                "let \nvalue = incoming;\n// keep incoming aligned\n"
+            );
+
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["incoming", "incoming"],
+                "an inserted newline must not smear the lines below it"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn typing_multibyte_text_keeps_highlights_on_character_boundaries(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            let text = "let café = incoming;\n// naïve incoming\n";
+            input.set_text(text, cx);
+            input.set_highlight_provider_with_key(
+                7,
+                token_highlight_provider(input.text(), "incoming"),
+                input.text().len(),
+                cx,
+            );
+            let _ = highlighted_slices(input, 0..text.len());
+
+            // Two multi-byte characters typed just before "café". Slicing the
+            // result at all proves the mapped bounds are character boundaries;
+            // a mid-character bound would panic here (and trips a debug assert
+            // inside the mapping itself).
+            input.replace_utf8_range(4..4, "üé", cx);
+            assert_eq!(input.text(), "let üécafé = incoming;\n// naïve incoming\n");
+
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["incoming", "incoming"]
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn typing_interpolates_statically_published_highlights(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("let value = incoming;", cx);
+            let token = input.text().find("incoming").expect("token in fixture");
+            input.set_highlights(
+                vec![(
+                    token..token + "incoming".len(),
+                    gpui::HighlightStyle {
+                        color: Some(TOKEN_COLOR),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )],
+                cx,
+            );
+
+            assert_eq!(highlighted_slices(input, 0..input.text().len()), vec!["incoming"]);
+
+            // Highlights published through `set_highlights` were never
+            // invalidated on edit at all, so they smeared silently.
+            input.replace_utf8_range(4..4, "X", cx);
+
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["incoming"],
+                "a static highlight vector rides along with edits like a provider's"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn rebinding_a_provider_resets_the_highlight_interpolation(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+
+    let dp = make_dual_providers();
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
+            input.replace_utf8_range(0..1, "AA", cx);
+            assert!(!input.highlight.interpolation.is_exact());
+
+            // A different key means a different closure, built over the text as
+            // it stands now.
+            input.set_highlight_provider_with_key(42, dp.second.clone(), input.text().len(), cx);
+            assert!(
+                input.highlight.interpolation.is_exact(),
+                "a fresh provider describes the buffer verbatim"
+            );
+
+            input.replace_utf8_range(0..1, "BB", cx);
+            assert!(!input.highlight.interpolation.is_exact());
+
+            // The same key means the same closure over the same text, so its
+            // anchor has to survive.
+            input.set_highlight_provider_with_key(42, dp.second.clone(), input.text().len(), cx);
+            assert!(
+                !input.highlight.interpolation.is_exact(),
+                "reapplying an unchanged binding must not move the anchor"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn set_highlights_resets_the_highlight_interpolation(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            input.set_highlights(
+                vec![(
+                    0..5,
+                    gpui::HighlightStyle {
+                        color: Some(TOKEN_COLOR),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )],
+                cx,
+            );
+            input.replace_utf8_range(0..1, "AA", cx);
+            assert!(!input.highlight.interpolation.is_exact());
+
+            input.set_highlights(
+                vec![(
+                    0..6,
+                    gpui::HighlightStyle {
+                        color: Some(TOKEN_COLOR),
+                        ..gpui::HighlightStyle::default()
+                    },
+                )],
+                cx,
+            );
+
+            assert!(input.highlight.interpolation.is_exact());
+            assert_eq!(highlighted_slices(input, 0..input.text().len()), vec!["AAlpha"]);
+        });
+    });
+}
+
+#[gpui::test]
+fn rebinding_under_a_new_key_resets_the_highlight_interpolation(cx: &mut gpui::TestAppContext) {
+    // This is the contract the live syntax engine depends on. It re-syncs its
+    // tree on the keystroke and rebinds under the document's new version, so
+    // its ranges are already correct for the edited text. If interpolation
+    // survived the rebind, those correct ranges would be mapped through the
+    // edit a second time and land in the wrong place.
+    let (input, cx) = multiline_input(cx);
+    let dp = make_dual_providers();
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            input.set_highlight_provider_with_key(1, dp.first.clone(), input.text().len(), cx);
+            let _ = input.effective_highlights_for_window(0..5);
+
+            input.replace_utf8_range(0..1, "AA", cx);
+            assert!(
+                !input.highlight.interpolation.is_exact(),
+                "an edit against a still-installed provider must be interpolated"
+            );
+
+            // What the live engine does next: rebind under a fresh key.
+            input.set_highlight_provider_with_key(2, dp.second.clone(), input.text().len(), cx);
+
+            assert!(
+                input.highlight.interpolation.is_exact(),
+                "a new binding key declares the provider current for the edited text"
+            );
+            assert_eq!(
+                highlighted_slices(input, 0..6),
+                vec!["AAlpha"],
+                "ranges from the rebound provider must pass through unmapped"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn a_never_pending_provider_does_not_accumulate_superseded_sources(
+    cx: &mut gpui::TestAppContext,
+) {
+    // The live engine rebinds on every keystroke. Each rebind sets the outgoing
+    // source aside to cover for a replacement that cannot answer yet; a
+    // provider that always answers must clear that reserve instead of piling up
+    // an Arc per keystroke.
+    let (input, cx) = multiline_input(cx);
+    let dp = make_dual_providers();
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            for key in 1..=8u64 {
+                let provider = if key % 2 == 0 {
+                    dp.second.clone()
+                } else {
+                    dp.first.clone()
+                };
+                input.set_highlight_provider_with_key(key, provider, input.text().len(), cx);
+                let resolved = input.effective_highlights_for_window(0..5);
+                assert!(
+                    !resolved.pending,
+                    "a live-engine provider is always exact and never reports pending"
+                );
+                assert!(
+                    input.highlight.superseded.is_none(),
+                    "a settled source must release the one it replaced (key {key})"
+                );
+            }
+        });
+    });
+}
+
+#[gpui::test]
+fn landing_background_syntax_chunks_preserves_the_highlight_interpolation(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (input, cx) = multiline_input(cx);
+
+    let dp = make_dual_providers();
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
+            let _ = input.effective_highlights_for_window(0..5);
+            input.replace_utf8_range(0..1, "AA", cx);
+
+            let generation = input.highlight.interpolation.generation();
+            let previous_epoch = input.highlight.epoch;
+
+            // Chunks landing improve the provider's tokens; the text it was
+            // built over is unchanged, so its anchor must not move.
+            input.note_provider_highlights_changed();
+
+            assert!(!input.highlight.interpolation.is_exact());
+            assert_eq!(input.highlight.interpolation.generation(), generation);
+            assert!(
+                input.highlight.epoch > previous_epoch,
+                "better tokens are a reason to refetch"
+            );
+            assert!(input.highlight.interpolated_cache.is_none());
+
+            let resolved = input.effective_highlights_for_window(0..5);
+            assert_eq!(
+                resolved
+                    .highlights
+                    .iter()
+                    .map(|(range, _)| range.clone())
+                    .collect::<Vec<_>>(),
+                vec![2..5],
+                "the refetched tokens arrive shifted by the same +1 the edit caused"
+            );
+        });
+    });
+}
+
+/// A provider whose tokens are built in the background: it answers `pending`
+/// with nothing until `ready` is flipped, the way a freshly prepared syntax
+/// document does.
+fn deferred_token_provider(
+    source: &str,
+    token: &'static str,
+    ready: Arc<std::sync::atomic::AtomicBool>,
+) -> HighlightProvider {
+    use std::sync::atomic::Ordering;
+
+    let source = source.to_string();
+    let resolve_ready = Arc::clone(&ready);
+    let has_pending_ready = Arc::clone(&ready);
+    HighlightProvider::with_pending(
+        move |range: Range<usize>| {
+            if !resolve_ready.load(Ordering::SeqCst) {
+                return HighlightProviderResult {
+                    highlights: Vec::new(),
+                    pending: true,
+                };
+            }
+            HighlightProviderResult {
+                highlights: source
+                    .match_indices(token)
+                    .map(|(start, matched)| start..start + matched.len())
+                    .filter(|found| found.start < range.end && found.end > range.start)
+                    .map(|found| {
+                        (
+                            found,
+                            gpui::HighlightStyle {
+                                color: Some(TOKEN_COLOR),
+                                ..gpui::HighlightStyle::default()
+                            },
+                        )
+                    })
+                    .collect(),
+                pending: false,
+            }
+        },
+        || 0,
+        move || !has_pending_ready.load(Ordering::SeqCst),
+    )
+}
+
+#[gpui::test]
+fn rebinding_to_a_provider_that_cannot_answer_yet_keeps_the_previous_colors(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            let text = "let value = incoming;\n// keep incoming aligned\n";
+            input.set_text(text, cx);
+            input.set_highlight_provider_with_key(
+                1,
+                token_highlight_provider(input.text(), "incoming"),
+                input.text().len(),
+                cx,
+            );
+            assert_eq!(
+                highlighted_slices(input, 0..text.len()),
+                vec!["incoming", "incoming"]
+            );
+
+            // The user types; the owner's debounce then recomputes and rebinds
+            // to a provider over a freshly prepared document, whose token
+            // chunks are still being built in the background.
+            input.replace_utf8_range(4..4, "X", cx);
+            let edited = input.text().to_string();
+            let ready = Arc::new(AtomicBool::new(false));
+            input.set_highlight_provider_with_key(
+                2,
+                deferred_token_provider(&edited, "incoming", Arc::clone(&ready)),
+                edited.len(),
+                cx,
+            );
+
+            // Without the handoff this window renders in the base color — the
+            // whole output flashing white for a frame or two.
+            assert_eq!(
+                highlighted_slices(input, 0..edited.len()),
+                vec!["incoming", "incoming"],
+                "the outgoing source must cover for its replacement until it can answer"
+            );
+
+            // Chunks land; the new provider takes over and the fallback is let go.
+            ready.store(true, Ordering::SeqCst);
+            input.note_provider_highlights_changed();
+
+            assert_eq!(
+                highlighted_slices(input, 0..edited.len()),
+                vec!["incoming", "incoming"]
+            );
+            assert!(
+                input.highlight.superseded.is_none(),
+                "a settled source needs no stand-in"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn a_provider_that_never_answered_does_not_become_the_fallback(cx: &mut gpui::TestAppContext) {
+    use std::sync::atomic::AtomicBool;
+
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            let text = "let value = incoming;\n// keep incoming aligned\n";
+            input.set_text(text, cx);
+            input.set_highlight_provider_with_key(
+                1,
+                token_highlight_provider(input.text(), "incoming"),
+                input.text().len(),
+                cx,
+            );
+            let _ = highlighted_slices(input, 0..text.len());
+
+            // Two rebinds in a row, neither replacement ready — the second must
+            // not push the good source out in favour of the first, which never
+            // managed to say anything.
+            for key in [2u64, 3] {
+                input.replace_utf8_range(4..4, "X", cx);
+                let edited = input.text().to_string();
+                input.set_highlight_provider_with_key(
+                    key,
+                    deferred_token_provider(&edited, "incoming", Arc::new(AtomicBool::new(false))),
+                    edited.len(),
+                    cx,
+                );
+            }
+
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["incoming", "incoming"],
+                "the last source that actually answered stays the fallback"
+            );
+        });
+    });
+}
+
+#[gpui::test]
+fn replace_utf8_range_keeps_cached_provider_highlights_and_interpolates(
+    cx: &mut gpui::TestAppContext,
+) {
     use std::sync::atomic::Ordering;
 
     let (input, cx) = cx.add_window_view(|window, cx| {
@@ -1759,9 +2590,9 @@ fn replace_utf8_range_invalidates_cached_provider_highlights(cx: &mut gpui::Test
     cx.update(|_window, app| {
         input.update(app, |input, cx| {
             input.set_text("alpha\nbeta", cx);
-            input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
 
-            let _ = input.resolve_provider_highlights(0, 5);
+            let _ = input.effective_highlights_for_window(0..5);
             assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
             let previous_highlight_epoch = input.highlight.epoch;
             assert!(
@@ -1769,30 +2600,41 @@ fn replace_utf8_range_invalidates_cached_provider_highlights(cx: &mut gpui::Test
                 "initial resolve should populate the provider cache"
             );
 
-            let inserted = input.replace_utf8_range(0..5, "gamma", cx);
-            assert_eq!(inserted, 0..5);
+            // One byte becomes two, so everything the provider described from
+            // byte 1 onward now sits one byte further along.
+            let inserted = input.replace_utf8_range(0..1, "AA", cx);
+            assert_eq!(inserted, 0..2);
+            assert_eq!(input.text(), "AAlpha\nbeta");
             assert!(
-                input.highlight.provider_cache.is_none(),
-                "text edits should clear cached provider ranges"
+                input.highlight.provider_cache.is_some(),
+                "an edit is interpolated over, so the cached provider range survives it"
             );
-            assert!(
-                input.highlight.epoch > previous_highlight_epoch,
-                "text edits should invalidate provider highlight epochs"
+            assert_eq!(
+                input.highlight.epoch, previous_highlight_epoch,
+                "an edit does not change what the provider describes"
             );
 
-            let resolved = input.resolve_provider_highlights(0, 5);
+            let resolved = input.effective_highlights_for_window(0..5);
             assert_eq!(
                 dp.first_calls.load(Ordering::SeqCst),
-                2,
-                "after an edit, the stable provider should be asked for a fresh range"
+                1,
+                "the same window maps back into the range already fetched"
             );
-            assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            assert_eq!(
+                resolved
+                    .highlights
+                    .iter()
+                    .map(|(range, style)| (range.clone(), style.color))
+                    .collect::<Vec<_>>(),
+                vec![(2..6, Some(dp.first_color))],
+                "the provider's 0..5 span keeps its tail, shifted past the insert"
+            );
         });
     });
 }
 
 #[gpui::test]
-fn set_text_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+fn set_text_records_an_edit_delta_for_highlights(cx: &mut gpui::TestAppContext) {
     use std::sync::atomic::Ordering;
 
     let (input, cx) = cx.add_window_view(|window, cx| {
@@ -1811,9 +2653,9 @@ fn set_text_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext
     cx.update(|_window, app| {
         input.update(app, |input, cx| {
             input.set_text("alpha\nbeta", cx);
-            input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
 
-            let _ = input.resolve_provider_highlights(0, 5);
+            let _ = input.effective_highlights_for_window(0..5);
             assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
             let previous_highlight_epoch = input.highlight.epoch;
             assert!(
@@ -1821,30 +2663,37 @@ fn set_text_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext
                 "initial resolve should populate the provider cache"
             );
 
-            input.set_text("gamma\nbeta", cx);
+            // A rewrite that appends one byte at offset 5, which `set_text`
+            // diffs out of the two texts rather than invalidating blindly.
+            input.set_text("alphaX\nbeta", cx);
 
             assert!(
-                input.highlight.provider_cache.is_none(),
-                "set_text should clear cached provider ranges"
+                !input.highlight.interpolation.is_exact(),
+                "set_text must record what it changed, not silently move the text out from under the highlights"
             );
             assert!(
-                input.highlight.epoch > previous_highlight_epoch,
-                "set_text should invalidate provider highlight epochs"
+                input.highlight.provider_cache.is_some(),
+                "the cached provider range still describes the text it was fetched for"
             );
+            assert_eq!(input.highlight.epoch, previous_highlight_epoch);
 
-            let resolved = input.resolve_provider_highlights(0, 5);
+            let resolved = input.effective_highlights_for_window(0..5);
+            assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
             assert_eq!(
-                dp.first_calls.load(Ordering::SeqCst),
-                2,
-                "after set_text, the stable provider should be asked for a fresh range"
+                resolved
+                    .highlights
+                    .iter()
+                    .map(|(range, style)| (range.clone(), style.color))
+                    .collect::<Vec<_>>(),
+                vec![(0..5, Some(dp.first_color))],
+                "highlights entirely ahead of the edit are untouched"
             );
-            assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
         });
     });
 }
 
 #[gpui::test]
-fn undo_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
+fn undo_composes_into_the_highlight_interpolation(cx: &mut gpui::TestAppContext) {
     use std::sync::atomic::Ordering;
 
     let (input, cx) = cx.add_window_view(|window, cx| {
@@ -1863,36 +2712,45 @@ fn undo_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         input.update(app, |input, cx| {
             input.set_text("alpha\nbeta", cx);
-            input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
 
-            let _ = input.resolve_provider_highlights(0, 5);
+            let _ = input.effective_highlights_for_window(0..5);
             assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
-
-            let inserted = input.replace_utf8_range(0..5, "gamma", cx);
-            assert_eq!(inserted, 0..5);
-            let _ = input.resolve_provider_highlights(0, 5);
-            assert_eq!(dp.first_calls.load(Ordering::SeqCst), 2);
             let previous_highlight_epoch = input.highlight.epoch;
+
+            let inserted = input.replace_utf8_range(0..1, "AA", cx);
+            assert_eq!(inserted, 0..2);
+            assert!(!input.highlight.interpolation.is_exact());
 
             input.undo(&Undo, window, cx);
 
             assert_eq!(input.text(), "alpha\nbeta");
+            // The undo composes into the patch like any other edit. It restores
+            // the provider's own text, but the interpolation tracks which bytes
+            // were touched, not what they now say, so byte 0 stays marked.
+            assert!(!input.highlight.interpolation.is_exact());
             assert!(
-                input.highlight.provider_cache.is_none(),
-                "undo should clear cached provider ranges restored from the old snapshot"
+                input.highlight.provider_cache.is_some(),
+                "the restored text is the text the cached range was fetched for"
             );
-            assert!(
-                input.highlight.epoch > previous_highlight_epoch,
-                "undo should invalidate provider highlight epochs"
-            );
+            assert_eq!(input.highlight.epoch, previous_highlight_epoch);
 
-            let resolved = input.resolve_provider_highlights(0, 5);
+            let resolved = input.effective_highlights_for_window(0..5);
             assert_eq!(
                 dp.first_calls.load(Ordering::SeqCst),
-                3,
-                "after undo, the provider should be asked for a fresh range"
+                1,
+                "returning to the provider's own text should not re-query it"
             );
-            assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
+            assert_eq!(
+                resolved
+                    .highlights
+                    .iter()
+                    .map(|(range, style)| (range.clone(), style.color))
+                    .collect::<Vec<_>>(),
+                vec![(1..5, Some(dp.first_color))],
+                "offsets are back where they started; only the touched byte waits \
+                 for the debounced recompute"
+            );
         });
     });
 }
@@ -2029,60 +2887,7 @@ fn redo_is_noop_when_input_is_read_only(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
-fn replace_text_in_range_invalidates_cached_provider_highlights(cx: &mut gpui::TestAppContext) {
-    use std::sync::atomic::Ordering;
-
-    let (input, cx) = cx.add_window_view(|window, cx| {
-        TextInput::new(
-            TextInputOptions {
-                multiline: true,
-                ..Default::default()
-            },
-            window,
-            cx,
-        )
-    });
-
-    let dp = make_dual_providers();
-
-    cx.update(|window, app| {
-        input.update(app, |input, cx| {
-            input.set_text("alpha\nbeta", cx);
-            input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
-
-            let _ = input.resolve_provider_highlights(0, 5);
-            assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
-            let previous_highlight_epoch = input.highlight.epoch;
-            assert!(
-                input.highlight.provider_cache.is_some(),
-                "initial resolve should populate the provider cache"
-            );
-
-            input.replace_text_in_range(Some(0..5), "gamma", window, cx);
-
-            assert_eq!(input.text(), "gamma\nbeta");
-            assert!(
-                input.highlight.provider_cache.is_none(),
-                "IME replace_text_in_range should clear cached provider ranges"
-            );
-            assert!(
-                input.highlight.epoch > previous_highlight_epoch,
-                "IME replace_text_in_range should invalidate provider highlight epochs"
-            );
-
-            let resolved = input.resolve_provider_highlights(0, 5);
-            assert_eq!(
-                dp.first_calls.load(Ordering::SeqCst),
-                2,
-                "after replace_text_in_range, the stable provider should be asked for a fresh range"
-            );
-            assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
-        });
-    });
-}
-
-#[gpui::test]
-fn replace_and_mark_text_in_range_invalidates_cached_provider_highlights(
+fn replace_text_in_range_keeps_cached_provider_highlights_and_interpolates(
     cx: &mut gpui::TestAppContext,
 ) {
     use std::sync::atomic::Ordering;
@@ -2101,40 +2906,95 @@ fn replace_and_mark_text_in_range_invalidates_cached_provider_highlights(
     let dp = make_dual_providers();
 
     cx.update(|window, app| {
-            input.update(app, |input, cx| {
-                input.set_text("alpha\nbeta", cx);
-                input.set_highlight_provider_with_key(41, dp.first.clone(), cx);
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
 
-                let _ = input.resolve_provider_highlights(0, 5);
-                assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
-                let previous_highlight_epoch = input.highlight.epoch;
-                assert!(
-                    input.highlight.provider_cache.is_some(),
-                    "initial resolve should populate the provider cache"
-                );
+            let _ = input.effective_highlights_for_window(0..5);
+            assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+            let previous_highlight_epoch = input.highlight.epoch;
+            assert!(
+                input.highlight.provider_cache.is_some(),
+                "initial resolve should populate the provider cache"
+            );
 
-                input.replace_and_mark_text_in_range(Some(0..5), "gamma", None, window, cx);
+            input.replace_text_in_range(Some(0..1), "AA", window, cx);
 
-                assert_eq!(input.text(), "gamma\nbeta");
-                assert_eq!(input.selection.marked_range, Some(0..5));
-                assert!(
-                    input.highlight.provider_cache.is_none(),
-                    "IME replace_and_mark_text_in_range should clear cached provider ranges"
-                );
-                assert!(
-                    input.highlight.epoch > previous_highlight_epoch,
-                    "IME replace_and_mark_text_in_range should invalidate provider highlight epochs"
-                );
+            assert_eq!(input.text(), "AAlpha\nbeta");
+            assert!(
+                input.highlight.provider_cache.is_some(),
+                "IME replace_text_in_range is interpolated over like any other edit"
+            );
+            assert_eq!(input.highlight.epoch, previous_highlight_epoch);
 
-                let resolved = input.resolve_provider_highlights(0, 5);
-                assert_eq!(
-                    dp.first_calls.load(Ordering::SeqCst),
-                    2,
-                    "after replace_and_mark_text_in_range, the stable provider should be asked for a fresh range"
-                );
-                assert_eq!(resolved.highlights[0].1.color, Some(dp.first_color));
-            });
+            let resolved = input.effective_highlights_for_window(0..5);
+            assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                resolved
+                    .highlights
+                    .iter()
+                    .map(|(range, style)| (range.clone(), style.color))
+                    .collect::<Vec<_>>(),
+                vec![(2..6, Some(dp.first_color))],
+            );
         });
+    });
+}
+
+#[gpui::test]
+fn replace_and_mark_text_in_range_keeps_cached_provider_highlights_and_interpolates(
+    cx: &mut gpui::TestAppContext,
+) {
+    use std::sync::atomic::Ordering;
+
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    let dp = make_dual_providers();
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha\nbeta", cx);
+            input.set_highlight_provider_with_key(41, dp.first.clone(), input.text().len(), cx);
+
+            let _ = input.effective_highlights_for_window(0..5);
+            assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+            let previous_highlight_epoch = input.highlight.epoch;
+            assert!(
+                input.highlight.provider_cache.is_some(),
+                "initial resolve should populate the provider cache"
+            );
+
+            input.replace_and_mark_text_in_range(Some(0..1), "AA", None, window, cx);
+
+            assert_eq!(input.text(), "AAlpha\nbeta");
+            assert_eq!(input.selection.marked_range, Some(0..2));
+            assert!(
+                input.highlight.provider_cache.is_some(),
+                "an IME composition is interpolated over like any other edit"
+            );
+            assert_eq!(input.highlight.epoch, previous_highlight_epoch);
+
+            let resolved = input.effective_highlights_for_window(0..5);
+            assert_eq!(dp.first_calls.load(Ordering::SeqCst), 1);
+            assert_eq!(
+                resolved
+                    .highlights
+                    .iter()
+                    .map(|(range, style)| (range.clone(), style.color))
+                    .collect::<Vec<_>>(),
+                vec![(2..6, Some(dp.first_color))],
+            );
+        });
+    });
 }
 
 #[test]

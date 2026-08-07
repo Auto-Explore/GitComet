@@ -27,19 +27,7 @@ pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u3
     scaled_diff_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
 }
 
-#[derive(Default)]
-pub(super) struct ResolvedOutputSyntaxState {
-    /// Materialized syntax and unresolved-conflict highlights used when there
-    /// is no prepared-document provider.
-    pub(super) highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
-    pub(super) prepared_document: Option<rows::PreparedDiffSyntaxDocument>,
-    /// Lazy provider backed by a prepared document.
-    pub(super) highlight_provider: Option<HighlightProvider>,
-    /// When true, render plain text for now and continue parsing in the background.
-    pub(super) needs_background_prepare: bool,
-}
-
-fn build_resolved_output_syntax_fallback_highlights(
+pub(super) fn build_resolved_output_syntax_fallback_highlights(
     theme: AppTheme,
     output_text: &str,
     language: rows::DiffSyntaxLanguage,
@@ -61,7 +49,7 @@ fn build_resolved_output_syntax_fallback_highlights(
     highlights
 }
 
-fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
+pub(super) fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
     gpui::HighlightStyle {
         color: Some(theme.colors.danger.into()),
         ..gpui::HighlightStyle::default()
@@ -72,7 +60,7 @@ fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::Highligh
 /// style. The returned ranges are non-overlapping with the unresolved spans, so
 /// the text input's later-highlight precedence cannot reveal syntax colours
 /// through the conflict treatment.
-fn apply_resolved_output_unresolved_highlights(
+pub(super) fn apply_resolved_output_unresolved_highlights(
     mut syntax_highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
     unresolved_ranges: &[Range<usize>],
     requested_range: Range<usize>,
@@ -141,237 +129,6 @@ fn apply_resolved_output_unresolved_highlights(
         }
     }
     merged
-}
-
-fn resolved_output_unresolved_highlights(
-    theme: AppTheme,
-    unresolved_ranges: &[Range<usize>],
-    text_len: usize,
-) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    apply_resolved_output_unresolved_highlights(
-        Vec::new(),
-        unresolved_ranges,
-        0..text_len,
-        resolved_output_unresolved_highlight_style(theme),
-    )
-}
-
-fn resolved_output_highlight_provider(
-    theme: AppTheme,
-    output_text: SharedString,
-    line_starts: Arc<[usize]>,
-    language: rows::DiffSyntaxLanguage,
-    document: rows::PreparedDiffSyntaxDocument,
-    unresolved_ranges: Arc<[Range<usize>]>,
-) -> HighlightProvider {
-    let shared_text: Arc<str> = output_text.into();
-    let unresolved_style = resolved_output_unresolved_highlight_style(theme);
-    HighlightProvider::with_pending(
-        move |byte_range: Range<usize>| {
-            match rows::request_syntax_highlights_for_prepared_document_byte_range(
-                theme,
-                &shared_text,
-                line_starts.as_ref(),
-                document,
-                language,
-                byte_range.clone(),
-            ) {
-                Some(result) => HighlightProviderResult {
-                    highlights: apply_resolved_output_unresolved_highlights(
-                        result.highlights,
-                        unresolved_ranges.as_ref(),
-                        byte_range,
-                        unresolved_style,
-                    ),
-                    pending: result.pending,
-                },
-                None => HighlightProviderResult {
-                    highlights: apply_resolved_output_unresolved_highlights(
-                        Vec::new(),
-                        unresolved_ranges.as_ref(),
-                        byte_range,
-                        unresolved_style,
-                    ),
-                    pending: false,
-                },
-            }
-        },
-        move || rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document),
-        move || rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document),
-    )
-}
-
-fn pending_resolved_output_syntax_state(
-    theme: AppTheme,
-    output_text: SharedString,
-    line_starts: Arc<[usize]>,
-    language: rows::DiffSyntaxLanguage,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-    unresolved_ranges: Arc<[Range<usize>]>,
-) -> ResolvedOutputSyntaxState {
-    let highlights = old_document
-        .is_none()
-        .then(|| {
-            resolved_output_unresolved_highlights(
-                theme,
-                unresolved_ranges.as_ref(),
-                output_text.len(),
-            )
-        })
-        .unwrap_or_default();
-    ResolvedOutputSyntaxState {
-        highlights,
-        prepared_document: old_document,
-        highlight_provider: old_document.map(|document| {
-            resolved_output_highlight_provider(
-                theme,
-                output_text,
-                line_starts,
-                language,
-                document,
-                unresolved_ranges,
-            )
-        }),
-        needs_background_prepare: true,
-    }
-}
-
-fn build_resolved_output_syntax_state_with_source(
-    theme: AppTheme,
-    output_text: SharedString,
-    line_starts: Arc<[usize]>,
-    language: Option<rows::DiffSyntaxLanguage>,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-    edit_hint: Option<rows::DiffSyntaxEdit>,
-    budget: rows::DiffSyntaxBudget,
-    unresolved_ranges: Arc<[Range<usize>]>,
-) -> ResolvedOutputSyntaxState {
-    let Some(language) = language else {
-        return ResolvedOutputSyntaxState {
-            highlights: resolved_output_unresolved_highlights(
-                theme,
-                unresolved_ranges.as_ref(),
-                output_text.len(),
-            ),
-            ..ResolvedOutputSyntaxState::default()
-        };
-    };
-    if output_text.is_empty() {
-        return ResolvedOutputSyntaxState::default();
-    }
-
-    // Large outputs skip foreground syntax entirely — render plain, then let the
-    // background pass upgrade — matching the streamed path and the diff view's
-    // `MAX_LINES_FOR_SYNTAX_HIGHLIGHTING` gate. Without this a big editable
-    // output could shape syntax on the UI thread during a recompute.
-    if line_starts.len() > rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-        return pending_resolved_output_syntax_state(
-            theme,
-            output_text,
-            line_starts,
-            language,
-            old_document,
-            unresolved_ranges,
-        );
-    }
-
-    match rows::prepare_diff_syntax_document_with_budget_reuse_text(
-        language,
-        rows::DiffSyntaxMode::Auto,
-        output_text.clone(),
-        line_starts.clone(),
-        budget,
-        old_document,
-        edit_hint,
-    ) {
-        rows::PrepareDiffSyntaxDocumentResult::Ready(document) => ResolvedOutputSyntaxState {
-            highlights: Vec::new(),
-            prepared_document: Some(document),
-            highlight_provider: Some(resolved_output_highlight_provider(
-                theme,
-                output_text,
-                line_starts,
-                language,
-                document,
-                unresolved_ranges,
-            )),
-            needs_background_prepare: false,
-        },
-        rows::PrepareDiffSyntaxDocumentResult::TimedOut => pending_resolved_output_syntax_state(
-            theme,
-            output_text,
-            line_starts,
-            language,
-            old_document,
-            unresolved_ranges,
-        ),
-        rows::PrepareDiffSyntaxDocumentResult::Unsupported => {
-            let syntax_highlights = build_resolved_output_syntax_fallback_highlights(
-                theme,
-                output_text.as_ref(),
-                language,
-                rows::DiffSyntaxMode::HeuristicOnly,
-            );
-            ResolvedOutputSyntaxState {
-                highlights: apply_resolved_output_unresolved_highlights(
-                    syntax_highlights,
-                    unresolved_ranges.as_ref(),
-                    0..output_text.len(),
-                    resolved_output_unresolved_highlight_style(theme),
-                ),
-                prepared_document: None,
-                highlight_provider: None,
-                needs_background_prepare: false,
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-pub(super) fn build_resolved_output_syntax_state_for_snapshot(
-    theme: AppTheme,
-    output_snapshot: &TextModelSnapshot,
-    language: Option<rows::DiffSyntaxLanguage>,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-    edit_hint: Option<rows::DiffSyntaxEdit>,
-) -> ResolvedOutputSyntaxState {
-    build_resolved_output_syntax_state_with_source(
-        theme,
-        output_snapshot.as_shared_string(),
-        output_snapshot.shared_line_starts(),
-        language,
-        old_document,
-        edit_hint,
-        rows::DiffSyntaxBudget::default(),
-        Arc::default(),
-    )
-}
-
-pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
-    theme: AppTheme,
-    output_snapshot: &TextModelSnapshot,
-    language: Option<rows::DiffSyntaxLanguage>,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-    edit_hint: Option<rows::DiffSyntaxEdit>,
-    budget: rows::DiffSyntaxBudget,
-    unresolved_ranges: Arc<[Range<usize>]>,
-) -> ResolvedOutputSyntaxState {
-    build_resolved_output_syntax_state_with_source(
-        theme,
-        output_snapshot.as_shared_string(),
-        output_snapshot.shared_line_starts(),
-        language,
-        old_document,
-        edit_hint,
-        budget,
-        unresolved_ranges,
-    )
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) struct ResolvedOutputSyntaxBackgroundKey {
-    pub(in crate::view) source_revision: ResolvedOutputSourceRevision,
-    pub(in crate::view) language: rows::DiffSyntaxLanguage,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -869,24 +626,6 @@ pub(super) fn shifted_line_index(ix: usize, delta: isize) -> usize {
         ix.saturating_add(delta as usize)
     } else {
         ix.saturating_sub((-delta) as usize)
-    }
-}
-
-pub(super) fn remap_line_keyed_cache_for_delta<T>(
-    cache: &mut HashMap<usize, T>,
-    old_range: Range<usize>,
-    new_range: Range<usize>,
-) {
-    let shift = new_range.len() as isize - old_range.len() as isize;
-    let previous = std::mem::take(cache);
-    for (line_ix, value) in previous {
-        if line_ix < old_range.start {
-            cache.insert(line_ix, value);
-            continue;
-        }
-        if line_ix >= old_range.end {
-            cache.insert(shifted_line_index(line_ix, shift), value);
-        }
     }
 }
 
@@ -1471,6 +1210,135 @@ pub(super) fn resolved_output_placeholder_protected_ranges(
     }
 
     ranges.into()
+}
+
+/// The placeholder spans as tree-sitter should see them: the protected rows
+/// minus their line terminator.
+///
+/// Keeping the `\n` real is deliberate. It guarantees the lines either side of a
+/// masked row cannot lex as one token, and it keeps every row index — and so
+/// every `Point` the incremental edit path computes — aligned with the text.
+///
+/// Derived from the same spans the buffer protects from editing, so the mask and
+/// the protection can never drift apart.
+pub(super) fn resolved_output_live_syntax_mask(
+    protected_ranges: &[Range<usize>],
+    output_text: &str,
+) -> Arc<[Range<usize>]> {
+    if protected_ranges.is_empty() {
+        return Arc::default();
+    }
+    let bytes = output_text.as_bytes();
+    let mut mask = Vec::with_capacity(protected_ranges.len());
+    for range in protected_ranges {
+        let mut end = range.end.min(bytes.len());
+        if end > range.start && bytes.get(end - 1) == Some(&b'\n') {
+            end -= 1;
+        }
+        if end > range.start && bytes.get(end - 1) == Some(&b'\r') {
+            end -= 1;
+        }
+        if end > range.start {
+            mask.push(range.start..end);
+        }
+    }
+    mask.into()
+}
+
+/// Identity of everything the resolved-output highlight provider closes over.
+///
+/// This has to be *stable* when nothing changed, not merely unique. Installing a
+/// provider notifies the input, which re-enters the `cx.observe` that installed
+/// it; an always-fresh key would rebind on that re-entry, notify again, and spin
+/// forever. `set_highlight_provider_with_key` early-returns on an unchanged key
+/// without notifying, which is what terminates the cycle.
+///
+/// The document version covers the text and the tree; the theme and the
+/// unresolved-conflict spans are the other two things baked into the closure.
+pub(super) fn resolved_output_live_provider_binding_key(
+    document_version: u64,
+    theme: AppTheme,
+    unresolved_ranges: &[Range<usize>],
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    document_version.hash(&mut hasher);
+    theme.is_dark.hash(&mut hasher);
+    if let Some(color) = resolved_output_unresolved_highlight_style(theme).color {
+        color.h.to_bits().hash(&mut hasher);
+        color.s.to_bits().hash(&mut hasher);
+        color.l.to_bits().hash(&mut hasher);
+        color.a.to_bits().hash(&mut hasher);
+    }
+    unresolved_ranges.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Highlights for the resolved output, straight off the live tree.
+///
+/// Unlike the prepared-document provider this replaced, it is always exact for
+/// the text it was built over and so never reports `pending`: the document is
+/// re-synced on the keystroke and the provider rebound with it. That is what
+/// keeps `TextInput`'s interpolation and superseded-source machinery dormant
+/// here — they exist to cover a recompute lag this path does not have.
+pub(super) fn resolved_output_live_highlight_provider(
+    theme: AppTheme,
+    snapshot: rows::LiveSyntaxSnapshot,
+    unresolved_ranges: Arc<[Range<usize>]>,
+) -> HighlightProvider {
+    let unresolved_style = resolved_output_unresolved_highlight_style(theme);
+    HighlightProvider::with_pending(
+        move |byte_range: Range<usize>| HighlightProviderResult {
+            highlights: apply_resolved_output_unresolved_highlights(
+                snapshot.highlights_for_byte_range(byte_range.clone()),
+                unresolved_ranges.as_ref(),
+                byte_range,
+                unresolved_style,
+            ),
+            pending: false,
+        },
+        || 0,
+        || false,
+    )
+}
+
+/// Fold a batch of edits into the single `(replaced, inserted)` span that covers
+/// them all, in the coordinates `LiveSyntaxDocument::sync` expects.
+///
+/// Each delta is expressed against the buffer as it stood when that delta was
+/// applied, and only the final line starts survive to this point, so translating
+/// them individually would compute positions against the wrong text. One wider
+/// edit is always sound — it just reparses a little more than strictly needed —
+/// and GPUI coalesces notifications, so in practice the batch is one delta.
+///
+/// Mirrors the union arithmetic in `HighlightInterpolation::record_edit`.
+pub(super) fn coalesce_resolved_output_edit_deltas(
+    deltas: &[(Range<usize>, Range<usize>)],
+) -> Option<(Range<usize>, Range<usize>)> {
+    let mut folded: Option<(usize, usize, usize)> = None; // (start, old_len, new_len)
+    for (replaced, inserted) in deltas {
+        folded = Some(match folded {
+            None => (
+                replaced.start,
+                replaced.end.saturating_sub(replaced.start),
+                inserted.end.saturating_sub(inserted.start),
+            ),
+            Some((start, old_len, new_len)) => {
+                let union_start = start.min(replaced.start);
+                let union_right = start.saturating_add(new_len).max(replaced.end);
+                let source_right = union_right - new_len + old_len;
+                let live_right =
+                    union_right - (replaced.end - replaced.start) + (inserted.end - inserted.start);
+                (
+                    union_start,
+                    source_right.saturating_sub(union_start),
+                    live_right.saturating_sub(union_start),
+                )
+            }
+        });
+    }
+    folded.map(|(start, old_len, new_len)| (start..start + old_len, start..start + new_len))
 }
 
 pub(super) fn resolved_output_marker_for_line(
@@ -2975,18 +2843,27 @@ pub(crate) struct MainPaneView {
         conflict_resolver::ResolvedOutputBlockMap,
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
     pub(in crate::view) conflict_resolved_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
-    pub(in crate::view) conflict_resolved_preview_highlight_provider_theme_epoch: u64,
-    pub(in crate::view) conflict_resolved_preview_style_cache_epoch: u64,
-    pub(in crate::view) conflict_resolved_preview_prepared_syntax_document:
-        Option<rows::PreparedDiffSyntaxDocument>,
-    pub(in crate::view) conflict_resolved_preview_syntax_inflight:
-        Option<ResolvedOutputSyntaxBackgroundKey>,
     pub(in crate::view) conflict_resolved_preview_line_count: usize,
     pub(in crate::view) conflict_resolved_preview_line_starts: Arc<[usize]>,
+    /// The editable resolved output's tree-sitter document. Owned here rather
+    /// than in the shared thread-local cache because there is exactly one of
+    /// them at a time and it must survive every keystroke — which is precisely
+    /// what a content-hash-keyed cache cannot do.
+    pub(in crate::view) conflict_resolved_output_live_syntax: Option<rows::LiveSyntaxDocument>,
+    /// In-flight reparse for an edit that outran the foreground budget.
+    pub(in crate::view) conflict_resolved_output_live_syntax_reparse: Option<gpui::Task<()>>,
+    /// What the live tree was last built for: the buffer revision and the
+    /// placeholder mask. Both must be unchanged for a refresh to be a no-op.
+    ///
+    /// Deliberately not pointer identity on the text. `SharedString` can be
+    /// `Borrowed`, and `Arc<str>::from(&str)` then allocates afresh on every
+    /// call, so a pointer check would never match — turning every refresh into a
+    /// reparse and, because installing a provider notifies the input that
+    /// triggered the refresh, into an unbreakable loop.
+    pub(in crate::view) conflict_resolved_output_live_syntax_source:
+        Option<(ResolvedOutputSourceRevision, Arc<[Range<usize>]>)>,
     pub(in crate::view) conflict_resolved_output_measure_row: usize,
     pub(in crate::view) conflict_resolved_outline_stash: Option<StashedResolvedOutlineState>,
-    pub(in crate::view) conflict_resolved_preview_segments_cache:
-        HashMap<usize, VersionedCachedDiffStyledText>,
     #[cfg(test)]
     pub(in crate::view) conflict_resolved_outline_background_delay_override:
         Option<std::time::Duration>,

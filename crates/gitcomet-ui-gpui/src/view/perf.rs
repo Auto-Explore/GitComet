@@ -12,6 +12,8 @@ pub(crate) enum ViewPerfSpan {
     RenderThreeWayRows,
     RenderResolverDiffRows,
     RenderResolvedPreviewRows,
+    RenderConflictResolverPane,
+    ResolvedOutputEditObserve,
     RecomputeResolvedOutline,
     StyledTextBuild,
     SyntaxHighlighting,
@@ -52,6 +54,8 @@ pub(crate) struct ViewPerfSnapshot {
     pub render_three_way_rows: SpanStats,
     pub render_resolver_diff_rows: SpanStats,
     pub render_resolved_preview_rows: SpanStats,
+    pub render_conflict_resolver_pane: SpanStats,
+    pub resolved_output_edit_observe: SpanStats,
     pub recompute_resolved_outline: SpanStats,
     pub styled_text_build: SpanStats,
     pub syntax_highlighting: SpanStats,
@@ -123,6 +127,8 @@ pub(crate) fn snapshot() -> ViewPerfSnapshot {
             render_three_way_rows: RENDER_THREE_WAY_ROWS_SPAN.snapshot(),
             render_resolver_diff_rows: RENDER_RESOLVER_DIFF_ROWS_SPAN.snapshot(),
             render_resolved_preview_rows: RENDER_RESOLVED_PREVIEW_ROWS_SPAN.snapshot(),
+            render_conflict_resolver_pane: RENDER_CONFLICT_RESOLVER_PANE_SPAN.snapshot(),
+            resolved_output_edit_observe: RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN.snapshot(),
             recompute_resolved_outline: RECOMPUTE_RESOLVED_OUTLINE_SPAN.snapshot(),
             styled_text_build: STYLED_TEXT_BUILD_SPAN.snapshot(),
             syntax_highlighting: SYNTAX_HIGHLIGHTING_SPAN.snapshot(),
@@ -149,6 +155,8 @@ pub(crate) fn reset() {
         RENDER_THREE_WAY_ROWS_SPAN.reset();
         RENDER_RESOLVER_DIFF_ROWS_SPAN.reset();
         RENDER_RESOLVED_PREVIEW_ROWS_SPAN.reset();
+        RENDER_CONFLICT_RESOLVER_PANE_SPAN.reset();
+        RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN.reset();
         RECOMPUTE_RESOLVED_OUTLINE_SPAN.reset();
         STYLED_TEXT_BUILD_SPAN.reset();
         SYNTAX_HIGHLIGHTING_SPAN.reset();
@@ -259,6 +267,10 @@ static RENDER_RESOLVER_DIFF_ROWS_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 static RENDER_RESOLVED_PREVIEW_ROWS_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
+static RENDER_CONFLICT_RESOLVER_PANE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
+static RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
 static RECOMPUTE_RESOLVED_OUTLINE_SPAN: AtomicSpanStats = AtomicSpanStats::new();
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 static STYLED_TEXT_BUILD_SPAN: AtomicSpanStats = AtomicSpanStats::new();
@@ -283,6 +295,8 @@ fn span_stats(span: ViewPerfSpan) -> &'static AtomicSpanStats {
         ViewPerfSpan::RenderThreeWayRows => &RENDER_THREE_WAY_ROWS_SPAN,
         ViewPerfSpan::RenderResolverDiffRows => &RENDER_RESOLVER_DIFF_ROWS_SPAN,
         ViewPerfSpan::RenderResolvedPreviewRows => &RENDER_RESOLVED_PREVIEW_ROWS_SPAN,
+        ViewPerfSpan::RenderConflictResolverPane => &RENDER_CONFLICT_RESOLVER_PANE_SPAN,
+        ViewPerfSpan::ResolvedOutputEditObserve => &RESOLVED_OUTPUT_EDIT_OBSERVE_SPAN,
         ViewPerfSpan::RecomputeResolvedOutline => &RECOMPUTE_RESOLVED_OUTLINE_SPAN,
         ViewPerfSpan::StyledTextBuild => &STYLED_TEXT_BUILD_SPAN,
         ViewPerfSpan::SyntaxHighlighting => &SYNTAX_HIGHLIGHTING_SPAN,
