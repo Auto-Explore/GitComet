@@ -13325,14 +13325,9 @@ fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui:
             // Preview-only: the state layer loads no patch for an untracked file.
             repo.diff_state.diff = gitcomet_state::model::Loadable::NotLoaded;
             repo.diff_state.diff_file_rev = 1;
-            repo.diff_state.diff_file =
-                gitcomet_state::model::Loadable::Ready(Some(Arc::new(
-                    gitcomet_core::domain::FileDiffText::new(
-                        path.clone(),
-                        None,
-                        Some(source.clone()),
-                    ),
-                )));
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(path.clone(), None, Some(source.clone())),
+            )));
 
             let next_state = app_state_with_repo(repo, repo_id);
             push_test_state(this, next_state, cx);
