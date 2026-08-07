@@ -2052,6 +2052,7 @@ impl MainPaneView {
             super::super::diff_target_rendered_preview_kind(self.rendered_diff_target());
         let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
             wants_file_diff,
+            wants_collapsed_diff,
             is_file_preview,
             rendered_preview_kind,
         );

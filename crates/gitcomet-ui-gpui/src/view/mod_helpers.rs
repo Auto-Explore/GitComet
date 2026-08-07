@@ -331,11 +331,17 @@ pub(super) fn diff_target_rendered_preview_kind(
 
 pub(super) fn main_diff_rendered_preview_toggle_kind(
     wants_file_diff: bool,
+    wants_collapsed_diff: bool,
     is_file_preview: bool,
     preview_kind: Option<RenderedPreviewKind>,
 ) -> Option<RenderedPreviewKind> {
     match preview_kind? {
-        RenderedPreviewKind::Svg if wants_file_diff => Some(RenderedPreviewKind::Svg),
+        // Image/Code is orthogonal to the Full/Collapsed diff mode: the
+        // rendered image is the whole file either way, and the source is a
+        // normal text diff that both modes can show.
+        RenderedPreviewKind::Svg if wants_file_diff || wants_collapsed_diff => {
+            Some(RenderedPreviewKind::Svg)
+        }
         RenderedPreviewKind::Markdown if wants_file_diff || is_file_preview => {
             Some(RenderedPreviewKind::Markdown)
         }

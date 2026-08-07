@@ -140,7 +140,16 @@ pub(super) fn titlebar_control_button(
         .items_center()
         .justify_center()
         .cursor(CursorStyle::PointingHand)
-        .block_mouse_except_scroll()
+        // `occlude`, not `block_mouse_except_scroll`. gpui answers Windows'
+        // WM_NCHITTEST with the first hovered window-control area in paint
+        // order, testing membership against the whole hit-test list rather than
+        // its hovered prefix — so any window-control area painted underneath
+        // one of these buttons would answer for it, and Windows would run that
+        // area's behaviour instead of delivering the click. Occluding ends the
+        // hit test here, leaving the button's own Min/Max/Close area as the
+        // only candidate. Nothing scrollable sits under the title bar, so the
+        // stricter blocking costs nothing.
+        .occlude()
         .child(
             div()
                 .id(id)
@@ -542,12 +551,24 @@ impl Render for TitleBarView {
         // One drag surface spans the title bar underneath its controls. Each
         // visible control occludes only its painted bounds, so the uncovered
         // title above and below it behaves like ordinary window chrome.
+        //
+        // Deliberately *not* a `WindowControlArea::Drag`. gpui answers Windows'
+        // WM_NCHITTEST with the first hovered window-control area in paint
+        // order, testing membership against the whole hit-test list rather than
+        // its hovered prefix — so a full-bleed drag area painted under the bar
+        // claims HTCAPTION for every control on top of it, and Windows runs its
+        // own SC_MOVE loop instead of delivering the click. That froze the
+        // repo tabs, the app menu, and the repo picker. Marking each control
+        // `occlude()` would fix the lookup but would also cut the tab strip off
+        // from wheel events, which is exactly what `block_mouse_except_scroll`
+        // is there to preserve. Dragging instead goes through the handlers
+        // below, which is already the only path on Linux (window control areas
+        // are a no-op there) and reaches the same native SC_MOVE on Windows.
         let drag_surface = div()
             .id("title_drag")
             .debug_selector(|| "titlebar_drag".to_string())
             .absolute()
             .inset_0()
-            .window_control_area(WindowControlArea::Drag)
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !should_handle_titlebar_double_click(e.click_count(), e.standard_click()) {
                     return;

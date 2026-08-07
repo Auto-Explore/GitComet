@@ -47,6 +47,11 @@ pub fn install() {
         eprintln!("Failed to install GitComet terminal interrupt handler: {err}");
     }
 
+    #[cfg(windows)]
+    if !install_terminal_interrupt_handler() {
+        eprintln!("Failed to install GitComet terminal interrupt handler");
+    }
+
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         write_panic_log(info);
@@ -117,20 +122,66 @@ fn install_terminal_interrupt_handler() -> std::io::Result<()> {
         .spawn(move || {
             if signals.forever().next().is_some() {
                 // SIGINT is the user's explicit request to stop a terminal
-                // launch. Retire only this process's active recovery marker,
-                // then preserve the conventional shell exit status (130).
-                let _lifecycle = SESSION_LIFECYCLE
-                    .lock()
-                    .unwrap_or_else(|poisoned| poisoned.into_inner());
-                if SESSION_ACTIVE.swap(false, Ordering::SeqCst)
-                    && let Some(dir) = crash_dir()
-                {
-                    let _ = finish_session_in_dir(&dir);
-                }
+                // launch, then preserve the conventional shell exit status.
+                retire_active_session();
                 std::process::exit(128 + SIGINT);
             }
         })?;
     Ok(())
+}
+
+/// Windows has no SIGINT: the console delivers Ctrl+C, Ctrl+Break and console
+/// close as control events, and terminates the process once every handler
+/// declines them. Retiring the recovery marker there keeps a deliberate
+/// terminal interrupt from being reported as a crash on the next launch.
+#[cfg(windows)]
+fn install_terminal_interrupt_handler() -> bool {
+    gitcomet_win32_window_utils::install_console_ctrl_handler(handle_console_ctrl_event)
+}
+
+#[cfg(windows)]
+fn handle_console_ctrl_event(event: u32) -> bool {
+    if console_ctrl_event_ends_process(event) {
+        retire_active_session();
+    }
+    // Decline the event so the console keeps its own termination behaviour,
+    // including the exit status the invoking shell expects.
+    false
+}
+
+#[cfg(windows)]
+fn console_ctrl_event_ends_process(event: u32) -> bool {
+    use gitcomet_win32_window_utils::{
+        CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
+    };
+
+    matches!(
+        event,
+        CTRL_C_EVENT
+            | CTRL_BREAK_EVENT
+            | CTRL_CLOSE_EVENT
+            | CTRL_LOGOFF_EVENT
+            | CTRL_SHUTDOWN_EVENT
+    )
+}
+
+/// Retires only this process's active recovery marker, so a deliberate
+/// shutdown outside the UI event loop is not recovered as an abnormal exit.
+#[cfg(any(unix, windows))]
+fn retire_active_session() {
+    retire_active_session_in_dir(crash_dir().as_deref());
+}
+
+#[cfg(any(unix, windows))]
+fn retire_active_session_in_dir(dir: Option<&Path>) {
+    let _lifecycle = SESSION_LIFECYCLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if SESSION_ACTIVE.swap(false, Ordering::SeqCst)
+        && let Some(dir) = dir
+    {
+        let _ = finish_session_in_dir(dir);
+    }
 }
 
 fn write_runtime_error_log(record: &log::Record<'_>) {
@@ -1849,6 +1900,46 @@ new frame
         assert!(!session_marker_path_for_pid(&dir, child_pid).exists());
         assert!(!last_operation_path_for_pid(&dir, child_pid).exists());
         assert!(!runtime_error_path_for_pid(&dir, child_pid).exists());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn console_control_events_that_terminate_are_not_reported_as_crashes() {
+        use gitcomet_win32_window_utils::{
+            CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT,
+            CTRL_SHUTDOWN_EVENT,
+        };
+
+        for event in [
+            CTRL_C_EVENT,
+            CTRL_BREAK_EVENT,
+            CTRL_CLOSE_EVENT,
+            CTRL_LOGOFF_EVENT,
+            CTRL_SHUTDOWN_EVENT,
+        ] {
+            assert!(console_ctrl_event_ends_process(event));
+            assert!(
+                !handle_console_ctrl_event(event),
+                "declining the event keeps the console's own termination status"
+            );
+        }
+        assert!(!console_ctrl_event_ends_process(u32::MAX));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn terminal_interrupt_clears_active_session_state() {
+        let dir = tempdir().expect("temp dir");
+        begin_session_in_dir(dir.path()).expect("begin session");
+        std::fs::write(last_operation_path(dir.path()), "copy_source=test\n")
+            .expect("write operation diagnostics");
+        SESSION_ACTIVE.store(true, Ordering::SeqCst);
+
+        retire_active_session_in_dir(Some(dir.path()));
+
+        assert!(!SESSION_ACTIVE.load(Ordering::SeqCst));
+        assert!(!session_marker_path(dir.path()).exists());
+        assert!(!last_operation_path(dir.path()).exists());
     }
 
     #[test]
