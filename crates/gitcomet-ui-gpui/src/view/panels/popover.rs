@@ -24,14 +24,15 @@ mod picker_nav;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_onto_confirm;
-mod recent_repo_picker;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
+mod rename_branch_prompt;
 mod repo_picker;
 mod reset_prompt;
 mod search_inputs;
 mod squash_prompt;
+mod stage_conflict_markers_confirm;
 mod stash_drop_confirm;
 mod stash_picker_prompt;
 mod stash_prompt;
@@ -104,8 +105,8 @@ const CONFLICT_INPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.
 const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 220.0, 360.0);
 const CONFLICT_OUTPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 300.0);
 const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 360.0);
+const REPO_TAB_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
-const RECENT_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(480.0, 480.0, 860.0);
 const LARGE_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(520.0, 520.0, 820.0);
 const DIALOG_320_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
 const DIALOG_360_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
@@ -115,7 +116,9 @@ const DIALOG_440_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(440.0);
 const DIALOG_460_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(460.0);
 const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
-const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(250.0);
+// Leaves enough room for “Open in code editor” and its three-key shortcut
+// badge to remain on one line on non-macOS platforms.
+const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
 
 /// Cancel/submit focus-handle pair shared by every prompt dialog.
 pub(super) struct DialogFocus {
@@ -151,7 +154,6 @@ pub(in super::super) struct PopoverHost {
     _ui_model_subscription: gpui::Subscription,
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
-    _recent_repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
     _file_history_search_input_subscription: Option<gpui::Subscription>,
@@ -160,9 +162,20 @@ pub(in super::super) struct PopoverHost {
     _prompt_input_subscriptions: Vec<gpui::Subscription>,
     notify_fingerprint: u64,
     root_view: WeakEntity<GitCometView>,
+    /// Mirror of the root view's mode, which is fixed for the window's lifetime.
+    /// Held here because menu models are built while the root view's update
+    /// borrow is active, so its entity can't be read at that point.
+    root_view_mode: GitCometViewMode,
     tooltip_host: WeakEntity<TooltipHost>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
+    sidebar_pane: Entity<SidebarPaneView>,
+    /// Mirror of the sidebar pane's pinned branches, keyed by repository
+    /// workdir. Kept here because context menus are built from click handlers
+    /// that already hold the sidebar pane's update borrow, so its entity can't
+    /// be read at that point.
+    pinned_branches_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
@@ -171,19 +184,24 @@ pub(in super::super) struct PopoverHost {
     /// opens; drafts are intentionally session-local.
     cherry_pick_mainline: Option<usize>,
     context_menu_focus_handle: FocusHandle,
+    /// Focus held by the App/Add Repository menu invoker, restored when that
+    /// menu is dismissed without replacing it with another prompt.
+    menu_invoker_focus: Option<FocusHandle>,
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
     repo_picker_selected_index: Option<usize>,
-    recent_repo_picker_selected_index: Option<usize>,
-    recent_repo_picker_cached_repos: Vec<std::path::PathBuf>,
+    /// Session recent repositories snapshotted when a repository picker opens,
+    /// so the list can't shift under the user mid-interaction.
+    cached_recent_repos: Vec<std::path::PathBuf>,
+    repo_picker_sort: repo_picker::RepoPickerSort,
+    repo_picker_sort_menu_open: bool,
     branch_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
     submodule_picker_selected_index: Option<usize>,
     file_history_selected_index: Option<usize>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
-    recent_repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
     file_history_search_input: Option<Entity<components::TextInput>>,
@@ -215,6 +233,7 @@ pub(in super::super) struct PopoverHost {
     create_branch_checkout_enabled: bool,
     create_branch_source_target: String,
     worktree_ref_source_target: String,
+    suppress_worktree_submit_after_ref_enter: bool,
     create_branch_from_ref_checkout_focus_handle: FocusHandle,
     create_branch_from_ref_focus: DialogFocus,
     create_tag_annotated: bool,
@@ -298,6 +317,8 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
     cx: &mut gpui::Context<V>,
 ) -> gpui::Stateful<gpui::Div> {
     let focus_handle = focus_handle.clone().tab_index(0).tab_stop(true);
+    let hover_bg = theme.hover_overlay();
+    let active_bg = theme.active_overlay();
     div()
         .id(id)
         .debug_selector(move || debug_selector.to_string())
@@ -308,13 +329,14 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .items_center()
         .justify_between()
         .rounded(px(theme.radii.row))
+        .border_1()
+        .border_color(gpui::transparent_black())
         .track_focus(&focus_handle)
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.hover))
-        .active(move |s| s.bg(theme.colors.active))
+        .hover(move |s| s.bg(hover_bg))
+        .active(move |s| s.bg(active_bg))
         .focus(move |s| {
             s.bg(theme.colors.focus_ring_bg)
-                .border_1()
                 .border_color(theme.colors.focus_ring)
         })
         .on_mouse_down(
@@ -328,7 +350,9 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
 fn popover_is_context_menu(kind: &PopoverKind) -> bool {
     matches!(
         kind,
-        PopoverKind::PullPicker
+        PopoverKind::AppMenu
+            | PopoverKind::AddRepoMenu
+            | PopoverKind::PullPicker
             | PopoverKind::PushPicker
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
@@ -390,6 +414,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
+            | PopoverKind::StageConflictMarkersConfirm { .. }
             | PopoverKind::ResetPrompt { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::TerminalShutdownConfirm(_)
@@ -607,6 +632,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         PopoverKind::PullPicker
         | PopoverKind::PushPicker
         | PopoverKind::CreateBranchFromRefPrompt { .. }
+        | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::StashPrompt
         | PopoverKind::StashDropConfirm { .. }
         | PopoverKind::CloneRepo
@@ -670,7 +696,6 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
         PopoverKind::RepoPicker | PopoverKind::BranchPicker { .. } => Some(PICKER_WIDTH),
-        PopoverKind::RecentRepositoryPicker => Some(RECENT_PICKER_WIDTH),
         PopoverKind::StashPrompt
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }
@@ -678,6 +703,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
+        | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::StashDropConfirm { .. }
         | PopoverKind::Repo {
@@ -698,7 +724,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
-        | PopoverKind::DiscardChangesConfirm { .. } => Some(DIALOG_420_WIDTH),
+        | PopoverKind::DiscardChangesConfirm { .. }
+        | PopoverKind::StageConflictMarkersConfirm { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::PushSetUpstreamPrompt { .. } => Some(DIALOG_320_WIDTH),
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
@@ -720,12 +747,13 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             ..
         }
         | PopoverKind::Repo {
-            kind:
-                RepoPopoverKind::Submodule(
-                    SubmodulePopoverKind::AddPrompt | SubmodulePopoverKind::TrustConfirm,
-                ),
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::AddPrompt),
             ..
         } => Some(DIALOG_640_WIDTH),
+        PopoverKind::Repo {
+            kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::TrustConfirm),
+            ..
+        } => Some(DIALOG_460_WIDTH),
         PopoverKind::Repo {
             kind: RepoPopoverKind::Submodule(SubmodulePopoverKind::ChangePointerPrompt { .. }),
             ..
@@ -761,7 +789,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::PushPicker
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
-        | PopoverKind::RepoTabMenu { .. }
         | PopoverKind::TagMenu { .. }
         | PopoverKind::TagRefMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
@@ -789,6 +816,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
@@ -846,10 +874,12 @@ impl PopoverHost {
     fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
         let root_view = self.root_view.clone();
         let app_menu_open = matches!(self.popover, Some(PopoverKind::AppMenu));
+        let repo_picker_open = matches!(self.popover, Some(PopoverKind::RepoPicker));
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
                 root.title_bar.update(cx, |title_bar, cx| {
                     title_bar.set_app_menu_open(app_menu_open, cx);
+                    title_bar.set_repo_picker_open(repo_picker_open, cx);
                 });
             });
         });
@@ -922,9 +952,15 @@ impl PopoverHost {
         diff_word_wrap: bool,
         diff_show_line_numbers: bool,
         root_view: WeakEntity<GitCometView>,
+        root_view_mode: GitCometViewMode,
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
+        sidebar_pane: Entity<SidebarPaneView>,
+        pinned_branches_by_repo: std::collections::BTreeMap<
+            std::path::PathBuf,
+            std::collections::BTreeSet<String>,
+        >,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Self {
@@ -1288,6 +1324,7 @@ impl PopoverHost {
                 matches!(
                     this.popover,
                     Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                        | Some(PopoverKind::RenameBranchPrompt { .. })
                         | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
                 )
             },
@@ -1297,6 +1334,8 @@ impl PopoverHost {
                     Some(PopoverKind::CreateBranchFromRefPrompt { .. })
                 ) {
                     this.submit_create_branch(window, cx);
+                } else if matches!(this.popover, Some(PopoverKind::RenameBranchPrompt { .. })) {
+                    this.submit_rename_branch(window, cx);
                 } else {
                     this.submit_checkout_remote_branch(cx);
                 }
@@ -1452,7 +1491,6 @@ impl PopoverHost {
             _ui_model_subscription: subscription,
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
-            _recent_repo_picker_search_input_subscription: None,
             _worktree_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
             _file_history_search_input_subscription: None,
@@ -1462,25 +1500,29 @@ impl PopoverHost {
             _prompt_input_subscriptions: prompt_input_subscriptions,
             notify_fingerprint: 0,
             root_view,
+            root_view_mode,
             tooltip_host,
             main_pane,
             details_pane,
+            sidebar_pane,
+            pinned_branches_by_repo,
             popover: None,
             popover_anchor: None,
             cherry_pick_mainline: None,
             context_menu_focus_handle,
+            menu_invoker_focus: None,
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             repo_picker_selected_index: None,
-            recent_repo_picker_selected_index: None,
-            recent_repo_picker_cached_repos: Vec::new(),
+            cached_recent_repos: Vec::new(),
+            repo_picker_sort: repo_picker::RepoPickerSort::default(),
+            repo_picker_sort_menu_open: false,
             branch_picker_selected_index: None,
             worktree_picker_selected_index: None,
             submodule_picker_selected_index: None,
             file_history_selected_index: None,
             repo_picker_search_input: None,
-            recent_repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
             file_history_search_input: None,
@@ -1504,6 +1546,7 @@ impl PopoverHost {
             create_branch_checkout_enabled: true,
             create_branch_source_target: String::new(),
             worktree_ref_source_target: String::new(),
+            suppress_worktree_submit_after_ref_enter: false,
             create_branch_from_ref_checkout_focus_handle,
             create_branch_from_ref_focus,
             create_tag_annotated: false,
@@ -1579,7 +1622,6 @@ impl PopoverHost {
         .chain(
             [
                 &self.repo_picker_search_input,
-                &self.recent_repo_picker_search_input,
                 &self.branch_picker_search_input,
                 &self.remote_picker_search_input,
                 &self.file_history_search_input,
@@ -1603,6 +1645,10 @@ impl PopoverHost {
         cx.notify();
     }
 
+    pub(in super::super) fn is_kind_open(&self, kind: &PopoverKind) -> bool {
+        self.popover.as_ref() == Some(kind)
+    }
+
     #[cfg(test)]
     pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
@@ -1615,6 +1661,7 @@ impl PopoverHost {
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
+        self.menu_invoker_focus = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
         self.clear_active_context_menu_invoker(cx);
@@ -1736,6 +1783,7 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let menu_invoker_focus = self.menu_invoker_focus.take();
         let restore_diff_panel_focus = matches!(
             self.popover,
             Some(
@@ -1751,6 +1799,8 @@ impl PopoverHost {
         if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
             window.focus(&focus, cx);
+        } else if let Some(focus) = menu_invoker_focus {
+            window.focus(&focus, cx);
         }
     }
 
@@ -1762,6 +1812,7 @@ impl PopoverHost {
         matches!(
             self.popover,
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                | Some(PopoverKind::RenameBranchPrompt { .. })
                 | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
                 | Some(PopoverKind::StashPrompt)
                 | Some(PopoverKind::CommitPrompt { .. })
@@ -1860,6 +1911,7 @@ impl PopoverHost {
         }
         match self.popover.as_ref() {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+            | Some(PopoverKind::RenameBranchPrompt { .. })
             | Some(PopoverKind::StashPrompt)
             | Some(PopoverKind::CommitPrompt { .. })
             | Some(PopoverKind::StashPickerPrompt { .. })
@@ -1868,7 +1920,6 @@ impl PopoverHost {
                 ..
             }) => self.dismiss_inline_popover(window, cx),
             Some(PopoverKind::CloneRepo)
-            | Some(PopoverKind::RecentRepositoryPicker)
             | Some(PopoverKind::CreateTagPrompt { .. })
             | Some(PopoverKind::SquashPrompt { .. })
             | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
@@ -2055,6 +2106,34 @@ impl PopoverHost {
         )
     }
 
+    fn active_branch_ref_picker_items(
+        &self,
+        include_head: bool,
+        include_tags: bool,
+    ) -> Vec<components::BranchRefPickerItem> {
+        let Some(repo) = self.active_repo() else {
+            return Vec::new();
+        };
+        let mut items = Vec::new();
+        if include_head {
+            items.push(components::BranchRefPickerItem::head());
+        }
+        if let Loadable::Ready(branches) = &repo.branches {
+            items.extend(
+                branches
+                    .iter()
+                    .map(|branch| components::BranchRefPickerItem::branch(branch.name.clone())),
+            );
+        }
+        if include_tags && let Loadable::Ready(tags) = &repo.tags {
+            items.extend(
+                tags.iter()
+                    .map(|tag| components::BranchRefPickerItem::tag(tag.name.clone())),
+            );
+        }
+        items
+    }
+
     fn handle_inline_branch_picker_escape(&mut self, cx: &mut gpui::Context<Self>) {
         match &self.popover {
             Some(PopoverKind::CreateBranchFromRefPrompt { .. }) => {
@@ -2098,6 +2177,7 @@ impl PopoverHost {
         &mut self,
         name: String,
         repo_id: RepoId,
+        window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
         match &self.popover {
@@ -2113,6 +2193,18 @@ impl PopoverHost {
                     });
                 }
                 self.branch_picker_selected_index = None;
+                cx.defer_in(window, |this, window, cx| {
+                    if matches!(
+                        this.popover,
+                        Some(PopoverKind::CreateBranchFromRefPrompt { .. })
+                    ) {
+                        let focus = this
+                            .create_branch_input
+                            .read_with(cx, |input, _| input.focus_handle());
+                        window.focus(&focus, cx);
+                        cx.notify();
+                    }
+                });
                 cx.notify();
             }
             Some(PopoverKind::Repo {
@@ -2130,6 +2222,32 @@ impl PopoverHost {
                     });
                 }
                 self.branch_picker_selected_index = None;
+                // Hand focus to Add once the keystroke that picked the ref has
+                // finished dispatching, so it cannot land on the button it just
+                // moved to; `suppress_worktree_submit_after_ref_enter` covers
+                // the same Enter until the next frame is on screen.
+                cx.defer_in(window, |this, window, cx| {
+                    if matches!(
+                        this.popover,
+                        Some(PopoverKind::Repo {
+                            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                            ..
+                        })
+                    ) {
+                        let focus = if this.can_submit_worktree_add(cx) {
+                            this.worktree_focus.submit.clone()
+                        } else {
+                            this.worktree_path_input
+                                .read_with(cx, |input, _| input.focus_handle())
+                        };
+                        window.focus(&focus, cx);
+                        cx.notify();
+                    }
+                    cx.on_next_frame(window, |this, _window, cx| {
+                        this.suppress_worktree_submit_after_ref_enter = false;
+                        cx.notify();
+                    });
+                });
                 cx.notify();
             }
             Some(PopoverKind::BranchPicker {
@@ -2208,6 +2326,35 @@ impl PopoverHost {
                 target,
             });
         }
+        self.dismiss_inline_popover(window, cx);
+    }
+
+    fn can_submit_rename_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
+        let Some(PopoverKind::RenameBranchPrompt { name, .. }) = &self.popover else {
+            return false;
+        };
+        self.create_branch_input.read_with(cx, |input, _| {
+            let new_name = input.text().trim();
+            !new_name.is_empty() && new_name != name
+        })
+    }
+
+    fn submit_rename_branch(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::RenameBranchPrompt { repo_id, name, .. }) = self.popover.clone()
+        else {
+            return;
+        };
+        let new_name = self
+            .create_branch_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if new_name.is_empty() || new_name == name {
+            return;
+        }
+        self.store.dispatch(Msg::RenameBranch {
+            repo_id,
+            old_name: name,
+            new_name,
+        });
         self.dismiss_inline_popover(window, cx);
     }
 
@@ -2436,6 +2583,9 @@ impl PopoverHost {
     }
 
     pub(super) fn submit_worktree_add(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.suppress_worktree_submit_after_ref_enter {
+            return;
+        }
         let Some(PopoverKind::Repo {
             repo_id,
             kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
@@ -2587,11 +2737,18 @@ impl PopoverHost {
         if matches!(&kind, PopoverKind::CherryPickCommitConfirm { .. }) {
             self.cherry_pick_mainline = None;
         }
+        self.menu_invoker_focus =
+            if matches!(&kind, PopoverKind::AppMenu | PopoverKind::AddRepoMenu) {
+                window.focused(cx)
+            } else {
+                None
+            };
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu
             || matches!(
                 &kind,
                 PopoverKind::CreateBranchFromRefPrompt { .. }
+                    | PopoverKind::RenameBranchPrompt { .. }
                     | PopoverKind::StashPrompt
                     | PopoverKind::CommitPrompt { .. }
                     | PopoverKind::StashPickerPrompt { .. }
@@ -2603,7 +2760,6 @@ impl PopoverHost {
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
         self.repo_picker_selected_index = None;
-        self.recent_repo_picker_selected_index = None;
         self.branch_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
@@ -2619,11 +2775,11 @@ impl PopoverHost {
         } else {
             match &kind {
                 PopoverKind::RepoPicker => {
+                    let ui_session = session::load();
+                    self.repo_picker_sort = repo_picker::sort_from_session(&ui_session);
+                    self.cached_recent_repos = ui_session.recent_repos;
+                    self.repo_picker_sort_menu_open = false;
                     let _ = self.ensure_repo_picker_search_input(window, cx);
-                }
-                PopoverKind::RecentRepositoryPicker => {
-                    self.recent_repo_picker_cached_repos = session::load().recent_repos;
-                    let _ = self.ensure_recent_repo_picker_search_input(window, cx);
                 }
                 PopoverKind::BranchPicker { .. } => {
                     let _ = self.ensure_branch_picker_search_input(window, cx);
@@ -2653,6 +2809,19 @@ impl PopoverHost {
                     let focus = self
                         .create_branch_input
                         .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::RenameBranchPrompt { name, .. } => {
+                    let theme = self.theme;
+                    self.create_branch_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text(name.clone(), cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .create_branch_input
+                        .read_with(cx, |input, _| input.focus_handle());
                     window.focus(&focus, cx);
                 }
                 PopoverKind::CheckoutRemoteBranchPrompt { branch, .. } => {
@@ -2831,6 +3000,7 @@ impl PopoverHost {
                         cx.notify();
                     });
                     self.worktree_ref_source_target = String::new();
+                    self.suppress_worktree_submit_after_ref_enter = false;
                     let _ = self.ensure_branch_picker_search_input(window, cx);
                     let focus = self
                         .worktree_path_input
@@ -3000,6 +3170,33 @@ impl PopoverHost {
     fn active_repo(&self) -> Option<&RepoState> {
         let repo_id = self.active_repo_id()?;
         self.state.repos.iter().find(|r| r.id == repo_id)
+    }
+
+    pub(in super::super) fn set_pinned_branches(
+        &mut self,
+        pinned: std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.pinned_branches_by_repo == pinned {
+            return;
+        }
+        self.pinned_branches_by_repo = pinned;
+        cx.notify();
+    }
+
+    pub(in super::super) fn is_branch_pinned(
+        &self,
+        repo_id: RepoId,
+        section: BranchSection,
+        name: &str,
+    ) -> bool {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return false;
+        };
+        let key = crate::view::branch_sidebar::branch_pin_storage_key(section, name);
+        self.pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .is_some_and(|items| items.contains(&key))
     }
 
     pub(in super::super) fn set_date_time_format(
@@ -3315,7 +3512,6 @@ impl PopoverHost {
 
         let panel = match kind {
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
-            PopoverKind::RecentRepositoryPicker => recent_repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::CreateBranchFromRefPrompt {
                 repo_id,
@@ -3329,6 +3525,11 @@ impl PopoverHost {
                 window,
                 cx,
             ),
+            PopoverKind::RenameBranchPrompt {
+                repo_id,
+                name,
+                is_current_branch,
+            } => rename_branch_prompt::panel(self, repo_id, name, is_current_branch, cx),
             PopoverKind::CheckoutRemoteBranchPrompt {
                 repo_id,
                 remote,
@@ -3463,6 +3664,19 @@ impl PopoverHost {
                 area,
                 path,
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::StageConflictMarkersConfirm {
+                repo_id,
+                paths,
+                unresolved,
+                clear_selection,
+            } => stage_conflict_markers_confirm::panel(
+                self,
+                repo_id,
+                paths.clone(),
+                unresolved.clone(),
+                clear_selection,
+                cx,
+            ),
             PopoverKind::PullReconcilePrompt { repo_id } => {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
@@ -3664,8 +3878,9 @@ impl PopoverHost {
                 },
                 cx,
             ),
-            PopoverKind::AppMenu => app_menu::panel(self, cx),
-            PopoverKind::AddRepoMenu => add_repo_menu::panel(self, cx),
+            kind @ (PopoverKind::AppMenu | PopoverKind::AddRepoMenu) => {
+                self.context_menu_view(kind, cx)
+            }
             PopoverKind::RebaseOntoConfirm { repo_id, onto } => {
                 rebase_onto_confirm::panel(self, repo_id, onto, cx)
             }
@@ -3903,22 +4118,31 @@ impl PopoverHost {
         // Centered prompts are modal dialogs; anchored popovers (menus,
         // pickers) float just above the content and take the lighter lift.
         let is_centered = matches!(self.popover_anchor, Some(PopoverAnchor::Centered));
-        let popover_shadow = if is_centered {
-            crate::theme::shadow_modal(theme)
+        let popover_surface = if is_centered {
+            components::modal_surface(theme)
         } else {
-            crate::theme::shadow_popover(theme)
+            div()
+                .bg(theme.colors.surface_bg_elevated)
+                .border_1()
+                .border_color(popover_border_color)
+                .rounded(px(theme.radii.popover))
+                .shadow(crate::theme::shadow_popover(theme))
+                .overflow_hidden()
         };
-        let mut popover_container = div()
+        let mut popover_container = popover_surface
             .id("app_popover")
             .debug_selector(|| "app_popover".to_string())
             .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
+            // `occlude` keeps the root view's mouse-move listener from firing
+            // over the popover, so the tooltip host would otherwise anchor
+            // truncated-text tooltips to wherever the pointer was before the
+            // popover opened. Feed it positions from inside the popover.
+            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window, cx| {
+                let _ = this
+                    .tooltip_host
+                    .update(cx, |host, cx| host.on_mouse_moved(e.position, cx));
+            }))
             .occlude()
-            .bg(theme.colors.surface_bg_elevated)
-            .border_1()
-            .border_color(popover_border_color)
-            .rounded(px(theme.radii.popover))
-            .shadow(popover_shadow)
-            .overflow_hidden()
             .p_1()
             .child(panel);
 
@@ -3932,7 +4156,6 @@ impl PopoverHost {
 
         if is_centered {
             let top_offset = scaled_px(80.0);
-            let scrim_bg = with_alpha(theme.colors.shadow, if theme.is_dark { 0.35 } else { 0.22 });
             let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
                 this.close_popover_and_restore_focus(window, cx);
             });
@@ -3941,16 +4164,7 @@ impl PopoverHost {
                 .top_0()
                 .left_0()
                 .size_full()
-                .child(
-                    div()
-                        .absolute()
-                        .top_0()
-                        .left_0()
-                        .size_full()
-                        .bg(scrim_bg)
-                        .occlude()
-                        .on_mouse_down(MouseButton::Left, scrim_close),
-                )
+                .child(components::modal_scrim(theme).on_mouse_down(MouseButton::Left, scrim_close))
                 .child(
                     div()
                         .absolute()

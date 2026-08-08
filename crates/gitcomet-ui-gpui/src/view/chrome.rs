@@ -1,8 +1,13 @@
 use super::*;
 use crate::ui_scale;
+use std::cell::Cell;
+use std::rc::Rc;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET_PX: f32 = 10.0;
 pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 38.0;
+/// Empty title-bar width kept beside repository tabs so the window always has
+/// an easy-to-hit drag surface, even when the tab strip overflows.
+const REPO_TABS_TRAILING_DRAG_WIDTH_PX: f32 = 64.0;
 const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
 #[cfg(test)]
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
@@ -24,7 +29,12 @@ pub(super) struct TitleBarView {
     root_view: WeakEntity<GitCometView>,
     title_drag_state: TitleBarDragState,
     app_menu_open: bool,
+    app_menu_focus_handle: FocusHandle,
+    repo_picker_open: bool,
     workspace_actions_enabled: bool,
+    /// Painted bounds of the repository switcher chevron, so opening the picker
+    /// from the keyboard can anchor to the same control the mouse uses.
+    repo_picker_toggle_bounds: Rc<Cell<Option<Bounds<Pixels>>>>,
 }
 
 #[derive(Debug, Default, Clone, Copy, Eq, PartialEq)]
@@ -130,6 +140,16 @@ pub(super) fn titlebar_control_button(
         .items_center()
         .justify_center()
         .cursor(CursorStyle::PointingHand)
+        // `occlude`, not `block_mouse_except_scroll`. gpui answers Windows'
+        // WM_NCHITTEST with the first hovered window-control area in paint
+        // order, testing membership against the whole hit-test list rather than
+        // its hovered prefix — so any window-control area painted underneath
+        // one of these buttons would answer for it, and Windows would run that
+        // area's behaviour instead of delivering the click. Occluding ends the
+        // hit test here, leaving the button's own Min/Max/Close area as the
+        // only candidate. Nothing scrollable sits under the title bar, so the
+        // stricter blocking costs nothing.
+        .occlude()
         .child(
             div()
                 .id(id)
@@ -171,6 +191,20 @@ fn mix(mut a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
 
 fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
     mix(color, gpui::rgba(0xFFFFFFFF), amount)
+}
+
+/// The title bar's fill. The active window lifts it off the workspace surface;
+/// an inactive one drops back to it. Repo tabs sit on this color, so anything
+/// that has to blend into the bar (the label fade, for one) asks here.
+pub(in crate::view) fn title_bar_background(theme: AppTheme, window_is_active: bool) -> gpui::Rgba {
+    if window_is_active {
+        lighten(
+            theme.colors.surface_bg,
+            if theme.is_dark { 0.06 } else { 0.03 },
+        )
+    } else {
+        theme.colors.surface_bg
+    }
 }
 
 fn window_frame_visual_inset(ui_scale_percent: u32) -> Pixels {
@@ -305,14 +339,32 @@ impl TitleBarView {
         theme: AppTheme,
         root_view: WeakEntity<GitCometView>,
         workspace_actions_enabled: bool,
+        cx: &mut gpui::Context<Self>,
     ) -> Self {
         Self {
             theme,
             root_view,
             title_drag_state: TitleBarDragState::default(),
             app_menu_open: false,
+            app_menu_focus_handle: cx.focus_handle().tab_index(0).tab_stop(true),
+            repo_picker_open: false,
             workspace_actions_enabled,
+            repo_picker_toggle_bounds: Rc::new(Cell::new(None)),
         }
+    }
+
+    pub(super) fn repo_picker_toggle_bounds(&self) -> Option<Bounds<Pixels>> {
+        self.repo_picker_toggle_bounds.get()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn app_menu_focus_handle_for_test(&self) -> FocusHandle {
+        self.app_menu_focus_handle.clone()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn title_drag_armed_for_test(&self) -> bool {
+        self.title_drag_state.should_move
     }
 
     pub(super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
@@ -328,6 +380,14 @@ impl TitleBarView {
         cx.notify();
     }
 
+    pub(super) fn set_repo_picker_open(&mut self, open: bool, cx: &mut gpui::Context<Self>) {
+        if self.repo_picker_open == open {
+            return;
+        }
+        self.repo_picker_open = open;
+        cx.notify();
+    }
+
     pub(super) fn set_workspace_actions_enabled(
         &mut self,
         enabled: bool,
@@ -339,6 +399,7 @@ impl TitleBarView {
         self.workspace_actions_enabled = enabled;
         if !enabled {
             self.app_menu_open = false;
+            self.repo_picker_open = false;
         }
         cx.notify();
     }
@@ -352,6 +413,18 @@ impl TitleBarView {
     ) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.open_popover_at(kind, anchor, window, cx);
+        });
+    }
+
+    fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
         });
     }
 }
@@ -375,75 +448,127 @@ impl Render for TitleBarView {
             with_alpha(theme.colors.accent, if theme.is_dark { 0.48 } else { 0.38 });
         let app_menu_hover_bg = theme.titlebar_hover_overlay();
         let app_menu_active_bg = theme.titlebar_active_overlay();
-        let bar_bg = if window.is_window_active() {
-            lighten(
-                theme.colors.surface_bg,
-                if theme.is_dark { 0.06 } else { 0.03 },
-            )
-        } else {
-            theme.colors.surface_bg
-        };
+        let bar_bg = title_bar_background(theme, window.is_window_active());
+        let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
         let menu_toggle = div()
-            .id("app_menu")
-            .debug_selector(|| "app_menu".to_string())
             .h_full()
             .pl(scaled_px(2.0))
             .flex()
             .items_center()
-            .cursor(CursorStyle::PointingHand)
+            .child(
+                components::Button::new("app_menu_btn", "")
+                    .start_slot(svg_icon(
+                        "icons/menu.svg",
+                        theme.colors.text,
+                        scaled_px(16.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .borderless()
+                    .selected(app_menu_open)
+                    .selected_bg(app_menu_open_bg)
+                    .focus_handle(app_menu_focus_handle)
+                    .on_click(theme, cx, |this, _e, window, cx| {
+                        this.set_app_menu_open(true, cx);
+                        let anchor = window_top_left_corner(window);
+                        this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
+                    })
+                    // Sized to the window controls' 32px hitbox so the 16px glyph
+                    // clears the same 8px on each side. The button's intrinsic
+                    // `icon_pad_x` is narrower; a fixed width plus the centered
+                    // content is what actually matches the two ends of the bar.
+                    .h(scaled_px(26.0))
+                    .w(scaled_px(32.0))
+                    .rounded(px(theme.radii.pill))
+                    .block_mouse_except_scroll()
+                    .debug_selector(|| "app_menu".to_string())
+                    .gitcomet_tooltip(theme, "Application menu".into()),
+            );
+
+        // Browser-style repository switcher: a bare chevron beside the app menu
+        // (and the repo tabs) that opens the repository picker. Replaces the old
+        // labelled "Repositories" button that used to sit in the action bar.
+        let repo_picker_open = self.repo_picker_open;
+        let repo_picker_toggle_bounds_for_prepaint = Rc::clone(&self.repo_picker_toggle_bounds);
+        let repo_picker_toggle_bounds_for_click = Rc::clone(&self.repo_picker_toggle_bounds);
+        let repo_picker_toggle = div()
+            .h_full()
+            .flex()
+            .items_center()
+            .on_children_prepainted(move |children_bounds, _window, _cx| {
+                repo_picker_toggle_bounds_for_prepaint.set(children_bounds.first().copied());
+            })
             .child(
                 div()
-                    .id("app_menu_btn")
+                    .id("repo_picker_btn")
+                    .debug_selector(|| "repo_picker_toggle".to_string())
                     .h(scaled_px(26.0))
-                    .w(scaled_px(26.0))
+                    .w(scaled_px(32.0))
                     .flex()
                     .items_center()
                     .justify_center()
+                    .cursor(CursorStyle::PointingHand)
                     .rounded(px(theme.radii.pill))
-                    .when(app_menu_open, move |s| s.bg(app_menu_open_bg))
+                    // Stay lit in the pressed/open color while the picker popover
+                    // is open, mirroring the app-menu button.
+                    .when(repo_picker_open, move |s| s.bg(app_menu_open_bg))
                     .hover(move |s| {
-                        if app_menu_open {
+                        if repo_picker_open {
                             s.bg(app_menu_open_bg)
                         } else {
                             s.bg(app_menu_hover_bg)
                         }
                     })
                     .active(move |s| {
-                        if app_menu_open {
+                        if repo_picker_open {
                             s.bg(app_menu_open_active_bg)
                         } else {
                             s.bg(app_menu_active_bg)
                         }
                     })
                     .child(svg_icon(
-                        "icons/menu.svg",
+                        "icons/chevron_down.svg",
                         theme.colors.text,
-                        scaled_px(14.0),
-                    )),
-            )
-            .on_click(cx.listener(|this, _e: &ClickEvent, window, cx| {
-                this.set_app_menu_open(true, cx);
-                let anchor = window_top_left_corner(window);
-                this.open_popover_at(PopoverKind::AppMenu, anchor, window, cx);
-            }))
-            .on_mouse_up(
-                MouseButton::Right,
-                cx.listener(|_this, e: &MouseUpEvent, window, cx| {
-                    show_titlebar_secondary_menu(e.position, window, cx);
-                }),
+                        scaled_px(16.0),
+                    ))
+                    .block_mouse_except_scroll()
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        let anchor_bounds = repo_picker_toggle_bounds_for_click
+                            .get()
+                            .unwrap_or_else(|| {
+                                Bounds::new(e.position(), gpui::size(px(0.0), px(0.0)))
+                            });
+                        this.open_popover_for_bounds(
+                            PopoverKind::RepoPicker,
+                            anchor_bounds,
+                            window,
+                            cx,
+                        );
+                    }))
+                    .gitcomet_tooltip(theme, "Switch repository".into()),
             );
 
-        let drag_region = div()
+        // One drag surface spans the title bar underneath its controls. Each
+        // visible control occludes only its painted bounds, so the uncovered
+        // title above and below it behaves like ordinary window chrome.
+        //
+        // Deliberately *not* a `WindowControlArea::Drag`. gpui answers Windows'
+        // WM_NCHITTEST with the first hovered window-control area in paint
+        // order, testing membership against the whole hit-test list rather than
+        // its hovered prefix — so a full-bleed drag area painted under the bar
+        // claims HTCAPTION for every control on top of it, and Windows runs its
+        // own SC_MOVE loop instead of delivering the click. That froze the
+        // repo tabs, the app menu, and the repo picker. Marking each control
+        // `occlude()` would fix the lookup but would also cut the tab strip off
+        // from wheel events, which is exactly what `block_mouse_except_scroll`
+        // is there to preserve. Dragging instead goes through the handlers
+        // below, which is already the only path on Linux (window control areas
+        // are a no-op there) and reaches the same native SC_MOVE on Windows.
+        let drag_surface = div()
             .id("title_drag")
             .debug_selector(|| "titlebar_drag".to_string())
-            .flex_1()
-            .h_full()
-            .flex()
-            .items_center()
-            .min_w(px(0.0))
-            .px(scaled_px(8.0))
-            .window_control_area(WindowControlArea::Drag)
+            .absolute()
+            .inset_0()
             .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 if !should_handle_titlebar_double_click(e.click_count(), e.standard_click()) {
                     return;
@@ -458,12 +583,16 @@ impl Render for TitleBarView {
             .on_mouse_up(
                 MouseButton::Right,
                 cx.listener(|_this, e: &MouseUpEvent, window, cx| {
+                    if crate::press_gesture::is_press_claimed(cx) {
+                        return;
+                    }
                     show_titlebar_secondary_menu(e.position, window, cx);
                 }),
             )
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, e: &MouseDownEvent, _w, cx| {
+                    crate::press_gesture::claim_press(cx);
                     this.title_drag_state.on_left_mouse_down(e.click_count);
                     cx.notify();
                 }),
@@ -595,6 +724,7 @@ impl Render for TitleBarView {
                     .border_color(free_badge_active_border)
                     .text_color(theme.colors.accent)
             })
+            .block_mouse_except_scroll()
             .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
                 cx.open_url(EDITIONS_URL);
@@ -615,7 +745,8 @@ impl Render for TitleBarView {
             })
             .when(!is_macos && workspace_actions_enabled, |d| {
                 d.child(menu_toggle)
-            });
+            })
+            .when(workspace_actions_enabled, |d| d.child(repo_picker_toggle));
 
         // Browser-style: when a workspace is open, the repo tabs live in the
         // title bar's middle. Keep a fixed draggable strip beside them so the
@@ -629,14 +760,29 @@ impl Render for TitleBarView {
         };
         let middle: AnyElement = if let Some(repo_tabs) = repo_tabs {
             div()
+                .flex()
                 .flex_1()
                 .min_w(px(0.0))
                 .h_full()
                 .overflow_hidden()
-                .child(repo_tabs)
+                .child(
+                    div()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .h_full()
+                        .overflow_hidden()
+                        .child(repo_tabs),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_none()
+                        .w(scaled_px(REPO_TABS_TRAILING_DRAG_WIDTH_PX))
+                        .h_full(),
+                )
                 .into_any_element()
         } else {
-            drag_region.into_any_element()
+            div().flex_1().h_full().into_any_element()
         };
 
         let frame_rounding = client_frame_corner_rounding(theme, window);
@@ -663,9 +809,10 @@ impl Render for TitleBarView {
                         .left_0()
                         .right_0()
                         .h(px(1.0))
-                        .bg(theme.colors.border),
+                        .bg(components::Tab::outline_color(theme)),
                 )
             })
+            .child(drag_surface)
             .child(leading)
             .child(middle)
             .child(
@@ -726,7 +873,12 @@ pub(crate) fn window_frame(
         inner = inner.child(overlay);
     }
 
-    outer.child(inner).into_any_element()
+    // Every window built on the frame resets the press claim; see the
+    // `press_gesture` module docs.
+    outer
+        .child(crate::press_gesture::PressGestureReset)
+        .child(inner)
+        .into_any_element()
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ struct PendingCommitAmend {
 
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
-    state: Arc<AppState>,
+    pub(in super::super) state: Arc<AppState>,
     pub(in super::super) theme: AppTheme,
     pub(in super::super) change_tracking_view: ChangeTrackingView,
     pub(in super::super) ui_scale_percent: u32,
@@ -468,6 +468,43 @@ impl DetailsPaneView {
 
     pub(in crate::view) fn ui_scale(&self) -> ui_scale::UiScale {
         ui_scale::UiScale::from_percent(self.ui_scale_percent)
+    }
+
+    /// The "Stage all" buttons: drop the row selection, then stage — but confirm
+    /// first if any of what is about to be staged still has conflict markers in
+    /// the worktree, since staging is what tells git the conflict is resolved.
+    /// An empty `paths` means everything, matching `Msg::StagePaths`.
+    ///
+    /// Shared so the combined and split change-tracking views cannot answer this
+    /// question differently; they differ only in which section they stage.
+    pub(in crate::view) fn stage_all_with_conflict_confirmation(
+        &mut self,
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // The row selection is dropped because staging everything makes it
+        // meaningless — but only once the staging is actually going ahead, so a
+        // cancelled confirmation costs the user nothing.
+        if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+            &self.state,
+            repo_id,
+            paths.clone(),
+            true,
+        ) {
+            let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+            self.open_popover_at(confirm, anchor, window, cx);
+            cx.notify();
+            return;
+        }
+        self.clear_status_multi_selection(repo_id);
+        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        self.store.dispatch(Msg::StagePaths {
+            repo_id,
+            paths: paths.into(),
+        });
+        cx.notify();
     }
 
     pub(in super::super) fn set_date_settings(
@@ -1277,6 +1314,7 @@ mod tests {
             summary: format!("{command}: test"),
             stdout: String::new(),
             stderr: String::new(),
+            announce_success: true,
         }
     }
 

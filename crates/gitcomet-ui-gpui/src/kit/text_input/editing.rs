@@ -19,6 +19,7 @@ impl TextInput {
             focus_handle,
             content: TextModel::new(),
             placeholder: options.placeholder,
+            leading_icon: options.leading_icon,
             multiline: options.multiline,
             read_only: options.read_only,
             chromeless: options.chromeless,
@@ -131,6 +132,24 @@ impl TextInput {
         }
         self.style = style;
         self.bump_shape_style_epoch();
+        cx.notify();
+    }
+
+    pub fn set_chromeless(&mut self, chromeless: bool, cx: &mut Context<Self>) {
+        if self.chromeless == chromeless {
+            return;
+        }
+        self.chromeless = chromeless;
+        self.invalidate_layout_caches();
+        cx.notify();
+    }
+
+    pub fn set_leading_icon(&mut self, leading_icon: Option<&'static str>, cx: &mut Context<Self>) {
+        if self.leading_icon == leading_icon {
+            return;
+        }
+        self.leading_icon = leading_icon;
+        self.invalidate_layout_caches();
         cx.notify();
     }
 
@@ -1596,24 +1615,37 @@ impl TextInput {
         if self.read_only {
             return;
         }
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        if let Some(text) = crate::clipboard::read_text(cx) {
             self.replace_text_in_range(None, &text, window, cx);
         }
     }
 
     pub(super) fn copy(&mut self, _: &Copy, _: &mut Window, cx: &mut Context<Self>) {
+        self.copy_with_source(crate::clipboard::CopySource::TextInputShortcut, cx);
+    }
+
+    fn copy_with_source(&self, source: crate::clipboard::CopySource, cx: &mut Context<Self>) {
         if !self.selection.range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
+            crate::clipboard::write_text(
+                cx,
                 self.content[self.selection.range.clone()].to_string(),
-            ));
+                source,
+            );
         }
     }
 
     pub(super) fn cut(&mut self, _: &Cut, window: &mut Window, cx: &mut Context<Self>) {
+        self.cut_with_source(crate::clipboard::CopySource::TextInputShortcut, window, cx);
+    }
+
+    fn cut_with_source(
+        &mut self,
+        source: crate::clipboard::CopySource,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         if !self.selection.range.is_empty() {
-            cx.write_to_clipboard(ClipboardItem::new_string(
-                self.content[self.selection.range.clone()].to_string(),
-            ));
+            self.copy_with_source(source, cx);
             if !self.read_only {
                 self.replace_text_in_range(None, "", window, cx)
             }
@@ -2129,6 +2161,11 @@ impl TextInput {
         if self.interaction.context_menu.take().is_some() {
             cx.notify();
         }
+        // The press belongs to this input for as long as the button is held,
+        // even once the pointer leaves it — nobody else may read its release
+        // as a click. Claimed unconditionally, because a double-click that
+        // turns into a drag never sets `is_selecting`.
+        crate::press_gesture::claim_press(cx);
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
@@ -2234,6 +2271,7 @@ impl TextInput {
             return;
         }
 
+        crate::press_gesture::claim_press(cx);
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
@@ -2249,10 +2287,7 @@ impl TextInput {
         }
 
         self.interaction.context_menu = Some(TextInputContextMenuState {
-            can_paste: cx
-                .read_from_clipboard()
-                .and_then(|item| item.text())
-                .is_some(),
+            can_paste: crate::clipboard::read_text(cx).is_some(),
             anchor: event.position,
         });
         cx.notify();
@@ -2350,7 +2385,11 @@ impl TextInput {
                     cx.listener(|this, _e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
                         this.interaction.context_menu = None;
-                        this.cut(&Cut, window, cx);
+                        this.cut_with_source(
+                            crate::clipboard::CopySource::TextInputContextMenu,
+                            window,
+                            cx,
+                        );
                         cx.notify();
                     }),
                 );
@@ -2364,10 +2403,10 @@ impl TextInput {
         if !copy_disabled {
             copy_row = copy_row.on_mouse_down(
                 MouseButton::Left,
-                cx.listener(|this, _e: &MouseDownEvent, window, cx| {
+                cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
                     cx.stop_propagation();
                     this.interaction.context_menu = None;
-                    this.copy(&Copy, window, cx);
+                    this.copy_with_source(crate::clipboard::CopySource::TextInputContextMenu, cx);
                     cx.notify();
                 }),
             );

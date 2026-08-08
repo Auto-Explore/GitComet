@@ -215,6 +215,12 @@ impl TooltipHost {
     pub(crate) fn tooltip_text_for_test(&self) -> Option<SharedString> {
         self.tooltip_text.clone()
     }
+
+    /// The pointer position tooltips anchor to.
+    #[cfg(test)]
+    pub(crate) fn anchor_for_test(&self) -> Point<Pixels> {
+        self.last_mouse_pos
+    }
 }
 
 impl Render for TooltipHost {
@@ -240,6 +246,9 @@ impl Render for TooltipHost {
                     .position(pos)
                     .anchor(Anchor::TopLeft)
                     .offset(point(px(0.0), px(0.0)))
+                    // Rows near a window edge would otherwise push the tooltip
+                    // out of view, since it hangs below-right of the pointer.
+                    .snap_to_window_with_margin(px(8.0))
                     .child(
                         div()
                             .px_2()

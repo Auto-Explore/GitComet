@@ -14,6 +14,7 @@ pub mod perf_alloc;
 pub mod perf_ram_guard;
 #[doc(hidden)]
 pub mod perf_sidecar;
+mod press_gesture;
 mod startup_probe;
 mod text_selection;
 mod theme;
@@ -21,7 +22,10 @@ mod ui_runtime;
 mod ui_scale;
 mod view;
 
-pub use app::{FocusedMergetoolConfig, run, run_focused_mergetool, run_with_startup_crash_report};
+pub use app::{
+    FocusedMergetoolConfig, UiRunOutcome, run, run_focused_mergetool,
+    run_with_startup_crash_report, run_with_startup_crash_report_and_shutdown_callback,
+};
 pub use focused_diff::{FocusedDiffConfig, run_focused_diff};
 pub use launch_guard::UiLaunchError;
 pub use view::StartupCrashReport;

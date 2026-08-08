@@ -30,7 +30,22 @@ const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 1024;
 impl GixRepo {
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c").arg("color.ui=false").arg("--no-pager");
+        cmd.arg("-c").arg("color.ui=false");
+        // Pin the header format: the UI resolves a file's path out of the
+        // `diff --git` / `---` / `+++` lines, and these settings are the ones a
+        // user's git config could otherwise use to reshape them.
+        cmd.arg("-c")
+            // Keeps non-ASCII names as literal UTF-8 instead of octal escapes.
+            .arg("core.quotepath=false")
+            .arg("-c")
+            .arg("diff.mnemonicPrefix=false")
+            .arg("-c")
+            .arg("diff.noprefix=false")
+            .arg("-c")
+            .arg("diff.srcPrefix=a/")
+            .arg("-c")
+            .arg("diff.dstPrefix=b/");
+        cmd.arg("--no-pager");
 
         match target {
             DiffTarget::WorkingTree { path, area } => {

@@ -583,6 +583,11 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
+    fn rename_branch(&self, _old_name: &str, _new_name: &str) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "branch renaming is not implemented for this backend",
+        )))
+    }
     fn delete_branch(&self, name: &str) -> Result<()>;
     fn delete_branch_force(&self, _name: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(

@@ -1,8 +1,8 @@
 use crate::model::RepoId;
 use crate::msg::{Msg, RepoExternalChange, RepoWatchDegradedReason};
 use gix::index::entry::Mode as GitIndexMode;
-use notify::event::{AccessKind, AccessMode};
-use notify::{RecommendedWatcher, RecursiveMode, Watcher};
+use notify::event::{AccessKind, AccessMode, EventKindMask};
+use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::any::Any;
 use std::fs;
@@ -661,13 +661,16 @@ fn build_workdir_watcher(
     monitor_tx: &mpsc::Sender<MonitorMsg>,
     monitor_enabled: &Arc<AtomicBool>,
 ) -> Option<(RecommendedWatcher, WatchSetupOutcome)> {
-    let watcher = notify::recommended_watcher({
-        let monitor_tx = monitor_tx.clone();
-        let monitor_enabled = Arc::clone(monitor_enabled);
-        move |res| {
-            send_watcher_event_or_log(repo_id, &monitor_tx, res, monitor_enabled.as_ref());
-        }
-    });
+    let watcher = RecommendedWatcher::new(
+        {
+            let monitor_tx = monitor_tx.clone();
+            let monitor_enabled = Arc::clone(monitor_enabled);
+            move |res| {
+                send_watcher_event_or_log(repo_id, &monitor_tx, res, monitor_enabled.as_ref());
+            }
+        },
+        NotifyConfig::default().with_event_kinds(WATCHED_EVENT_KINDS),
+    );
 
     let mut watcher: RecommendedWatcher = match watcher {
         Ok(w) => w,
@@ -1676,10 +1679,24 @@ fn is_git_tags_path(workdir: &Path, git_dir: Option<&Path>, path: &Path) -> bool
     false
 }
 
+/// Which event kinds the kernel is asked to deliver.
+///
+/// `notify::Config::default()` is `EventKindMask::ALL`, which on Linux adds
+/// `IN_OPEN` and `IN_CLOSE_NOWRITE` to the inotify mask. `should_ignore_event_kind`
+/// discards those — but only after the kernel has queued each one and woken the
+/// monitor thread. A repo this app is actively reading (status, diffs, `git blame`)
+/// makes its own reads generate them, so they routinely account for well over 99%
+/// of all delivered events. Ask for only the kinds `classify_repo_event` can act
+/// on; `ACCESS_CLOSE` (`IN_CLOSE_WRITE`) is the one access kind that signals a
+/// completed write, and `should_ignore_event_kind` still keeps exactly that one.
+const WATCHED_EVENT_KINDS: EventKindMask = EventKindMask::CORE.union(EventKindMask::ACCESS_CLOSE);
+
 fn should_ignore_event_kind(event: &notify::Event) -> bool {
     match &event.kind {
         // Reading repo state should not cause a refresh loop; ignore access events except
-        // close-after-write which indicates a write has completed.
+        // close-after-write which indicates a write has completed. Backends that
+        // honour `WATCHED_EVENT_KINDS` no longer deliver the ignored kinds at all;
+        // this stays as the portable backstop.
         notify::EventKind::Access(AccessKind::Close(AccessMode::Write)) => false,
         notify::EventKind::Access(_) => true,
         _ => false,
@@ -2301,6 +2318,71 @@ mod tests {
         assert!(
             !saw_target,
             "modifications under the gitignored target/ must not be watched"
+        );
+    }
+
+    #[test]
+    fn watched_event_kinds_exclude_read_access_but_keep_close_write() {
+        assert!(!WATCHED_EVENT_KINDS.intersects(EventKindMask::ACCESS_OPEN));
+        assert!(!WATCHED_EVENT_KINDS.intersects(EventKindMask::ACCESS_CLOSE_NOWRITE));
+        // `should_ignore_event_kind` keeps close-after-write, so it must still be requested.
+        assert!(WATCHED_EVENT_KINDS.contains(EventKindMask::ACCESS_CLOSE));
+        // Everything `classify_repo_event` acts on.
+        assert!(WATCHED_EVENT_KINDS.contains(EventKindMask::CORE));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn watcher_does_not_deliver_events_for_reads_of_watched_files() {
+        // Regression: the default notify config asks inotify for IN_OPEN and
+        // IN_CLOSE_NOWRITE, so every file this app reads while producing a status,
+        // diff or blame bounced straight back as an event the monitor then threw
+        // away. On an active repo that was >99% of all delivered events — tens of
+        // thousands per minute of pure thread-wakeup and allocation churn.
+        let dir = unique_temp_dir("gitcomet-monitor-read-noise");
+        let workdir = dir.path().join("repo");
+        fs::create_dir_all(&workdir).expect("create workdir");
+        let file = workdir.join("tracked.txt");
+        fs::write(&file, b"before").expect("seed file");
+
+        let (tx, rx) = mpsc::channel::<notify::Event>();
+        let mut watcher = RecommendedWatcher::new(
+            move |res: notify::Result<notify::Event>| {
+                if let Ok(event) = res {
+                    let _ = tx.send(event);
+                }
+            },
+            NotifyConfig::default().with_event_kinds(WATCHED_EVENT_KINDS),
+        )
+        .expect("create watcher");
+        watcher
+            .watch(&workdir, RecursiveMode::NonRecursive)
+            .expect("watch workdir");
+
+        for _ in 0..50 {
+            assert_eq!(fs::read(&file).expect("read file"), b"before");
+        }
+        std::thread::sleep(Duration::from_secs(1));
+        let read_events: Vec<_> = rx.try_iter().collect();
+        assert!(
+            read_events.is_empty(),
+            "reading watched files must not deliver any event, got {read_events:?}"
+        );
+
+        // The watch is still live: a real write must still arrive.
+        fs::write(&file, b"after").expect("modify file");
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let mut saw_write = false;
+        while !saw_write && Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(200)) {
+                Ok(event) => saw_write = event.paths.iter().any(|p| p == &file),
+                Err(mpsc::RecvTimeoutError::Timeout) => continue,
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        assert!(
+            saw_write,
+            "a write to a watched file must still be delivered"
         );
     }
 

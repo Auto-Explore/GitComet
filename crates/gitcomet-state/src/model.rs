@@ -485,6 +485,11 @@ pub struct AppState {
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
+    /// A submodule trust check is running in the background. Set the moment the
+    /// add/update/load is triggered and cleared when the check resolves, so the
+    /// UI can show a pending/spinner state instead of a dead gap before the
+    /// trust dialog (or a silent proceed) appears.
+    pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
     pub sidebar_mode: SidebarMode,
@@ -561,6 +566,21 @@ pub struct SubmoduleTrustPromptState {
     pub sources: Vec<SubmoduleTrustTarget>,
 }
 
+/// Which pending action a background trust check belongs to. Mirrors the
+/// operation so the spinner's title matches the trust dialog that may follow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleTrustCheckOperation {
+    Add,
+    Update,
+    Load,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubmoduleTrustCheckState {
+    pub repo_id: RepoId,
+    pub operation: SubmoduleTrustCheckOperation,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppNotification {
     pub time: SystemTime,
@@ -630,6 +650,11 @@ pub struct CommandLogEntry {
     pub summary: String,
     pub stdout: String,
     pub stderr: String,
+    /// Whether finishing this command is worth telling the user about. Routine,
+    /// user-initiated edits announce themselves through the change they make —
+    /// a toast per staged line is noise — but they still belong in the log.
+    /// Failures are always surfaced, whatever this says.
+    pub announce_success: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -651,6 +676,9 @@ pub struct HistoryState {
     pub blame_path: Option<PathBuf>,
     pub blame_source: Option<BlameSource>,
     pub blame: Loadable<Shared<Vec<BlameLine>>>,
+    /// Annotations to keep painting while blame reloads for the same target, so
+    /// the annotation column does not blank out on every refresh.
+    pub retained_blame_while_loading: Option<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
     pub commit_details: Loadable<Shared<CommitDetails>>,
@@ -686,6 +714,7 @@ impl Default for HistoryState {
             blame_path: None,
             blame_source: None,
             blame: Loadable::NotLoaded,
+            retained_blame_while_loading: None,
             selected_commit: None,
             selected_commit_rev: 0,
             commit_details: Loadable::NotLoaded,
@@ -757,6 +786,15 @@ pub struct DiffState {
     pub content_preview: bool,
     pub diff_target_rev: u64,
     pub diff_state_rev: u64,
+    /// A reload of the *same* target is in flight and the content still on
+    /// screen is the generation from before it. Set when a reload keeps that
+    /// content rather than blanking it, and cleared when the reload lands.
+    ///
+    /// Anything that builds a patch out of the rendered rows — staging a line or
+    /// a hunk out of the diff — has to sit out this window: those rows describe
+    /// the index as it was before the last command, so a patch cut from them no
+    /// longer applies.
+    pub diff_reload_in_flight: bool,
     pub diff_rev: u64,
     pub diff: Loadable<Shared<Diff>>,
     pub diff_file_rev: u64,
@@ -777,6 +815,7 @@ impl Default for DiffState {
             content_preview: false,
             diff_target_rev: 0,
             diff_state_rev: 0,
+            diff_reload_in_flight: false,
             diff_rev: 0,
             diff: Loadable::NotLoaded,
             diff_file_rev: 0,
@@ -1411,6 +1450,24 @@ impl RepoState {
         if let Loadable::Ready(page) = &self.log {
             self.history_state.retained_log_while_loading = Some(Arc::clone(page));
         }
+    }
+
+    /// Hold on to the currently loaded annotations so the blame column keeps
+    /// painting them while the same target reloads, instead of blanking out.
+    /// Only valid while `blame_path`/`blame_source` still describe them —
+    /// callers that re-target blame must call [`Self::clear_retained_blame`].
+    pub(crate) fn retain_blame_while_loading(&mut self) {
+        if self.history_state.retained_blame_while_loading.is_some() {
+            return;
+        }
+
+        if let Loadable::Ready(lines) = &self.history_state.blame {
+            self.history_state.retained_blame_while_loading = Some(Arc::clone(lines));
+        }
+    }
+
+    pub(crate) fn clear_retained_blame(&mut self) {
+        self.history_state.retained_blame_while_loading = None;
     }
 
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {

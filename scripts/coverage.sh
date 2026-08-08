@@ -34,7 +34,6 @@ mkdir -p "$coverage_dir"
 
 cargo llvm-cov \
   --workspace \
-  --exclude gitcomet-ui \
   --exclude gitcomet-ui-gpui \
   --no-default-features \
   --features gix \
@@ -44,7 +43,6 @@ cargo llvm-cov \
 
 cargo llvm-cov \
   --workspace \
-  --exclude gitcomet-ui \
   --exclude gitcomet-ui-gpui \
   --no-default-features \
   --features gix \

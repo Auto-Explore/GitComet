@@ -47,24 +47,30 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         .collect::<Vec<_>>();
                     let items = branch_names
                         .iter()
-                        .map(|name| name.clone().into())
-                        .collect::<Vec<SharedString>>();
-                    let checked_out_index = head_branch
-                        .and_then(|head| branch_names.iter().position(|name| name == head));
+                        .cloned()
+                        .map(components::BranchRefPickerItem::branch)
+                        .collect::<Vec<_>>();
+                    let marked_name = head_branch.map(str::to_string);
 
                     menu = menu.child(
-                        components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-                            .items(items)
-                            .tooltip_host(this.tooltip_host.clone())
-                            .empty_text("No branches")
-                            .max_height(scaled_px(240.0))
-                            .selected_index(this.branch_picker_selected_index)
-                            .marked_index(checked_out_index)
-                            .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
-                                if let Some(name) = branch_names.get(ix).cloned() {
-                                    this.handle_inline_branch_picker_select(name, repo_id, cx);
-                                }
-                            }),
+                        components::BranchRefPicker::new(
+                            search,
+                            this.picker_prompt_scroll.clone(),
+                            items,
+                        )
+                        .tooltip_host(this.tooltip_host.clone())
+                        .empty_text("No branches")
+                        .max_height(scaled_px(240.0))
+                        .selected_index(this.branch_picker_selected_index)
+                        .marked_name(marked_name)
+                        .render(
+                            theme,
+                            ui_scale_percent,
+                            cx,
+                            move |this, name, _e, window, cx| {
+                                this.handle_inline_branch_picker_select(name, repo_id, window, cx);
+                            },
+                        ),
                     );
                 } else {
                     for (ix, branch) in branches.iter().enumerate() {
@@ -83,10 +89,11 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                             .tooltip_host(this.tooltip_host.clone())
                             .render(theme, ui_scale_percent, cx)
                             .on_click(cx.listener(
-                                move |this, _e: &ClickEvent, _w, cx| {
+                                move |this, _e: &ClickEvent, window, cx| {
                                     this.handle_inline_branch_picker_select(
                                         name.clone(),
                                         repo_id,
+                                        window,
                                         cx,
                                     );
                                 },
@@ -122,8 +129,7 @@ fn branch_picker_status_panel(
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     if let Some(search) = this.branch_picker_search_input.clone() {
-        components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-            .items(Vec::<SharedString>::new())
+        components::BranchRefPicker::new(search, this.picker_prompt_scroll.clone(), Vec::new())
             .tooltip_host(this.tooltip_host.clone())
             .empty_text(empty_text)
             .max_height(scaled_px(240.0))

@@ -48,6 +48,27 @@ fn open_text_input_context_menu(cx: &mut gpui::VisualTestContext, position: gpui
     });
 }
 
+fn simulate_key_press(cx: &mut gpui::VisualTestContext, key: &str) {
+    let keystroke = gpui::Keystroke::parse(key)
+        .unwrap_or_else(|err| panic!("failed to parse test keystroke `{key}`: {err}"))
+        .with_simulated_ime();
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::KeyDown(gpui::KeyDownEvent {
+                keystroke: keystroke.clone(),
+                is_held: false,
+                prefer_character_input: false,
+            }),
+            app,
+        );
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::KeyUp(gpui::KeyUpEvent { keystroke }),
+            app,
+        );
+    });
+    cx.run_until_parked();
+}
+
 #[test]
 fn builds_pure_components_without_panics() {
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
@@ -183,14 +204,24 @@ impl gpui::Render for SmokeView {
             .tab(
                 components::Tab::new(("t", 0u64))
                     .selected(true)
-                    .child(div().child("One"))
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
+                    .child(
+                        div()
+                            .debug_selector(|| "smoke_selected_tab_content".to_string())
+                            .child("One"),
+                    )
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .debug_selector(|| "smoke_selected_tab".to_string()),
             )
             .tab(
                 components::Tab::new(("t", 1u64))
                     .selected(false)
-                    .child(div().child("Two"))
-                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT),
+                    .child(
+                        div()
+                            .debug_selector(|| "smoke_idle_tab_content".to_string())
+                            .child("Two"),
+                    )
+                    .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT)
+                    .debug_selector(|| "smoke_idle_tab".to_string()),
             )
             .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
 
@@ -371,6 +402,38 @@ fn smoke_view_renders_without_panicking(cx: &mut gpui::TestAppContext) {
         })
         .unwrap();
     });
+}
+
+#[gpui::test]
+fn tab_selection_border_keeps_content_inset_stable(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = cx.add_window_view(SmokeView::new);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let selected_tab = cx
+        .debug_bounds("smoke_selected_tab")
+        .expect("expected the selected smoke tab");
+    let selected_content = cx
+        .debug_bounds("smoke_selected_tab_content")
+        .expect("expected the selected smoke tab content");
+    let idle_tab = cx
+        .debug_bounds("smoke_idle_tab")
+        .expect("expected the idle smoke tab");
+    let idle_content = cx
+        .debug_bounds("smoke_idle_tab_content")
+        .expect("expected the idle smoke tab content");
+
+    assert_eq!(
+        selected_content.left() - selected_tab.left(),
+        idle_content.left() - idle_tab.left(),
+        "selected and idle tabs must reserve the same leading border inset",
+    );
+    assert_eq!(
+        selected_content.top() - selected_tab.top(),
+        idle_content.top() - idle_tab.top(),
+        "selected and idle tabs must reserve the same top border inset",
+    );
 }
 
 #[gpui::test]
@@ -1430,6 +1493,18 @@ fn repo_tab_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("repo_tab_{}", repo_id.0).into_boxed_str())
 }
 
+fn repo_tab_separator_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("repo_tab_separator_after_{}", repo_id.0).into_boxed_str())
+}
+
+fn repo_tab_label_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("repo_tab_label_{}", repo_id.0).into_boxed_str())
+}
+
+fn repo_tab_label_text_selector(repo_id: RepoId) -> &'static str {
+    Box::leak(format!("repo_tab_label_text_{}", repo_id.0).into_boxed_str())
+}
+
 fn worktrees_spinner_selector(repo_id: RepoId) -> &'static str {
     Box::leak(format!("worktrees_spinner_{}", repo_id.0).into_boxed_str())
 }
@@ -1756,6 +1831,71 @@ fn repo_tabs_can_drag_reorder_by_right_half(cx: &mut gpui::TestAppContext) {
     cx.simulate_mouse_up(drop, MouseButton::Left, Modifiers::default());
 
     wait_for_repo_order(&store_for_test, &expected);
+}
+
+#[gpui::test]
+fn repo_tab_reorder_does_not_bounce_on_minor_pointer_reversal(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_repo_tabs_jitter_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        view.clone(),
+        vec![base.join("repo1"), base.join("repo2"), base.join("repo3")],
+    );
+
+    let dragged = repo_ids[0];
+    let expected = vec![repo_ids[1], repo_ids[0], repo_ids[2]];
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repository tab bounds");
+    let target_bounds = cx
+        .debug_bounds(repo_tab_selector(repo_ids[1]))
+        .expect("expected target repository tab bounds");
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x + px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    // Cross the rightward takeover point, then move back only a few pixels
+    // while the displaced neighbour is still animating through that point.
+    let takeover = gpui::point(
+        target_bounds.left() + target_bounds.size.width * 0.45,
+        target_bounds.center().y,
+    );
+    cx.simulate_mouse_move(takeover, Some(MouseButton::Left), Modifiers::default());
+    wait_for_repo_order(&store_for_test, &expected);
+    sync_view_for_tests(cx, &view);
+
+    let jitter = gpui::point(takeover.x - px(5.0), takeover.y);
+    cx.simulate_mouse_move(jitter, Some(MouseButton::Left), Modifiers::default());
+    sync_view_for_tests(cx, &view);
+
+    let got = store_for_test
+        .snapshot()
+        .repos
+        .iter()
+        .map(|repo| repo.id)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        got, expected,
+        "a small reverse movement must not make adjacent tabs swap back"
+    );
+
+    cx.simulate_mouse_up(jitter, MouseButton::Left, Modifiers::default());
 }
 
 #[gpui::test]
@@ -2170,18 +2310,26 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
         cx.debug_bounds(menu_selector).is_none(),
         "expected branch hamburger menu indicator to be removed"
     );
-    let edge_gap = row_bounds.right() - badge_bounds.right();
-    assert!(
-        edge_gap >= px(0.0) && edge_gap <= px(1.0),
-        "expected branch worktree badge to sit flush with the row edge"
-    );
 
     let row_center = row_bounds.center();
     cx.simulate_mouse_move(row_center, None, Modifiers::default());
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 
-    cx.simulate_mouse_down(row_center, MouseButton::Right, Modifiers::default());
+    // The trailing menu-dots slot is reserved in the row layout, so the worktree
+    // badge sits to its left rather than overlapping it.
+    let dots_bounds = cx
+        .debug_bounds(debug_selector("branch_dots", badge_ix))
+        .expect("expected the reserved branch menu dots slot");
+    assert!(
+        badge_bounds.right() <= dots_bounds.left(),
+        "expected branch worktree badge to sit left of the menu dots slot"
+    );
+
+    // Right-click over the label (near the leading edge) rather than the center:
+    // the trailing area holds the worktree badge and menu-dots slot.
+    let row_label_point = gpui::point(row_bounds.left() + px(48.0), row_center.y);
+    cx.simulate_mouse_down(row_label_point, MouseButton::Right, Modifiers::default());
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 
@@ -3125,8 +3273,8 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
 
     // Open the repo picker dropdown in the action bar, which should overlay the rest of the UI.
     let picker_bounds = cx
-        .debug_bounds("repo_picker")
-        .expect("expected repo_picker in debug bounds");
+        .debug_bounds("repo_picker_toggle")
+        .expect("expected repo_picker_toggle in debug bounds");
     cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
     cx.simulate_mouse_down(
         picker_bounds.center(),
@@ -3142,6 +3290,20 @@ fn popover_is_clickable_above_content(cx: &mut gpui::TestAppContext) {
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
+
+    let popover_bounds = cx
+        .debug_bounds("app_popover")
+        .expect("expected repository picker popover bounds");
+    assert_eq!(
+        popover_bounds.left(),
+        picker_bounds.left(),
+        "expected repository picker to stay aligned to the chevron's left edge"
+    );
+    assert_eq!(
+        popover_bounds.top(),
+        picker_bounds.bottom() + px(1.0),
+        "expected repository picker to stay attached below the chevron"
+    );
 
     let close_bounds = cx
         .debug_bounds("repo_popover_close")
@@ -3185,8 +3347,8 @@ fn popover_closes_when_clicking_outside(cx: &mut gpui::TestAppContext) {
     );
 
     let picker_bounds = cx
-        .debug_bounds("repo_picker")
-        .expect("expected repo_picker in debug bounds");
+        .debug_bounds("repo_picker_toggle")
+        .expect("expected repo_picker_toggle in debug bounds");
     cx.simulate_mouse_move(picker_bounds.center(), None, Modifiers::default());
     cx.simulate_mouse_down(
         picker_bounds.center(),
@@ -3272,6 +3434,58 @@ fn titlebar_hamburger_opens_app_menu(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn titlebar_hamburger_opens_from_keyboard_and_restores_focus_on_escape(
+    cx: &mut gpui::TestAppContext,
+) {
+    if cfg!(target_os = "macos") {
+        return;
+    }
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store_for_view, events, None, window, cx)
+    });
+    seed_workspace_repo(
+        cx,
+        &store,
+        view.clone(),
+        PathBuf::from("/tmp/gitcomet-smoke-titlebar-menu-keyboard-test"),
+    );
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let app_menu_focus = cx.update(|_window, app| {
+        crate::view::test_support::app_menu_focus_handle(view.read(app), app)
+    });
+    cx.update(|window, app| window.focus(&app_menu_focus, app));
+
+    simulate_key_press(cx, "enter");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        assert!(
+            crate::view::test_support::popover_is_open(view.read(app), app),
+            "Enter on the shared titlebar Button should open the app menu"
+        );
+    });
+
+    simulate_key_press(cx, "escape");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        assert!(
+            !crate::view::test_support::popover_is_open(view.read(app), app),
+            "Escape should close the keyboard-opened app menu"
+        );
+        assert!(
+            app_menu_focus.is_focused(window),
+            "closing the app menu should restore focus to its shared Button"
+        );
+    });
+}
+
+#[gpui::test]
 fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext) {
     if cfg!(target_os = "macos") {
         return;
@@ -3318,6 +3532,10 @@ fn repo_tab_strip_plus_button_opens_add_repo_menu(cx: &mut gpui::TestAppContext)
             "expected the + button to open the add-repository menu"
         );
     });
+    assert!(
+        cx.debug_bounds("add_repo_menu_init").is_some(),
+        "expected the add-repository menu to include initialize repository"
+    );
 }
 
 #[gpui::test]
@@ -3744,6 +3962,945 @@ fn scrollbar_track_uses_own_bounds_when_larger_than_surface(cx: &mut gpui::TestA
         assert!(
             offset_y != px(0.0),
             "expected track click near bottom to scroll even when scrollbar is taller than the scroll surface"
+        );
+    });
+}
+
+/// Opens a window with `count` repositories and returns their ids in tab
+/// order. Enough of them to overflow the strip is the point of most callers.
+fn open_repo_tabs(
+    cx: &mut gpui::VisualTestContext,
+    store: &AppStore,
+    view: gpui::Entity<crate::view::GitCometView>,
+    label: &str,
+    count: usize,
+) -> Vec<RepoId> {
+    let base =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{label}_{}", std::process::id()));
+    let repos: Vec<PathBuf> = (0..count)
+        .map(|ix| base.join(format!("repository-number-{ix}")))
+        .collect();
+    restore_session_and_draw(cx, store, view, repos)
+}
+
+fn repo_tab_scroll(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+) -> (Pixels, Pixels) {
+    cx.update(|_window, app| crate::view::test_support::repo_tab_scroll(view.read(app), app))
+}
+
+fn resize_repo_tab_strip_to(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    target_width: Pixels,
+) {
+    let current_strip = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+            .size
+            .width
+    });
+    let window_size = cx.update(|window, _app| window.viewport_size());
+    let delta = target_width - current_strip;
+    if f32::from(delta).abs() > 1.0 {
+        cx.simulate_resize(gpui::size(
+            (window_size.width + delta).max(px(640.0)),
+            window_size.height,
+        ));
+        sync_view_for_tests(cx, view);
+    }
+}
+
+fn scroll_over(cx: &mut gpui::VisualTestContext, position: gpui::Point<Pixels>, delta_y: Pixels) {
+    cx.simulate_mouse_move(position, None, Modifiers::default());
+    cx.simulate_event(ScrollWheelEvent {
+        position,
+        delta: ScrollDelta::Pixels(gpui::point(px(0.0), delta_y)),
+        modifiers: Modifiers::default(),
+        touch_phase: Default::default(),
+    });
+}
+
+#[gpui::test]
+fn titlebar_only_reserves_visible_repository_controls_from_window_drag(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_ids = open_repo_tabs(
+        cx,
+        &store_for_test,
+        view.clone(),
+        "titlebar_visible_hitboxes",
+        30,
+    );
+
+    let drag_surface = cx
+        .debug_bounds("titlebar_drag")
+        .expect("expected the shared title-bar drag surface");
+    let repo_tab_bounds = cx
+        .debug_bounds(repo_tab_selector(repo_ids[0]))
+        .expect("expected repository tab bounds");
+    let repo_tab_viewport = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+    });
+    assert_eq!(
+        (repo_tab_viewport.top(), repo_tab_viewport.bottom()),
+        (repo_tab_bounds.top(), repo_tab_bounds.bottom()),
+        "expected the scrollable tab strip hitbox to match the visible tab row"
+    );
+    let mut controls = vec![
+        (
+            "repository picker",
+            cx.debug_bounds("repo_picker_toggle")
+                .expect("expected repository picker bounds"),
+        ),
+        ("repository tab", repo_tab_bounds),
+        (
+            "add repository",
+            cx.debug_bounds("add_repo_menu")
+                .expect("expected add repository button bounds"),
+        ),
+    ];
+    if !cfg!(target_os = "macos") {
+        controls.push((
+            "application menu",
+            cx.debug_bounds("app_menu")
+                .expect("expected application menu bounds"),
+        ));
+    }
+
+    for (name, bounds) in controls {
+        let above = gpui::point(bounds.center().x, drag_surface.top() + px(1.0));
+        assert!(
+            above.y < bounds.top(),
+            "expected title chrome above the visible {name}"
+        );
+
+        cx.simulate_mouse_move(above, None, Modifiers::default());
+        cx.simulate_mouse_down(above, MouseButton::Left, Modifiers::default());
+        cx.update(|_window, app| {
+            assert!(
+                crate::view::test_support::titlebar_drag_is_armed(view.read(app), app),
+                "expected the area above the visible {name} to arm a window drag"
+            );
+        });
+        cx.simulate_mouse_up(above, MouseButton::Left, Modifiers::default());
+
+        cx.simulate_mouse_move(bounds.center(), None, Modifiers::default());
+        cx.simulate_mouse_down(bounds.center(), MouseButton::Left, Modifiers::default());
+        cx.update(|_window, app| {
+            assert!(
+                !crate::view::test_support::titlebar_drag_is_armed(view.read(app), app),
+                "expected the visible {name} to keep its own interaction"
+            );
+        });
+        cx.simulate_mouse_up(above, MouseButton::Left, Modifiers::default());
+    }
+}
+
+#[gpui::test]
+fn repo_tabs_scroll_with_the_wheel_once_they_overflow(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_wheel", 30);
+
+    let (scrolled, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(scrolled, px(0.0), "expected the strip to start unscrolled");
+    assert!(
+        max_scroll > px(0.0),
+        "expected 30 repository tabs to overflow the strip, got max scroll {max_scroll:?}"
+    );
+
+    // A plain vertical wheel has to move the strip: it scrolls on one axis and
+    // there is no scrollbar to drag.
+    let over_tabs = cx
+        .debug_bounds(repo_tab_selector(repo_ids[0]))
+        .expect("expected first repo tab bounds")
+        .center();
+    scroll_over(cx, over_tabs, px(-200.0));
+    sync_view_for_tests(cx, &view);
+
+    let (scrolled, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        scrolled,
+        px(200.0),
+        "expected the wheel to scroll the repository tab strip"
+    );
+
+    scroll_over(cx, over_tabs, px(500.0));
+    sync_view_for_tests(cx, &view);
+
+    let (scrolled, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        scrolled,
+        px(0.0),
+        "expected scrolling back to stop at the start of the strip"
+    );
+}
+
+#[gpui::test]
+fn repo_tab_strip_never_renders_scroll_arrows(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let roomy_repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_no_arrows_few", 2);
+    let roomy_tab = cx
+        .debug_bounds(repo_tab_selector(roomy_repo_ids[0]))
+        .expect("expected a repository tab in the roomy strip");
+    let roomy_label = cx
+        .debug_bounds(repo_tab_label_selector(roomy_repo_ids[0]))
+        .expect("expected a repository label in the roomy strip");
+    let roomy_leading_inset = roomy_label.left() - roomy_tab.left();
+
+    assert!(
+        cx.debug_bounds("tab_bar_scroll_left").is_none()
+            && cx.debug_bounds("tab_bar_scroll_right").is_none(),
+        "expected no scroll arrows while every tab fits"
+    );
+
+    let repos: Vec<PathBuf> = (0..30)
+        .map(|ix| {
+            std::env::temp_dir()
+                .join(format!(
+                    "gitcomet_ui_test_tab_no_arrows_{}",
+                    std::process::id()
+                ))
+                .join(format!("repository-number-{ix}"))
+        })
+        .collect();
+    let dense_repo_ids = restore_session_and_draw(cx, &store_for_test, view.clone(), repos);
+    sync_view_for_tests(cx, &view);
+
+    assert!(
+        cx.debug_bounds("tab_bar_scroll_left").is_none()
+            && cx.debug_bounds("tab_bar_scroll_right").is_none(),
+        "expected overflowing repository tabs to remain free of scroll arrows"
+    );
+    let dense_tab = cx
+        .debug_bounds(repo_tab_selector(dense_repo_ids[0]))
+        .expect("expected a repository tab in the dense strip");
+    let dense_label = cx
+        .debug_bounds(repo_tab_label_selector(dense_repo_ids[0]))
+        .expect("expected a repository label in the dense strip");
+    let dense_leading_inset = dense_label.left() - dense_tab.left();
+    assert!(
+        (f32::from(dense_leading_inset) - f32::from(roomy_leading_inset)).abs() <= 0.5,
+        "expected fixed side padding at every tab-strip density, got \
+         roomy={roomy_leading_inset:?}, dense={dense_leading_inset:?}"
+    );
+    let drag_region = cx
+        .debug_bounds("titlebar_drag")
+        .expect("expected a window drag region after overflowing repository tabs");
+    assert!(
+        drag_region.size.width >= px(60.0),
+        "expected repository tabs to leave a useful window drag region, got {:?}",
+        drag_region.size.width
+    );
+}
+
+#[gpui::test]
+fn roomy_repo_tab_expands_to_show_its_full_repository_name(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    let workdir =
+        std::env::temp_dir().join("repository-with-a-long-descriptive-name-that-still-fits");
+    let repo_ids = restore_session_and_draw(cx, &store_for_test, view.clone(), vec![workdir]);
+    let repo_id = repo_ids[0];
+
+    let tab = cx
+        .debug_bounds(repo_tab_selector(repo_id))
+        .expect("expected roomy repository tab bounds");
+    let label = cx
+        .debug_bounds(repo_tab_label_selector(repo_id))
+        .expect("expected roomy repository label bounds");
+    let natural_text = cx
+        .debug_bounds(repo_tab_label_text_selector(repo_id))
+        .expect("expected natural repository label text bounds");
+
+    assert!(
+        tab.size.width > px(180.0),
+        "expected a roomy tab to expand beyond the former 180px cap, got {:?}",
+        tab.size.width
+    );
+    assert!(
+        label.size.width + px(0.5) >= natural_text.size.width,
+        "expected the full repository name to fit without fading (label={:?}, text={:?})",
+        label.size.width,
+        natural_text.size.width
+    );
+    assert_eq!(
+        repo_tab_scroll(cx, &view).1,
+        px(0.0),
+        "expected the single naturally sized tab not to overflow the strip"
+    );
+}
+
+#[gpui::test]
+fn repository_tabs_shrink_long_names_before_short_names(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1800.0), px(700.0)));
+
+    let base = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_tab_priority_{}",
+        std::process::id()
+    ));
+    let repo_ids = restore_session_and_draw(
+        cx,
+        &store_for_test,
+        view.clone(),
+        vec![
+            base.join("small-project"),
+            base.join("medium-sized-repository"),
+            base.join("repository-with-an-exceptionally-long-descriptive-name"),
+        ],
+    );
+    sync_view_for_tests(cx, &view);
+
+    let tab_widths = |cx: &mut gpui::VisualTestContext| {
+        repo_ids
+            .iter()
+            .map(|repo_id| {
+                cx.debug_bounds(repo_tab_selector(*repo_id))
+                    .expect("expected repository tab bounds")
+                    .size
+                    .width
+            })
+            .collect::<Vec<_>>()
+    };
+    let natural = tab_widths(cx);
+    assert!(natural[0] < natural[1] && natural[1] < natural[2]);
+    let first_tab_left = cx
+        .debug_bounds(repo_tab_selector(repo_ids[0]))
+        .expect("expected first repository tab bounds")
+        .left();
+
+    // Keep the cap between the medium and long natural widths: only the long
+    // tab should have to yield at this pressure level.
+    let long_only_cap = (natural[1] + natural[2]) / 2.0;
+    let outer_chrome = px(36.0 + 6.0 * repo_ids.len() as f32);
+    resize_repo_tab_strip_to(
+        cx,
+        &view,
+        natural[0] + natural[1] + long_only_cap + outer_chrome,
+    );
+    let long_only = tab_widths(cx);
+    sync_view_for_tests(cx, &view);
+    assert_eq!(
+        tab_widths(cx),
+        long_only,
+        "repository tab widths must not adjust again on a follow-up frame"
+    );
+    assert_eq!(
+        cx.debug_bounds(repo_tab_selector(repo_ids[0]))
+            .expect("expected first repository tab bounds")
+            .left(),
+        first_tab_left,
+        "the repository tab strip must remain anchored while resizing"
+    );
+    assert_eq!(long_only[0], natural[0], "short tab should stay natural");
+    assert_eq!(long_only[1], natural[1], "medium tab should stay natural");
+    assert!(
+        long_only[2] < natural[2],
+        "the longest tab should fade first"
+    );
+
+    // Push the common cap below the shortest natural tab but above the 102px
+    // floor. At this threshold all three tabs should shrink together.
+    let all_tabs_cap = (px(102.0) + natural[0]) / 2.0;
+    resize_repo_tab_strip_to(
+        cx,
+        &view,
+        all_tabs_cap * repo_ids.len() as f32 + outer_chrome,
+    );
+    let all_shrunk = tab_widths(cx);
+    sync_view_for_tests(cx, &view);
+    assert_eq!(
+        tab_widths(cx),
+        all_shrunk,
+        "repository tabs must settle in the resize frame at every pressure level"
+    );
+    assert_eq!(
+        cx.debug_bounds(repo_tab_selector(repo_ids[0]))
+            .expect("expected first repository tab bounds")
+            .left(),
+        first_tab_left,
+        "the repository tab strip must not move horizontally as all tabs shrink"
+    );
+    assert!(
+        all_shrunk
+            .iter()
+            .zip(&natural)
+            .all(|(shrunk, natural)| shrunk < natural),
+        "every repository tab should shrink once the cap crosses the shortest name"
+    );
+    assert!(
+        all_shrunk
+            .windows(2)
+            .all(|pair| (f32::from(pair[0]) - f32::from(pair[1])).abs() <= 1.0),
+        "all tabs should share the same cap after the threshold: {all_shrunk:?}"
+    );
+}
+
+#[gpui::test]
+fn repo_tabs_show_separators_only_between_inactive_tabs(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view, "tab_inactive_separators", 3);
+
+    assert!(
+        cx.debug_bounds(repo_tab_separator_selector(repo_ids[0]))
+            .is_none(),
+        "expected no separator between the active tab and its inactive neighbour"
+    );
+    assert!(
+        cx.debug_bounds(repo_tab_separator_selector(repo_ids[1]))
+            .is_some(),
+        "expected a separator between adjacent inactive tabs"
+    );
+    assert!(
+        cx.debug_bounds(repo_tab_separator_selector(repo_ids[2]))
+            .is_none(),
+        "expected no separator after the final tab"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_repo_tab_to_the_edge_scrolls_the_strip(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_drag_scroll", 30);
+    let (scrolled, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(scrolled, px(0.0));
+    assert!(max_scroll > px(0.0), "expected the tabs to overflow");
+
+    let dragged = repo_ids[0];
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repo tab bounds");
+    let strip = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+    });
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x + px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    // Park the pointer just inside the strip's trailing edge and let frames run
+    // without moving it again.
+    let parked = gpui::point(strip.right() - px(38.0), start.y);
+    cx.simulate_mouse_move(parked, Some(MouseButton::Left), Modifiers::default());
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(10));
+        sync_view_for_tests(cx, &view);
+    }
+
+    let (scrolled_right, _) = repo_tab_scroll(cx, &view);
+    assert!(
+        scrolled_right > px(0.0),
+        "expected a tab held at the trailing edge to scroll the strip, got {scrolled_right:?}"
+    );
+
+    // Scrolling has to keep re-picking the drop target, or the tab would land
+    // back where it started however far the strip travelled.
+    let position = store_for_test
+        .snapshot()
+        .repos
+        .iter()
+        .position(|repo| repo.id == dragged)
+        .expect("expected the dragged repo to still be open");
+    assert!(
+        position > 0,
+        "expected the tabs scrolling under a parked drag to move it along, still at {position}"
+    );
+
+    // Holding at the opposite edge winds it back.
+    let parked_left = gpui::point(strip.left() + px(4.0), start.y);
+    cx.simulate_mouse_move(parked_left, Some(MouseButton::Left), Modifiers::default());
+    for _ in 0..12 {
+        std::thread::sleep(Duration::from_millis(10));
+        sync_view_for_tests(cx, &view);
+    }
+
+    let (scrolled_left, _) = repo_tab_scroll(cx, &view);
+    assert!(
+        scrolled_left < scrolled_right,
+        "expected the leading edge to scroll back, went {scrolled_right:?} -> {scrolled_left:?}"
+    );
+
+    cx.simulate_mouse_up(parked_left, MouseButton::Left, Modifiers::default());
+    sync_view_for_tests(cx, &view);
+
+    // The drag is over: the strip must sit still even with the pointer left in
+    // the edge zone.
+    let (settled, _) = repo_tab_scroll(cx, &view);
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(10));
+        sync_view_for_tests(cx, &view);
+    }
+    let (after_drop, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        settled, after_drop,
+        "expected auto-scroll to stop once the tab is dropped"
+    );
+}
+
+#[gpui::test]
+fn dragging_a_repo_tab_past_the_strip_ends_keeps_it_inside(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_drag_clamp", 6);
+    let dragged = repo_ids[2];
+    let dragged_bounds = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected dragged repo tab bounds");
+    let strip = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+    });
+
+    let start = dragged_bounds.center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_mouse_down(start, MouseButton::Left, Modifiers::default());
+    cx.simulate_mouse_move(
+        gpui::point(start.x - px(10.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+
+    // Haul it far past the leading edge, out where the sidebar lives.
+    cx.simulate_mouse_move(
+        gpui::point(strip.left() - px(400.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    sync_view_for_tests(cx, &view);
+
+    let at_left = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected the dragged tab to stay mounted in the strip");
+    assert!(
+        at_left.left() >= strip.left() - px(1.0),
+        "a tab dragged off the leading edge must stop at it \
+         (tab left={:?}, strip left={:?})",
+        at_left.left(),
+        strip.left()
+    );
+
+    // And the same past the trailing edge, where the add-repo button sits.
+    cx.simulate_mouse_move(
+        gpui::point(strip.right() + px(400.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    sync_view_for_tests(cx, &view);
+
+    let at_right = cx
+        .debug_bounds(repo_tab_selector(dragged))
+        .expect("expected the dragged tab to stay mounted after the trailing haul");
+    assert!(
+        at_right.right() <= strip.right() + px(1.0),
+        "a tab dragged off the trailing edge must stop at it \
+         (tab right={:?}, strip right={:?})",
+        at_right.right(),
+        strip.right()
+    );
+
+    cx.simulate_mouse_up(
+        gpui::point(strip.right() + px(400.0), start.y),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    sync_view_for_tests(cx, &view);
+}
+
+#[gpui::test]
+fn add_repo_button_stays_after_the_overflowing_tab_viewport(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_plus_pinned", 30);
+
+    let plus = cx
+        .debug_bounds("add_repo_menu")
+        .expect("expected the + button to stay rendered while tabs overflow");
+    let strip = cx.update(|_window, app| {
+        crate::view::test_support::repo_tab_strip_viewport(view.read(app), app)
+    });
+    let first_tab = cx
+        .debug_bounds(repo_tab_selector(repo_ids[0]))
+        .expect("expected first repository tab bounds");
+    assert!(cx.debug_bounds("tab_bar_scroll_left").is_none());
+    assert!(cx.debug_bounds("tab_bar_scroll_right").is_none());
+    assert!(
+        plus.left() >= strip.right() - px(1.0),
+        "expected the + button immediately after the overflowing tab viewport"
+    );
+    assert!(
+        plus.left() <= strip.right() + px(12.0),
+        "expected the + button to stay attached to the overflowing tab viewport"
+    );
+    assert!(
+        first_tab.right() <= strip.right() + px(1.0),
+        "expected visible repository tabs to stay within the scroll viewport"
+    );
+}
+
+#[gpui::test]
+fn add_repo_button_stays_at_the_strip_end_when_tabs_fit(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_plus_sticky", 3);
+    let (_, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(max_scroll, px(0.0), "expected three tabs not to overflow");
+
+    let plus = cx
+        .debug_bounds("add_repo_menu")
+        .expect("expected the + button");
+    let last_tab = cx
+        .debug_bounds(repo_tab_selector(*repo_ids.last().expect("repo ids")))
+        .expect("expected final repository tab bounds");
+
+    assert!(
+        plus.left() >= last_tab.right(),
+        "expected the + button after the final repository tab"
+    );
+    assert!(
+        plus.left() <= last_tab.right() + px(12.0),
+        "expected the + button to hug the final repository tab, got a {:?} gap",
+        plus.left() - last_tab.right()
+    );
+    assert!(
+        cx.debug_bounds("tab_bar_scroll_right").is_none(),
+        "expected no scroll arrows while the tabs fit"
+    );
+}
+
+#[gpui::test]
+fn activating_a_repo_scrolls_its_tab_into_view(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_test = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        crate::view::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_ids = open_repo_tabs(cx, &store_for_test, view.clone(), "tab_reveal", 30);
+    let (scrolled, _) = repo_tab_scroll(cx, &view);
+    assert_eq!(scrolled, px(0.0), "expected the strip to start unscrolled");
+
+    let last = *repo_ids.last().expect("repo ids");
+    store_for_test.dispatch(Msg::SetActiveRepo { repo_id: last });
+    sync_view_for_tests(cx, &view);
+    sync_view_for_tests(cx, &view);
+
+    let (scrolled, max_scroll) = repo_tab_scroll(cx, &view);
+    assert_eq!(
+        scrolled, max_scroll,
+        "expected activating the last repository to scroll its tab into view"
+    );
+}
+
+/// Hosts a text input beside two click targets — one on gpui's `on_click`, one
+/// on a raw `on_mouse_up` guarded by [`crate::press_gesture`] — so a drag that
+/// starts in the input and ends on a target can be replayed. The input sits
+/// inside an `occlude()`d overlay, standing in for the centered prompts that
+/// host inputs above a blocked hit test.
+struct PressGestureHostView {
+    theme: AppTheme,
+    input: gpui::Entity<components::TextInput>,
+    click_hits: usize,
+    release_hits: usize,
+}
+
+impl PressGestureHostView {
+    fn new(window: &mut gpui::Window, cx: &mut gpui::Context<Self>) -> Self {
+        let input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "Enter".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        Self {
+            theme: AppTheme::gitcomet_dark(),
+            input,
+            click_hits: 0,
+            release_hits: 0,
+        }
+    }
+}
+
+impl gpui::Render for PressGestureHostView {
+    fn render(
+        &mut self,
+        window: &mut gpui::Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl IntoElement {
+        let content = div()
+            .relative()
+            .size_full()
+            .child(
+                div()
+                    .id("pg_click")
+                    .debug_selector(|| "pg_click".to_string())
+                    .absolute()
+                    .top(px(200.0))
+                    .left(px(0.0))
+                    .w(px(240.0))
+                    .h(px(40.0))
+                    .on_click(cx.listener(|this, _e: &gpui::ClickEvent, _w, cx| {
+                        this.click_hits += 1;
+                        cx.notify();
+                    })),
+            )
+            .child(
+                div()
+                    .id("pg_release")
+                    .debug_selector(|| "pg_release".to_string())
+                    .absolute()
+                    .top(px(260.0))
+                    .left(px(0.0))
+                    .w(px(240.0))
+                    .h(px(40.0))
+                    .on_mouse_up(
+                        MouseButton::Left,
+                        cx.listener(|this, _e: &MouseUpEvent, _w, cx| {
+                            if crate::press_gesture::is_press_claimed(cx) {
+                                return;
+                            }
+                            this.release_hits += 1;
+                            cx.notify();
+                        }),
+                    ),
+            )
+            .child(
+                div()
+                    .id("pg_overlay")
+                    .absolute()
+                    .top(px(0.0))
+                    .left(px(0.0))
+                    .w(px(240.0))
+                    .h(px(160.0))
+                    .occlude()
+                    .child(
+                        div()
+                            .id("pg_input")
+                            .debug_selector(|| "pg_input".to_string())
+                            .w(px(240.0))
+                            .child(self.input.clone()),
+                    )
+                    .child(
+                        div()
+                            .id("pg_inert")
+                            .debug_selector(|| "pg_inert".to_string())
+                            .absolute()
+                            .top(px(100.0))
+                            .left(px(0.0))
+                            .w(px(240.0))
+                            .h(px(40.0)),
+                    ),
+            )
+            .into_any_element();
+
+        view::window_frame(
+            self.theme,
+            window.window_decorations(),
+            content,
+            None,
+            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+        )
+    }
+}
+
+fn press_gesture_hits(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<PressGestureHostView>,
+) -> (usize, usize) {
+    cx.update(|_window, app| {
+        let this = view.read(app);
+        (this.click_hits, this.release_hits)
+    })
+}
+
+#[gpui::test]
+fn release_outside_a_text_input_does_not_click_where_it_lands(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (view, cx) = cx.add_window_view(PressGestureHostView::new);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let input = cx
+        .debug_bounds("pg_input")
+        .expect("expected the input bounds");
+    let click_target = cx
+        .debug_bounds("pg_click")
+        .expect("expected the on_click target bounds");
+    let release_target = cx
+        .debug_bounds("pg_release")
+        .expect("expected the mouse-up target bounds");
+
+    // Positive control: both targets do fire for an ordinary click, so the
+    // assertions below cannot pass just because the harness never reaches them.
+    cx.simulate_mouse_move(click_target.center(), None, Modifiers::default());
+    cx.simulate_click(click_target.center(), Modifiers::default());
+    cx.simulate_mouse_move(release_target.center(), None, Modifiers::default());
+    cx.simulate_click(release_target.center(), Modifiers::default());
+    assert_eq!(
+        press_gesture_hits(cx, &view),
+        (1, 1),
+        "expected a plain click on each target to register"
+    );
+
+    // Press in the input, drag across both targets, release on the far one.
+    cx.simulate_mouse_move(input.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(input.center(), MouseButton::Left, Modifiers::default());
+    cx.update(|_window, app| {
+        assert!(
+            crate::press_gesture::is_press_claimed(app),
+            "the input should own the press while the button is held"
+        );
+    });
+    cx.simulate_mouse_move(
+        click_target.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_move(
+        release_target.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+    cx.simulate_mouse_up(
+        release_target.center(),
+        MouseButton::Left,
+        Modifiers::default(),
+    );
+
+    assert_eq!(
+        press_gesture_hits(cx, &view),
+        (1, 1),
+        "a release that only drifted onto a target must not click it"
+    );
+
+    // The claim lasts exactly one press: the next one still works normally.
+    cx.simulate_mouse_move(release_target.center(), None, Modifiers::default());
+    cx.simulate_click(release_target.center(), Modifiers::default());
+    assert_eq!(
+        press_gesture_hits(cx, &view),
+        (1, 2),
+        "expected the next press to clear the claim"
+    );
+}
+
+#[gpui::test]
+fn a_press_under_an_occluding_overlay_still_clears_the_claim(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (_view, cx) = cx.add_window_view(PressGestureHostView::new);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let input = cx
+        .debug_bounds("pg_input")
+        .expect("expected the input bounds");
+    let inert = cx
+        .debug_bounds("pg_inert")
+        .expect("expected the inert overlay area bounds");
+
+    cx.simulate_mouse_move(input.center(), None, Modifiers::default());
+    cx.simulate_click(input.center(), Modifiers::default());
+    cx.update(|_window, app| {
+        assert!(
+            crate::press_gesture::is_press_claimed(app),
+            "the claim outlives the release it belongs to"
+        );
+    });
+
+    // Both points sit inside an `occlude()`d overlay, so the window root is not
+    // hovered. A hitbox-gated reset would never run here and the claim would
+    // stick for the rest of the session.
+    cx.simulate_mouse_move(inert.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(inert.center(), MouseButton::Left, Modifiers::default());
+    cx.update(|_window, app| {
+        assert!(
+            !crate::press_gesture::is_press_claimed(app),
+            "a press that claims nothing must leave the claim clear"
+        );
+    });
+}
+
+#[gpui::test]
+fn a_button_less_pointer_move_clears_a_stranded_claim(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (_view, cx) = cx.add_window_view(PressGestureHostView::new);
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let input = cx
+        .debug_bounds("pg_input")
+        .expect("expected the input bounds");
+
+    cx.simulate_mouse_move(input.center(), None, Modifiers::default());
+    cx.simulate_mouse_down(input.center(), MouseButton::Left, Modifiers::default());
+    cx.update(|_window, app| {
+        assert!(crate::press_gesture::is_press_claimed(app));
+    });
+
+    // No release ever arrives — the pointer just moves with nothing held, which
+    // only happens once the gesture is over.
+    cx.simulate_mouse_move(input.center(), None, Modifiers::default());
+    cx.update(|_window, app| {
+        assert!(
+            !crate::press_gesture::is_press_claimed(app),
+            "a move with no button held must strand no claim"
         );
     });
 }

@@ -1082,6 +1082,7 @@ pub(super) fn repo_opened_ok(
             repo_state.history_state.blame_path = None;
             repo_state.history_state.blame_source = None;
             repo_state.history_state.blame = Loadable::NotLoaded;
+            repo_state.clear_retained_blame();
             repo_state.set_worktrees(Loadable::NotLoaded);
             repo_state.set_submodules(Loadable::NotLoaded);
             repo_state.set_selected_commit(None);

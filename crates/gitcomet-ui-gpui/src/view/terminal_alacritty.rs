@@ -289,10 +289,10 @@ pub(super) fn spawn_alacritty_terminal(
 // Terminal dimensions
 // ---------------------------------------------------------------------------
 
-struct TerminalDims {
-    columns: usize,
-    screen_lines: usize,
-    total_lines: usize,
+pub(super) struct TerminalDims {
+    pub(super) columns: usize,
+    pub(super) screen_lines: usize,
+    pub(super) total_lines: usize,
 }
 
 impl Dimensions for TerminalDims {
@@ -311,7 +311,7 @@ impl Dimensions for TerminalDims {
 // Terminal config
 // ---------------------------------------------------------------------------
 
-fn terminal_config(scrollback: usize) -> Config {
+pub(super) fn terminal_config(scrollback: usize) -> Config {
     Config {
         scrolling_history: scrollback,
         osc52: Osc52::Disabled,
@@ -319,7 +319,7 @@ fn terminal_config(scrollback: usize) -> Config {
     }
 }
 
-fn new_term(
+pub(super) fn new_term(
     config: &Config,
     bounds: &TerminalDims,
     events_tx: smol::channel::Sender<TerminalBackendEvent>,
@@ -1225,6 +1225,125 @@ pub(super) fn terminal_grid_point(
     let row = (rel_y / line_height).floor() as i32;
     let grid_row = row - display_offset as i32;
     Some((grid_row, col))
+}
+
+/// Whether `row` soft-wraps into the next one, i.e. the two are halves of a
+/// single logical line. Alacritty flags the last cell of a row that ran out of
+/// columns. Copying must not insert a newline there, or a wrapped command
+/// pastes back as two lines and a shell runs only the truncated first half.
+pub(super) fn terminal_row_wraps(
+    row: &alacritty_terminal::grid::Row<AlacCell>,
+    cols: usize,
+) -> bool {
+    cols > 0
+        && row[alacritty_terminal::index::Column(cols - 1)]
+            .flags
+            .contains(Flags::WRAPLINE)
+}
+
+/// Clamps a grid row into the range alacritty can actually address:
+/// `-(history_size) ..= screen_lines - 1`. Indexing a `Grid` outside that range
+/// is only `debug_assert`ed upstream, so in release it panics on the backing
+/// slice or silently reads a wrong row.
+pub(super) fn terminal_clamp_grid_row(row: i32, history_size: usize, screen_lines: usize) -> i32 {
+    let top = -(history_size as i32);
+    let bottom = screen_lines.saturating_sub(1) as i32;
+    row.clamp(top, bottom.max(top))
+}
+
+/// Resolves a mouse position to a grid cell for *text selection*.
+///
+/// Unlike [`terminal_grid_point`] (which mouse reporting relies on returning
+/// `None` outside the viewport) this never fails: the position is first clamped
+/// into `bounds`, so a drag above or left of the terminal resolves to the edge
+/// cell instead of freezing the selection. The row is then clamped into the
+/// addressable buffer range so scrollback rows stay representable as negatives.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn terminal_selection_grid_point(
+    mouse_pos: gpui::Point<Pixels>,
+    bounds: Bounds<Pixels>,
+    cell_width: Pixels,
+    line_height: Pixels,
+    display_offset: usize,
+    history_size: usize,
+    columns: usize,
+    screen_lines: usize,
+) -> Option<TerminalGridPoint> {
+    if columns == 0 || screen_lines == 0 || cell_width <= px(0.0) || line_height <= px(0.0) {
+        return None;
+    }
+    let x = mouse_pos.x.clamp(bounds.left(), bounds.right());
+    let y = mouse_pos.y.clamp(bounds.top(), bounds.bottom());
+    let rel_x: f32 = (x - bounds.left()).into();
+    let rel_y: f32 = (y - bounds.top()).into();
+    let cw: f32 = cell_width.into();
+    let lh: f32 = line_height.into();
+    // Sitting exactly on the right/bottom edge floors to one past the last
+    // cell, hence the two `min`s: a drag past the edge must resolve to the last
+    // *visible* row, not to the row below it.
+    let col = ((rel_x / cw).floor().max(0.0) as usize).min(columns - 1);
+    let screen_row = ((rel_y / lh).floor().max(0.0) as usize).min(screen_lines - 1);
+    let grid_row = terminal_clamp_grid_row(
+        screen_row as i32 - display_offset as i32,
+        history_size,
+        screen_lines,
+    );
+    Some(TerminalGridPoint::new(grid_row, col as u16))
+}
+
+/// Lines to scroll per autoscroll tick while a selection drag is outside the
+/// viewport vertically. Positive scrolls into history (matching
+/// `Scroll::Delta`'s sign), negative scrolls toward the live tail, zero means
+/// the pointer is still inside.
+pub(super) fn terminal_autoscroll_lines(
+    mouse_y: Pixels,
+    top: Pixels,
+    bottom: Pixels,
+    line_height: Pixels,
+) -> i32 {
+    const MAX_LINES: f32 = 6.0;
+    if line_height <= px(0.0) {
+        return 0;
+    }
+    let lh: f32 = line_height.into();
+    let ramp = |distance: Pixels| -> i32 {
+        let d: f32 = distance.into();
+        (d / lh).ceil().clamp(1.0, MAX_LINES) as i32
+    };
+    if mouse_y < top {
+        ramp(top - mouse_y)
+    } else if mouse_y > bottom {
+        -ramp(mouse_y - bottom)
+    } else {
+        0
+    }
+}
+
+/// The portion of a selection's grid-row span that is currently on screen, or
+/// `None` when the whole selection is scrolled out of view. Painting iterates
+/// this instead of the raw span so a scrollback-wide selection costs O(screen)
+/// rather than O(`TERMINAL_SCROLLBACK_ROWS`) per frame.
+pub(super) fn terminal_selection_visible_rows(
+    start_row: i32,
+    end_row: i32,
+    display_offset: usize,
+    screen_lines: usize,
+) -> Option<std::ops::RangeInclusive<i32>> {
+    if screen_lines == 0 {
+        return None;
+    }
+    let (lo, hi) = if start_row <= end_row {
+        (start_row, end_row)
+    } else {
+        (end_row, start_row)
+    };
+    // A grid row is visible when `row + display_offset` lands in `0..screen_lines`.
+    let offset = display_offset as i32;
+    let visible_top = -offset;
+    let visible_bottom = screen_lines as i32 - 1 - offset;
+    let first = lo.max(visible_top);
+    let last = hi.min(visible_bottom);
+    (first <= last).then_some(first..=last)
 }
 
 pub(super) fn terminal_mouse_button_report(
@@ -2239,6 +2358,155 @@ mod tests {
         )
         .unwrap();
         assert_eq!(row, -5, "viewport row 0 with offset 5 = grid row -5");
+    }
+
+    fn selection_bounds() -> Bounds<Pixels> {
+        Bounds::new(point(px(100.0), px(200.0)), size(px(800.0), px(384.0)))
+    }
+
+    /// 800x384 at 8x16 = 100 columns, 24 rows.
+    fn selection_point(
+        x: f32,
+        y: f32,
+        display_offset: usize,
+        history_size: usize,
+    ) -> TerminalGridPoint {
+        terminal_selection_grid_point(
+            point(px(x), px(y)),
+            selection_bounds(),
+            px(8.0),
+            px(16.0),
+            display_offset,
+            history_size,
+            100,
+            24,
+        )
+        .expect("selection point resolves inside a non-empty grid")
+    }
+
+    #[test]
+    fn clamp_grid_row_spans_history_and_screen() {
+        assert_eq!(terminal_clamp_grid_row(-500, 100, 24), -100);
+        assert_eq!(terminal_clamp_grid_row(-100, 100, 24), -100);
+        assert_eq!(terminal_clamp_grid_row(0, 100, 24), 0);
+        assert_eq!(terminal_clamp_grid_row(23, 100, 24), 23);
+        assert_eq!(terminal_clamp_grid_row(500, 100, 24), 23);
+        // No history yet: negative rows are not addressable at all.
+        assert_eq!(terminal_clamp_grid_row(-3, 0, 24), 0);
+        // Degenerate grid: `top` wins so the range never inverts.
+        assert_eq!(terminal_clamp_grid_row(5, 0, 0), 0);
+    }
+
+    #[test]
+    fn selection_grid_point_resolves_scrollback_rows_as_negatives() {
+        // The top visible row while scrolled back 5 lines is grid row -5. The
+        // old u16 selection point clamped this to 0, which put the highlight 5
+        // rows below the pointer and copied the wrong text.
+        let p = selection_point(100.0, 200.0, 5, 100);
+        assert_eq!(p.row, -5);
+        assert_eq!(p.col, 0);
+        // Third visible row, tenth column.
+        let p = selection_point(100.0 + 80.0, 200.0 + 32.0, 5, 100);
+        assert_eq!(p.row, -3);
+        assert_eq!(p.col, 10);
+    }
+
+    #[test]
+    fn selection_grid_point_clamps_positions_outside_the_viewport() {
+        // Dragging above/left of the terminal must resolve to the edge cell.
+        // `terminal_grid_point` returns None there, which would freeze the
+        // selection instead of extending it upward.
+        let p = selection_point(-500.0, -500.0, 0, 100);
+        assert_eq!(p.row, 0, "above the viewport clamps to the top visible row");
+        assert_eq!(p.col, 0, "left of the viewport clamps to column 0");
+        // Below the viewport clamps to the last visible row.
+        let p = selection_point(100.0, 5_000.0, 0, 100);
+        assert_eq!(p.row, 23);
+        // The exact right edge floors to `columns`, so it must be clamped back.
+        let p = selection_point(900.0, 200.0, 0, 100);
+        assert_eq!(p.col, 99);
+    }
+
+    #[test]
+    fn selection_grid_point_below_the_viewport_stops_at_the_last_visible_row() {
+        // Scrolled back 5, the visible window is grid rows -5..=18. Dragging
+        // below must land on 18, not on the row after it: sitting on the bottom
+        // edge floors to screen row 24, one past the last of the 24 rows.
+        let p = selection_point(100.0, 5_000.0, 5, 100);
+        assert_eq!(p.row, 18);
+        let p = selection_point(100.0, 200.0 + 384.0, 5, 100);
+        assert_eq!(p.row, 18, "the exact bottom edge behaves the same");
+    }
+
+    #[test]
+    fn selection_grid_point_cannot_escape_a_short_history() {
+        // Dragging far above with only 2 lines of scrollback stops at row -2.
+        let p = selection_point(100.0, -5_000.0, 2, 2);
+        assert_eq!(p.row, -2);
+    }
+
+    #[test]
+    fn selection_grid_point_rejects_an_empty_grid() {
+        let resolved = terminal_selection_grid_point(
+            point(px(0.0), px(0.0)),
+            selection_bounds(),
+            px(8.0),
+            px(16.0),
+            0,
+            0,
+            0,
+            0,
+        );
+        assert!(resolved.is_none());
+    }
+
+    #[test]
+    fn autoscroll_lines_scroll_into_history_above_the_viewport() {
+        let (top, bottom, lh) = (px(200.0), px(584.0), px(16.0));
+        assert_eq!(terminal_autoscroll_lines(px(300.0), top, bottom, lh), 0);
+        assert_eq!(terminal_autoscroll_lines(top, top, bottom, lh), 0);
+        assert_eq!(terminal_autoscroll_lines(bottom, top, bottom, lh), 0);
+        // Above the top scrolls up into history: `Scroll::Delta` is positive.
+        assert_eq!(terminal_autoscroll_lines(px(196.0), top, bottom, lh), 1);
+        assert_eq!(terminal_autoscroll_lines(px(168.0), top, bottom, lh), 2);
+        // Below the bottom scrolls toward the live tail.
+        assert_eq!(terminal_autoscroll_lines(px(588.0), top, bottom, lh), -1);
+        assert_eq!(terminal_autoscroll_lines(px(616.0), top, bottom, lh), -2);
+        // Ramp is monotonic and capped so a flick off-screen stays controllable.
+        assert_eq!(terminal_autoscroll_lines(px(-5_000.0), top, bottom, lh), 6);
+        assert_eq!(terminal_autoscroll_lines(px(5_000.0), top, bottom, lh), -6);
+    }
+
+    #[test]
+    fn selection_visible_rows_clamps_to_the_screen_window() {
+        // Whole-buffer selection at the live tail: exactly the visible screen.
+        assert_eq!(
+            terminal_selection_visible_rows(-10_000, 23, 0, 24),
+            Some(0..=23)
+        );
+        // Scrolled back 5: the visible window is grid rows -5..=18.
+        assert_eq!(
+            terminal_selection_visible_rows(-10_000, 23, 5, 24),
+            Some(-5..=18)
+        );
+        // A selection entirely inside the window is returned untouched.
+        assert_eq!(terminal_selection_visible_rows(3, 7, 0, 24), Some(3..=7));
+        // Reversed endpoints normalise.
+        assert_eq!(terminal_selection_visible_rows(7, 3, 0, 24), Some(3..=7));
+        // Scrolled far past the selection: nothing to paint.
+        assert_eq!(terminal_selection_visible_rows(-30, -25, 0, 24), None);
+        assert_eq!(terminal_selection_visible_rows(0, 5, 100, 24), None);
+        assert_eq!(terminal_selection_visible_rows(0, 5, 0, 0), None);
+    }
+
+    #[test]
+    fn grid_point_ordering_holds_across_scrollback() {
+        // `copy_grid_range` and the paint loop both rely on `start <= end`
+        // normalising correctly once rows can be negative.
+        assert!(TerminalGridPoint::new(-5, 3) < TerminalGridPoint::new(0, 0));
+        assert!(TerminalGridPoint::new(-5, 9) < TerminalGridPoint::new(-5, 10));
+        assert!(TerminalGridPoint::new(-10, 0) < TerminalGridPoint::new(-5, 0));
+        assert!(TerminalGridPoint::new(23, 0) > TerminalGridPoint::new(-1, 99));
     }
 
     #[test]

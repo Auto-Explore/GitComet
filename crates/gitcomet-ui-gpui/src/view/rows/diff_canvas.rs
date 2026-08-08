@@ -10,6 +10,7 @@ use super::diff_text::{
 use super::*;
 use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gpui::{
     App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Hsla, Pixels,
     Styled, TextRun, TextStyle, TransformationMatrix, TruncateFrom, Window, fill, point, px, size,
@@ -64,6 +65,15 @@ pub(in crate::view) const DIFF_ANNOTATION_DOT_DIAMETER_PX: f32 = 6.0;
 
 pub(in crate::view) const DIFF_ANNOTATION_PRIOR_ICON: &str = "icons/undo.svg";
 pub(in crate::view) const DIFF_ANNOTATION_BROWSE_ICON: &str = "icons/history.svg";
+
+/// Size of the hover-revealed stage/unstage button painted over the empty slack
+/// at the far left of a change row. It overlays the line-number gutter rather
+/// than reserving a column of its own, so enabling it never shifts diff text.
+const DIFF_STAGE_GUTTER_CELL_PX: f32 = 16.0;
+/// Rendered (square) size of the icon within the button.
+const DIFF_STAGE_GUTTER_GLYPH_PX: f32 = 11.0;
+const DIFF_STAGE_GUTTER_STAGE_ICON: &str = "icons/plus.svg";
+const DIFF_STAGE_GUTTER_UNSTAGE_ICON: &str = "icons/minus.svg";
 
 type HighlightSpans = Arc<[(Range<usize>, HighlightStyle)]>;
 
@@ -190,6 +200,42 @@ fn mix_blame_revision(
         blame.is_viewed_commit.hash(&mut hasher);
     } else {
         u8::MAX.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Fold a row's stage-gutter button into its canvas revision key so the cached
+/// canvas repaints when the button appears, disappears, or flips direction
+/// (staging vs. unstaging). `hovered` is this row's own stored hover state, not
+/// the raw cursor position, so mouse movement invalidates only the two rows
+/// whose button visibility actually changed.
+fn mix_stage_gutter_revision(
+    base: u64,
+    specs: &[Option<StageGutterSpec>],
+    stage_hover: Option<DiffStageHover>,
+    visible_ix: usize,
+) -> u64 {
+    if specs.iter().all(Option::is_none) {
+        return base;
+    }
+    let mut hasher = FxHasher::default();
+    base.hash(&mut hasher);
+    for spec in specs {
+        match spec {
+            Some(spec) => {
+                spec.area.hash(&mut hasher);
+                spec.slot.hash(&mut hasher);
+                // The kind decides which patch line a click resolves to, and the
+                // paint closure captures it, so a cached canvas must not outlive
+                // a change to it.
+                std::mem::discriminant(&spec.kind).hash(&mut hasher);
+                stage_hover
+                    .filter(|hover| hover.visible_ix == visible_ix && hover.slot == spec.slot)
+                    .map(|hover| hover.on_button)
+                    .hash(&mut hasher);
+            }
+            None => u8::MAX.hash(&mut hasher),
+        }
     }
     hasher.finish()
 }
@@ -363,7 +409,26 @@ fn paint_blame_icon(
     window: &mut Window,
     cx: &mut App,
 ) {
-    let glyph = diff_scaled_px(DIFF_ANNOTATION_ICON_GLYPH_PX, ui_scale_percent);
+    paint_centered_svg_icon(
+        path,
+        cell,
+        diff_scaled_px(DIFF_ANNOTATION_ICON_GLYPH_PX, ui_scale_percent),
+        color,
+        window,
+        cx,
+    );
+}
+
+/// Paint `path` as a square icon of `glyph` size, centered in `cell` and clamped
+/// so it never spills out of it.
+fn paint_centered_svg_icon(
+    path: &'static str,
+    cell: Bounds<Pixels>,
+    glyph: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let glyph = glyph.min(cell.size.width).min(cell.size.height);
     let ox = cell.left() + (cell.size.width - glyph) * 0.5;
     let oy = cell.top() + (cell.size.height - glyph) * 0.5;
@@ -410,6 +475,246 @@ struct AnnotHitboxes {
     browse_icon: Hitbox,
 }
 
+/// Which column's left gutter a stage/unstage button belongs to. Split views
+/// paint one button per column for the same row, so the row index alone cannot
+/// identify a button.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub(in crate::view) enum DiffStageSlot {
+    Inline,
+    SplitLeft,
+    SplitRight,
+}
+
+/// The stage-gutter button the pointer is currently on or near. Hovering
+/// anywhere in the row reveals its button; hovering the button itself is tracked
+/// separately so it can render brighter and show a tooltip.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub(in crate::view) struct DiffStageHover {
+    pub(in crate::view) visible_ix: usize,
+    pub(in crate::view) slot: DiffStageSlot,
+    pub(in crate::view) on_button: bool,
+}
+
+/// What a row's stage-gutter button does. Rows that get no button (context
+/// lines, headers, diffs that are not worktree diffs) pass `None` instead.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct StageGutterSpec {
+    /// Which side of the index the shown diff is: an unstaged diff stages the
+    /// line, a staged diff unstages it.
+    pub(in crate::view) area: DiffArea,
+    pub(in crate::view) slot: DiffStageSlot,
+    /// The change this button acts on, used to resolve the row back to a single
+    /// patch source line on click.
+    pub(in crate::view) kind: DiffLineKind,
+}
+
+impl StageGutterSpec {
+    fn icon(self) -> &'static str {
+        match self.area {
+            DiffArea::Unstaged => DIFF_STAGE_GUTTER_STAGE_ICON,
+            DiffArea::Staged => DIFF_STAGE_GUTTER_UNSTAGE_ICON,
+        }
+    }
+
+    fn color(self, theme: AppTheme) -> gpui::Rgba {
+        match self.area {
+            DiffArea::Unstaged => theme.colors.diff_add_text,
+            DiffArea::Staged => theme.colors.diff_remove_text,
+        }
+    }
+
+    fn tooltip(self) -> SharedString {
+        match self.area {
+            DiffArea::Unstaged => SharedString::from("Stage line"),
+            DiffArea::Staged => SharedString::from("Unstage line"),
+        }
+    }
+}
+
+/// Cell the stage/unstage button occupies: the far left of a row, which with
+/// line numbers shown is the empty slack ahead of the right-aligned number.
+/// Shared by painting and hit-testing so the two cannot drift apart.
+///
+/// With line numbers hidden there is no such slack — the diff text starts here
+/// — so the button overlaps its first characters and takes the clicks landing on
+/// them. That is deliberate: reaching the button everywhere is worth more than
+/// the couple of characters it sits on, and the chip is painted opaque so what
+/// it covers reads as covered rather than as garbled text.
+fn stage_gutter_cell(
+    content_left: Pixels,
+    row_top: Pixels,
+    row_height: Pixels,
+    ui_scale_percent: u32,
+) -> Bounds<Pixels> {
+    let pad = diff_row_horizontal_padding(ui_scale_percent);
+    let width = diff_scaled_px(DIFF_STAGE_GUTTER_CELL_PX, ui_scale_percent);
+    let height = width.min(row_height);
+    Bounds::new(
+        point(
+            content_left + pad * 0.5,
+            row_top + (row_height - height) * 0.5,
+        ),
+        size(width, height),
+    )
+}
+
+#[derive(Clone, Debug)]
+struct StageGutterPrepaint {
+    spec: StageGutterSpec,
+    cell: Bounds<Pixels>,
+    hitbox: Hitbox,
+}
+
+/// Reserve the button's hitbox during prepaint. Called after the text hitbox so
+/// the button's pointer cursor — and its clicks — win over the text I-beam, and
+/// clipped to the content mask so a scrolled-away button cannot be hovered.
+fn build_stage_gutter(
+    window: &mut Window,
+    spec: Option<StageGutterSpec>,
+    content_left: Pixels,
+    row_bounds: Bounds<Pixels>,
+    ui_scale_percent: u32,
+) -> Option<StageGutterPrepaint> {
+    let spec = spec?;
+    let cell = stage_gutter_cell(
+        content_left,
+        row_bounds.top(),
+        row_bounds.size.height,
+        ui_scale_percent,
+    );
+    let visible = cell.intersect(&window.content_mask().bounds);
+    if visible.size.width <= px(0.0) || visible.size.height <= px(0.0) {
+        return None;
+    }
+    Some(StageGutterPrepaint {
+        spec,
+        cell,
+        hitbox: window.insert_hitbox(visible, HitboxBehavior::Normal),
+    })
+}
+
+/// Paint a row's stage/unstage button and register its hover handling, returning
+/// the click routing for it. Hovering anywhere in the row reveals the button;
+/// hovering the button itself brightens it. The hover state comes from the view
+/// (never from the live cursor) so it matches the value folded into the canvas
+/// revision key. Clicks are handled by `install_diff_row_mouse_handlers`.
+#[allow(clippy::too_many_arguments)]
+fn paint_stage_gutter(
+    prepaint: Option<&StageGutterPrepaint>,
+    visible_ix: usize,
+    theme: AppTheme,
+    row_bg: gpui::Rgba,
+    ui_scale_percent: u32,
+    row_hitbox: &Hitbox,
+    column_bounds: Option<Bounds<Pixels>>,
+    view: &Entity<MainPaneView>,
+    window: &mut Window,
+    cx: &mut App,
+) -> Option<StageGutterMouse> {
+    let prepaint = prepaint?;
+    let spec = prepaint.spec;
+    window.set_cursor_style(CursorStyle::PointingHand, &prepaint.hitbox);
+
+    let hover = view.update(cx, |this, _cx| {
+        this.set_diff_stage_gutter_cell(visible_ix, spec.slot, prepaint.cell);
+        this.diff_stage_gutter_hover
+            .filter(|hover| hover.visible_ix == visible_ix && hover.slot == spec.slot)
+    });
+
+    if let Some(hover) = hover {
+        let color = spec.color(theme);
+        // The chip is opaque so it masks any line-number digits it covers. Over
+        // the row it stays quiet; under the pointer it takes a tint of the
+        // action it performs.
+        let (chip, icon) = if hover.on_button {
+            (
+                crate::theme::composite_over(row_bg, with_alpha(color, 0.22)),
+                color,
+            )
+        } else {
+            (row_bg, with_alpha(color, 0.75))
+        };
+        window.paint_quad(fill(prepaint.cell, chip).corner_radii(px(theme.radii.control)));
+        paint_centered_svg_icon(
+            spec.icon(),
+            prepaint.cell,
+            diff_scaled_px(DIFF_STAGE_GUTTER_GLYPH_PX, ui_scale_percent),
+            icon,
+            window,
+            cx,
+        );
+    }
+
+    install_stage_gutter_hover_handler(
+        window,
+        view,
+        visible_ix,
+        spec,
+        &prepaint.hitbox,
+        row_hitbox,
+        column_bounds,
+    );
+
+    Some(StageGutterMouse {
+        hitbox: prepaint.hitbox.clone(),
+        kind: spec.kind,
+    })
+}
+
+/// Register hover handling for a row's stage-gutter button: on every mouse move
+/// it resolves whether the cursor is over this row (which reveals the button) and
+/// whether it is on the button itself (which brightens it and shows a tooltip),
+/// updating the view only when that changes. `column_bounds` narrows the row to
+/// one side in split views, where both columns paint their own button.
+fn install_stage_gutter_hover_handler(
+    window: &mut Window,
+    view: &Entity<MainPaneView>,
+    visible_ix: usize,
+    spec: StageGutterSpec,
+    hitbox: &Hitbox,
+    row_hitbox: &Hitbox,
+    column_bounds: Option<Bounds<Pixels>>,
+) {
+    window.on_mouse_event({
+        let view = view.clone();
+        let hitbox = hitbox.clone();
+        let row_hitbox = row_hitbox.clone();
+        move |event: &gpui::MouseMoveEvent, phase, window, cx| {
+            if phase != DispatchPhase::Bubble {
+                return;
+            }
+            // Hover follows the hit test, so a panel painted over the diff hides
+            // the button underneath instead of revealing it through the overlay.
+            let on_row = row_hitbox.is_hovered(window)
+                && column_bounds.is_none_or(|bounds| bounds.contains(&event.position));
+            let next = on_row.then(|| DiffStageHover {
+                visible_ix,
+                slot: spec.slot,
+                on_button: hitbox.is_hovered(window),
+            });
+
+            // Cheap gate so plain mouse movement doesn't borrow/notify the view
+            // for every visible row: only act when this button's hover changes,
+            // and never clear a hover that belongs to a different button.
+            let current = view.read(cx).diff_stage_gutter_hover;
+            if current == next {
+                return;
+            }
+            if next.is_none()
+                && !current
+                    .is_some_and(|hover| hover.visible_ix == visible_ix && hover.slot == spec.slot)
+            {
+                return;
+            }
+
+            let tooltip = next.filter(|hover| hover.on_button).map(|_| spec.tooltip());
+            view.update(cx, |this, cx| {
+                this.update_diff_stage_gutter_hover(next, tooltip, cx);
+            });
+        }
+    });
+}
+
 /// Register click handling for a row's annotation column.
 #[allow(clippy::too_many_arguments)]
 fn install_blame_annotation_mouse_handler(
@@ -431,11 +736,10 @@ fn install_blame_annotation_mouse_handler(
         let message_hitbox = message_hitbox.clone();
         let prior_icon_hitbox = prior_icon_hitbox.clone();
         let browse_icon_hitbox = browse_icon_hitbox.clone();
-        move |event: &gpui::MouseDownEvent, phase, _window, cx| {
+        move |event: &gpui::MouseDownEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble || event.button != gpui::MouseButton::Left {
                 return;
             }
-            let pos = event.position;
             let commit_id = commit_id.clone();
             let path = path.clone();
             // For renamed files, navigate to the historical name at this commit
@@ -444,11 +748,14 @@ fn install_blame_annotation_mouse_handler(
                 .as_deref()
                 .map(std::path::Path::to_path_buf)
                 .unwrap_or_else(|| path.to_path_buf());
-            let action = if browse_enabled && browse_icon_hitbox.contains(&pos) {
+            // `is_hovered`, not `contains`: this is a window-level listener, so
+            // it runs even for clicks that landed on something painted over the
+            // diff. Only the hit test knows what actually owns the pointer.
+            let action = if browse_enabled && browse_icon_hitbox.is_hovered(window) {
                 BlameClickAction::Browse
-            } else if prior_enabled && prior_icon_hitbox.contains(&pos) {
+            } else if prior_enabled && prior_icon_hitbox.is_hovered(window) {
                 BlameClickAction::PriorRevision
-            } else if message_enabled && message_hitbox.contains(&pos) {
+            } else if message_enabled && message_hitbox.is_hovered(window) {
                 BlameClickAction::OpenDetails
             } else {
                 return;
@@ -618,16 +925,17 @@ fn install_blame_annotation_hover_handler(
         let message = hitboxes.message.clone();
         let prior_icon = hitboxes.prior_icon.clone();
         let browse_icon = hitboxes.browse_icon.clone();
-        move |event: &gpui::MouseMoveEvent, phase, _window, cx| {
+        move |_event: &gpui::MouseMoveEvent, phase, window, cx| {
             if phase != DispatchPhase::Bubble {
                 return;
             }
-            let pos = event.position;
-            let area = if message_enabled && message.contains(&pos) {
+            // Hover follows the hit test, so a panel painted over the diff hides
+            // the annotations underneath instead of highlighting them through it.
+            let area = if message_enabled && message.is_hovered(window) {
                 Some(AnnotArea::Message)
-            } else if prior_enabled && prior_icon.contains(&pos) {
+            } else if prior_enabled && prior_icon.is_hovered(window) {
                 Some(AnnotArea::PriorIcon)
-            } else if browse_enabled && browse_icon.contains(&pos) {
+            } else if browse_enabled && browse_icon.is_hovered(window) {
                 Some(AnnotArea::BrowseIcon)
             } else {
                 None
@@ -1665,6 +1973,8 @@ pub(super) fn inline_diff_line_row_canvas(
     annotation_width: Pixels,
     blame: Option<RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
+    stage: Option<StageGutterSpec>,
+    stage_hover: Option<DiffStageHover>,
 ) -> AnyElement {
     let paint_payload = diff_text_paint_payload(
         styled,
@@ -1685,6 +1995,7 @@ pub(super) fn inline_diff_line_row_canvas(
     );
     let row_hover = annot_hover.and_then(|(ix, area)| (ix == visible_ix).then_some(area));
     let revision = mix_blame_revision(revision, annotation_width, row_hover, blame.as_ref());
+    let revision = mix_stage_gutter_revision(revision, &[stage], stage_hover, visible_ix);
     let text = paint_payload.text;
     let highlights = paint_payload.highlights;
     let highlights_hash = paint_payload.highlights_hash;
@@ -1704,9 +2015,18 @@ pub(super) fn inline_diff_line_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = inline_text_bounds(content_bounds, gutter_total, pad);
+            // Everything but the annotation column, which owns its own clicks.
+            let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
             let annot_hitboxes =
                 build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
+            let stage_gutter = build_stage_gutter(
+                window,
+                stage,
+                content_bounds.left(),
+                bounds,
+                ui_scale_percent,
+            );
 
             InlineRowPrepaintState {
                 bounds,
@@ -1714,8 +2034,10 @@ pub(super) fn inline_diff_line_row_canvas(
                 gutter_total,
                 annot_w: annotation_width,
                 text_bounds,
+                row_hitbox,
                 text_hitbox,
                 annot_hitboxes,
+                stage_gutter,
             }
         },
         move |bounds, prepaint, window, cx| {
@@ -1802,24 +2124,37 @@ pub(super) fn inline_diff_line_row_canvas(
                 );
             });
 
-            let row_bounds = prepaint.bounds;
+            let stage_buttons = paint_stage_gutter(
+                prepaint.stage_gutter.as_ref(),
+                visible_ix,
+                theme,
+                bg,
+                ui_scale_percent,
+                &prepaint.row_hitbox,
+                None,
+                &view,
+                window,
+                cx,
+            )
+            .into_iter()
+            .collect();
+
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds =
-                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
                 &view,
                 visible_ix,
                 DiffRowMouseHandlers {
-                    row_bounds: visible_row_bounds,
+                    row_hitbox: prepaint.row_hitbox.clone(),
                     regions: DiffRowTextRegions::single(
                         DiffTextRegion::Inline,
                         visible_text_bounds,
                     ),
                     right_click: DiffRowRightClickBehavior::OpenContextMenu,
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
+                    stage: stage_buttons,
                 },
             );
 
@@ -1869,6 +2204,9 @@ pub(super) fn split_diff_line_row_canvas(
     annotation_width: Pixels,
     blame: Option<RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
+    stage_left: Option<StageGutterSpec>,
+    stage_right: Option<StageGutterSpec>,
+    stage_hover: Option<DiffStageHover>,
 ) -> AnyElement {
     let left_payload = diff_text_paint_payload(
         left_styled,
@@ -1902,6 +2240,12 @@ pub(super) fn split_diff_line_row_canvas(
     );
     let row_hover = annot_hover.and_then(|(ix, area)| (ix == visible_ix).then_some(area));
     let revision = mix_blame_revision(revision, annotation_width, row_hover, blame.as_ref());
+    let revision = mix_stage_gutter_revision(
+        revision,
+        &[stage_left, stage_right],
+        stage_hover,
+        visible_ix,
+    );
     let left_text = left_payload.text;
     let left_highlights = left_payload.highlights;
     let left_highlights_hash = left_payload.highlights_hash;
@@ -1930,10 +2274,26 @@ pub(super) fn split_diff_line_row_canvas(
             let left_text_bounds = column_text_bounds(left_col, gutter_total, pad);
             let right_text_bounds = column_text_bounds(right_col, gutter_total, pad);
 
+            // Everything but the annotation column, which owns its own clicks.
+            let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let left_hitbox = window.insert_hitbox(left_text_bounds, HitboxBehavior::Normal);
             let right_hitbox = window.insert_hitbox(right_text_bounds, HitboxBehavior::Normal);
             let annot_hitboxes =
                 build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
+            let left_stage_gutter = build_stage_gutter(
+                window,
+                stage_left,
+                left_col.left(),
+                bounds,
+                ui_scale_percent,
+            );
+            let right_stage_gutter = build_stage_gutter(
+                window,
+                stage_right,
+                right_col.left(),
+                bounds,
+                ui_scale_percent,
+            );
 
             SplitRowPrepaintState {
                 bounds,
@@ -1944,9 +2304,12 @@ pub(super) fn split_diff_line_row_canvas(
                 right_col,
                 left_text_bounds,
                 right_text_bounds,
+                row_hitbox,
                 left_hitbox,
                 right_hitbox,
                 annot_hitboxes,
+                left_stage_gutter,
+                right_stage_gutter,
             }
         },
         move |bounds, prepaint, window, cx| {
@@ -2066,12 +2429,36 @@ pub(super) fn split_diff_line_row_canvas(
                 );
             });
 
-            let row_bounds = prepaint.bounds;
+            let stage_buttons = paint_stage_gutter(
+                prepaint.left_stage_gutter.as_ref(),
+                visible_ix,
+                theme,
+                left_bg,
+                ui_scale_percent,
+                &prepaint.row_hitbox,
+                Some(prepaint.left_col),
+                &view,
+                window,
+                cx,
+            )
+            .into_iter()
+            .chain(paint_stage_gutter(
+                prepaint.right_stage_gutter.as_ref(),
+                visible_ix,
+                theme,
+                right_bg,
+                ui_scale_percent,
+                &prepaint.row_hitbox,
+                Some(prepaint.right_col),
+                &view,
+                window,
+                cx,
+            ))
+            .collect();
+
             let left_text_bounds = prepaint.left_text_bounds;
             let right_text_bounds = prepaint.right_text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds =
-                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_left_text_bounds = left_text_bounds.intersect(&clip_bounds);
             let visible_right_text_bounds = right_text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
@@ -2079,13 +2466,14 @@ pub(super) fn split_diff_line_row_canvas(
                 &view,
                 visible_ix,
                 DiffRowMouseHandlers {
-                    row_bounds: visible_row_bounds,
+                    row_hitbox: prepaint.row_hitbox.clone(),
                     regions: DiffRowTextRegions::split(
                         visible_left_text_bounds,
                         visible_right_text_bounds,
                     ),
                     right_click: DiffRowRightClickBehavior::OpenContextMenu,
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
+                    stage: stage_buttons,
                 },
             );
 
@@ -2128,6 +2516,8 @@ pub(super) fn patch_split_column_row_canvas(
     annotation_width: Pixels,
     blame: Option<RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
+    stage: Option<StageGutterSpec>,
+    stage_hover: Option<DiffStageHover>,
 ) -> AnyElement {
     let region = match column {
         super::diff::PatchSplitColumn::Left => DiffTextRegion::SplitLeft,
@@ -2156,6 +2546,7 @@ pub(super) fn patch_split_column_row_canvas(
     );
     let row_hover = annot_hover.and_then(|(ix, area)| (ix == visible_ix).then_some(area));
     let revision = mix_blame_revision(revision, annotation_width, row_hover, blame.as_ref());
+    let revision = mix_stage_gutter_revision(revision, &[stage], stage_hover, visible_ix);
     let canvas_id: gpui::ElementId = (
         match column {
             super::diff::PatchSplitColumn::Left => "diff_row_canvas_file_split_left",
@@ -2177,16 +2568,27 @@ pub(super) fn patch_split_column_row_canvas(
             };
             let content_bounds = inset_left(bounds, annotation_width);
             let text_bounds = single_column_text_bounds(content_bounds, gutter_total, pad);
+            // Everything but the annotation column, which owns its own clicks.
+            let row_hitbox = window.insert_hitbox(content_bounds, HitboxBehavior::Normal);
             let text_hitbox = window.insert_hitbox(text_bounds, HitboxBehavior::Normal);
             let annot_hitboxes =
                 build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent);
+            let stage_gutter = build_stage_gutter(
+                window,
+                stage,
+                content_bounds.left(),
+                bounds,
+                ui_scale_percent,
+            );
             SingleColumnRowPrepaintState {
                 bounds,
                 pad,
                 annot_w: annotation_width,
                 text_bounds,
+                row_hitbox,
                 text_hitbox,
                 annot_hitboxes,
+                stage_gutter,
             }
         },
         move |bounds, prepaint, window, cx| {
@@ -2263,21 +2665,34 @@ pub(super) fn patch_split_column_row_canvas(
                 );
             });
 
-            let row_bounds = prepaint.bounds;
+            let stage_buttons = paint_stage_gutter(
+                prepaint.stage_gutter.as_ref(),
+                visible_ix,
+                theme,
+                bg,
+                ui_scale_percent,
+                &prepaint.row_hitbox,
+                None,
+                &view,
+                window,
+                cx,
+            )
+            .into_iter()
+            .collect();
+
             let text_bounds = prepaint.text_bounds;
             let clip_bounds = window.content_mask().bounds;
-            let visible_row_bounds =
-                inset_left(row_bounds, prepaint.annot_w).intersect(&clip_bounds);
             let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             install_diff_row_mouse_handlers(
                 window,
                 &view,
                 visible_ix,
                 DiffRowMouseHandlers {
-                    row_bounds: visible_row_bounds,
+                    row_hitbox: prepaint.row_hitbox.clone(),
                     regions: DiffRowTextRegions::single(region, visible_text_bounds),
                     right_click: DiffRowRightClickBehavior::OpenContextMenu,
                     mouse_up: DiffRowMouseUpBehavior::HandlePatchRowClick,
+                    stage: stage_buttons,
                 },
             );
 
@@ -2446,15 +2861,14 @@ pub(super) fn worktree_preview_row_canvas(
                 );
             });
 
-            let text_bounds = prepaint.text_bounds;
-            let clip_bounds = window.content_mask().bounds;
-            let visible_text_bounds = text_bounds.intersect(&clip_bounds);
             window.on_mouse_event({
                 let view = view.clone();
+                // The hitbox covers the same text area, but consulting it rather
+                // than the bounds keeps clicks on anything painted over the
+                // preview (a floating popover, a menu) from reaching this row.
+                let text_hitbox = prepaint.text_hitbox.clone();
                 move |event: &gpui::MouseDownEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble
-                        || !visible_text_bounds.contains(&event.position)
-                    {
+                    if phase != DispatchPhase::Bubble || !text_hitbox.is_hovered(window) {
                         return;
                     }
 
@@ -2530,8 +2944,10 @@ struct InlineRowPrepaintState {
     gutter_total: Pixels,
     annot_w: Pixels,
     text_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     text_hitbox: Hitbox,
     annot_hitboxes: Option<AnnotHitboxes>,
+    stage_gutter: Option<StageGutterPrepaint>,
 }
 
 #[derive(Clone, Debug)]
@@ -2544,9 +2960,12 @@ struct SplitRowPrepaintState {
     right_col: Bounds<Pixels>,
     left_text_bounds: Bounds<Pixels>,
     right_text_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     left_hitbox: Hitbox,
     right_hitbox: Hitbox,
     annot_hitboxes: Option<AnnotHitboxes>,
+    left_stage_gutter: Option<StageGutterPrepaint>,
+    right_stage_gutter: Option<StageGutterPrepaint>,
 }
 
 #[derive(Clone, Debug)]
@@ -2555,8 +2974,10 @@ struct SingleColumnRowPrepaintState {
     pad: Pixels,
     annot_w: Pixels,
     text_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     text_hitbox: Hitbox,
     annot_hitboxes: Option<AnnotHitboxes>,
+    stage_gutter: Option<StageGutterPrepaint>,
 }
 
 #[derive(Clone, Debug)]
@@ -2626,18 +3047,42 @@ enum DiffRowMouseUpBehavior {
 
 #[derive(Clone, Debug)]
 struct DiffRowMouseHandlers {
-    row_bounds: Bounds<Pixels>,
+    row_hitbox: Hitbox,
     regions: DiffRowTextRegions,
     right_click: DiffRowRightClickBehavior,
     mouse_up: DiffRowMouseUpBehavior,
+    /// Stage/unstage buttons painted in this row's gutter(s): one per column, so
+    /// at most two in split views and at most one anywhere else.
+    stage: Vec<StageGutterMouse>,
 }
 
+/// Click routing for one stage/unstage button.
+#[derive(Clone, Debug)]
+struct StageGutterMouse {
+    hitbox: Hitbox,
+    kind: DiffLineKind,
+}
+
+impl StageGutterMouse {
+    fn hovered(buttons: &[Self], window: &Window) -> Option<DiffLineKind> {
+        buttons
+            .iter()
+            .find(|button| button.hitbox.is_hovered(window))
+            .map(|button| button.kind)
+    }
+}
+
+/// Row mouse handlers are window-level listeners: they see every event, whatever
+/// is painted over the diff. Asking the row's hitbox (rather than its bounds)
+/// whether it is hovered defers to the hit test, so a click on a panel floating
+/// above the diff — the collapsed sidebar's section popover, say — stops there
+/// instead of also landing on the row beneath it.
 fn should_handle_row_mouse_event(
     phase: DispatchPhase,
-    row_bounds: &Bounds<Pixels>,
-    position: gpui::Point<Pixels>,
+    row_hitbox: &Hitbox,
+    window: &Window,
 ) -> bool {
-    phase == DispatchPhase::Bubble && row_bounds.contains(&position)
+    phase == DispatchPhase::Bubble && row_hitbox.is_hovered(window)
 }
 
 fn install_diff_row_mouse_handlers(
@@ -2647,17 +3092,19 @@ fn install_diff_row_mouse_handlers(
     handlers: DiffRowMouseHandlers,
 ) {
     let DiffRowMouseHandlers {
-        row_bounds,
+        row_hitbox,
         regions,
         right_click,
         mouse_up,
+        stage,
     } = handlers;
-    let row_bounds_for_down = row_bounds;
+    let row_hitbox_for_down = row_hitbox.clone();
     let regions = regions.clone();
+    let stage_for_down = stage.clone();
     window.on_mouse_event({
         let view = view.clone();
         move |event: &gpui::MouseDownEvent, phase, window, cx| {
-            if !should_handle_row_mouse_event(phase, &row_bounds_for_down, event.position) {
+            if !should_handle_row_mouse_event(phase, &row_hitbox_for_down, window) {
                 return;
             }
 
@@ -2666,6 +3113,28 @@ fn install_diff_row_mouse_handlers(
             if event.button == gpui::MouseButton::Left {
                 let focus = view.read(cx).diff_panel_focus_handle.clone();
                 window.focus(&focus, cx);
+                // The gutter button owns the whole press: staging happens here,
+                // and neither text selection nor row selection may see it.
+                // Claiming the press is what stands the release handlers down —
+                // staging reloads the diff, so the release lands on a repainted
+                // row whose fresh handlers would otherwise read it as an
+                // ordinary click. The claim outlives the release and is cleared
+                // by the next press, so it cannot swallow a later click.
+                // A repeat click of a double-click stages nothing: the first one
+                // is still in flight, and window-activating clicks
+                // (`first_mouse`) must not act at all.
+                if let Some(kind) = StageGutterMouse::hovered(&stage_for_down, window) {
+                    crate::press_gesture::claim_press(cx);
+                    cx.stop_propagation();
+                    if event.click_count > 1 || event.first_mouse {
+                        return;
+                    }
+                    view.update(cx, |this, cx| {
+                        this.stage_or_unstage_diff_line(visible_ix, kind, cx);
+                        cx.notify();
+                    });
+                    return;
+                }
                 if let Some(region) = region {
                     let click_count = event.click_count;
                     let position = event.position;
@@ -2705,13 +3174,24 @@ fn install_diff_row_mouse_handlers(
         return;
     }
 
-    let row_bounds_for_up = row_bounds;
     window.on_mouse_event({
         let view = view.clone();
-        move |event: &gpui::MouseUpEvent, phase, _window, cx| {
+        move |event: &gpui::MouseUpEvent, phase, window, cx| {
             if event.button != gpui::MouseButton::Left
-                || !should_handle_row_mouse_event(phase, &row_bounds_for_up, event.position)
+                || !should_handle_row_mouse_event(phase, &row_hitbox, window)
             {
+                return;
+            }
+
+            // A canvas cannot lean on `on_click` to pair press and release, so
+            // it asks who owns the press instead.
+            if crate::press_gesture::is_press_claimed(cx) {
+                return;
+            }
+
+            // A release over a gutter button belongs to that button (it already
+            // staged on press): it must not also move the row selection.
+            if StageGutterMouse::hovered(&stage, window).is_some() {
                 return;
             }
 
@@ -2763,8 +3243,22 @@ fn line_metrics_annot_when(window: &Window) -> LineMetrics {
     line_metrics_scaled(window, 0.85)
 }
 
-pub(in crate::view) fn diff_text_wrap_char_width(window: &mut Window) -> Pixels {
-    let style = diff_text_style(window);
+/// Width of one wrapped diff-text column, measured in `editor_font_family`.
+///
+/// The family must be passed in rather than taken from the ambient text style:
+/// wrap columns are computed while the diff pane builds its element tree, which
+/// is before the rows container pushes `.font_family(editor_font)` onto the
+/// window text style stack. `window.text_style()` still resolves to the
+/// proportional UI font at that point, and measuring the `W` sample there
+/// overestimates the column width by ~1.5x (IBM Plex Sans `W` is 0.891em vs
+/// Lilex 0.600em), so every line wrapped at about two thirds of the width it
+/// actually had.
+pub(in crate::view) fn diff_text_wrap_char_width(
+    window: &mut Window,
+    editor_font_family: impl Into<gpui::SharedString>,
+) -> Pixels {
+    let mut style = diff_text_style(window);
+    style.font_family = editor_font_family.into();
     let font_size = style.font_size.to_pixels(window.rem_size()) * DIFF_FONT_SCALE;
     let run = style.to_run(DIFF_TEXT_WRAP_WIDTH_SAMPLE.len());
     let layout = window.text_system().shape_line(
@@ -3401,29 +3895,6 @@ mod tests {
             painted.size.height,
             bounds.size.height + px(DIFF_ROW_BACKGROUND_OVERDRAW_PX)
         );
-    }
-
-    #[test]
-    fn should_handle_row_mouse_event_requires_bubble_phase_and_in_bounds() {
-        let row_bounds = test_bounds(10.0, 20.0, 50.0, 10.0);
-        let inside = point(px(20.0), px(25.0));
-        let outside = point(px(200.0), px(25.0));
-
-        assert!(should_handle_row_mouse_event(
-            DispatchPhase::Bubble,
-            &row_bounds,
-            inside,
-        ));
-        assert!(!should_handle_row_mouse_event(
-            DispatchPhase::Capture,
-            &row_bounds,
-            inside,
-        ));
-        assert!(!should_handle_row_mouse_event(
-            DispatchPhase::Bubble,
-            &row_bounds,
-            outside,
-        ));
     }
 
     #[test]

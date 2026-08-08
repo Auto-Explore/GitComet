@@ -5,8 +5,12 @@ fn file_diff_ready_shows_processing(
     has_file: bool,
     cache_active: bool,
     cache_inflight: bool,
+    has_rendered_rows: bool,
 ) -> bool {
-    has_file && (!cache_active || cache_inflight)
+    // Rows already built for this file stay on screen while a refresh rebuilds
+    // them, so a reload does not blink through a placeholder. The placeholder is
+    // only for having nothing to show.
+    has_file && (!cache_active || cache_inflight) && !has_rendered_rows
 }
 
 fn image_diff_ready_shows_processing(has_file: bool, cache_active: bool) -> bool {
@@ -56,16 +60,17 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let rendered_preview_kind =
             crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
-        let wants_rendered_file_content = self.diff_content_mode == DiffContentMode::Full;
         let has_image = self
             .rendered_file_image_diff_loadable()
             .is_some_and(|file| !matches!(file, Loadable::NotLoaded));
-        let wants_image = wants_rendered_file_content
-            && has_image
+        // An image has no collapsed form — the rendered picture is the whole
+        // file — so the image view stays available in either diff mode. Only
+        // the SVG Image/Code toggle can send an image target down the text path.
+        let wants_image = has_image
             && (!matches!(rendered_preview_kind, Some(RenderedPreviewKind::Svg))
                 || self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
                     == RenderedPreviewMode::Rendered);
-        let wants_markdown_preview = wants_rendered_file_content
+        let wants_markdown_preview = self.diff_content_mode == DiffContentMode::Full
             && rendered_preview_kind == Some(RenderedPreviewKind::Markdown)
             && self
                 .rendered_preview_modes
@@ -274,14 +279,6 @@ impl MainPaneView {
                 },
             };
 
-            if !wants_markdown_preview
-                && rendered_preview_kind == Some(RenderedPreviewKind::Svg)
-                && matches!(diff_file_state, DiffFileState::NotLoaded)
-            {
-                return components::empty_state(theme, "Diff", "SVG code view is not available.")
-                    .into_any_element();
-            }
-
             if !wants_markdown_preview {
                 self.ensure_file_diff_cache(cx);
             }
@@ -347,7 +344,7 @@ impl MainPaneView {
                     }
                 }
                 DiffFileState::Ready { has_file } => {
-                    let text_cache_active = match self.diff_content_mode {
+                    let text_cache_active = match self.effective_diff_content_mode() {
                         DiffContentMode::Full => self.is_file_diff_view_active(),
                         DiffContentMode::Collapsed => self.is_collapsed_diff_projection_active(),
                     };
@@ -375,6 +372,7 @@ impl MainPaneView {
                         has_file,
                         text_cache_active,
                         self.file_diff_cache_inflight.is_some(),
+                        self.file_diff_cache_content_signature.is_some(),
                     ) {
                         components::empty_state(theme, "Diff", "Processing file...")
                             .into_any_element()
@@ -596,6 +594,7 @@ impl MainPaneView {
                                                 cx.listener(
                                                     move |this, e: &MouseDownEvent, _w, cx| {
                                                         cx.stop_propagation();
+                                                        crate::press_gesture::claim_press(cx);
                                                         this.diff_split_resize =
                                                             Some(DiffSplitResizeState {
                                                                 handle:
@@ -688,6 +687,8 @@ impl MainPaneView {
 
                                     let columns_header = div()
                                         .id("diff_split_columns_header")
+                                        .debug_selector(|| "diff_split_columns_header".to_string())
+                                        .w_full()
                                         .h(components::control_height(ui_scale_percent))
                                         .flex()
                                         .items_center()
@@ -725,14 +726,15 @@ impl MainPaneView {
                                         .flex_col()
                                         .bg(theme.colors.window_bg)
                                         .font_family(editor_font_family.clone())
+                                        .child(columns_header)
                                         .child(
                                             div()
+                                                .relative()
                                                 .pr(shared_scrollbar_gutter)
                                                 .flex()
                                                 .flex_col()
-                                                .h_full()
+                                                .flex_1()
                                                 .min_h(px(0.0))
-                                                .child(columns_header)
                                                 .child(
                                                     div()
                                                         .flex_1()
@@ -833,19 +835,19 @@ impl MainPaneView {
                                                                     )
                                                                 }),
                                                         ),
-                                                ),
-                                        )
-                                        .when(vertical_sync_enabled, |d| {
-                                            d.child(
-                                                components::Scrollbar::new(
-                                                    "diff_scrollbar",
-                                                    self.diff_scroll.clone(),
                                                 )
-                                                .markers(markers)
-                                                .always_visible()
-                                                .render(theme),
-                                            )
-                                        })
+                                                .when(vertical_sync_enabled, |d| {
+                                                    d.child(
+                                                        components::Scrollbar::new(
+                                                            "diff_scrollbar",
+                                                            self.diff_scroll.clone(),
+                                                        )
+                                                        .markers(markers)
+                                                        .always_visible()
+                                                        .render(theme),
+                                                    )
+                                                }),
+                                        )
                                         .into_any_element()
                                 }
                             }
@@ -1156,10 +1158,14 @@ mod tests {
 
     #[test]
     fn file_diff_ready_state_prefers_processing_when_cache_is_stale() {
-        assert!(file_diff_ready_shows_processing(true, false, false));
-        assert!(file_diff_ready_shows_processing(true, true, true));
-        assert!(!file_diff_ready_shows_processing(true, true, false));
-        assert!(!file_diff_ready_shows_processing(false, false, true));
+        assert!(file_diff_ready_shows_processing(true, false, false, false));
+        assert!(file_diff_ready_shows_processing(true, true, true, false));
+        assert!(!file_diff_ready_shows_processing(true, true, false, false));
+        assert!(!file_diff_ready_shows_processing(false, false, true, false));
+        // Rows from the previous build are shown instead of a placeholder while
+        // the same file is rebuilt.
+        assert!(!file_diff_ready_shows_processing(true, true, true, true));
+        assert!(!file_diff_ready_shows_processing(true, false, false, true));
     }
 
     #[test]

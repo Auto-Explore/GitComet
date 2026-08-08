@@ -155,7 +155,7 @@ pub(super) fn model(
             .map(|text| text.trim().is_empty())
             .unwrap_or(copy_target.is_none()),
         action: Box::new(match copy_text {
-            Some(text) => ContextMenuAction::CopyText { text: text.clone() },
+            Some(text) => ContextMenuAction::CopyDiffSelection { text: text.clone() },
             None => {
                 let (visible_ix, region) = copy_target.unwrap_or((0, DiffTextRegion::Inline));
                 ContextMenuAction::CopyDiffText { visible_ix, region }

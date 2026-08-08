@@ -10,6 +10,17 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str) {
+    let center = cx
+        .debug_bounds(selector)
+        .unwrap_or_else(|| panic!("expected {selector} in debug bounds"))
+        .center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
+    cx.run_until_parked();
+}
+
 #[derive(Clone)]
 pub(super) struct TrackingRepo {
     spec: RepoSpec,
@@ -366,6 +377,305 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
     assert!(
         repo.actions().is_empty(),
         "expected Escape to cancel without creating a branch"
+    );
+}
+
+#[gpui::test]
+fn create_branch_source_picker_selects_items_on_mouse_down(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("create-branch-source-click");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                        source_selectable: true,
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                let search = host
+                    .branch_picker_search_input
+                    .as_ref()
+                    .expect("branch picker search input");
+                // The prompt prefills the source ("HEAD"), which the picker
+                // treats as a filter query; clear it so the whole ref list is
+                // listed, like a user who types over the prefilled source.
+                search.update(cx, |input, cx| input.set_text("", cx));
+                let focus = search.read_with(cx, |input, _| input.focus_handle());
+                window.focus(&focus, cx);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "picker_prompt_item_1");
+
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(host.create_branch_source_target, "main");
+        assert_eq!(
+            host.branch_picker_search_input
+                .as_ref()
+                .expect("branch picker search input")
+                .read(app)
+                .text(),
+            "main"
+        );
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_input.read(app).focus_handle(),
+            "expected clicking a source branch to focus the new branch name",
+        );
+    });
+}
+
+#[gpui::test]
+fn create_branch_source_picker_enter_selects_and_focuses_name(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("create-branch-source-enter");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                        source_selectable: true,
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                let search = host
+                    .branch_picker_search_input
+                    .as_ref()
+                    .expect("branch picker search input");
+                search.update(cx, |input, cx| input.set_text("", cx));
+                let focus = search.read_with(cx, |input, _| input.focus_handle());
+                window.focus(&focus, cx);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(host.create_branch_source_target, "main");
+        assert_eq!(
+            host.branch_picker_search_input
+                .as_ref()
+                .expect("branch picker search input")
+                .read(app)
+                .text(),
+            "main"
+        );
+        assert_window_focus(
+            window,
+            app,
+            host.create_branch_input.read(app).focus_handle(),
+            "expected Enter on a source branch to focus the new branch name",
+        );
+    });
+}
+
+#[gpui::test]
+fn worktree_ref_picker_click_selects_and_focuses_add(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("worktree-ref-click");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::Repo {
+                        repo_id,
+                        kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.worktree_path_input
+                    .update(cx, |input, cx| input.set_text("/tmp/worktree", cx));
+                let search = host
+                    .branch_picker_search_input
+                    .as_ref()
+                    .expect("branch picker search input");
+                let focus = search.read_with(cx, |input, _| input.focus_handle());
+                window.focus(&focus, cx);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "picker_prompt_item_1");
+
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert_eq!(host.worktree_ref_source_target, "main");
+        assert_eq!(
+            host.branch_picker_search_input
+                .as_ref()
+                .expect("branch picker search input")
+                .read(app)
+                .text(),
+            "main"
+        );
+        assert_window_focus(
+            window,
+            app,
+            host.worktree_focus.submit.clone(),
+            "expected clicking a worktree ref to focus Add",
+        );
+    });
+}
+
+#[gpui::test]
+fn worktree_ref_picker_enter_selects_and_focuses_add(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("worktree-ref-enter");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::Repo {
+                        repo_id,
+                        kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.worktree_path_input
+                    .update(cx, |input, cx| input.set_text("/tmp/worktree", cx));
+                let search = host
+                    .branch_picker_search_input
+                    .as_ref()
+                    .expect("branch picker search input");
+                search.update(cx, |input, cx| input.set_text("", cx));
+                let focus = search.read_with(cx, |input, _| input.focus_handle());
+                window.focus(&focus, cx);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("down down enter");
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            matches!(
+                host.popover,
+                Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+                    ..
+                })
+            ),
+            "expected selecting a worktree ref with Enter to keep the dialog open"
+        );
+        assert_eq!(host.worktree_ref_source_target, "main");
+        assert_window_focus(
+            window,
+            app,
+            host.worktree_focus.submit.clone(),
+            "expected Enter on a worktree ref to focus Add",
+        );
+    });
+}
+
+#[gpui::test]
+fn rename_branch_prompt_cancel_button_and_escape_close(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+
+    let open_prompt =
+        |window: &mut gpui::Window, app: &mut gpui::App, view: &Entity<GitCometView>| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.open_popover_at(
+                        PopoverKind::RenameBranchPrompt {
+                            repo_id: RepoId(1),
+                            name: "feature/current".to_string(),
+                            is_current_branch: true,
+                        },
+                        gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        };
+
+    cx.update(|window, app| open_prompt(window, app, &view));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    assert!(
+        !cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()),
+        "expected Escape to close rename-branch prompt"
+    );
+
+    cx.update(|window, app| open_prompt(window, app, &view));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    click_debug_selector(cx, "rename_branch_cancel_hint");
+    assert!(
+        !cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()),
+        "expected clicking Cancel to close rename-branch prompt"
     );
 }
 

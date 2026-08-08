@@ -8,7 +8,7 @@
 )]
 
 mod cli;
-#[cfg(feature = "ui")]
+#[cfg(feature = "ui-gpui-runtime")]
 mod crashlog;
 mod difftool_mode;
 mod extract_fixtures_mode;
@@ -152,6 +152,9 @@ fn should_launch_focused_diff_gui(
 }
 
 fn main() {
+    #[cfg(feature = "ui-gpui-runtime")]
+    crashlog::install();
+
     let mode = match cli::parse_app_mode() {
         Ok(mode) => mode,
         Err(msg) => {
@@ -166,9 +169,6 @@ fn main() {
     if let Some(code) = maybe_relaunch_with_linux_x11_fallback(&mode) {
         std::process::exit(code);
     }
-
-    #[cfg(feature = "ui")]
-    crashlog::install();
 
     match mode {
         AppMode::Difftool(config) => {
@@ -210,7 +210,7 @@ fn main() {
             run_and_exit(result);
         }
         AppMode::Browser { path } => {
-            #[cfg(feature = "ui")]
+            #[cfg(feature = "ui-gpui-runtime")]
             {
                 #[cfg(all(target_os = "macos", feature = "ui-gpui-runtime"))]
                 if maybe_relaunch_browser_from_macos_app_bundle() {
@@ -218,50 +218,66 @@ fn main() {
                 }
 
                 let startup_crash_report = crashlog::take_startup_report();
+                if let Some(report) = startup_crash_report.as_ref() {
+                    // Keep the recovery path visible even if WSLg cannot create
+                    // a window for the in-app notification.
+                    print_startup_crash_report_hint(report);
+                }
+                if let Err(err) = crashlog::begin_session() {
+                    eprintln!(
+                        "Failed to create GitComet crash-recovery marker before UI launch: {err}"
+                    );
+                }
                 let backend = build_backend();
-
-                if cfg!(feature = "ui-gpui-runtime") {
-                    #[cfg(feature = "ui-gpui-runtime")]
-                    {
-                        let startup_report = startup_crash_report.clone().map(|report| {
-                            gitcomet_ui_gpui::StartupCrashReport {
-                                issue_url: report.issue_url,
-                                summary: report.summary,
-                                crash_log_path: report.crash_log_path,
+                let startup_report =
+                    startup_crash_report.map(|report| gitcomet_ui_gpui::StartupCrashReport {
+                        issue_url: report.issue_url,
+                        summary: report.summary,
+                        crash_log_path: report.crash_log_path,
+                    });
+                let run_result =
+                    gitcomet_ui_gpui::run_with_startup_crash_report_and_shutdown_callback(
+                        backend,
+                        path.clone(),
+                        startup_report,
+                        Some(|| {
+                            if let Err(err) = crashlog::finish_session() {
+                                eprintln!(
+                                    "Failed to clear GitComet crash-recovery marker during graceful shutdown: {err}"
+                                );
                             }
-                        });
-                        if let Err(err) = gitcomet_ui_gpui::run_with_startup_crash_report(
-                            backend.clone(),
-                            path.clone(),
-                            startup_report,
+                        }),
+                    );
+                match run_result {
+                    Ok(
+                        gitcomet_ui_gpui::UiRunOutcome::CleanShutdown
+                        | gitcomet_ui_gpui::UiRunOutcome::UnexpectedEventLoopExit,
+                    ) => {
+                        if let Err(err) = crashlog::finish_session() {
+                            eprintln!(
+                                "Failed to clear GitComet crash-recovery marker after clean shutdown: {err}"
+                            );
+                        }
+                    }
+                    Err(err) => {
+                        if let Err(record_err) = crashlog::record_session_failure(
+                            "main GPUI window launch",
+                            &err.to_string(),
                         ) {
-                            eprintln!("Failed to launch GPUI browser UI: {err}");
-                            if let Some(report) = startup_crash_report.as_ref() {
-                                print_startup_crash_report_hint(report);
-                            }
-                            std::process::exit(exit_code::ERROR);
+                            eprintln!(
+                                "Failed to preserve GitComet UI launch failure data: {record_err}"
+                            );
                         }
+                        eprintln!("Failed to launch GPUI browser UI: {err}");
+                        std::process::exit(exit_code::ERROR);
                     }
-
-                    #[cfg(not(feature = "ui-gpui-runtime"))]
-                    {
-                        if let Some(report) = startup_crash_report.as_ref() {
-                            print_startup_crash_report_hint(report);
-                        }
-                        gitcomet_ui::run(backend);
-                    }
-                } else {
-                    if let Some(report) = startup_crash_report.as_ref() {
-                        print_startup_crash_report_hint(report);
-                    }
-                    gitcomet_ui::run(backend);
                 }
             }
 
-            #[cfg(not(feature = "ui"))]
+            #[cfg(not(feature = "ui-gpui-runtime"))]
             {
                 let _ = path;
-                eprintln!("GitComet UI is disabled. Build with `-p gitcomet --features ui`.");
+                eprintln!("GitComet UI is disabled. Build with `-p gitcomet --features ui-gpui`.");
                 std::process::exit(exit_code::ERROR);
             }
         }
@@ -536,7 +552,7 @@ fn ensure_macos_dev_app_bundle(
     Ok(app_exe)
 }
 
-#[cfg(feature = "ui")]
+#[cfg(feature = "ui-gpui-runtime")]
 fn print_startup_crash_report_hint(report: &crashlog::StartupCrashReport) {
     eprintln!("GitComet detected a crash from a previous run.");
     eprintln!(
@@ -546,7 +562,7 @@ fn print_startup_crash_report_hint(report: &crashlog::StartupCrashReport) {
     eprintln!("Crash log: {}", report.crash_log_path.display());
 }
 
-#[cfg(feature = "ui")]
+#[cfg(feature = "ui-gpui-runtime")]
 fn build_backend() -> std::sync::Arc<dyn gitcomet_core::services::GitBackend> {
     if cfg!(feature = "gix") {
         #[cfg(feature = "gix")]

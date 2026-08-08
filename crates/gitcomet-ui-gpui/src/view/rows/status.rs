@@ -274,12 +274,20 @@ fn submodule_status_lookup(repo: &RepoState) -> HashMap<&std::path::Path, Submod
 }
 
 impl DetailsPaneView {
-    fn clear_status_multi_selection(&mut self, repo_id: RepoId) {
+    /// Drop the row selection because an action has gone ahead with it. Kept
+    /// separate from reading it: an action that can still be called off — a
+    /// confirmation dialog the user cancels — must not cost the user a selection
+    /// they spent clicks building.
+    pub(in crate::view) fn clear_status_multi_selection(&mut self, repo_id: RepoId) {
         self.status_multi_selection.remove(&repo_id);
     }
 
-    fn take_status_selected_paths_for_action(
-        &mut self,
+    /// The paths an action on `clicked_path` covers, plus whether they came from
+    /// the row selection rather than from the clicked path alone. Reads only;
+    /// [`Self::clear_status_multi_selection`] is what consumes the selection, and
+    /// callers owe it that call once the action is settled.
+    pub(in crate::view) fn status_selected_paths_for_action(
+        &self,
         repo_id: RepoId,
         area: DiffArea,
         clicked_path: &std::path::PathBuf,
@@ -289,17 +297,7 @@ impl DetailsPaneView {
         if !use_selection {
             return (vec![clicked_path.clone()], false);
         }
-
-        let sel = self
-            .status_multi_selection
-            .remove(&repo_id)
-            .unwrap_or_default();
-        let paths = sel.take_selected_paths_for_area(area);
-        if paths.is_empty() {
-            (vec![clicked_path.clone()], false)
-        } else {
-            (paths, true)
-        }
+        (selection.to_vec(), true)
     }
 
     fn status_multi_selection_for_repo_mut(
@@ -547,8 +545,28 @@ fn status_row(
                 return;
             }
 
-            let (paths, _used_selection) =
-                this.take_status_selected_paths_for_action(repo_id, area, path_for_stage.as_ref());
+            // Staging is what marks a conflict resolved, so confirm first if any
+            // of these files still has conflict markers in the worktree. The
+            // selection is read but not consumed until past that point, so
+            // cancelling the dialog leaves it standing.
+            let (paths, used_selection) =
+                this.status_selected_paths_for_action(repo_id, area, path_for_stage.as_ref());
+
+            if area == DiffArea::Unstaged
+                && let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &this.state,
+                    repo_id,
+                    paths.clone(),
+                    used_selection,
+                )
+            {
+                this.open_popover_at(confirm, e.position(), window, cx);
+                cx.notify();
+                return;
+            }
+            if used_selection {
+                this.clear_status_multi_selection(repo_id);
+            }
 
             match area {
                 DiffArea::Unstaged => this.store.dispatch(Msg::StagePaths {
@@ -597,41 +615,15 @@ fn status_row(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                 cx.stop_propagation();
-                let clicked_path = (*path_for_menu).clone();
-                let clicked_in_multiselect = this
-                    .status_selected_paths_for_area(repo_id, area)
-                    .iter()
-                    .any(|p| p == &clicked_path);
-                if !clicked_in_multiselect {
-                    this.status_selection_apply_click(
-                        repo_id,
-                        section,
-                        clicked_path.clone(),
-                        Some(ix),
-                        gpui::Modifiers::default(),
-                        None,
-                    );
-                }
-                if is_conflicted && area == DiffArea::Unstaged {
-                    this.store.dispatch(Msg::SelectConflictDiff {
-                        repo_id,
-                        path: clicked_path.clone(),
-                    });
-                } else {
-                    this.store.dispatch(Msg::SelectDiff {
-                        repo_id,
-                        target: DiffTarget::WorkingTree {
-                            path: clicked_path.clone(),
-                            area,
-                        },
-                    });
-                }
+                // Right-click only opens the menu: it must not open the diff (that is
+                // left-click's job) and must not touch the left-click selection. The
+                // right-clicked row is marked separately via the context menu invoker.
                 this.activate_context_menu_invoker(context_menu_invoker_for_row.clone(), cx);
                 this.open_popover_at(
                     PopoverKind::StatusFileMenu {
                         repo_id,
                         area,
-                        path: clicked_path,
+                        path: (*path_for_menu).clone(),
                     },
                     e.position,
                     window,

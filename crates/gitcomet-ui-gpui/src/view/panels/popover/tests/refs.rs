@@ -1030,6 +1030,101 @@ fn local_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppCon
 }
 
 #[gpui::test]
+fn branch_menu_pin_entry_toggles_and_relabels(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(24);
+    let branch_name = "feature/pinned".to_string();
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_branch_menu_pin",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("main".to_string());
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    // Drive the popover host directly: activating its actions from inside a
+    // `GitCometView` update would double-lease the root view, which the real
+    // click path never does.
+    let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    let pin_entry = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let model = host
+                .update(app, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Local,
+                            name: branch_name.clone(),
+                        },
+                        cx,
+                    )
+                })
+                .expect("expected branch context menu model");
+
+            model
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    ContextMenuItem::Entry { label, action, .. }
+                        if matches!(**action, ContextMenuAction::ToggleBranchPin { .. }) =>
+                    {
+                        Some((label.to_string(), (**action).clone()))
+                    }
+                    _ => None,
+                })
+                .expect("expected a pin entry in the branch menu")
+        })
+    };
+
+    let (label, action) = pin_entry(cx);
+    assert_eq!(label, "Pin branch");
+    assert!(matches!(
+        action,
+        ContextMenuAction::ToggleBranchPin {
+            repo_id: rid,
+            section: BranchSection::Local,
+            ref name,
+        } if rid == repo_id && *name == branch_name
+    ));
+
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            host.context_menu_activate_action(action.clone(), window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    let (label, _) = pin_entry(cx);
+    assert_eq!(
+        label, "Unpin branch",
+        "expected the pin entry to flip once the branch is pinned"
+    );
+}
+
+#[gpui::test]
 fn remote_branch_menu_has_pull_merge_and_squash_actions(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =

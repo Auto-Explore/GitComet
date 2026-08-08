@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const SCROLLBAR_GUTTER_PX: f32 = 16.0;
+const SCROLLBAR_THUMB_THICKNESS_PX: f32 = 6.0;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ScrollbarMarkerKind {
@@ -463,7 +464,10 @@ impl Scrollbar {
                 };
 
                 if show {
-                    window.paint_quad(fill(prepaint.thumb_bounds, thumb_color));
+                    window.paint_quad(
+                        fill(prepaint.thumb_bounds, thumb_color)
+                            .corner_radii(px(SCROLLBAR_THUMB_THICKNESS_PX / 2.0)),
+                    );
                 }
 
                 if interaction.read(cx).drag_offset.is_some() {
@@ -496,6 +500,8 @@ impl Scrollbar {
                         if max_offset <= px(0.0) {
                             return;
                         }
+
+                        crate::press_gesture::claim_press(cx);
 
                         if thumb_hit_bounds.contains(&event.position) {
                             driver.drag_started(axis);
@@ -821,7 +827,7 @@ pub(crate) fn vertical_thumb_metrics(
     Some(ThumbMetrics {
         offset: top,
         length: thumb_h,
-        thickness: px(8.0),
+        thickness: px(SCROLLBAR_THUMB_THICKNESS_PX),
     })
 }
 
@@ -851,7 +857,7 @@ fn horizontal_thumb_metrics(
     Some(ThumbMetrics {
         offset: left,
         length: thumb_w,
-        thickness: px(8.0),
+        thickness: px(SCROLLBAR_THUMB_THICKNESS_PX),
     })
 }
 
@@ -880,7 +886,10 @@ mod tests {
     #[test]
     fn vertical_thumb_hit_bounds_cover_full_gutter_width() {
         let gutter_bounds = Bounds::new(point(px(100.0), px(20.0)), size(px(16.0), px(120.0)));
-        let thumb_bounds = Bounds::new(point(px(104.0), px(40.0)), size(px(8.0), px(24.0)));
+        let thumb_bounds = Bounds::new(
+            point(px(106.0), px(40.0)),
+            size(px(SCROLLBAR_THUMB_THICKNESS_PX), px(24.0)),
+        );
 
         assert_eq!(
             expanded_thumb_hit_bounds(gutter_bounds, thumb_bounds, ScrollbarAxis::Vertical),

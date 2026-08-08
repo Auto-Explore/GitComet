@@ -356,6 +356,7 @@ impl HistoryView {
                     MouseButton::Left,
                     cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                         cx.stop_propagation();
+                        crate::press_gesture::claim_press(cx);
                         if handle == HistoryColResizeHandle::Graph {
                             this.history_col_graph_auto = false;
                         }
@@ -461,9 +462,6 @@ impl HistoryView {
                                     .h(scaled_px(18.0))
                                     .line_height(scaled_px(18.0))
                                     .rounded(px(theme.radii.row))
-                                    .bg(theme.colors.surface_bg_elevated)
-                                    .border_1()
-                                    .border_color(theme.colors.border_variant)
                                     .when(scope_active, |d| d.bg(theme.colors.active))
                                     .hover(move |s| {
                                         if scope_active {

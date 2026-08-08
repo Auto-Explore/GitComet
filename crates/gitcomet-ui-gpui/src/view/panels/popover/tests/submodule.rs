@@ -1,6 +1,62 @@
 use super::*;
 
 #[gpui::test]
+fn submodule_add_advanced_toggle_keeps_its_geometry_when_focused(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::submodule(RepoId(1), SubmodulePopoverKind::AddPrompt),
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+        let _ = window.draw(app);
+    });
+
+    let unfocused = cx
+        .debug_bounds("submodule_add_advanced_toggle")
+        .expect("expected the Advanced toggle before focus");
+    let unfocused_label = cx
+        .debug_bounds("submodule_add_advanced_label")
+        .expect("expected the Advanced label before focus");
+
+    cx.update(|window, app| {
+        let focus_handle = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .submodule_advanced_focus_handle
+            .clone();
+        window.focus(&focus_handle, app);
+        let _ = window.draw(app);
+    });
+
+    let focused = cx
+        .debug_bounds("submodule_add_advanced_toggle")
+        .expect("expected the Advanced toggle after focus");
+    let focused_label = cx
+        .debug_bounds("submodule_add_advanced_label")
+        .expect("expected the Advanced label after focus");
+    assert_eq!(
+        focused.size, unfocused.size,
+        "the reserved focus border must keep the Advanced row geometry stable",
+    );
+    assert_eq!(
+        focused_label, unfocused_label,
+        "the reserved focus border must keep the Advanced label in place",
+    );
+}
+
+#[gpui::test]
 fn submodule_add_popover_tabs_through_advanced_fields_and_wraps(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let store_for_view = store.clone();

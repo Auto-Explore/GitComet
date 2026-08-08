@@ -30,9 +30,11 @@ use rustc_hash::{FxHashMap, FxHashSet};
 use schemars::JsonSchema;
 #[cfg(target_os = "macos")]
 use serde::Deserialize;
+use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
+use std::time::{Duration, Instant};
 
 const WINDOW_MIN_WIDTH_PX: f32 = 820.0;
 const WINDOW_MIN_HEIGHT_PX: f32 = 560.0;
@@ -50,7 +52,7 @@ actions!(
         OpenSettings,
         OpenInCodeEditor,
         OpenRepository,
-        OpenRecentPicker,
+        SwitchRepository,
         ApplyPatch,
         Close,
         CloseWindow,
@@ -86,12 +88,37 @@ pub struct FocusedMergetoolConfig {
     pub label_base: String,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum UiRunOutcome {
+    CleanShutdown,
+    /// Retained for API compatibility. A successfully returned event loop is
+    /// now classified as a clean shutdown.
+    UnexpectedEventLoopExit,
+}
+
 #[derive(Clone, Debug)]
 struct WindowLaunchConfig {
     title: String,
     app_id: String,
     view_config: GitCometViewConfig,
 }
+
+#[derive(Clone)]
+struct CleanShutdownTracker {
+    requested: Arc<AtomicBool>,
+}
+
+impl Default for CleanShutdownTracker {
+    fn default() -> Self {
+        Self {
+            requested: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+impl gpui::Global for CleanShutdownTracker {}
+
+type ShutdownCallback = Arc<dyn Fn() + Send + Sync>;
 
 pub(crate) fn main_window_min_size_for_percent(percent: u32) -> Size<Pixels> {
     ui_scale::design_size_from_percent(WINDOW_MIN_WIDTH_PX, WINDOW_MIN_HEIGHT_PX, percent)
@@ -117,19 +144,46 @@ pub(crate) fn ensure_window_respects_min_size(window: &mut Window, min_size: Siz
 }
 
 pub fn run(backend: Arc<dyn GitBackend>) -> Result<(), UiLaunchError> {
-    run_with_startup_crash_report(backend, None, None)
+    run_with_startup_crash_report(backend, None, None).map(|_| ())
 }
 
 pub fn run_with_startup_crash_report(
     backend: Arc<dyn GitBackend>,
     initial_path: Option<PathBuf>,
     startup_crash_report: Option<StartupCrashReport>,
-) -> Result<(), UiLaunchError> {
+) -> Result<UiRunOutcome, UiLaunchError> {
+    run_with_startup_crash_report_and_shutdown_callback(
+        backend,
+        initial_path,
+        startup_crash_report,
+        None::<fn()>,
+    )
+}
+
+/// Runs the main window and invokes `on_shutdown` from GPUI's graceful-shutdown
+/// callback. On Windows GPUI terminates with `ExitProcess`, so callers cannot
+/// rely on [`run_with_startup_crash_report`] returning to perform cleanup.
+pub fn run_with_startup_crash_report_and_shutdown_callback(
+    backend: Arc<dyn GitBackend>,
+    initial_path: Option<PathBuf>,
+    startup_crash_report: Option<StartupCrashReport>,
+    on_shutdown: Option<impl Fn() + Send + Sync + 'static>,
+) -> Result<UiRunOutcome, UiLaunchError> {
     let launch = normal_launch_config(initial_path, startup_crash_report);
     ensure_graphics_device_available("main GPUI window launch")?;
+    let on_shutdown = on_shutdown.map(|callback| Arc::new(callback) as ShutdownCallback);
     run_with_panic_guard("main GPUI window launch", move || {
-        run_windowed_app(backend, launch)
-    })
+        run_windowed_app(
+            backend,
+            launch,
+            CleanShutdownTracker::default(),
+            on_shutdown,
+        )
+    })?;
+    // A native abort or forced process termination cannot return from the GPUI
+    // event loop. Reaching this point is therefore a clean shutdown even when a
+    // platform-specific close path did not set CleanShutdownTracker.
+    Ok(UiRunOutcome::CleanShutdown)
 }
 
 /// Launch the unified focused mergetool window using the shared `GitCometView`.
@@ -142,7 +196,7 @@ pub fn run_focused_mergetool(backend: Arc<dyn GitBackend>, config: FocusedMerget
     let exit_code = Arc::new(AtomicI32::new(FOCUSED_MERGETOOL_EXIT_CANCELED));
     let launch = focused_mergetool_launch_config(&config, Some(exit_code.clone()));
     if let Err(err) = run_with_panic_guard("focused mergetool GPUI launch", move || {
-        run_windowed_app(backend, launch)
+        run_windowed_app(backend, launch, CleanShutdownTracker::default(), None)
     }) {
         eprintln!("Failed to launch focused mergetool window: {err}");
         return FOCUSED_MERGETOOL_EXIT_ERROR;
@@ -280,8 +334,38 @@ fn window_hwnd(window: &Window) -> Option<isize> {
     Some(handle.hwnd.get())
 }
 
+thread_local! {
+    /// When we last asked the compositor/window manager for an interactive move
+    /// or resize grab.
+    static LAST_WINDOW_GRAB_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Record that we just requested an interactive move/resize grab.
+///
+/// The grab is executed by the compositor/WM, which takes the input focus for
+/// the duration of the drag. GPUI surfaces that as a plain window deactivate →
+/// activate pair — on Wayland via `wl_keyboard` Leave/Enter, on X11 via
+/// FocusOut/FocusIn (which are not filtered on `mode`, so NotifyGrab and
+/// NotifyUngrab arrive too) — indistinguishable from the user alt-tabbing away
+/// and back. This marker lets the activation observer ignore its own echo
+/// instead of treating it as a return to the app and refreshing the repo.
+pub(crate) fn note_window_grab_started() {
+    LAST_WINDOW_GRAB_AT.with(|cell| cell.set(Some(Instant::now())));
+}
+
+/// Whether a grab was requested no more than `max_age` ago. Always consumes the
+/// marker, so a grab the compositor silently dropped cannot arm suppression for
+/// an unrelated activation minutes later.
+pub(crate) fn take_window_grab_started_within(now: Instant, max_age: Duration) -> bool {
+    LAST_WINDOW_GRAB_AT.with(|cell| match cell.take() {
+        Some(at) => now.saturating_duration_since(at) <= max_age,
+        None => false,
+    })
+}
+
 #[cfg(target_os = "windows")]
 pub(crate) fn begin_window_move(window: &Window) {
+    note_window_grab_started();
     if let Some(hwnd) = window_hwnd(window)
         && gitcomet_win32_window_utils::begin_window_move(hwnd)
     {
@@ -293,7 +377,13 @@ pub(crate) fn begin_window_move(window: &Window) {
 
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn begin_window_move(window: &Window) {
+    note_window_grab_started();
     window.start_window_move();
+}
+
+pub(crate) fn begin_window_resize(window: &Window, edge: gpui::ResizeEdge) {
+    note_window_grab_started();
+    window.start_window_resize(edge);
 }
 
 #[cfg(target_os = "windows")]
@@ -327,7 +417,12 @@ pub(crate) fn window_system_menu_request(
     Some(WindowSystemMenuRequest { hwnd, x, y })
 }
 
-fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
+fn run_windowed_app(
+    backend: Arc<dyn GitBackend>,
+    launch: WindowLaunchConfig,
+    clean_shutdown_tracker: CleanShutdownTracker,
+    on_shutdown: Option<ShutdownCallback>,
+) {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
     let application = application().with_assets(GitCometAssets);
 
@@ -355,6 +450,14 @@ fn run_windowed_app(backend: Arc<dyn GitBackend>, launch: WindowLaunchConfig) {
     }
 
     application.run(move |cx: &mut App| {
+        cx.set_global(clean_shutdown_tracker);
+        if let Some(on_shutdown) = on_shutdown {
+            cx.on_app_quit(move |_cx| {
+                on_shutdown();
+                async {}
+            })
+            .detach();
+        }
         if let Err(err) = crate::bundled_fonts::register(cx) {
             eprintln!("Failed to register bundled fonts: {err:#}");
         }
@@ -397,6 +500,7 @@ fn open_gitcomet_window(
     backend: Arc<dyn GitBackend>,
     launch: &WindowLaunchConfig,
 ) -> gpui::WindowHandle<GitCometView> {
+    clear_clean_shutdown_request(cx);
     let ui_session = session::load();
     let ui_scale = ui_scale::current_or_initialize_from_session(&ui_session, cx);
     let min_size = main_window_min_size_for_percent(ui_scale.percent);
@@ -416,6 +520,7 @@ fn open_gitcomet_window(
     let app_id = launch.app_id.clone();
     let view_config = launch.view_config.clone();
     let ui_scale_percent = ui_scale.percent;
+    let intercept_native_close = view_config.view_mode == GitCometViewMode::Normal;
 
     cx.open_window(
         WindowOptions {
@@ -441,6 +546,12 @@ fn open_gitcomet_window(
         },
         move |window, cx| {
             ui_scale::apply_to_window(window, ui_scale_percent);
+            if intercept_native_close {
+                window.on_window_should_close(cx, |window, cx| {
+                    close_window_or_warn(window, cx);
+                    false
+                });
+            }
             let (store, events) = AppStore::new(Arc::clone(&backend));
             cx.new(|cx| {
                 GitCometView::new_with_config(store, events, view_config.clone(), window, cx)
@@ -540,13 +651,13 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     });
 
     let recent_picker_backend = Arc::clone(&backend);
-    cx.on_action(move |_: &OpenRecentPicker, cx| {
+    cx.on_action(move |_: &SwitchRepository, cx| {
         let backend = Arc::clone(&recent_picker_backend);
         cx.defer(move |cx| {
             if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
                 return;
             }
-            open_recent_repository_picker_in_existing_or_new_window(cx, backend);
+            open_repository_switcher_in_existing_or_new_window(cx, backend);
         });
     });
     cx.on_action(|_: &ToggleCommandPalette, cx| {
@@ -697,7 +808,8 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-n", NewWindow, None),
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-o", OpenRepository, None),
-        KeyBinding::new("secondary-shift-o", OpenRecentPicker, None),
+        KeyBinding::new("secondary-shift-o", SwitchRepository, None),
+        KeyBinding::new("secondary-shift-a", SwitchRepository, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
         KeyBinding::new("secondary-w", Close, None),
@@ -718,7 +830,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("f2", DiffPrevSearchMatchOrChange, None),
         KeyBinding::new("f3", DiffNextSearchMatchOrChange, None),
         #[cfg(target_os = "macos")]
-        KeyBinding::new("alt-cmd-o", OpenRecentPicker, None),
+        KeyBinding::new("alt-cmd-o", SwitchRepository, None),
         #[cfg(target_os = "macos")]
         KeyBinding::new("cmd-{", PreviousRepository, None),
         #[cfg(target_os = "macos")]
@@ -781,7 +893,7 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
         MenuItem::action("New Window", NewWindow),
         MenuItem::separator(),
         MenuItem::action("Open…", OpenRepository),
-        MenuItem::action("Open Recent…", OpenRecentPicker),
+        MenuItem::action("Switch Repository…", SwitchRepository),
     ];
 
     let recent_repo_items = recent_repo_menu_items();
@@ -909,6 +1021,9 @@ fn recent_repo_menu_items() -> Vec<MenuItem> {
         .collect()
 }
 
+/// Labels the macOS "Recent Repositories" menu items. Other platforms only
+/// reach the recents through the repository switcher, which builds its own rows.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub(crate) fn recent_repository_label(path: &Path) -> String {
     let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
         return path.display().to_string();
@@ -1011,8 +1126,50 @@ fn active_normal_gitcomet_window_blocks_non_repository_actions(cx: &mut App) -> 
         .unwrap_or(false)
 }
 
+fn mark_clean_shutdown<C>(cx: &mut C)
+where
+    C: BorrowAppContext,
+{
+    cx.update_default_global::<CleanShutdownTracker, _>(|tracker, _cx| {
+        tracker.requested.store(true, Ordering::SeqCst);
+    });
+}
+
+fn clear_clean_shutdown_request(cx: &mut App) {
+    if let Some(tracker) = cx.try_global::<CleanShutdownTracker>() {
+        tracker.requested.store(false, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn mark_clean_shutdown_if_last_window(cx: &mut App) {
+    if cx.windows().len() == 1 {
+        mark_clean_shutdown(cx);
+    }
+}
+
+pub(crate) fn mark_clean_shutdown_requested(cx: &mut App) {
+    mark_clean_shutdown(cx);
+}
+
+pub(crate) fn mark_clean_shutdown_if_last_window_from_view<T>(cx: &mut gpui::Context<T>)
+where
+    T: 'static,
+{
+    if cx.windows().len() == 1 {
+        mark_clean_shutdown(cx);
+    }
+}
+
+pub(crate) fn mark_clean_shutdown_from_view<T>(cx: &mut gpui::Context<T>)
+where
+    T: 'static,
+{
+    mark_clean_shutdown(cx);
+}
+
 fn close_active_window(cx: &mut App) {
     if let Some(window) = cx.active_window() {
+        mark_clean_shutdown_if_last_window(cx);
         let _ = window.update(cx, |_root, window, _cx| {
             window.remove_window();
         });
@@ -1030,6 +1187,7 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
         })
         .unwrap_or(false);
     if !handled {
+        mark_clean_shutdown_if_last_window(cx);
         window.remove_window();
     }
 }
@@ -1049,6 +1207,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
         .filter(|entry| entry.view_mode == GitCometViewMode::Normal)
         .collect();
     if entries.is_empty() {
+        mark_clean_shutdown(cx);
         cx.quit();
         return;
     }
@@ -1068,6 +1227,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
     }
 
     if running_command_count == 0 {
+        mark_clean_shutdown(cx);
         cx.quit();
         return;
     }
@@ -1094,6 +1254,7 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
             );
         });
     } else {
+        mark_clean_shutdown(cx);
         cx.quit();
     }
 }
@@ -1210,13 +1371,13 @@ fn repository_paths_from_open_urls(urls: &[String]) -> Vec<PathBuf> {
     paths
 }
 
-fn open_recent_repository_picker_in_window(cx: &mut App, window: &GitCometWindowEntry) {
+fn open_repository_switcher_in_window(cx: &mut App, window: &GitCometWindowEntry) {
     let _ = window.handle.update(cx, |root_view, window, cx| {
         let Ok(view) = root_view.downcast::<GitCometView>() else {
             return;
         };
         view.update(cx, |view, cx| {
-            view.open_recent_repository_picker(window, cx);
+            view.toggle_repository_switcher(window, cx);
         });
     });
     if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
@@ -1224,19 +1385,16 @@ fn open_recent_repository_picker_in_window(cx: &mut App, window: &GitCometWindow
     }
 }
 
-fn open_recent_repository_picker_in_existing_or_new_window(
-    cx: &mut App,
-    backend: Arc<dyn GitBackend>,
-) {
+fn open_repository_switcher_in_existing_or_new_window(cx: &mut App, backend: Arc<dyn GitBackend>) {
     if let Some(window) = find_normal_gitcomet_window(cx) {
-        open_recent_repository_picker_in_window(cx, &window);
+        open_repository_switcher_in_window(cx, &window);
         return;
     }
 
     let launch = normal_launch_config(None, None);
     let window = open_gitcomet_window(cx, backend, &launch);
     let _ = window.update(cx, |view, window, cx| {
-        view.open_recent_repository_picker(window, cx);
+        view.toggle_repository_switcher(window, cx);
     });
     activate_gitcomet_window(cx, window.into());
     cx.activate(true);
@@ -1573,7 +1731,7 @@ fn bind_terminal_keys(cx: &mut App) {
         #[cfg(not(target_os = "macos"))]
         KeyBinding::new("ctrl-shift-v", TerminalPaste, Some("Terminal")),
         #[cfg(not(target_os = "macos"))]
-        KeyBinding::new("ctrl-shift-a", TerminalSelectAll, Some("Terminal")),
+        KeyBinding::new("secondary-shift-a", TerminalSelectAll, Some("Terminal")),
     ]);
 }
 
@@ -1777,7 +1935,7 @@ mod tests {
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenInCodeEditor))
                 .on_action(record_action_listener!(OpenRepository))
-                .on_action(record_action_listener!(OpenRecentPicker))
+                .on_action(record_action_listener!(SwitchRepository))
                 .on_action(record_action_listener!(Close))
                 .on_action(record_action_listener!(CloseWindow))
                 .on_action(record_action_listener!(PreviousRepository))
@@ -2019,6 +2177,7 @@ mod tests {
 
         cx.update(|window, app| {
             app.clear_key_bindings();
+            bind_app_keys(app);
             bind_terminal_keys_for_test(app);
             let focus = view.update(app, |view, _cx| view.focus_handle());
             window.focus(&focus, app);
@@ -2036,7 +2195,7 @@ mod tests {
         let cases = [
             ("ctrl-shift-c", TerminalCopy.name()),
             ("ctrl-shift-v", TerminalPaste.name()),
-            ("ctrl-shift-a", TerminalSelectAll.name()),
+            ("secondary-shift-a", TerminalSelectAll.name()),
         ];
 
         for (keystroke, expected_action) in cases {
@@ -2223,7 +2382,8 @@ mod tests {
             ("secondary-shift-n", NewWindow.name()),
             ("secondary-,", OpenSettings.name()),
             ("secondary-o", OpenRepository.name()),
-            ("secondary-shift-o", OpenRecentPicker.name()),
+            ("secondary-shift-o", SwitchRepository.name()),
+            ("secondary-shift-a", SwitchRepository.name()),
             ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-p", crate::view::ToggleCommandPalette.name()),
             ("secondary-w", Close.name()),
@@ -2243,7 +2403,7 @@ mod tests {
 
         #[cfg(target_os = "macos")]
         cases.extend([
-            ("alt-cmd-o", OpenRecentPicker.name()),
+            ("alt-cmd-o", SwitchRepository.name()),
             ("cmd-{", PreviousRepository.name()),
             ("alt-cmd-left", PreviousRepository.name()),
             ("cmd-}", NextRepository.name()),
@@ -2424,7 +2584,7 @@ mod tests {
     }
 
     #[gpui::test]
-    fn recent_picker_shortcut_opens_the_popover(cx: &mut gpui::TestAppContext) {
+    fn recent_picker_shortcut_toggles_the_popover(cx: &mut gpui::TestAppContext) {
         let _visual_guard = lock_visual_test();
         let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
         let (store, events) = AppStore::new(Arc::clone(&backend));
@@ -2440,12 +2600,22 @@ mod tests {
         });
         seed_workspace_repo(cx, &store, view);
 
-        cx.simulate_keystrokes("secondary-shift-o");
+        cx.simulate_keystrokes("secondary-shift-a");
         cx.update(|window, app| {
             let _ = window.draw(app);
         });
 
         assert!(cx.debug_bounds("app_popover").is_some());
+
+        cx.simulate_keystrokes("secondary-shift-a");
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            cx.debug_bounds("app_popover").is_none(),
+            "pressing the shortcut again should close the repository picker"
+        );
     }
 
     #[gpui::test]

@@ -47,6 +47,8 @@ impl GitBackend for TestBackend {
     }
 }
 
+mod add_repo_menu;
+mod app_menu;
 mod branch;
 mod browse_history;
 mod clone;
@@ -56,8 +58,8 @@ mod dialog;
 mod file_actions;
 mod layout;
 mod picker;
-mod recent_repo_picker;
 mod refs;
+mod repository_switcher;
 mod stash;
 mod status;
 mod submodule;

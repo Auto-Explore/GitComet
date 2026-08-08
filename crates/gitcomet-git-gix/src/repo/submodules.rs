@@ -28,6 +28,8 @@ type NumstatCounts = BTreeMap<PathBuf, NumstatLineCounts>;
 const SUBMODULE_HISTORY_UNAVAILABLE_REASON: &str = "Submodule history is not available locally.";
 const SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON: &str =
     "Only one side of the submodule pointer is available.";
+const GIT_CONFIG_CONTENTION_RETRIES: usize = 6;
+const GIT_CONFIG_CONTENTION_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 fn allow_file_submodule_transport(cmd: &mut Command) {
     // `git submodule` blocks local-path remotes unless `protocol.file.allow` is enabled.
@@ -1620,47 +1622,52 @@ fn persist_submodule_trust_approvals(
     trust_root: &Path,
     approved_sources: &[SubmoduleTrustTarget],
 ) -> Result<()> {
-    const GIT_CONFIG_LOCK_RETRIES: usize = 6;
-
     for source in approved_sources {
         let key = submodule_file_transport_consent_key(trust_root, &source.local_source_path);
-        if git_config_get_bool_global(trust_root, &key)?.unwrap_or(false) {
+        if git_config_get_bool_global_with_retry(trust_root, &key)?.unwrap_or(false) {
             continue;
         }
 
-        let mut last_err = None;
-        for attempt in 0..GIT_CONFIG_LOCK_RETRIES {
-            let mut cmd = git_workdir_cmd_for(trust_root);
-            cmd.arg("config").arg("--global").arg(&key).arg("true");
-            match run_git_simple(cmd, &format!("git config --global {key} true")) {
-                Ok(()) => {
-                    last_err = None;
-                    break;
-                }
-                Err(err) => {
-                    if git_config_get_bool_global(trust_root, &key)?.unwrap_or(false) {
-                        last_err = None;
-                        break;
-                    }
-                    let retryable =
-                        attempt + 1 < GIT_CONFIG_LOCK_RETRIES && is_git_config_lock_error(&err);
-                    last_err = Some(err);
-                    if retryable {
-                        thread::sleep(Duration::from_millis(25));
-                        continue;
-                    }
-                    break;
-                }
+        if let Err(write_err) = git_config_set_bool_global_with_retry(trust_root, &key) {
+            if git_config_get_bool_global_with_retry(trust_root, &key)?.unwrap_or(false) {
+                continue;
             }
-        }
-        if let Some(err) = last_err {
-            return Err(err);
+            return Err(write_err);
         }
     }
     Ok(())
 }
 
-fn is_git_config_lock_error(err: &Error) -> bool {
+fn git_config_get_bool_global_with_retry(trust_root: &Path, key: &str) -> Result<Option<bool>> {
+    retry_git_config_contention(|| git_config_get_bool_global(trust_root, key))
+}
+
+fn git_config_set_bool_global_with_retry(trust_root: &Path, key: &str) -> Result<()> {
+    retry_git_config_contention(|| {
+        let mut cmd = git_workdir_cmd_for(trust_root);
+        cmd.arg("config").arg("--global").arg(key).arg("true");
+        run_git_simple(cmd, &format!("git config --global {key} true"))
+    })
+}
+
+fn retry_git_config_contention<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
+    for attempt in 0..GIT_CONFIG_CONTENTION_RETRIES {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if attempt + 1 == GIT_CONFIG_CONTENTION_RETRIES
+                    || !is_git_config_contention_error(&err)
+                {
+                    return Err(err);
+                }
+                thread::sleep(GIT_CONFIG_CONTENTION_RETRY_DELAY);
+            }
+        }
+    }
+    unreachable!("the retry loop always returns after the final attempt");
+}
+
+fn is_git_config_contention_error(err: &Error) -> bool {
     let text = match err.kind() {
         ErrorKind::Git(failure) => format!(
             "{}{}{}",
@@ -1670,12 +1677,16 @@ fn is_git_config_lock_error(err: &Error) -> bool {
         ),
         _ => err.to_string(),
     };
+    let text = text.to_ascii_lowercase();
     text.contains("could not lock config file")
+        || (text.contains("unable to access")
+            && text.contains("permission denied")
+            && text.contains("reading the configuration files"))
 }
 
 fn submodule_source_trusted(trust_root: &Path, source: &SubmoduleTrustTarget) -> Result<bool> {
     let key = submodule_file_transport_consent_key(trust_root, &source.local_source_path);
-    Ok(git_config_get_bool_global(trust_root, &key)?.unwrap_or(false))
+    Ok(git_config_get_bool_global_with_retry(trust_root, &key)?.unwrap_or(false))
 }
 
 fn untrusted_local_submodule_error(source: &SubmoduleTrustTarget, action: &str) -> Error {
@@ -1815,10 +1826,14 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 
 #[cfg(test)]
 mod tests {
-    use super::{GixRepo, allow_file_submodule_transport, submodule_file_transport_consent_key};
+    use super::{
+        GixRepo, allow_file_submodule_transport, is_git_config_contention_error,
+        retry_git_config_contention, submodule_file_transport_consent_key,
+    };
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
-    use gitcomet_core::error::ErrorKind;
+    use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
+    use std::cell::Cell;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
@@ -1879,6 +1894,70 @@ mod tests {
         assert!(
             !cmd.get_envs()
                 .any(|(key, _)| key == OsStr::new("GIT_ALLOW_PROTOCOL"))
+        );
+    }
+
+    fn git_config_failure(stderr: &str) -> Error {
+        Error::new(ErrorKind::Git(GitFailure::new(
+            "git config --global gitcomet.submodule.allowfiletransport-example true",
+            GitFailureId::CommandFailed,
+            Some(128),
+            Vec::new(),
+            stderr.as_bytes().to_vec(),
+            None,
+        )))
+    }
+
+    #[test]
+    fn git_config_contention_detection_handles_windows_access_denied() {
+        assert!(is_git_config_contention_error(&git_config_failure(
+            "error: could not lock config file .gitconfig: File exists"
+        )));
+        let windows_access_denied = "warning: unable to access 'C:\\Temp\\global.gitconfig': Permission denied\n\
+             fatal: unknown error occurred while reading the configuration files";
+        assert!(is_git_config_contention_error(&git_config_failure(
+            windows_access_denied
+        )));
+        assert!(is_git_config_contention_error(&Error::new(
+            ErrorKind::Backend(format!(
+                "git config --global --type=bool --get key failed: {windows_access_denied}"
+            ))
+        )));
+        assert!(!is_git_config_contention_error(&git_config_failure(
+            "fatal: could not read Username for 'https://example.com': terminal prompts disabled"
+        )));
+    }
+
+    #[test]
+    fn git_config_contention_retry_retries_known_contention() {
+        let attempts = Cell::new(0);
+        retry_git_config_contention(|| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                return Err(git_config_failure(
+                    "error: could not lock config file .gitconfig: File exists",
+                ));
+            }
+            Ok(())
+        })
+        .expect("known config contention should be retried");
+
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn git_config_contention_retry_does_not_retry_unrelated_failures() {
+        let attempts = Cell::new(0);
+        let err = retry_git_config_contention(|| {
+            attempts.set(attempts.get() + 1);
+            Err::<(), _>(git_config_failure("fatal: invalid config value"))
+        })
+        .expect_err("unrelated config failure should not be retried");
+
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(
+            err.to_string(),
+            "git config --global gitcomet.submodule.allowfiletransport-example true failed"
         );
     }
 

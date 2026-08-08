@@ -797,13 +797,23 @@ fn build_row_blame_paint_tracked(
 impl MainPaneView {
     /// Build a blame render context when annotate is enabled and blame for the
     /// current target is loaded; otherwise `None`.
+    ///
+    /// While the same target reloads, falls back to the annotations retained by
+    /// the store (`retained_blame_while_loading`) so the column keeps its
+    /// contents instead of blanking on every refresh. The retained value is
+    /// dropped when blame re-targets, so it always describes `blame_path`.
     pub(super) fn blame_render_ctx(&mut self) -> Option<BlameRenderCtx> {
-        if !self.annotation_active() {
+        if !self.annotation_active() || !self.blame_matches_rendered_target() {
             return None;
         }
         let repo = self.active_repo()?;
-        let gitcomet_state::model::Loadable::Ready(lines) = &repo.history_state.blame else {
-            return None;
+        let lines = match &repo.history_state.blame {
+            gitcomet_state::model::Loadable::Ready(lines) => lines,
+            gitcomet_state::model::Loadable::NotLoaded
+            | gitcomet_state::model::Loadable::Loading => {
+                repo.history_state.retained_blame_while_loading.as_ref()?
+            }
+            gitcomet_state::model::Loadable::Error(_) => return None,
         };
         let path: std::sync::Arc<std::path::Path> =
             std::sync::Arc::from(repo.history_state.blame_path.as_deref()?);
@@ -903,6 +913,8 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let annot_hover = this.blame_annot_hover;
+        let stage_area = this.diff_stage_gutter_area();
+        let stage_hover = this.diff_stage_gutter_hover;
         let min_width = this.diff_horizontal_layout_min_width(DiffHorizontalScrollColumn::Primary);
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
@@ -1138,6 +1150,8 @@ impl MainPaneView {
                                     .as_ref()
                                     .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, wrap, theme)),
                                 annot_hover,
+                                stage_area,
+                                stage_hover,
                                 cx,
                             )
                         }
@@ -1456,6 +1470,8 @@ impl MainPaneView {
                             .as_ref()
                             .and_then(|ctx| build_row_blame_paint_tracked(ctx, matches!(visual_kind, DiffLineKind::Context), line.old_line, line.new_line, &blame_prev_nl, wrap, theme)),
                         annot_hover,
+                        stage_area,
+                        stage_hover,
                         cx,
                     )
                 })
@@ -1613,6 +1629,8 @@ impl MainPaneView {
                         )
                     }),
                     annot_hover,
+                    stage_area,
+                    stage_hover,
                     cx,
                 )
             })
@@ -1646,6 +1664,8 @@ impl MainPaneView {
         annot_hover: Option<(usize, AnnotArea)>,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let stage_area = this.diff_stage_gutter_area();
+        let stage_hover = this.diff_stage_gutter_hover;
         let min_width =
             this.diff_horizontal_layout_min_width(if matches!(column, PatchSplitColumn::Right) {
                 DiffHorizontalScrollColumn::SplitRight
@@ -1883,6 +1903,8 @@ impl MainPaneView {
                                     None
                                 },
                                 annot_hover,
+                                stage_area,
+                                stage_hover,
                                 cx,
                             )
                         }
@@ -2021,6 +2043,8 @@ impl MainPaneView {
                         None
                     },
                     annot_hover,
+                    stage_area,
+                    stage_hover,
                     cx,
                 )
                 })
@@ -2166,6 +2190,8 @@ impl MainPaneView {
                                 None
                             },
                             annot_hover,
+                            stage_area,
+                            stage_hover,
                             cx,
                         )
                     }
@@ -2271,6 +2297,8 @@ fn diff_row(
     annotation_width: Pixels,
     row_blame: Option<diff_canvas::RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
+    stage_area: Option<DiffArea>,
+    stage_hover: Option<diff_canvas::DiffStageHover>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let on_click = cx.listener(move |this, e: &ClickEvent, _w, cx| {
@@ -2393,6 +2421,9 @@ fn diff_row(
     }
 
     let show_row_numbers = wrap.is_none_or(|wrap| wrap.wrap_ix == 0);
+    // Continuation rows of a wrapped line share the line's gutter, so only the
+    // first visual row carries the stage button.
+    let stage_area = stage_area.filter(|_| show_row_numbers);
     let old = if show_row_numbers {
         line_number_string(line.old_line)
     } else {
@@ -2405,28 +2436,38 @@ fn diff_row(
     };
 
     match mode {
-        DiffViewMode::Inline => diff_canvas::inline_diff_line_row_canvas(
-            theme,
-            cx.entity(),
-            ui_scale_percent,
-            visible_ix,
-            min_width,
-            selected,
-            old,
-            new,
-            bg,
-            fg,
-            gutter_fg,
-            styled,
-            streamed_spec,
-            raw_text,
-            reveal_whitespace_chars,
-            show_line_numbers,
-            wrap,
-            annotation_width,
-            row_blame,
-            annot_hover,
-        ),
+        DiffViewMode::Inline => {
+            // `visual_kind`, not `line.kind`: in ignore-whitespace mode a
+            // whitespace-only change renders as context, and a row painted as
+            // context must not offer to stage itself. The split columns derive
+            // their button from the same value.
+            let stage = stage_area
+                .and_then(|area| stage_gutter_spec(area, DiffStageSlot::Inline, visual_kind));
+            diff_canvas::inline_diff_line_row_canvas(
+                theme,
+                cx.entity(),
+                ui_scale_percent,
+                visible_ix,
+                min_width,
+                selected,
+                old,
+                new,
+                bg,
+                fg,
+                gutter_fg,
+                styled,
+                streamed_spec,
+                raw_text,
+                reveal_whitespace_chars,
+                show_line_numbers,
+                wrap,
+                annotation_width,
+                row_blame,
+                annot_hover,
+                stage,
+                stage_hover,
+            )
+        }
         DiffViewMode::Split => {
             let left_kind = if visual_kind == DiffLineKind::Remove {
                 DiffLineKind::Remove
@@ -2469,6 +2510,15 @@ fn diff_row(
                 _ => None,
             };
 
+            // A split row shows removals on the left and additions on the right,
+            // so each side gets the button for its own kind of change.
+            let stage_left = stage_area
+                .and_then(|area| stage_gutter_spec(area, DiffStageSlot::SplitLeft, visual_kind))
+                .filter(|spec| spec.kind == DiffLineKind::Remove);
+            let stage_right = stage_area
+                .and_then(|area| stage_gutter_spec(area, DiffStageSlot::SplitRight, visual_kind))
+                .filter(|spec| spec.kind == DiffLineKind::Add);
+
             diff_canvas::split_diff_line_row_canvas(
                 theme,
                 cx.entity(),
@@ -2496,9 +2546,23 @@ fn diff_row(
                 annotation_width,
                 row_blame,
                 annot_hover,
+                stage_left,
+                stage_right,
+                stage_hover,
             )
         }
     }
+}
+
+/// Build the stage-gutter spec for a change line, or `None` for anything that
+/// cannot be staged line-by-line (context lines and headers).
+fn stage_gutter_spec(
+    area: DiffArea,
+    slot: DiffStageSlot,
+    kind: DiffLineKind,
+) -> Option<diff_canvas::StageGutterSpec> {
+    matches!(kind, DiffLineKind::Add | DiffLineKind::Remove)
+        .then_some(diff_canvas::StageGutterSpec { area, slot, kind })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2793,6 +2857,8 @@ fn patch_split_column_row(
     annotation_width: Pixels,
     row_blame: Option<diff_canvas::RowBlamePaint>,
     annot_hover: Option<(usize, AnnotArea)>,
+    stage_area: Option<DiffArea>,
+    stage_hover: Option<diff_canvas::DiffStageHover>,
     cx: &mut gpui::Context<MainPaneView>,
 ) -> AnyElement {
     let line_kind = match (column, visual_kind) {
@@ -2819,6 +2885,19 @@ fn patch_split_column_row(
         SharedString::default()
     };
 
+    // `line_kind` is already resolved per column, so each side offers the button
+    // only for the change it actually shows.
+    let stage = stage_area.filter(|_| show_row_number).and_then(|area| {
+        stage_gutter_spec(
+            area,
+            match column {
+                PatchSplitColumn::Left => DiffStageSlot::SplitLeft,
+                PatchSplitColumn::Right => DiffStageSlot::SplitRight,
+            },
+            line_kind,
+        )
+    });
+
     diff_canvas::patch_split_column_row_canvas(
         theme,
         cx.entity(),
@@ -2844,6 +2923,8 @@ fn patch_split_column_row(
         annotation_width,
         row_blame,
         annot_hover,
+        stage,
+        stage_hover,
     )
 }
 

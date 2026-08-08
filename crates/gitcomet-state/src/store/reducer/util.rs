@@ -258,7 +258,13 @@ pub(super) fn selected_diff_load_plan(
 
     SelectedDiffLoadPlan {
         load_patch_diff: !preview_only,
-        load_file_text: supports_file && !preview_only && (!preview.wants_image || preview.is_svg),
+        // An SVG counts as an image, so it never reaches the text-file preview
+        // path and the diff pane's Code view is the only place its source is
+        // ever shown. That view reads the loaded file text, so it has to load
+        // even for the preview-only targets — added, deleted, untracked — that
+        // a plain text file would render straight from the worktree instead.
+        load_file_text: supports_file
+            && (preview.is_svg || (!preview.wants_image && !preview_only)),
         preview_text_side,
         load_submodule_summary: false,
         load_file_image: supports_file && preview.wants_image,
@@ -269,28 +275,71 @@ pub(super) fn apply_selected_diff_load_plan_state(
     repo_state: &mut RepoState,
     load_plan: SelectedDiffLoadPlan,
 ) {
+    apply_selected_diff_load_plan_state_with_reload_mode(
+        repo_state,
+        load_plan,
+        DiffReloadMode::Blank,
+    );
+}
+
+/// What a reload does with content that is already on screen.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DiffReloadMode {
+    /// Drop it: the diff is switching to something else, so the old content is
+    /// not what the user asked for and must not linger.
+    Blank,
+    /// Keep it until the new content arrives. For a reload of the *same* target
+    /// — after staging a hunk or line, say — blanking makes the pane flash a
+    /// "Loading" placeholder for a frame or two even when almost nothing about
+    /// the file changed.
+    ///
+    /// What stays on screen is then a generation behind the index, so this also
+    /// raises `diff_reload_in_flight` for as long as that is true.
+    KeepLoaded,
+}
+
+pub(super) fn apply_selected_diff_load_plan_state_with_reload_mode(
+    repo_state: &mut RepoState,
+    load_plan: SelectedDiffLoadPlan,
+    mode: DiffReloadMode,
+) {
+    fn reloading<T>(current: &Loadable<T>, mode: DiffReloadMode) -> Loadable<T>
+    where
+        T: Clone,
+    {
+        match (mode, current) {
+            (DiffReloadMode::KeepLoaded, Loadable::Ready(value)) => Loadable::Ready(value.clone()),
+            _ => Loadable::Loading,
+        }
+    }
+
+    // Blanking leaves nothing stale to build a patch out of, so only the keeping
+    // mode raises the flag — and it lowers it again, which is what stops a
+    // target change from stranding it set.
+    repo_state.diff_state.diff_reload_in_flight = matches!(mode, DiffReloadMode::KeepLoaded);
+
     repo_state.diff_state.diff = if load_plan.load_patch_diff {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.diff_file = if load_plan.load_file_text {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff_file, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.diff_preview_text_file = if load_plan.preview_text_side.is_some() {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff_preview_text_file, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.submodule_summary = if load_plan.load_submodule_summary {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.submodule_summary, mode)
     } else {
         Loadable::NotLoaded
     };
     repo_state.diff_state.diff_file_image = if load_plan.load_file_image {
-        Loadable::Loading
+        reloading(&repo_state.diff_state.diff_file_image, mode)
     } else {
         Loadable::NotLoaded
     };
@@ -872,6 +921,16 @@ pub(super) fn handle_session_persist_result(
     }
 }
 
+/// Staging and unstaging a hunk or line is a direct, visible edit: the diff
+/// redraws without the change, which is the whole feedback the user needs. A
+/// toast for each one just stacks up while working through a file.
+fn command_success_is_worth_announcing(command: &RepoCommandKind) -> bool {
+    !matches!(
+        command,
+        RepoCommandKind::StageHunk | RepoCommandKind::UnstageHunk
+    )
+}
+
 pub(super) fn push_command_log(
     repo_state: &mut RepoState,
     ok: bool,
@@ -894,6 +953,7 @@ pub(super) fn push_command_log(
         } else {
             output.stderr.clone()
         },
+        announce_success: command_success_is_worth_announcing(command),
     });
     if repo_state.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
@@ -917,6 +977,7 @@ pub(super) fn push_action_log(
         summary,
         stdout: String::new(),
         stderr: error.map(format_error_for_user).unwrap_or_default(),
+        announce_success: true,
     });
     if repo_state.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
@@ -1615,6 +1676,7 @@ mod tests {
             summary: String::new(),
             stdout: String::new(),
             stderr: String::new(),
+            announce_success: true,
         }
     }
 
@@ -1706,6 +1768,60 @@ mod tests {
         // Without the flag, a tracked file still gets a normal patch diff.
         repo.diff_state.content_preview = false;
         assert!(selected_diff_load_plan(&repo, &worktree).load_patch_diff);
+    }
+
+    #[test]
+    fn preview_only_svg_still_loads_file_text_for_the_code_view() {
+        use crate::model::Shared;
+        use gitcomet_core::domain::{FileStatus, RepoStatus};
+
+        let mut repo = repo_state(11);
+        let svg_path = PathBuf::from("assets/diagram.svg");
+        let png_path = PathBuf::from("assets/logo.png");
+        repo.status = Loadable::Ready(Shared::new(RepoStatus {
+            unstaged: vec![
+                FileStatus {
+                    path: svg_path.clone(),
+                    kind: FileStatusKind::Untracked,
+                    conflict: None,
+                },
+                FileStatus {
+                    path: png_path.clone(),
+                    kind: FileStatusKind::Untracked,
+                    conflict: None,
+                },
+            ],
+            staged: vec![],
+        }));
+
+        // An untracked SVG has no patch, but its source still has to load: the
+        // Code view is the only place an SVG's text is ever shown.
+        let svg = DiffTarget::WorkingTree {
+            path: svg_path,
+            area: DiffArea::Unstaged,
+        };
+        let plan = selected_diff_load_plan(&repo, &svg);
+        assert!(!plan.load_patch_diff);
+        assert!(plan.load_file_text);
+        assert!(plan.load_file_image);
+        // Image + preview text + file text is the widest SVG fan-out; it has to
+        // stay inside the reload cap that `diff_reload_effect_count` asserts.
+        assert!(plan.preview_text_side.is_some());
+        assert_eq!(diff_reload_effect_count(&repo, &svg), 3);
+
+        // A non-SVG image has no text view at all.
+        let png = DiffTarget::WorkingTree {
+            path: png_path,
+            area: DiffArea::Unstaged,
+        };
+        let plan = selected_diff_load_plan(&repo, &png);
+        assert!(!plan.load_patch_diff);
+        assert!(!plan.load_file_text);
+        assert!(plan.load_file_image);
+
+        // Content preview does not suppress the SVG file text either.
+        repo.diff_state.content_preview = true;
+        assert!(selected_diff_load_plan(&repo, &svg).load_file_text);
     }
 
     #[test]

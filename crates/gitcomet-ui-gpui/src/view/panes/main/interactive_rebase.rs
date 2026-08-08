@@ -410,12 +410,18 @@ impl Render for IRebaseDragPreview {
                     .flex()
                     .items_center()
                     .justify_center()
+                    .gap_1()
                     .rounded(px(theme.radii.row))
                     .border_1()
                     .border_color(outlined_border)
                     .text_sm()
                     .text_color(theme.colors.text)
-                    .child(format!("{} ▾", self.action.to_todo_str())),
+                    .child(self.action.to_todo_str())
+                    .child(crate::view::icons::svg_icon(
+                        "icons/chevron_down.svg",
+                        theme.colors.text_muted,
+                        px(12.0),
+                    )),
             )
             .child(
                 div()
@@ -763,10 +769,13 @@ impl MainPaneView {
             Rc::new(RefCell::new(None));
         let btn_bounds_prepaint = Rc::clone(&btn_bounds);
         let action_btn_w = px(ACTION_BTN_W * ui_scale_percent as f32 / 100.0);
-        let action_label = format!("{} ▾", action.to_todo_str());
-
-        let inner_btn = components::Button::new(format!("action_{ix}"), action_label)
+        let inner_btn = components::Button::new(format!("action_{ix}"), action.to_todo_str())
             .style(components::ButtonStyle::Outlined)
+            .end_slot(crate::view::icons::svg_icon(
+                "icons/chevron_down.svg",
+                theme.colors.text_muted,
+                px(12.0),
+            ))
             .render(theme, ui_scale_percent)
             .w(action_btn_w)
             .flex_shrink_0()
@@ -811,7 +820,12 @@ impl MainPaneView {
             .child(inner_btn)
             .id(format!("action_w_{ix}"));
 
-        let up_btn = components::Button::new(format!("up_{ix}"), "▲")
+        let up_btn = components::Button::new(format!("up_{ix}"), "")
+            .start_slot(crate::view::icons::svg_icon(
+                "icons/arrow_up.svg",
+                theme.colors.text_muted,
+                px(12.0),
+            ))
             .style(components::ButtonStyle::Subtle)
             .no_focus()
             .disabled(display_pos == 0)
@@ -833,7 +847,12 @@ impl MainPaneView {
                 cx.notify();
             }));
 
-        let down_btn = components::Button::new(format!("down_{ix}"), "▼")
+        let down_btn = components::Button::new(format!("down_{ix}"), "")
+            .start_slot(crate::view::icons::svg_icon(
+                "icons/arrow_down.svg",
+                theme.colors.text_muted,
+                px(12.0),
+            ))
             .style(components::ButtonStyle::Subtle)
             .no_focus()
             .disabled(display_pos + 1 >= entry_count)
@@ -1013,6 +1032,11 @@ impl MainPaneView {
             .on_mouse_up(
                 gpui::MouseButton::Right,
                 cx.listener(move |this, e: &gpui::MouseUpEvent, window, cx| {
+                    // Checked before `stop_propagation`: declining to open the
+                    // menu must not swallow the release either.
+                    if crate::press_gesture::is_press_claimed(cx) {
+                        return;
+                    }
                     cx.stop_propagation();
                     let Some(st) = this.interactive_rebase_states.get(&repo_id) else {
                         return;
@@ -1351,9 +1375,14 @@ impl MainPaneView {
                                     .child(
                                         components::Button::new(
                                             "irebase_autosquash",
-                                            "Auto Squash ▾",
+                                            "Auto Squash",
                                         )
                                         .style(components::ButtonStyle::Outlined)
+                                        .end_slot(crate::view::icons::svg_icon(
+                                            "icons/chevron_down.svg",
+                                            theme.colors.text_muted,
+                                            px(12.0),
+                                        ))
                                         .on_click_with_bounds(
                                             theme,
                                             cx,

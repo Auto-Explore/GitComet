@@ -246,6 +246,11 @@ pub enum Effect {
         name: String,
         target: String,
     },
+    RenameBranch {
+        repo_id: RepoId,
+        old_name: String,
+        new_name: String,
+    },
     DeleteBranch {
         repo_id: RepoId,
         name: String,

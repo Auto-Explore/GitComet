@@ -1,5 +1,6 @@
 use super::util::{
-    SelectedConflictTarget, apply_selected_diff_load_plan_state, clear_banner_error_for_repo,
+    DiffReloadMode, SelectedConflictTarget, apply_selected_diff_load_plan_state,
+    apply_selected_diff_load_plan_state_with_reload_mode, clear_banner_error_for_repo,
     diff_reload_effects, format_failure_summary, push_action_log, push_command_log,
     refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     selected_diff_load_plan, start_conflict_target_reload, start_current_conflict_target_reload,
@@ -86,6 +87,14 @@ pub(super) fn create_branch_and_checkout(
         repo_id,
         name,
         target,
+    }]
+}
+
+pub(super) fn rename_branch(repo_id: RepoId, old_name: String, new_name: String) -> Vec<Effect> {
+    vec![Effect::RenameBranch {
+        repo_id,
+        old_name,
+        new_name,
     }]
 }
 
@@ -751,15 +760,21 @@ pub(super) fn drop_stash(repo_id: RepoId, index: usize) -> Vec<Effect> {
     vec![Effect::DropStash { repo_id, index }]
 }
 
-/// Drop any loaded blame after a working-tree mutation (stage/unstage/apply
-/// patch/commit). The blame annotation column is derived from the same content
-/// the diff shows, which is being reloaded; leaving blame `Ready` would make
-/// `request_blame_for_current_target` treat the target as already attempted and
-/// keep painting stale attribution and staged/unstaged labels. `blame_path` and
-/// `blame_source` are intentionally preserved so the view reloads the same
+/// Drop any loaded blame once the content it describes is known to be stale —
+/// after a working-tree mutation (stage/unstage/apply patch/commit), after a
+/// reload whose result actually differed (`diff_loaded`/`diff_file_loaded`), or
+/// after a git-state event that may have moved HEAD. The blame annotation column
+/// is derived from the same content the diff shows; leaving blame `Ready` would
+/// make `request_blame_for_current_target` treat the target as already attempted
+/// and keep painting stale attribution and staged/unstaged labels. `blame_path`
+/// and `blame_source` are intentionally preserved so the view reloads the same
 /// target's blame against the new content.
 pub(super) fn invalidate_loaded_blame(repo_state: &mut RepoState) {
     if !matches!(repo_state.history_state.blame, Loadable::NotLoaded) {
+        // Keep the outgoing annotations available to the view so the column
+        // stays painted across the reload; the target is unchanged, so they
+        // still describe the right file.
+        repo_state.retain_blame_while_loading();
         repo_state.history_state.blame = Loadable::NotLoaded;
     }
 }
@@ -1193,6 +1208,8 @@ pub(super) fn repo_command_finished(
         // shows, so staging/unstaging/patching must invalidate blame too.
         invalidate_loaded_blame(repo_state);
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
+            // Blanked, so there is nothing stale left to guard against.
+            repo_state.diff_state.diff_reload_in_flight = false;
             repo_state.diff_state.diff = Loadable::NotLoaded;
             repo_state.diff_state.diff_file = Loadable::NotLoaded;
             repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
@@ -1210,7 +1227,14 @@ pub(super) fn repo_command_finished(
             }
         } else {
             let load_plan = selected_diff_load_plan(repo_state, &target);
-            apply_selected_diff_load_plan_state(repo_state, load_plan);
+            // The diff target did not change — only its contents did — so the
+            // reload keeps showing what is already there. Blanking it would make
+            // the pane flash "Loading" on every staged hunk or line.
+            apply_selected_diff_load_plan_state_with_reload_mode(
+                repo_state,
+                load_plan,
+                DiffReloadMode::KeepLoaded,
+            );
             repo_state.bump_diff_state_rev();
             extra_effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }

@@ -7,7 +7,6 @@ members = [
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
   "crates/gitcomet-tree-sitter-alloc",
-  "crates/gitcomet-ui",
   "crates/gitcomet-ui-gpui",
 ]
 exclude = ["crates/win32-window-utils"]
@@ -18,7 +17,6 @@ default-members = [
   "crates/gitcomet-git",
   "crates/gitcomet-git-gix",
   "crates/gitcomet-state",
-  "crates/gitcomet-ui",
   "crates/gitcomet-ui-gpui",
 ]
 
@@ -36,22 +34,22 @@ gitcomet-core = { path = "crates/gitcomet-core" }
 gitcomet-git = { path = "crates/gitcomet-git" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
-gitcomet-ui = { path = "crates/gitcomet-ui" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 
 # External crates
 alacritty_terminal = "0.26"
-clap = { version = "4.6.4", features = ["derive"] }
+clap = { version = "4.6.6", features = ["derive"] }
 criterion = "0.8.2"
-fontdb = "0.23.0"
+fontdb = "0.24.0"
 futures = "0.3.33"
 gix = { version = "0.86.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "4cf012218ea9d0b00c7577fbea326304de250d0e" }
-gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "4cf012218ea9d0b00c7577fbea326304de250d0e", features = ["font-kit"] }
+gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "f5c044833b803206ebc5c91a10361ec28f389c3b" }
+gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "f5c044833b803206ebc5c91a10361ec28f389c3b", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
 libc = "0.2"
+log = "0.4.33"
 lru = "0.18"
 memchr = "2.8.3"
 mimalloc = "0.1.52"
@@ -60,13 +58,14 @@ pulldown-cmark = { version = "0.13", default-features = false, features = ["simd
 notify = "9.0.0-rc.4"
 raw-window-handle = "0.6"
 regex = "1.13.1"
-resvg = { version = "0.47.0", default-features = false, features = ["text", "system-fonts", "raster-images"] }
+resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
 rustc-hash = "2.1.3"
 rustix = { version = "1.1.4", default-features = false, features = ["std", "process"] }
 semver = "1.0.28"
-schemars = "1.2.1"
+schemars = "1.2.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+signal-hook = "0.4.4"
 smallvec = "1.15.2"
 smol = "2.0.2"
 stats_alloc = { version = "0.1.10", features = ["nightly"] }
@@ -83,7 +82,7 @@ tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev 
 tree-sitter-css = "0.25.0"
 tree-sitter-dart = "0.2.0"
 tree-sitter-diff = "0.1.0"
-tree-sitter-fsharp = "0.3.1"
+tree-sitter-fsharp = "0.3.11"
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-go = "0.25.0"
 tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a", package = "tree-sitter-gomod" }

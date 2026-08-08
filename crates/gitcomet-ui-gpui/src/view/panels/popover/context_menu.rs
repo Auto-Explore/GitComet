@@ -199,6 +199,65 @@ impl PopoverHost {
         super::super::super::platform_open::open_file_location(path)
     }
 
+    fn reveal_path_in_file_manager(
+        &mut self,
+        path: std::path::PathBuf,
+        fallback: Option<std::path::PathBuf>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let target = if path.exists() {
+            path
+        } else {
+            path.parent()
+                .map(ToOwned::to_owned)
+                .or(fallback)
+                .unwrap_or(path)
+        };
+
+        if !target.exists() {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Path not found: {}", target.display()),
+                cx,
+            );
+        } else if let Err(err) = self.open_file_location(&target) {
+            self.push_toast(
+                components::ToastKind::Error,
+                format!("Failed to open location: {err}"),
+                cx,
+            );
+        }
+    }
+
+    /// The paths a context-menu action on `clicked_path` covers, plus whether
+    /// they came out of the row selection. Reads only — see
+    /// [`Self::clear_status_multi_selection`] for the other half.
+    fn status_paths_for_action(
+        &self,
+        repo_id: RepoId,
+        area: DiffArea,
+        clicked_path: &std::path::PathBuf,
+        cx: &gpui::App,
+    ) -> (Vec<std::path::PathBuf>, bool) {
+        self.details_pane
+            .read(cx)
+            .status_selected_paths_for_action(repo_id, area, clicked_path)
+    }
+
+    /// Drop the row selection because an action has gone ahead with it. Never
+    /// call this before the action is settled: a confirmation the user cancels
+    /// must leave the selection standing.
+    pub(super) fn clear_status_multi_selection(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.details_pane.update(cx, |pane, cx| {
+            pane.clear_status_multi_selection(repo_id);
+            cx.notify();
+        });
+    }
+
     fn take_status_paths_for_action(
         &mut self,
         repo_id: RepoId,
@@ -206,27 +265,11 @@ impl PopoverHost {
         clicked_path: &std::path::PathBuf,
         cx: &mut gpui::Context<Self>,
     ) -> (Vec<std::path::PathBuf>, bool) {
-        let selection = self.details_pane.update(cx, |pane, cx| {
-            let selection = pane
-                .status_multi_selection
-                .get(&repo_id)
-                .map(|sel| sel.selected_paths_for_area(area))
-                .unwrap_or(&[]);
-
-            let use_selection = selection.len() > 1 && selection.iter().any(|p| p == clicked_path);
-            if !use_selection {
-                return None;
-            }
-
-            let sel = pane.status_multi_selection.remove(&repo_id)?;
-            cx.notify();
-            Some(sel.take_selected_paths_for_area(area))
-        });
-
-        match selection {
-            Some(paths) if !paths.is_empty() => (paths, true),
-            _ => (vec![clicked_path.clone()], false),
+        let (paths, used_selection) = self.status_paths_for_action(repo_id, area, clicked_path, cx);
+        if used_selection {
+            self.clear_status_multi_selection(repo_id, cx);
         }
+        (paths, used_selection)
     }
 
     pub(in super::super) fn context_menu_model(
@@ -235,6 +278,8 @@ impl PopoverHost {
         cx: &gpui::Context<Self>,
     ) -> Option<ContextMenuModel> {
         match kind {
+            PopoverKind::AppMenu => Some(app_menu::model(self)),
+            PopoverKind::AddRepoMenu => Some(add_repo_menu::model()),
             PopoverKind::PullPicker => Some(pull::model(self)),
             PopoverKind::PushPicker => Some(push::model(self)),
             PopoverKind::CommitOptionsMenu { repo_id } => {
@@ -426,6 +471,14 @@ impl PopoverHost {
         let mut close_after_action = true;
         let mut restore_diff_panel_focus_after_action = false;
         match action {
+            ContextMenuAction::AppMenu(action) => {
+                app_menu::activate(self, action, window, cx);
+                return;
+            }
+            ContextMenuAction::AddRepoMenu(action) => {
+                add_repo_menu::activate(self, action, window, cx);
+                return;
+            }
             ContextMenuAction::SelectDiff { repo_id, target } => {
                 self.store.dispatch(Msg::SelectDiff { repo_id, target });
             }
@@ -485,31 +538,11 @@ impl PopoverHost {
                     }
                 };
 
-                let target = if full_path.exists() {
-                    full_path
-                } else {
-                    full_path
-                        .parent()
-                        .map(ToOwned::to_owned)
-                        .unwrap_or_else(|| {
-                            self.workdir_for_repo(repo_id)
-                                .unwrap_or_else(|| full_path.clone())
-                        })
-                };
-
-                if !target.exists() {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Path not found: {}", target.display()),
-                        cx,
-                    );
-                } else if let Err(err) = self.open_file_location(&target) {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open location: {err}"),
-                        cx,
-                    );
-                }
+                let fallback = self.workdir_for_repo(repo_id);
+                self.reveal_path_in_file_manager(full_path, fallback, cx);
+            }
+            ContextMenuAction::OpenRepositoryLocation { path } => {
+                self.reveal_path_in_file_manager(path, None, cx);
             }
             ContextMenuAction::OpenInCodeEditor { repo_id, path } => {
                 let full_path = match repo_id {
@@ -694,6 +727,15 @@ impl PopoverHost {
                 });
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
             }
+            ContextMenuAction::ToggleBranchPin {
+                repo_id,
+                section,
+                name,
+            } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.toggle_pinned_branch(repo_id, section, &name, cx);
+                });
+            }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
             }
@@ -789,9 +831,24 @@ impl PopoverHost {
                 area,
                 path,
             } => {
+                // Staging is what marks a conflict resolved, so confirm first if
+                // any of these files still has conflict markers in the worktree.
+                // Resolved without consuming the selection, which the dialog
+                // takes over responsibility for.
                 let (paths, used_selection) =
-                    self.take_status_paths_for_action(repo_id, area, &path, cx);
+                    self.status_paths_for_action(repo_id, area, &path, cx);
+                if let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+                    &self.state,
+                    repo_id,
+                    paths.clone(),
+                    used_selection,
+                ) {
+                    let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+                    self.open_popover_at(confirm, anchor, window, cx);
+                    return;
+                }
                 if used_selection {
+                    self.clear_status_multi_selection(repo_id, cx);
                     self.store.dispatch(Msg::ClearDiffSelection { repo_id });
                     self.store.dispatch(Msg::StagePaths {
                         repo_id,
@@ -1116,16 +1173,13 @@ impl PopoverHost {
                 cx.notify();
             }
             ContextMenuAction::ConflictResolverOutputCut { text } => {
-                cx.write_to_clipboard(gpui::ClipboardItem::new_string(text));
+                crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
                 self.main_pane.update(cx, |pane, cx| {
                     pane.conflict_resolver_output_delete_selection(cx);
                 });
             }
             ContextMenuAction::ConflictResolverOutputPaste => {
-                if let Some(text) = cx
-                    .read_from_clipboard()
-                    .and_then(|item| item.text().map(|s| s.to_string()))
-                {
+                if let Some(text) = crate::clipboard::read_text(cx) {
                     self.main_pane.update(cx, |pane, cx| {
                         pane.conflict_resolver_output_paste_text(&text, cx);
                     });
@@ -1133,7 +1187,15 @@ impl PopoverHost {
             }
             ContextMenuAction::CopyText { text } => {
                 window.activate_window();
-                crate::clipboard::write_text(cx, text);
+                crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
+            }
+            ContextMenuAction::CopyDiffSelection { text } => {
+                window.activate_window();
+                crate::clipboard::write_text(
+                    cx,
+                    text,
+                    crate::clipboard::CopySource::DiffContextMenu,
+                );
             }
             ContextMenuAction::CopyDiffText { visible_ix, region } => {
                 window.activate_window();
@@ -1396,6 +1458,8 @@ impl PopoverHost {
         let model_for_mouse = model.clone();
         let tooltip_host = self.tooltip_host.clone();
         let entry_tooltips = model.entry_tooltips.clone();
+        let entry_debug_selectors = model.entry_debug_selectors.clone();
+        let shortcut_keycaps = model.shortcut_keycaps;
 
         let focus = self.context_menu_focus_handle.clone();
         // No fallback highlight: the menu opens with nothing selected (like
@@ -1454,6 +1518,13 @@ impl PopoverHost {
                             this.context_menu_selected_ix = next;
                             cx.notify();
                         }
+                        "tab" => {
+                            cx.stop_propagation();
+                            let direction = if mods.shift { -1 } else { 1 };
+                            this.context_menu_selected_ix = model_for_keys
+                                .next_selectable(this.context_menu_selected_ix, direction);
+                            cx.notify();
+                        }
                         "home" => {
                             cx.stop_propagation();
                             this.context_menu_selected_ix = model_for_keys.first_selectable();
@@ -1464,7 +1535,7 @@ impl PopoverHost {
                             this.context_menu_selected_ix = model_for_keys.last_selectable();
                             cx.notify();
                         }
-                        "enter" => {
+                        "enter" | "space" => {
                             let Some(ix) = context_menu_activate_entry_ix(
                                 &model_for_keys,
                                 this.context_menu_selected_ix,
@@ -1530,7 +1601,10 @@ impl PopoverHost {
                         action,
                     } => {
                         let selected = selected_for_render == Some(ix);
-                        let debug_selector = context_menu_entry_debug_selector(label.as_ref());
+                        let debug_selector = entry_debug_selectors
+                            .get(&ix)
+                            .map(|selector| selector.to_string())
+                            .unwrap_or_else(|| context_menu_entry_debug_selector(label.as_ref()));
                         let tooltip_text = entry_tooltips
                             .get(&ix)
                             .cloned()
@@ -1551,6 +1625,7 @@ impl PopoverHost {
                             components::ContextMenuEntry::new(("context_menu_entry", ix), label)
                                 .icon(icon_slot)
                                 .shortcut(shortcut)
+                                .shortcut_keycaps(shortcut_keycaps)
                                 .selected(selected)
                                 .disabled(disabled)
                                 .tooltip_host(tooltip_host.clone())
