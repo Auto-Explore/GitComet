@@ -121,6 +121,15 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    LoadRangeFiles {
+        repo_id: RepoId,
+        from: CommitId,
+        /// `None` lists files between `from` and the working tree.
+        to: Option<CommitId>,
+        /// Echoed back on the reply so a completion that lost a race against a
+        /// newer load can be dropped. See `HistoryState::range_files_request`.
+        request: u64,
+    },
     LoadSquashMessagePreview {
         repo_id: RepoId,
         oldest: CommitId,

@@ -636,6 +636,42 @@ impl PopoverHost {
                 self.store
                     .dispatch(Msg::CheckoutCommit { repo_id, commit_id });
             }
+            ContextMenuAction::MarkForComparison {
+                repo_id,
+                commit_id,
+                label,
+            } => {
+                self.store.dispatch(Msg::MarkForComparison {
+                    repo_id,
+                    commit_id,
+                    label,
+                });
+            }
+            ContextMenuAction::CompareWithMarked {
+                repo_id,
+                commit_id,
+                label,
+            } => {
+                self.store.dispatch(Msg::CompareWithMarked {
+                    repo_id,
+                    commit_id,
+                    label,
+                });
+            }
+            ContextMenuAction::CompareWithWorkingTree {
+                repo_id,
+                commit_id,
+                label,
+            } => {
+                self.store.dispatch(Msg::CompareWithWorkingTree {
+                    repo_id,
+                    from: commit_id,
+                    from_label: label,
+                });
+            }
+            ContextMenuAction::ClearComparisonMark { repo_id } => {
+                self.store.dispatch(Msg::ClearComparisonMark { repo_id });
+            }
             ContextMenuAction::CherryPickCommit { repo_id, commit_id } => {
                 let anchor = self
                     .popover_anchor

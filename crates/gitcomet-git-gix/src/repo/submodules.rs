@@ -5,7 +5,7 @@ use crate::util::{
     run_git_raw_output, run_git_simple, run_git_with_output,
 };
 use gitcomet_core::domain::{
-    CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
+    CommitFileChange, CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
 };
@@ -867,15 +867,39 @@ fn submodule_range_changes_from_commits(
     from: &CommitId,
     to: &CommitId,
 ) -> Result<Vec<SubmoduleInnerChange>> {
-    let status_changes = git_range_status_changes(nested_workdir, from, to)?;
-    let counts = git_range_numstat_counts(nested_workdir, from, to)?;
+    let status_changes = git_range_status_changes(nested_workdir, from, Some(to))?;
+    let counts = git_range_numstat_counts(nested_workdir, from, Some(to))?;
     Ok(status_changes
         .into_iter()
-        .map(|(path, kind)| {
-            let (additions, deletions) = counts.get(&path).cloned().unwrap_or((None, None));
+        .map(|change| {
+            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
             SubmoduleInnerChange {
-                path,
-                kind,
+                path: change.path,
+                kind: change.kind,
+                additions,
+                deletions,
+            }
+        })
+        .collect())
+}
+
+/// List the files that differ between commit `from` and the live working tree
+/// (`git diff <from>`), for the compare-against-working-tree feature. Untracked
+/// files are excluded, matching the unified diff shown in the main pane.
+pub(super) fn diff_commit_to_worktree_files(
+    workdir: &Path,
+    from: &CommitId,
+) -> Result<Vec<CommitFileChange>> {
+    let status_changes = git_range_status_changes(workdir, from, None)?;
+    let counts = git_range_numstat_counts(workdir, from, None)?;
+    Ok(status_changes
+        .into_iter()
+        .map(|change| {
+            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
+            CommitFileChange {
+                path: change.path,
+                kind: change.kind,
+                is_submodule: change.is_submodule,
                 additions,
                 deletions,
             }
@@ -952,21 +976,40 @@ fn git_numstat_counts(workdir: &Path, cached: bool) -> Result<NumstatCounts> {
     Ok(counts)
 }
 
+/// One entry of a `git diff --raw` listing: what changed at `path`, and whether
+/// that entry is a gitlink on either side (i.e. a submodule pointer rather than
+/// a file).
+struct RangeStatusChange {
+    path: PathBuf,
+    kind: gitcomet_core::domain::FileStatusKind,
+    is_submodule: bool,
+}
+
+/// Git's tree entry mode for a gitlink (a submodule pointer).
+const GITLINK_ENTRY_MODE: &[u8] = b"160000";
+
+/// `--raw` rather than `--name-status` because the entry modes are the only
+/// thing in a CLI diff that identifies a submodule pointer, and callers that
+/// build `CommitFileChange` have to flag those the same way the gix tree-diff
+/// path does.
 fn git_range_status_changes(
     workdir: &Path,
     from: &CommitId,
-    to: &CommitId,
-) -> Result<Vec<(PathBuf, gitcomet_core::domain::FileStatusKind)>> {
+    to: Option<&CommitId>,
+) -> Result<Vec<RangeStatusChange>> {
     let mut command = git_workdir_cmd_for(workdir);
     command
         .arg("--no-optional-locks")
         .arg("diff")
-        .arg("--name-status")
+        .arg("--raw")
         .arg("-z")
         .arg("--find-renames")
-        .arg(from.as_ref())
-        .arg(to.as_ref());
-    let label = "git diff --name-status -z --find-renames";
+        .arg(from.as_ref());
+    // Omitting `to` makes git compare `from` against the working tree.
+    if let Some(to) = to {
+        command.arg(to.as_ref());
+    }
+    let label = "git diff --raw -z --find-renames";
     let output = run_git_raw_output(command, label)?;
     if !output.status.success() {
         return Err(Error::new(ErrorKind::Backend(format!(
@@ -977,7 +1020,20 @@ fn git_range_status_changes(
 
     let mut fields = output.stdout.split(|byte| *byte == 0);
     let mut changes = Vec::new();
-    while let Some(status_field) = next_non_empty_nul_field(&mut fields) {
+    // Each record is `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0`,
+    // with renames and copies adding a second path field.
+    while let Some(header) = next_non_empty_nul_field(&mut fields) {
+        let Some(header) = header.strip_prefix(b":") else {
+            continue;
+        };
+        let mut tokens = header.split(|byte| *byte == b' ').filter(|t| !t.is_empty());
+        let (Some(src_mode), Some(dst_mode)) = (tokens.next(), tokens.next()) else {
+            continue;
+        };
+        // The two object ids sit between the modes and the status letter.
+        let Some(status_field) = tokens.next_back() else {
+            continue;
+        };
         let Some(status_code) = status_field.first().copied() else {
             continue;
         };
@@ -1000,10 +1056,13 @@ fn git_range_status_changes(
             continue;
         }
 
-        changes.push((
-            path_buf_from_git_bytes(path_bytes, "git diff --name-status path")?,
+        changes.push(RangeStatusChange {
+            path: path_buf_from_git_bytes(path_bytes, "git diff --raw path")?,
             kind,
-        ));
+            // A submodule added or removed by the range is a gitlink on only one
+            // side, so either side counts.
+            is_submodule: src_mode == GITLINK_ENTRY_MODE || dst_mode == GITLINK_ENTRY_MODE,
+        });
     }
 
     Ok(changes)
@@ -1012,7 +1071,7 @@ fn git_range_status_changes(
 fn git_range_numstat_counts(
     workdir: &Path,
     from: &CommitId,
-    to: &CommitId,
+    to: Option<&CommitId>,
 ) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
     command
@@ -1021,8 +1080,11 @@ fn git_range_numstat_counts(
         .arg("--numstat")
         .arg("-z")
         .arg("--find-renames")
-        .arg(from.as_ref())
-        .arg(to.as_ref());
+        .arg(from.as_ref());
+    // Omitting `to` makes git compare `from` against the working tree.
+    if let Some(to) = to {
+        command.arg(to.as_ref());
+    }
     let label = "git diff --numstat -z --find-renames";
     let output = run_git_raw_output(command, label)?;
     if !output.status.success() {

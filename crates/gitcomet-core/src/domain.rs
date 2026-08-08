@@ -346,6 +346,11 @@ pub enum BlameSource {
     WorkingTree(DiffArea),
 }
 
+/// Git's canonical empty tree object. Usable anywhere a diff wants a base with
+/// no content — comparing against it is how the changes a root commit
+/// *introduces* are expressed, since a root commit has no parent to diff from.
+pub const EMPTY_TREE_ID: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DiffTarget {
     WorkingTree {
@@ -358,7 +363,10 @@ pub enum DiffTarget {
     },
     CommitRange {
         from_commit_id: CommitId,
-        to_commit_id: CommitId,
+        /// The newer side of the comparison. `Some(id)` compares two commits
+        /// (`git diff from to`); `None` compares `from` against the live working
+        /// tree (`git diff from`), so the tip tracks uncommitted changes.
+        to_commit_id: Option<CommitId>,
         path: Option<PathBuf>,
     },
 }

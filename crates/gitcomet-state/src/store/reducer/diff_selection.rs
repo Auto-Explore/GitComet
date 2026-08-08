@@ -52,7 +52,7 @@ fn inline_submodule_entries_from_range(
             kind: change.kind,
             target: DiffTarget::CommitRange {
                 from_commit_id: (*from_commit_id).clone(),
-                to_commit_id: (*to_commit_id).clone(),
+                to_commit_id: Some((*to_commit_id).clone()),
                 path: Some(change.path.clone()),
             },
             section: InlineSubmoduleDiffSection::Range(range.kind),
@@ -323,6 +323,39 @@ pub(super) fn global_nav(
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_selected_commit(None);
                 repo_state.set_commit_details(Loadable::NotLoaded);
+            }
+        }
+    }
+
+    // Restore the two-point comparison. This has to run before the diff-target
+    // restore below: entering a comparison clears the diff pane, so doing it
+    // afterwards would wipe the very target this step is meant to show.
+    //
+    // The multi-selection that may have started the comparison is not part of
+    // the snapshot, so `compare_range` drops it and the restored view names
+    // itself after the endpoints instead of "N commits selected". The files it
+    // lists are the same either way — the endpoints are what the comparison is.
+    let restore_range = {
+        let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
+            return effects;
+        };
+        repo_state.history_state.range_selection != snapshot.range_selection
+    };
+    if restore_range {
+        match snapshot.range_selection {
+            Some(range) => effects.extend(super::effects::compare_range(
+                state,
+                repo_id,
+                range.from,
+                range.to,
+                range.from_label,
+                range.to_label,
+                super::effects::ComparisonSource::Explicit,
+            )),
+            None => {
+                if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                    repo_state.clear_range_comparison();
+                }
             }
         }
     }

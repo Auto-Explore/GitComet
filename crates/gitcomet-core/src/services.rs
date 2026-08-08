@@ -355,6 +355,20 @@ pub trait GitRepository: Send + Sync {
         )))
     }
     fn commit_details(&self, id: &CommitId) -> Result<CommitDetails>;
+    /// Files that differ between two points (`from` → `to`), for the
+    /// compare-selected-commits feature. `from` is the base/older side, so the
+    /// result reads as "what `to` adds/removes relative to `from`". `to = None`
+    /// compares `from` against the live working tree. Branch and tag comparisons
+    /// resolve their tips to commit ids before calling this.
+    fn diff_range_files(
+        &self,
+        _from: &CommitId,
+        _to: Option<&CommitId>,
+    ) -> Result<Vec<CommitFileChange>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "range file listing is not implemented for this backend",
+        )))
+    }
     /// Full `%B` messages of the given commits, in input order. Message-only
     /// on purpose: callers like the cherry-pick editor need nothing else, and
     /// implementations should skip the per-commit tree diff `commit_details`

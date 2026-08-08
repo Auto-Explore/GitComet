@@ -2277,6 +2277,146 @@ impl DetailsPaneView {
             })
             .collect()
     }
+
+    /// Render the changed-file rows for an active two-point comparison. Mirrors
+    /// [`Self::render_commit_file_rows`] but sources the file list from
+    /// `history_state.range_files` and builds `DiffTarget::CommitRange` targets,
+    /// so clicking a file loads its diff through the normal diff pipeline.
+    pub(in super::super) fn render_range_file_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(repo) = this.active_repo() else {
+            return Vec::new();
+        };
+        let Some(range_selection) = repo.history_state.range_selection.clone() else {
+            return Vec::new();
+        };
+        let Loadable::Ready(files) = &repo.history_state.range_files else {
+            return Vec::new();
+        };
+        let files = files.clone();
+
+        let theme = this.theme;
+        let ui_scale_percent = this.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let repo_id = repo.id;
+        let from = range_selection.from.clone();
+        let to = range_selection.to.clone();
+        let file_rows =
+            this.cached_range_file_rows(repo_id, repo.history_state.range_files_rev, &files);
+        let visible_signature = this.range_files_visible_signature(
+            repo_id,
+            repo.history_state.range_files_rev,
+            &range,
+            files.len(),
+        );
+        let path_alignment_group = this
+            .range_files_path_alignment_group
+            .visible_rows(visible_signature);
+
+        range
+            .filter_map(|ix| {
+                files
+                    .get(ix)
+                    .zip(file_rows.get(ix))
+                    .map(|(f, row)| (ix, f, row.label.clone(), row.visuals))
+            })
+            .map(|(ix, f, path_label, visuals)| {
+                let icon = Some(visuals.icon);
+                let color = visuals.color(&theme);
+                let target = DiffTarget::CommitRange {
+                    from_commit_id: from.clone(),
+                    to_commit_id: to.clone(),
+                    path: Some(f.path.clone()),
+                };
+                let selected = repo.diff_state.diff_target.as_ref() == Some(&target);
+                let target_for_click = target.clone();
+                let tooltip = path_label.clone();
+
+                let mut row = div()
+                    .id(("range_file", ix))
+                    .debug_selector(move || format!("range_file_{}_{}", repo_id.0, ix))
+                    .h(scaled_px(24.0))
+                    .flex()
+                    .items_center()
+                    .gap(scaled_px(8.0))
+                    .px(scaled_px(8.0))
+                    .w_full()
+                    .rounded(px(theme.radii.row))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(theme.colors.hover))
+                    .active(move |s| s.bg(theme.colors.active))
+                    .child(
+                        div()
+                            .w(scaled_px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .when_some(icon, |this, icon| {
+                                this.child(svg_icon(icon, color, scaled_px(14.0)))
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .line_height(scaled_px(18.0))
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(
+                                components::TruncatedText::aligned_path(
+                                    path_label,
+                                    path_alignment_group.clone(),
+                                )
+                                .text_sm()
+                                .render(cx),
+                            ),
+                    )
+                    .when(f.additions.is_some() || f.deletions.is_some(), |row| {
+                        row.child(div().flex_none().child(components::diff_stat(
+                            theme,
+                            ui_scale_percent,
+                            f.additions.unwrap_or(0) as usize,
+                            f.deletions.unwrap_or(0) as usize,
+                        )))
+                    })
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if !e.standard_click() {
+                            return;
+                        }
+                        let selected = this.active_repo().is_some_and(|repo| {
+                            repo.id == repo_id
+                                && repo.diff_state.diff_target.as_ref() == Some(&target_for_click)
+                        });
+                        if selected {
+                            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+                        } else {
+                            this.focus_diff_panel(window, cx);
+                            this.store.dispatch(Msg::SelectDiff {
+                                repo_id,
+                                target: target_for_click.clone(),
+                            });
+                        }
+                        cx.notify();
+                    }))
+                    .gitcomet_tooltip(theme, tooltip.clone());
+
+                if selected {
+                    row = row.bg(with_alpha(
+                        theme.colors.accent,
+                        if theme.is_dark { 0.16 } else { 0.10 },
+                    ));
+                }
+
+                row.into_any_element()
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]

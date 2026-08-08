@@ -1068,7 +1068,11 @@ fn blame_path_rev_for_target(
             ..
         } => Some((
             path.clone(),
-            BlameSource::Revision(Some(to_commit_id.0.to_string())),
+            match to_commit_id {
+                Some(to_commit_id) => BlameSource::Revision(Some(to_commit_id.0.to_string())),
+                // Working-tree tip: the new side is the worktree file.
+                None => BlameSource::WorkingTree(gitcomet_core::domain::DiffArea::Unstaged),
+            },
         )),
         _ => None,
     }
