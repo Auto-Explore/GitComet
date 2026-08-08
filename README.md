@@ -39,7 +39,6 @@ Install from the Microsoft Store:
 App and `gitcomet` command from tap:
 
 ```bash
-brew tap auto-explore/gitcomet
 brew install --cask gitcomet
 ```
 
