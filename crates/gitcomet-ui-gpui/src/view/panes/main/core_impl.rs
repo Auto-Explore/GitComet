@@ -5119,8 +5119,20 @@ impl MainPaneView {
             .unwrap_or_else(|| self.diff_visible_indices.len())
     }
 
+    /// True when the *text diff's* wrap projection maps list positions to
+    /// source rows.
+    ///
+    /// The rendered markdown preview keeps its own visual-row mapping and
+    /// never refreshes these rows, so a preview opened after a wrapped text
+    /// diff would otherwise be remapped through that diff's stale rows.
+    fn diff_wrap_projection_active(&self) -> bool {
+        self.diff_word_wrap
+            && self.diff_wrap_visible_cache_key.is_some()
+            && !self.is_markdown_preview_active()
+    }
+
     pub(in crate::view) fn diff_visible_len(&self) -> usize {
-        if self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some() {
+        if self.diff_wrap_projection_active() {
             return self.diff_wrap_visible_rows.len();
         }
         self.diff_source_visible_len()
@@ -5130,7 +5142,7 @@ impl MainPaneView {
         &self,
         visible_ix: usize,
     ) -> Option<usize> {
-        if self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some() {
+        if self.diff_wrap_projection_active() {
             return self
                 .diff_wrap_visible_rows
                 .get(visible_ix)
@@ -5143,7 +5155,7 @@ impl MainPaneView {
         &self,
         source_visible_ix: usize,
     ) -> usize {
-        if !(self.diff_word_wrap && self.diff_wrap_visible_cache_key.is_some()) {
+        if !self.diff_wrap_projection_active() {
             return source_visible_ix;
         }
 
@@ -5192,7 +5204,7 @@ impl MainPaneView {
         &self,
         visible_ix: usize,
     ) -> Option<rows::DiffTextWrapSlice> {
-        if !self.diff_word_wrap {
+        if !self.diff_wrap_projection_active() {
             return None;
         }
         let row = self.diff_wrap_visible_rows.get(visible_ix)?;

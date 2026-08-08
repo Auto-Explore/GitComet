@@ -4,8 +4,9 @@ use super::history_canvas;
 use super::*;
 
 use crate::view::markdown_preview::{
-    MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewDocument,
-    MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow, MarkdownPreviewWrapPlan,
+    MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineImage, MarkdownInlineStyle,
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
+    MarkdownPreviewWrapPlan,
 };
 use crate::view::panes::main::diff_search::DiffSearchMatcher;
 use crate::view::perf::{self, ViewPerfRenderLane, ViewPerfSpan};
@@ -240,58 +241,6 @@ impl MainPaneView {
             .collect()
     }
 
-    pub(in super::super) fn render_markdown_preview_rows(
-        this: &mut Self,
-        range: Range<usize>,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> Vec<AnyElement> {
-        let theme = this.theme;
-        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let editor_font_family: SharedString =
-            crate::font_preferences::current_editor_font_family(cx).into();
-        let Loadable::Ready(document) = &this.worktree_markdown_preview else {
-            return Vec::new();
-        };
-        let document = Arc::clone(document);
-        let bar_color = worktree_preview_bar_color(this, theme);
-        let viewport_width = this
-            .worktree_preview_scroll
-            .0
-            .borrow()
-            .base_handle
-            .bounds()
-            .size
-            .width
-            .max(px(0.0));
-        this.update_markdown_preview_horizontal_min_width(
-            document.as_ref(),
-            range.clone(),
-            bar_color,
-            editor_font_family.as_ref(),
-            window,
-            cx,
-        );
-        let view = cx.entity().clone();
-        let min_width = this.diff_horizontal_content_width().max(viewport_width);
-        render_markdown_preview_document_rows(
-            document.as_ref(),
-            range,
-            &MarkdownPreviewRenderContext {
-                theme,
-                bar_color,
-                min_width,
-                editor_font_family,
-                ui_scale_percent,
-                view: Some(view),
-                text_region: DiffTextRegion::Inline,
-                wrap_plan: this
-                    .markdown_preview_wrap
-                    .plan(MarkdownPreviewList::Worktree),
-            },
-        )
-    }
-
     pub(in super::super) fn render_markdown_diff_left_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -328,6 +277,9 @@ impl MainPaneView {
             DiffViewMode::Split => DiffTextRegion::SplitLeft,
         };
         let view = cx.entity().clone();
+        let image_base_dir: Option<Arc<std::path::Path>> = this
+            .markdown_preview_image_base_dir()
+            .map(|dir| Arc::from(dir.as_path()));
         let min_width = this.diff_horizontal_content_width().max(viewport_width);
         render_markdown_preview_document_rows(
             &preview.old,
@@ -341,6 +293,7 @@ impl MainPaneView {
                 view: Some(view),
                 text_region: region,
                 wrap_plan: this.markdown_preview_wrap.plan(MarkdownPreviewList::Old),
+                image_base_dir: image_base_dir.clone(),
             },
         )
     }
@@ -377,6 +330,9 @@ impl MainPaneView {
             cx,
         );
         let view = cx.entity().clone();
+        let image_base_dir: Option<Arc<std::path::Path>> = this
+            .markdown_preview_image_base_dir()
+            .map(|dir| Arc::from(dir.as_path()));
         let min_width = this.diff_horizontal_content_width().max(viewport_width);
         render_markdown_preview_document_rows(
             &preview.inline,
@@ -390,6 +346,7 @@ impl MainPaneView {
                 view: Some(view),
                 text_region: DiffTextRegion::Inline,
                 wrap_plan: this.markdown_preview_wrap.plan(MarkdownPreviewList::Inline),
+                image_base_dir: image_base_dir.clone(),
             },
         )
     }
@@ -426,6 +383,9 @@ impl MainPaneView {
             cx,
         );
         let view = cx.entity().clone();
+        let image_base_dir: Option<Arc<std::path::Path>> = this
+            .markdown_preview_image_base_dir()
+            .map(|dir| Arc::from(dir.as_path()));
         let min_width = this.diff_horizontal_content_width().max(viewport_width);
         render_markdown_preview_document_rows(
             &preview.new,
@@ -439,12 +399,14 @@ impl MainPaneView {
                 view: Some(view),
                 text_region: DiffTextRegion::SplitRight,
                 wrap_plan: this.markdown_preview_wrap.plan(MarkdownPreviewList::New),
+                image_base_dir: image_base_dir.clone(),
             },
         )
     }
 
     /// Rebuild the wrapped visual-row mapping for one preview list if the
-    /// width, font, scale, or document it was measured against changed.
+    /// width, font, scale, change bar, or document it was measured against
+    /// changed.
     ///
     /// Returns the number of rows the list should render: the wrapped visual
     /// row count while word wrap is on, and the plain source row count
@@ -459,42 +421,171 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> usize {
-        if !self.diff_word_wrap || available_width <= px(0.0) {
+        let Some(measure) =
+            self.markdown_preview_wrap_measure(document_rev, available_width, bar_color, cx)
+        else {
             self.markdown_preview_wrap.clear_list(list);
             return document.rows.len();
-        }
-
-        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
-        let editor_font_family: SharedString =
-            crate::font_preferences::current_editor_font_family(cx).into();
-        let key = MarkdownPreviewWrapKey {
-            width_px: u32::from(available_width.round()),
-            ui_scale_percent,
-            theme_is_dark: self.theme.is_dark,
-            editor_font_family_hash: markdown_preview_font_family_hash(&editor_font_family),
-            document_rev,
         };
-        if !self.markdown_preview_wrap.is_current(list, key) {
-            let theme = self.theme;
-            let plan =
-                crate::view::markdown_preview::build_markdown_preview_wrap_plan(document, |row| {
-                    markdown_preview_row_wrap_ranges(
-                        window,
-                        theme,
-                        row,
-                        bar_color,
-                        available_width,
-                        &editor_font_family,
-                        ui_scale_percent,
-                    )
-                });
-            self.markdown_preview_wrap.store(list, key, plan);
+
+        if !self.markdown_preview_wrap.is_current(list, measure.key) {
+            let plan = crate::view::markdown_preview::build_markdown_preview_wrap_plan(
+                document,
+                measure.wrap_row_fn(window, self.theme),
+            );
+            self.markdown_preview_wrap.store(list, measure.key, plan);
         }
 
         self.markdown_preview_wrap
-            .plan(list)
-            .map(|plan| plan.len())
+            .plan_len(list)
             .unwrap_or(document.rows.len())
+    }
+
+    /// Rebuild both split-preview wrap plans together so the two columns stay
+    /// row-aligned, and return each list's row count.
+    pub(in crate::view) fn ensure_markdown_preview_split_wrap_plans(
+        &mut self,
+        old_doc: &MarkdownPreviewDocument,
+        new_doc: &MarkdownPreviewDocument,
+        document_rev: u64,
+        available_width: Pixels,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> (usize, usize) {
+        let measure = self.markdown_preview_wrap_measure(document_rev, available_width, None, cx);
+
+        match measure {
+            None => {
+                self.markdown_preview_wrap
+                    .clear_list(MarkdownPreviewList::Old);
+                self.markdown_preview_wrap
+                    .clear_list(MarkdownPreviewList::New);
+            }
+            Some(measure)
+                if !self
+                    .markdown_preview_wrap
+                    .is_current(MarkdownPreviewList::Old, measure.key)
+                    || !self
+                        .markdown_preview_wrap
+                        .is_current(MarkdownPreviewList::New, measure.key) =>
+            {
+                let (old_plan, new_plan) =
+                    crate::view::markdown_preview::build_markdown_preview_split_wrap_plans(
+                        old_doc,
+                        new_doc,
+                        measure.wrap_row_fn(window, self.theme),
+                    )
+                    .unzip();
+                self.markdown_preview_wrap
+                    .store(MarkdownPreviewList::Old, measure.key, old_plan);
+                self.markdown_preview_wrap
+                    .store(MarkdownPreviewList::New, measure.key, new_plan);
+            }
+            Some(_) => {}
+        }
+
+        (
+            self.markdown_preview_wrap
+                .plan_len(MarkdownPreviewList::Old)
+                .unwrap_or(old_doc.rows.len()),
+            self.markdown_preview_wrap
+                .plan_len(MarkdownPreviewList::New)
+                .unwrap_or(new_doc.rows.len()),
+        )
+    }
+
+    /// Wrap plans for whichever preview lists the current view mode paints,
+    /// returning `(old, new, inline)` row counts.
+    ///
+    /// Owning the mode switch here keeps the "only painted lists hold a plan"
+    /// invariant in one place instead of spread through the render tree, and
+    /// stops an unpainted column from being wrapped at a width it never uses.
+    pub(in crate::view) fn ensure_markdown_preview_wrap_plans(
+        &mut self,
+        preview: &crate::view::markdown_preview::MarkdownPreviewDiff,
+        document_rev: u64,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> (usize, usize, usize) {
+        let (inline_width, split_width) = self.markdown_preview_wrap_widths(cx);
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                self.markdown_preview_wrap
+                    .clear_list(MarkdownPreviewList::Old);
+                self.markdown_preview_wrap
+                    .clear_list(MarkdownPreviewList::New);
+                let inline_len = self.ensure_markdown_preview_wrap_plan(
+                    MarkdownPreviewList::Inline,
+                    &preview.inline,
+                    document_rev,
+                    inline_width,
+                    None,
+                    window,
+                    cx,
+                );
+                (preview.old.rows.len(), preview.new.rows.len(), inline_len)
+            }
+            DiffViewMode::Split => {
+                self.markdown_preview_wrap
+                    .clear_list(MarkdownPreviewList::Inline);
+                let (old_len, new_len) = self.ensure_markdown_preview_split_wrap_plans(
+                    &preview.old,
+                    &preview.new,
+                    document_rev,
+                    split_width,
+                    window,
+                    cx,
+                );
+                (old_len, new_len, preview.inline.rows.len())
+            }
+        }
+    }
+
+    /// Everything needed to wrap a preview list at the current width, or
+    /// `None` when word wrap is off and the list should render unwrapped.
+    ///
+    /// The width is quantised so dragging a window edge does not invalidate
+    /// the plan on every pixel — re-wrapping a whole document is far more
+    /// expensive than the sub-bucket accuracy it would buy, and wrapping to
+    /// the rounded-down width keeps rows inside the viewport.
+    fn markdown_preview_wrap_measure(
+        &self,
+        document_rev: u64,
+        available_width: Pixels,
+        bar_color: Option<gpui::Rgba>,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<MarkdownPreviewWrapMeasure> {
+        const WRAP_WIDTH_BUCKET_PX: u32 = 8;
+
+        if !self.diff_word_wrap || available_width <= px(0.0) {
+            return None;
+        }
+
+        let width_px = (u32::from(available_width.floor()) / WRAP_WIDTH_BUCKET_PX)
+            .saturating_mul(WRAP_WIDTH_BUCKET_PX);
+        if width_px == 0 {
+            return None;
+        }
+
+        let editor_font_family: SharedString =
+            crate::font_preferences::current_editor_font_family(cx).into();
+        let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        Some(MarkdownPreviewWrapMeasure {
+            key: MarkdownPreviewWrapKey {
+                width_px,
+                ui_scale_percent,
+                theme_is_dark: self.theme.is_dark,
+                editor_font_family_hash: markdown_preview_font_family_hash(&editor_font_family),
+                // The change bar widens the row chrome, so a file that gains
+                // or loses it must re-wrap even when its text is unchanged.
+                has_change_bar: bar_color.is_some(),
+                document_rev,
+            },
+            wrap_width: px(width_px as f32),
+            bar_color,
+            editor_font_family,
+            ui_scale_percent,
+        })
     }
 
     pub(in crate::view) fn update_markdown_preview_horizontal_min_width(
@@ -514,13 +605,14 @@ impl MainPaneView {
         }
         let mut min_width = self.diff_horizontal_content_width();
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
+        let editor_font_family: SharedString = editor_font_family.to_owned().into();
         for row in range.filter_map(|ix| document.rows.get(ix)) {
             let required = markdown_preview_row_required_width(
                 window,
                 self.theme,
                 row,
                 bar_color,
-                editor_font_family,
+                &editor_font_family,
                 ui_scale_percent,
             );
             if required > min_width {
@@ -533,21 +625,21 @@ impl MainPaneView {
 }
 
 const MARKDOWN_PREVIEW_ROW_HEIGHT_PX: f32 = 28.0;
-const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
+pub(super) const MARKDOWN_PREVIEW_BASE_FONT_PX: f32 = 13.0;
 const MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX: f32 = 20.0;
-const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
+pub(in crate::view) const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
 const MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX: f32 = 8.0;
-const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
+pub(super) const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
 const MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
-const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
+pub(super) const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
 const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX: f32 = 8.0;
 const MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX: f32 = 12.0;
-const MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX: f32 = 22.0;
-const MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX: f32 = 10.0;
+pub(super) const MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX: f32 = 22.0;
+pub(super) const MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX: f32 = 10.0;
 const MARKDOWN_PREVIEW_ALERT_BADGE_FONT_PX: f32 = 11.0;
 const MARKDOWN_PREVIEW_ALERT_BADGE_PAD_X_PX: f32 = 6.0;
 const MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX: f32 = 10.0;
-const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 12.0;
+pub(super) const MARKDOWN_PREVIEW_SHELL_PAD_X_PX: f32 = 12.0;
 const MARKDOWN_PREVIEW_CODE_BORDER_PX: f32 = 1.0;
 
 fn markdown_preview_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
@@ -583,6 +675,36 @@ struct MarkdownPreviewRowHorizontalPadding {
     right_px: f32,
 }
 
+/// Inputs shared by every row of one wrap pass.
+struct MarkdownPreviewWrapMeasure {
+    key: MarkdownPreviewWrapKey,
+    wrap_width: Pixels,
+    bar_color: Option<gpui::Rgba>,
+    editor_font_family: SharedString,
+    ui_scale_percent: u32,
+}
+
+impl MarkdownPreviewWrapMeasure {
+    /// Per-row wrap callback for the plan builders.
+    fn wrap_row_fn<'a>(
+        &'a self,
+        window: &'a mut Window,
+        theme: AppTheme,
+    ) -> impl FnMut(&MarkdownPreviewRow) -> Vec<Range<usize>> + 'a {
+        move |row| {
+            markdown_preview_row_wrap_ranges(
+                window,
+                theme,
+                row,
+                self.bar_color,
+                self.wrap_width,
+                &self.editor_font_family,
+                self.ui_scale_percent,
+            )
+        }
+    }
+}
+
 pub(super) struct MarkdownPreviewRenderContext<'a> {
     pub(super) theme: AppTheme,
     pub(super) bar_color: Option<gpui::Rgba>,
@@ -594,6 +716,8 @@ pub(super) struct MarkdownPreviewRenderContext<'a> {
     /// Visual-row mapping when word wrap is on; `None` renders one row per
     /// source row with horizontal overflow clipped.
     pub(super) wrap_plan: Option<&'a MarkdownPreviewWrapPlan>,
+    /// Directory relative image paths resolve against.
+    pub(super) image_base_dir: Option<Arc<std::path::Path>>,
 }
 
 pub(super) fn render_markdown_preview_document_rows(
@@ -764,6 +888,52 @@ fn markdown_preview_row_element(
             .into_any_element();
     }
 
+    if let MarkdownPreviewRowKind::Image {
+        slice_ix,
+        slice_count,
+    } = row.kind
+    {
+        // Image bands carry none of the text machinery — no marker, no
+        // selection overlay, no styled runs — so they short-circuit here.
+        let padding = markdown_preview_row_horizontal_padding(row, ui_scale_percent);
+        return div()
+            .relative()
+            .h(markdown_preview_row_height(ui_scale_percent))
+            .min_h(markdown_preview_row_height(ui_scale_percent))
+            .w(min_width)
+            .min_w(min_width)
+            .flex()
+            .items_center()
+            .when_some(markdown_preview_row_background(theme, row), |div, bg| {
+                div.bg(bg)
+            })
+            .when_some(bar_color, |container, color| {
+                container.child(markdown_preview_change_bar(
+                    color,
+                    row_ix,
+                    MarkdownPreviewRowLayout::default(),
+                    ui_scale_percent,
+                ))
+            })
+            .child(
+                div()
+                    .flex_grow()
+                    .min_w(px(0.0))
+                    .w_full()
+                    .h_full()
+                    .pl(px(padding.left_px))
+                    .pr(px(padding.right_px))
+                    .child(markdown_preview_image_row(
+                        row,
+                        row_ix,
+                        slice_ix,
+                        slice_count,
+                        context,
+                    )),
+            )
+            .into_any_element();
+    }
+
     let is_continuation = visual_row.is_some_and(MarkdownPreviewVisualRow::is_continuation);
     let row_layout = markdown_preview_row_layout(row, ui_scale_percent);
     let typography =
@@ -774,13 +944,17 @@ fn markdown_preview_row_element(
     // under the text they continue.
     let sliced_styled = visual_row
         .filter(|visual| visual.byte_range != (0..row.text.len()))
-        .map(|visual| slice_cached_diff_styled_text(full_styled, visual.byte_range.clone()));
+        .map(|visual| {
+            slice_cached_diff_styled_text(
+                full_styled,
+                markdown_preview_expanded_slice_range(
+                    row.text.as_ref(),
+                    full_styled.text.len(),
+                    &visual.byte_range,
+                ),
+            )
+        });
     let styled = sliced_styled.as_ref().unwrap_or(full_styled);
-    let selection_text = if sliced_styled.is_some() {
-        styled.text.clone()
-    } else {
-        row.text.clone()
-    };
     let horizontal_padding = markdown_preview_row_horizontal_padding(row, ui_scale_percent);
     // Continuations keep the marker slot but leave it blank, so wrapped list
     // and footnote text stays indented under the first line instead of
@@ -793,6 +967,13 @@ fn markdown_preview_row_element(
         }
     });
     let alert_title = markdown_preview_alert_title_label(row).filter(|_| !is_continuation);
+    // Pictures written on this line. A wrapped continuation already showed
+    // them on its first visual row.
+    let inline_images: &[MarkdownInlineImage] = if is_continuation {
+        &[]
+    } else {
+        row.inline_images.as_ref()
+    };
 
     // Rows that need a content_shell wrapper for border/background styling.
     let needs_content_shell = matches!(
@@ -802,8 +983,11 @@ fn markdown_preview_row_element(
             | MarkdownPreviewRowKind::TableRow { .. }
             | MarkdownPreviewRowKind::PlainFallback
     );
-    let flatten_shell_text_directly =
-        !is_interactive && needs_content_shell && marker.is_none() && alert_title.is_none();
+    let flatten_shell_text_directly = !is_interactive
+        && needs_content_shell
+        && marker.is_none()
+        && alert_title.is_none()
+        && inline_images.is_empty();
 
     let build_content_shell = || {
         let mut content_shell = div()
@@ -883,7 +1067,7 @@ fn markdown_preview_row_element(
         content_shell
     };
 
-    let mut row_body = if flatten_shell_text_directly {
+    let row_body = if flatten_shell_text_directly {
         // Benchmarked non-interactive rows do not need the extra inner content
         // wrapper when a shell already provides sizing/background/border styles.
         let mut content_shell = build_content_shell()
@@ -922,7 +1106,10 @@ fn markdown_preview_row_element(
             .line_height(px(typography.line_height))
             .text_color(typography.text_color);
         if is_interactive {
-            content = content.debug_selector(|| format!("markdown_preview_text_box_{row_ix}"));
+            // Preview text is selectable, so the pointer should say so.
+            content = content
+                .cursor(gpui::CursorStyle::IBeam)
+                .debug_selector(|| format!("markdown_preview_text_box_{row_ix}"));
         }
 
         if let Some(font_weight) = typography.font_weight {
@@ -932,6 +1119,14 @@ fn markdown_preview_row_element(
             content = content.font_family(font_family);
         }
         if let Some(view) = context.view.clone() {
+            // Hit testing and copy resolve rows through
+            // `markdown_preview_row_text`, which works in `row.text`
+            // coordinates, so the overlay shapes the raw slice rather than the
+            // tab-expanded one this row paints.
+            let selection_text = match visual_row {
+                Some(visual) if sliced_styled.is_some() => visual.text_slice(row),
+                _ => row.text.clone(),
+            };
             content = content.child(
                 div()
                     .absolute()
@@ -943,7 +1138,7 @@ fn markdown_preview_row_element(
                         view,
                         visible_ix: row_ix,
                         region: text_region,
-                        text: selection_text.clone(),
+                        text: selection_text,
                     }),
             );
         }
@@ -960,7 +1155,7 @@ fn markdown_preview_row_element(
                     theme.colors.border,
                     if theme.is_dark { 0.92 } else { 0.88 },
                 ))),
-            _ if marker.is_none() && alert_title.is_none() => {
+            _ if marker.is_none() && alert_title.is_none() && inline_images.is_empty() => {
                 // Fast path: no marker or alert badge — use content div directly
                 // as body, skipping the intermediate line wrapper div.
                 if styled.highlights.is_empty() {
@@ -1044,6 +1239,26 @@ fn markdown_preview_row_element(
                             .child(alert_title),
                     );
                 }
+                // The diff preview's rows are a fixed height, so an inline
+                // picture is capped to the line and sits ahead of the text
+                // rather than flowing at the offset it was written at.
+                for (image_ix, inline) in inline_images.iter().enumerate() {
+                    line = line.child(
+                        div()
+                            .flex_none()
+                            .h_full()
+                            .mr(markdown_preview_scaled_px(4.0, ui_scale_percent))
+                            .overflow_hidden()
+                            .child(markdown_preview_inline_image(
+                                inline,
+                                row_ix,
+                                image_ix,
+                                theme,
+                                ui_scale_percent,
+                                context.image_base_dir.as_deref(),
+                            )),
+                    );
+                }
                 line.child(text)
             }
         };
@@ -1054,18 +1269,30 @@ fn markdown_preview_row_element(
             body
         }
     };
-    let needs_row_content_wrapper = bar_color.is_some() || row.blockquote_level > 0;
-    if !needs_row_content_wrapper {
-        row_body = if needs_content_shell {
-            row_body
-                .ml(px(horizontal_padding.left_px))
-                .mr(px(horizontal_padding.right_px))
-        } else {
-            row_body
-                .pl(px(horizontal_padding.left_px))
-                .pr(px(horizontal_padding.right_px))
-        };
-    }
+    // The row's horizontal padding always lives on a wrapper, never on the
+    // text box itself: the selection overlay is absolutely positioned inside
+    // that box, so padding applied there would shift the highlight left of the
+    // glyphs it is meant to cover and cut it short at the end of the line.
+    let build_row_content = move || {
+        let mut row_content = div()
+            .flex_grow()
+            .min_w(px(0.0))
+            .w_full()
+            .h_full()
+            .flex()
+            .items_center()
+            .pl(px(horizontal_padding.left_px))
+            .pr(px(horizontal_padding.right_px));
+        if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter(
+            theme,
+            row.blockquote_level,
+            row.alert_kind,
+            ui_scale_percent,
+        ) {
+            row_content = row_content.child(blockquote_gutter);
+        }
+        row_content
+    };
 
     if let Some(view) = context.view.clone() {
         // Interactive markdown preview row with text selection + context menu.
@@ -1100,13 +1327,22 @@ fn markdown_preview_row_element(
                     let click_count = event.click_count;
                     let position = event.position;
                     view.update(cx, |this, cx| {
-                        this.handle_diff_text_mouse_down(
+                        if !this.handle_markdown_preview_link_click(
                             row_ix,
                             text_region,
                             position,
                             click_count,
+                            window,
                             cx,
-                        );
+                        ) {
+                            this.handle_diff_text_mouse_down(
+                                row_ix,
+                                text_region,
+                                position,
+                                click_count,
+                                cx,
+                            );
+                        }
                         cx.notify();
                     });
                 }
@@ -1126,30 +1362,9 @@ fn markdown_preview_row_element(
                     });
                 }
             });
-        if needs_row_content_wrapper {
-            let mut row_content = div()
-                .flex_grow()
-                .min_w(px(0.0))
-                .w_full()
-                .h_full()
-                .flex()
-                .items_center()
-                .pl(px(horizontal_padding.left_px))
-                .pr(px(horizontal_padding.right_px));
-            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter(
-                theme,
-                row.blockquote_level,
-                row.alert_kind,
-                ui_scale_percent,
-            ) {
-                row_content = row_content.child(blockquote_gutter);
-            }
-            row_container
-                .child(row_content.child(row_body))
-                .into_any_element()
-        } else {
-            row_container.child(row_body).into_any_element()
-        }
+        row_container
+            .child(build_row_content().child(row_body))
+            .into_any_element()
     } else {
         // Non-interactive markdown preview row (benchmarks, conflict resolver).
         let row_container = div()
@@ -1173,30 +1388,9 @@ fn markdown_preview_row_element(
                 ))
             })
             .min_w(min_width);
-        if needs_row_content_wrapper {
-            let mut row_content = div()
-                .flex_grow()
-                .min_w(px(0.0))
-                .w_full()
-                .h_full()
-                .flex()
-                .items_center()
-                .pl(px(horizontal_padding.left_px))
-                .pr(px(horizontal_padding.right_px));
-            if let Some(blockquote_gutter) = markdown_preview_blockquote_gutter(
-                theme,
-                row.blockquote_level,
-                row.alert_kind,
-                ui_scale_percent,
-            ) {
-                row_content = row_content.child(blockquote_gutter);
-            }
-            row_container
-                .child(row_content.child(row_body))
-                .into_any_element()
-        } else {
-            row_container.child(row_body).into_any_element()
-        }
+        row_container
+            .child(build_row_content().child(row_body))
+            .into_any_element()
     }
 }
 
@@ -1205,21 +1399,22 @@ fn markdown_preview_row_required_width(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
     bar_color: Option<gpui::Rgba>,
-    editor_font_family: &str,
+    editor_font_family: &SharedString,
     ui_scale_percent: u32,
 ) -> Pixels {
     if matches!(row.kind, MarkdownPreviewRowKind::Spacer) {
         return px(0.0);
     }
 
-    let editor_font_family: SharedString = editor_font_family.to_owned().into();
     let typography =
-        markdown_preview_row_typography(theme, row, &editor_font_family, ui_scale_percent);
-    let default_font_family = window.text_style().font_family.clone();
+        markdown_preview_row_typography(theme, row, editor_font_family, ui_scale_percent);
+    // Word wrap measures every row of the document, so the ambient text style
+    // — which `Window::text_style` rebuilds from the style stack on each call
+    // — is only consulted for rows that do not carry their own family.
     let resolved_font_family = typography
         .font_family
         .clone()
-        .unwrap_or_else(|| default_font_family.clone());
+        .unwrap_or_else(|| window.text_style().font_family.clone());
     let cache_key = markdown_preview_row_width_cache_key(
         typography.font_size,
         typography.font_weight.unwrap_or(FontWeight::NORMAL),
@@ -1337,6 +1532,9 @@ fn markdown_preview_row_chrome_width(
 /// Wrapping is measured with the row's own typography — headings, code, and
 /// body text all use different fonts — via `gpui`'s line wrapper rather than a
 /// character-count approximation, because preview text is proportional.
+///
+/// Ranges are in `row.text` coordinates; the renderer maps them onto the
+/// tab-expanded text it paints (see `markdown_preview_expanded_slice_range`).
 pub(super) fn markdown_preview_row_wrap_ranges(
     window: &mut Window,
     theme: AppTheme,
@@ -1351,6 +1549,22 @@ pub(super) fn markdown_preview_row_wrap_ranges(
             row.kind,
             MarkdownPreviewRowKind::Spacer | MarkdownPreviewRowKind::ThematicBreak
         )
+    {
+        return Vec::new();
+    }
+
+    // Rows that already fit need no wrapper pass at all. The required width is
+    // cached per row and keyed only by font, so on a resize this is a hash and
+    // a comparison rather than a re-measure — which is what keeps a wide
+    // document from re-shaping every row on every frame of a resize drag.
+    if markdown_preview_row_required_width(
+        window,
+        theme,
+        row,
+        bar_color,
+        editor_font_family,
+        ui_scale_percent,
+    ) <= available_width
     {
         return Vec::new();
     }
@@ -1376,13 +1590,32 @@ pub(super) fn markdown_preview_row_wrap_ranges(
     }
 
     let text = row.text.clone();
+    // A tab is painted as four spaces, so it is fed to the wrapper as an
+    // element of that width rather than as a single character.
+    let tab_width = text.contains('\t').then(|| {
+        markdown_preview_shape_text_width(
+            window,
+            "    ",
+            typography.font_size,
+            typography.font_weight.unwrap_or(FontWeight::NORMAL),
+            typography.font_family.as_ref().map(SharedString::as_ref),
+            &[],
+        )
+    });
     let mut handle = window
         .text_system()
         .line_wrapper(font, px(typography.font_size));
-    let fragments = [gpui::LineFragment::text(text.as_ref())];
+    // Prose has no tabs, so the common case stays on the stack.
+    let tabbed_fragments =
+        tab_width.map(|width| markdown_preview_wrap_fragments(text.as_ref(), width));
+    let plain_fragment = [gpui::LineFragment::text(text.as_ref())];
+    let fragments: &[gpui::LineFragment<'_>] = match tabbed_fragments.as_deref() {
+        Some(fragments) => fragments,
+        None => &plain_fragment,
+    };
     let mut ranges = Vec::new();
     let mut start = 0usize;
-    for boundary in handle.wrap_line(&fragments, wrap_width) {
+    for boundary in handle.wrap_line(fragments, wrap_width) {
         if boundary.ix <= start || !text.is_char_boundary(boundary.ix) {
             continue;
         }
@@ -1394,6 +1627,437 @@ pub(super) fn markdown_preview_row_wrap_ranges(
     }
     ranges.push(start..text.len());
     ranges
+}
+
+/// Split `text` into wrap fragments, giving each tab the width it is painted
+/// at ([`DIFF_WRAP_TAB_EXPANDED_COLUMNS`] spaces) instead of a single character.
+fn markdown_preview_wrap_fragments(text: &str, tab_width: Pixels) -> Vec<gpui::LineFragment<'_>> {
+    let mut fragments = Vec::new();
+    let mut segment_start = 0usize;
+    for (ix, _) in text.match_indices('\t') {
+        if ix > segment_start {
+            fragments.push(gpui::LineFragment::text(&text[segment_start..ix]));
+        }
+        fragments.push(gpui::LineFragment::element(tab_width, 1));
+        segment_start = ix + 1;
+    }
+    if segment_start < text.len() {
+        fragments.push(gpui::LineFragment::text(&text[segment_start..]));
+    }
+    fragments
+}
+
+/// Map a `row.text` byte range onto the tab-expanded text that is painted.
+///
+/// Styled preview text replaces every tab with [`DIFF_WRAP_TAB_EXPANDED_COLUMNS`]
+/// spaces, so raw offsets would slice the painted text in the wrong place —
+/// shifted by three bytes per preceding tab, and cutting the tail short.
+fn markdown_preview_expanded_slice_range(
+    raw_text: &str,
+    expanded_len: usize,
+    range: &Range<usize>,
+) -> Range<usize> {
+    if expanded_len == raw_text.len() {
+        return range.clone();
+    }
+
+    let expand = |offset: usize| {
+        let offset = offset.min(raw_text.len());
+        let tabs = raw_text.as_bytes()[..offset]
+            .iter()
+            .filter(|byte| **byte == b'\t')
+            .count();
+        offset + tabs * (DIFF_WRAP_TAB_EXPANDED_COLUMNS - 1)
+    };
+
+    expand(range.start)..expand(range.end)
+}
+
+/// Where a markdown image source resolves to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum MarkdownPreviewImageSource {
+    /// A file inside the previewed document's own directory tree.
+    File(std::path::PathBuf),
+    /// An `http(s)` URL, fetched and cached by `gpui`'s image loader.
+    Remote(SharedString),
+}
+
+/// Resolve a markdown image source to something the preview can draw.
+///
+/// A local path must stay inside the previewed document's own directory tree,
+/// so document content cannot aim the preview at arbitrary files on disk.
+/// Anything else — `data:` payloads, other schemes, paths that climb out of
+/// the tree — resolves to nothing and falls back to the alt text.
+pub(in crate::view) fn markdown_preview_image_source(
+    base_dir: Option<&std::path::Path>,
+    source: &str,
+) -> Option<MarkdownPreviewImageSource> {
+    let source = source.trim();
+    if source.is_empty() {
+        return None;
+    }
+    if let Some(remote) = markdown_preview_remote_image_url(source) {
+        return Some(MarkdownPreviewImageSource::Remote(remote));
+    }
+    if source.contains("://") || source.starts_with("data:") {
+        return None;
+    }
+
+    // Query and fragment suffixes are common on image sources and are not part
+    // of the file name.
+    let path = source.split(['#', '?']).next().unwrap_or(source);
+    let relative = std::path::Path::new(path);
+    if relative.is_absolute() {
+        return None;
+    }
+    let mut resolved = base_dir?.to_path_buf();
+    for component in relative.components() {
+        match component {
+            std::path::Component::Normal(part) => resolved.push(part),
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+
+    resolved
+        .is_file()
+        .then_some(MarkdownPreviewImageSource::File(resolved))
+}
+
+/// The `http(s)` URL an image source names, if it names one.
+///
+/// Only these two schemes are followed; anything else a document might carry
+/// (`file:`, `javascript:`, and so on) is not something a preview should
+/// dereference.
+fn markdown_preview_remote_image_url(source: &str) -> Option<SharedString> {
+    let scheme_end = source.find("://")?;
+    let scheme = &source[..scheme_end];
+    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        .then(|| SharedString::from(source.to_owned()))
+}
+
+/// Styled text for one row, shared with the flowing single-document renderer.
+pub(in crate::view) fn markdown_preview_styled_row(
+    theme: AppTheme,
+    row: &MarkdownPreviewRow,
+) -> &CachedDiffStyledText {
+    markdown_preview_row_styled_text(theme, row)
+}
+
+/// Text element carrying inline highlights, shared with the flowing renderer.
+pub(in crate::view) fn markdown_preview_highlighted_text(
+    text: SharedString,
+    highlights: Arc<[(Range<usize>, gpui::HighlightStyle)]>,
+) -> impl IntoElement {
+    MarkdownPreviewSharedHighlightsText::new(text, highlights)
+}
+
+/// List bullet or number for a row, shared with the flowing renderer.
+pub(in crate::view) fn markdown_preview_marker_label(
+    row: &MarkdownPreviewRow,
+) -> Option<SharedString> {
+    markdown_preview_row_marker(row)
+}
+
+/// Accent colour for an alert blockquote, shared with the flowing renderer.
+pub(in crate::view) fn markdown_preview_alert_bar_color(
+    theme: AppTheme,
+    kind: MarkdownAlertKind,
+) -> gpui::Rgba {
+    markdown_preview_alert_color(theme, kind)
+}
+
+/// Badge label for an alert blockquote, shared with the flowing renderer.
+pub(in crate::view) fn markdown_preview_alert_label(
+    kind: MarkdownAlertKind,
+) -> Option<SharedString> {
+    Some(SharedString::new_static(match kind {
+        MarkdownAlertKind::Note => "NOTE",
+        MarkdownAlertKind::Tip => "TIP",
+        MarkdownAlertKind::Important => "IMPORTANT",
+        MarkdownAlertKind::Warning => "WARNING",
+        MarkdownAlertKind::Caution => "CAUTION",
+    }))
+}
+
+/// An image sized the way the document asked, for the flowing renderer.
+///
+/// Unlike the diff preview's banded block, this is one element that keeps its
+/// aspect ratio and never reserves rows it does not need.
+pub(in crate::view) fn markdown_preview_flow_image(
+    row: &MarkdownPreviewRow,
+    row_ix: usize,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    image_base_dir: Option<&std::path::Path>,
+) -> AnyElement {
+    let label_color = theme.colors.text_muted;
+    let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
+    let source = row
+        .image
+        .as_ref()
+        .and_then(|image| markdown_preview_image_source(image_base_dir, image.source.as_ref()));
+
+    let Some(source) = source else {
+        return markdown_preview_image_placeholder_element(
+            markdown_preview_image_label(row, "Image unavailable"),
+            font_size,
+            label_color,
+        )
+        .into_any_element();
+    };
+
+    let declared = row.image.as_ref().and_then(|image| image.width_px);
+    let failed_label = markdown_preview_image_label(row, "Failed to load");
+    let image = markdown_preview_image_element(
+        source,
+        markdown_preview_image_element_id("markdown_preview_block_image", row_ix, 0),
+    );
+    let image = match declared {
+        Some(width) => image.w(markdown_preview_scaled_px(width as f32, ui_scale_percent)),
+        // Without a declared size the picture keeps its own, up to the width
+        // of the document.
+        None => image.max_w_full(),
+    };
+
+    div()
+        .w_full()
+        .min_w(px(0.0))
+        .child(image.with_fallback(move || {
+            markdown_preview_image_placeholder_element(failed_label.clone(), font_size, label_color)
+                .into_any_element()
+        }))
+        .into_any_element()
+}
+
+/// Tallest an inline picture may be when the document declares no size, so a
+/// stray screenshot written mid-sentence cannot push the line open.
+const MARKDOWN_PREVIEW_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 26.0;
+
+/// One picture drawn on the same line as the text around it.
+///
+/// Badges, shields, and a logo beside a heading are all written inline, so they
+/// are sized to the line rather than to the document: a declared width wins,
+/// and anything else keeps its own size up to the inline height cap.
+pub(in crate::view) fn markdown_preview_inline_image(
+    inline: &MarkdownInlineImage,
+    row_ix: usize,
+    image_ix: usize,
+    theme: AppTheme,
+    ui_scale_percent: u32,
+    image_base_dir: Option<&std::path::Path>,
+) -> AnyElement {
+    let label_color = theme.colors.text_muted;
+    let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
+    let describe = |reason: &str| -> SharedString {
+        let described = if inline.alt.is_empty() {
+            inline.image.source.clone()
+        } else {
+            inline.alt.clone()
+        };
+        SharedString::from(format!("{reason}: {described}"))
+    };
+
+    let Some(source) = markdown_preview_image_source(image_base_dir, inline.image.source.as_ref())
+    else {
+        return markdown_preview_inline_image_placeholder(
+            describe("Image unavailable"),
+            font_size,
+            label_color,
+        );
+    };
+
+    let failed_label = describe("Failed to load");
+    let image = markdown_preview_image_element(
+        source,
+        markdown_preview_image_element_id("markdown_preview_inline_image", row_ix, image_ix),
+    );
+    let image = match inline.image.width_px {
+        Some(width) => image.w(markdown_preview_scaled_px(width as f32, ui_scale_percent)),
+        None => image.max_h(markdown_preview_scaled_px(
+            MARKDOWN_PREVIEW_INLINE_IMAGE_MAX_HEIGHT_PX,
+            ui_scale_percent,
+        )),
+    };
+
+    image
+        .with_fallback(move || {
+            markdown_preview_inline_image_placeholder(failed_label.clone(), font_size, label_color)
+        })
+        .into_any_element()
+}
+
+/// A picture element that keeps per-frame state.
+///
+/// The id matters: `gpui` only remembers which frame an animated image is
+/// showing for elements that have one, so an `img` without an id freezes on the
+/// first frame of a GIF.
+fn markdown_preview_image_element(
+    source: MarkdownPreviewImageSource,
+    id: gpui::ElementId,
+) -> gpui::Stateful<gpui::Img> {
+    match source {
+        MarkdownPreviewImageSource::File(path) => gpui::img(path),
+        MarkdownPreviewImageSource::Remote(url) => {
+            gpui::img(gpui::SharedUri::from(url.to_string()))
+        }
+    }
+    .id(id)
+}
+
+fn markdown_preview_image_element_id(
+    prefix: &'static str,
+    row_ix: usize,
+    image_ix: usize,
+) -> gpui::ElementId {
+    gpui::ElementId::from(SharedString::from(format!("{prefix}_{row_ix}_{image_ix}")))
+}
+
+fn markdown_preview_inline_image_placeholder(
+    label: SharedString,
+    font_size: Pixels,
+    color: gpui::Rgba,
+) -> AnyElement {
+    div()
+        .flex_none()
+        .text_size(font_size)
+        .text_color(color)
+        .child(label)
+        .into_any_element()
+}
+
+/// Label for a picture that is not on screen: the reason, plus the alt text or
+/// the source so the reader can tell which image is missing.
+fn markdown_preview_image_label(row: &MarkdownPreviewRow, reason: &str) -> SharedString {
+    let described = if row.text.is_empty() {
+        row.image
+            .as_ref()
+            .map(|image| image.source.clone())
+            .unwrap_or_default()
+    } else {
+        row.text.clone()
+    };
+    if described.is_empty() {
+        SharedString::from(reason.to_owned())
+    } else {
+        SharedString::from(format!("{reason}: {described}"))
+    }
+}
+
+/// Stand-in shown in place of a picture, so the row is never silently blank.
+fn markdown_preview_image_placeholder_element(
+    label: SharedString,
+    font_size: Pixels,
+    color: gpui::Rgba,
+) -> gpui::Div {
+    div()
+        .w_full()
+        .h_full()
+        .flex()
+        .items_center()
+        .overflow_hidden()
+        .whitespace_nowrap()
+        .text_size(font_size)
+        .text_color(color)
+        .child(label)
+}
+
+/// Stand-in for a source that could not be resolved at all.
+fn markdown_preview_image_placeholder(
+    row: &MarkdownPreviewRow,
+    context: &MarkdownPreviewRenderContext<'_>,
+    reason: &str,
+) -> gpui::Div {
+    markdown_preview_image_placeholder_element(
+        markdown_preview_image_label(row, reason),
+        markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, context.ui_scale_percent),
+        context.theme.colors.text_muted,
+    )
+}
+
+/// One horizontal band of an image block.
+fn markdown_preview_image_row(
+    row: &MarkdownPreviewRow,
+    row_ix: usize,
+    slice_ix: u8,
+    slice_count: u8,
+    context: &MarkdownPreviewRenderContext<'_>,
+) -> AnyElement {
+    let ui_scale_percent = context.ui_scale_percent;
+    let row_height = markdown_preview_row_height(ui_scale_percent);
+    let block_height = row_height * f32::from(slice_count.max(1));
+    let source = row.image.as_ref().and_then(|image| {
+        markdown_preview_image_source(context.image_base_dir.as_deref(), image.source.as_ref())
+    });
+    // A declared width is the size the document asked for; without one the
+    // picture fills the block.
+    let declared_width = row
+        .image
+        .as_ref()
+        .and_then(|image| image.width_px)
+        .map(|width| markdown_preview_scaled_px(width as f32, ui_scale_percent));
+
+    let band = div().relative().w_full().h(row_height).overflow_hidden();
+    let Some(source) = source else {
+        // Nothing to draw: the first band describes the picture instead, and
+        // the rest stay blank so the block keeps its shape.
+        if slice_ix != 0 {
+            return band.into_any_element();
+        }
+        return band
+            .child(markdown_preview_image_placeholder(
+                row,
+                context,
+                "Image unavailable",
+            ))
+            .into_any_element();
+    };
+
+    // `with_fallback` is called on demand, so the placeholder is rebuilt from
+    // owned pieces rather than cloning a built element.
+    let failed_label = markdown_preview_image_label(row, "Failed to load");
+    let failed_font_size =
+        markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
+    let failed_color = context.theme.colors.text_muted;
+    // `gpui` loads and caches both sources, decoding raster formats and
+    // rendering SVG, and fetches remote ones through the app's HTTP client.
+    let image = markdown_preview_image_element(
+        source,
+        markdown_preview_image_element_id("markdown_preview_image_band", row_ix, 0),
+    );
+    // `Contain` keeps the aspect ratio inside whichever box the document asked
+    // for, so a declared width never stretches the picture across the row.
+    let image = match declared_width {
+        Some(width) => image.w(width).max_w(width),
+        None => image.w_full(),
+    };
+    band.child(
+        div()
+            .absolute()
+            .left_0()
+            .right_0()
+            // Every band draws the whole picture and clips to its own slice, so
+            // a block that is half scrolled off screen still renders correctly.
+            .top(-(row_height * f32::from(slice_ix)))
+            .h(block_height)
+            .child(
+                image
+                    .h(block_height)
+                    .object_fit(gpui::ObjectFit::Contain)
+                    // A source that resolved but would not load — a 404 badge,
+                    // an unreachable host, an undecodable file — says so rather
+                    // than leaving a blank band.
+                    .with_fallback(move || {
+                        markdown_preview_image_placeholder_element(
+                            failed_label.clone(),
+                            failed_font_size,
+                            failed_color,
+                        )
+                        .into_any_element()
+                    }),
+            ),
+    )
+    .into_any_element()
 }
 
 /// Gutter bar marking a row as added or removed.
@@ -1488,6 +2152,8 @@ fn markdown_preview_shape_text_width(
         .width
 }
 
+/// Gutter colour the flowing markdown preview marks a wholly added or removed
+/// file with, shared with the source preview so the two agree.
 pub(in crate::view) fn worktree_markdown_preview_bar_color(
     this: &MainPaneView,
     theme: AppTheme,
@@ -1704,17 +2370,21 @@ fn markdown_preview_row_layout(
 ) -> MarkdownPreviewRowLayout {
     let scaled = |value: f32| markdown_preview_scaled_value(value, ui_scale_percent);
     match row.kind {
+        // Headings are inset evenly so the text sits centred in its row rather
+        // than riding high with a gap underneath. The section break above a
+        // top-level heading is a spacer row; these insets are the smaller gap
+        // that surrounds the heading text itself.
         MarkdownPreviewRowKind::Heading { level: 1 | 2 } => MarkdownPreviewRowLayout {
-            top_inset_px: scaled(0.0),
-            bottom_inset_px: scaled(0.0),
+            top_inset_px: scaled(2.0),
+            bottom_inset_px: scaled(2.0),
         },
         MarkdownPreviewRowKind::Heading { level: 3 } => MarkdownPreviewRowLayout {
-            top_inset_px: scaled(2.0),
-            bottom_inset_px: scaled(4.0),
+            top_inset_px: scaled(3.0),
+            bottom_inset_px: scaled(3.0),
         },
         MarkdownPreviewRowKind::Heading { .. } => MarkdownPreviewRowLayout {
-            top_inset_px: scaled(2.0),
-            bottom_inset_px: scaled(6.0),
+            top_inset_px: scaled(4.0),
+            bottom_inset_px: scaled(4.0),
         },
         MarkdownPreviewRowKind::DetailsSummary => MarkdownPreviewRowLayout {
             top_inset_px: scaled(0.0),
@@ -1739,6 +2409,11 @@ fn markdown_preview_row_layout(
         MarkdownPreviewRowKind::ThematicBreak => MarkdownPreviewRowLayout {
             top_inset_px: scaled(6.0),
             bottom_inset_px: scaled(6.0),
+        },
+        // The bands of an image block must tile without gaps.
+        MarkdownPreviewRowKind::Image { .. } => MarkdownPreviewRowLayout {
+            top_inset_px: scaled(0.0),
+            bottom_inset_px: scaled(0.0),
         },
         MarkdownPreviewRowKind::Spacer => MarkdownPreviewRowLayout {
             top_inset_px: scaled(0.0),
@@ -1890,7 +2565,9 @@ fn markdown_preview_row_horizontal_padding(
     }
 }
 
-fn markdown_preview_row_background(
+/// The wash a row carries in its own right: a diff change hint, an alert's
+/// tint, or the warning band on a line the parser could not interpret.
+pub(in crate::view) fn markdown_preview_row_background(
     theme: AppTheme,
     row: &MarkdownPreviewRow,
 ) -> Option<gpui::Rgba> {
@@ -2403,18 +3080,20 @@ fn working_tree_summary_history_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewRow, MarkdownPreviewRowKind,
-        build_cached_diff_styled_text, history_scope_shows_graph_color_marker,
-        history_worktree_node_color, markdown_preview_alert_title_label,
-        markdown_preview_inline_highlight, markdown_preview_row_background,
-        markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
-        markdown_preview_row_marker, markdown_preview_row_styled_text,
+        MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource, MarkdownPreviewRow,
+        MarkdownPreviewRowKind, build_cached_diff_styled_text,
+        history_scope_shows_graph_color_marker, history_worktree_node_color,
+        markdown_preview_alert_title_label, markdown_preview_expanded_slice_range,
+        markdown_preview_image_source, markdown_preview_inline_highlight,
+        markdown_preview_row_background, markdown_preview_row_horizontal_padding,
+        markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
         markdown_preview_row_typography, worktree_preview_apply_query_overlay,
     };
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::history_graph;
     use crate::view::markdown_preview::MarkdownInlineSpan;
     use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+    use crate::view::rows::diff_text::DIFF_WRAP_TAB_EXPANDED_COLUMNS;
     use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use gitcomet_core::domain::LogScope;
     use gpui::{FontWeight, SharedString};
@@ -2435,6 +3114,8 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         }
@@ -2632,6 +3313,8 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
@@ -2787,6 +3470,8 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
@@ -2814,6 +3499,8 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
@@ -2836,6 +3523,8 @@ mod tests {
             footnote_label: Some("1".into()),
             alert_kind: None,
             starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
@@ -2863,6 +3552,8 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };
@@ -2952,18 +3643,22 @@ mod tests {
             MarkdownInlineSpan {
                 byte_range: 0..4,
                 style: MarkdownInlineStyle::Link,
+                link_url: None,
             },
             MarkdownInlineSpan {
                 byte_range: 5..10,
                 style: MarkdownInlineStyle::Underline,
+                link_url: None,
             },
             MarkdownInlineSpan {
                 byte_range: 11..17,
                 style: MarkdownInlineStyle::Strikethrough,
+                link_url: None,
             },
             MarkdownInlineSpan {
                 byte_range: 18..23,
                 style: MarkdownInlineStyle::Normal,
+                link_url: None,
             },
         ]);
 
@@ -2990,6 +3685,113 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_slices_map_onto_the_tab_expanded_painted_text() {
+        // Wrap ranges are measured on `row.text`, where a tab is one byte, but
+        // the painted text expands each tab to four spaces. Slicing the
+        // painted text with raw offsets shifted every wrapped row and dropped
+        // the tail of the line.
+        let raw = "\tab\tcd";
+        let expanded_len =
+            raw.len() + raw.matches('\t').count() * (DIFF_WRAP_TAB_EXPANDED_COLUMNS - 1);
+
+        // "\tab" -> "    ab", "\tcd" -> "    cd"
+        assert_eq!(
+            markdown_preview_expanded_slice_range(raw, expanded_len, &(0..3)),
+            0..6
+        );
+        assert_eq!(
+            markdown_preview_expanded_slice_range(raw, expanded_len, &(3..raw.len())),
+            6..expanded_len
+        );
+        // A row without tabs keeps its ranges untouched.
+        assert_eq!(
+            markdown_preview_expanded_slice_range("abcd", 4, &(1..3)),
+            1..3
+        );
+    }
+
+    #[test]
+    fn image_paths_resolve_only_inside_the_documents_own_directory() {
+        let dir = std::env::temp_dir().join(format!(
+            "gitcomet_md_image_path_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("clock")
+                .as_nanos()
+        ));
+        let nested = dir.join("assets");
+        std::fs::create_dir_all(&nested).expect("create fixture dirs");
+        let image = nested.join("shot.png");
+        std::fs::write(&image, b"not really a png").expect("write fixture image");
+        let outside = dir.parent().expect("temp dir parent").join("outside.png");
+        std::fs::write(&outside, b"not really a png").expect("write outside fixture");
+
+        let resolve = |source: &str| markdown_preview_image_source(Some(dir.as_path()), source);
+        let file = |path: &std::path::Path| Some(MarkdownPreviewImageSource::File(path.to_owned()));
+        let remote = |url: &str| {
+            Some(MarkdownPreviewImageSource::Remote(SharedString::from(
+                url.to_owned(),
+            )))
+        };
+
+        assert_eq!(resolve("assets/shot.png"), file(&image));
+        assert_eq!(resolve("./assets/shot.png"), file(&image));
+        // Query and fragment suffixes are common in markdown image sources and
+        // are not part of the file name.
+        assert_eq!(resolve("assets/shot.png?v=2"), file(&image));
+        assert_eq!(resolve("assets/shot.png#frag"), file(&image));
+
+        // Badges and hosted screenshots resolve to the URL, query string and
+        // all — that is what identifies the image.
+        assert_eq!(
+            resolve("https://img.shields.io/badge/a-b.svg?logo=x"),
+            remote("https://img.shields.io/badge/a-b.svg?logo=x")
+        );
+        assert_eq!(
+            resolve("http://example.com/a.png"),
+            remote("http://example.com/a.png")
+        );
+        // Remote sources resolve without a base directory, since nothing is
+        // resolved against the document's location.
+        assert_eq!(
+            markdown_preview_image_source(None, "https://example.com/a.png"),
+            remote("https://example.com/a.png")
+        );
+
+        // A file that exists but sits outside the document's tree is refused,
+        // so document content cannot aim the preview at arbitrary files.
+        assert_eq!(resolve("../outside.png"), None);
+        // Schemes a preview has no business dereferencing.
+        assert_eq!(resolve("data:image/png;base64,AAAA"), None);
+        assert_eq!(resolve("file:///etc/passwd"), None);
+        assert_eq!(resolve("javascript:alert(1)"), None);
+        // Missing files, empty sources, and a missing base directory resolve
+        // to nothing.
+        assert_eq!(resolve("assets/absent.png"), None);
+        assert_eq!(resolve("   "), None);
+        assert_eq!(markdown_preview_image_source(None, "assets/shot.png"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_file(&outside);
+    }
+
+    #[test]
+    fn heading_rows_are_inset_evenly_above_and_below() {
+        // Headings used to carry more space below than above, so the text rode
+        // high in its row instead of sitting centred in the break.
+        for level in 1..=6u8 {
+            let row = markdown_row(MarkdownPreviewRowKind::Heading { level });
+            let layout =
+                markdown_preview_row_layout(&row, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+            assert_eq!(
+                layout.top_inset_px, layout.bottom_inset_px,
+                "h{level} should be inset evenly: {layout:?}"
+            );
+        }
+    }
+
+    #[test]
     fn markdown_preview_row_styled_text_repairs_spans_that_split_a_multibyte_char() {
         // A span pointing inside a multi-byte character used to reach `gpui`
         // as a text run whose length splits that character, aborting the
@@ -3002,10 +3804,12 @@ mod tests {
             MarkdownInlineSpan {
                 byte_range: 0..1,
                 style: MarkdownInlineStyle::Bold,
+                link_url: None,
             },
             MarkdownInlineSpan {
                 byte_range: 6..9,
                 style: MarkdownInlineStyle::Italic,
+                link_url: None,
             },
         ]);
 
@@ -3080,6 +3884,8 @@ mod tests {
             footnote_label: None,
             alert_kind: None,
             starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
             styled_text_cache: Default::default(),
             measured_width_px: Default::default(),
         };

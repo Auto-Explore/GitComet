@@ -38,6 +38,7 @@ gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false 
 
 # External crates
 alacritty_terminal = "0.26"
+anyhow = "1"
 clap = { version = "4.6.6", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.24.0"
@@ -113,6 +114,7 @@ tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"
 unicode-segmentation = "1.13.3"
+ureq = { version = "3.3.0", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
 windows = "0.62.2"
 wayland-client = "0.31.15"

@@ -106,7 +106,7 @@ fn file_preview_text_multi_clicks_select_word_then_line(cx: &mut gpui::TestAppCo
     let expected_word = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let offset = pane
-            .diff_text_offset_for_position_for_tests(0, DiffTextRegion::Inline, click)
+            .diff_text_offset_for_position(0, DiffTextRegion::Inline, click)
             .expect("expected file-preview diff text offset");
         let word_range = crate::text_selection::token_range_for_offset(&expected_line, offset);
         expected_line[word_range].to_string()

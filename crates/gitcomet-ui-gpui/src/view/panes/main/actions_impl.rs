@@ -230,33 +230,6 @@ impl MainPaneView {
             .map(|source_visible_ix| self.diff_visual_ix_for_source_visible_ix(source_visible_ix))
     }
 
-    fn markdown_preview_visible_len(&self) -> usize {
-        let Loadable::Ready(preview) = &self.file_markdown_preview else {
-            return 0;
-        };
-
-        match self.diff_view {
-            DiffViewMode::Inline => self
-                .markdown_preview_wrap
-                .plan(MarkdownPreviewList::Inline)
-                .map(|plan| plan.len())
-                .unwrap_or(preview.inline.rows.len()),
-            DiffViewMode::Split => self
-                .markdown_preview_wrapped_len(MarkdownPreviewList::Old, preview.old.rows.len())
-                .max(self.markdown_preview_wrapped_len(
-                    MarkdownPreviewList::New,
-                    preview.new.rows.len(),
-                )),
-        }
-    }
-
-    fn markdown_preview_wrapped_len(&self, list: MarkdownPreviewList, row_len: usize) -> usize {
-        self.markdown_preview_wrap
-            .plan(list)
-            .map(|plan| plan.len())
-            .unwrap_or(row_len)
-    }
-
     /// Translate a source row index into the row the list actually scrolls to,
     /// which differs once word wrap has split earlier rows.
     fn markdown_preview_visual_ix(&self, list: MarkdownPreviewList, row_ix: usize) -> usize {
@@ -562,7 +535,7 @@ impl MainPaneView {
             return;
         }
         let visible_len = if self.is_markdown_preview_active() && !self.is_file_preview_active() {
-            self.markdown_preview_visible_len()
+            self.markdown_preview_row_count().unwrap_or(0)
         } else {
             self.diff_visible_len()
         };

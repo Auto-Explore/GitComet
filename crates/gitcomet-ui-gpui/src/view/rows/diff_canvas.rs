@@ -3658,6 +3658,7 @@ fn paint_selectable_diff_text(
         },
         offset_map: offset_map.cloned(),
         streamed_ascii_monospace_cell_width: hitbox_cell_width,
+        wrapped: None,
     };
 
     view.update(cx, |this, cx| {
@@ -3789,6 +3790,53 @@ mod tests {
 
     fn rgba(r: f32, g: f32, b: f32) -> gpui::Rgba {
         gpui::Rgba { r, g, b, a: 1.0 }
+    }
+
+    /// `gpui` shapes a line by splitting the text at each run boundary, so a
+    /// run that ends inside a multi-byte character aborts the process in
+    /// `str::split_at`. This pins the diff canvas to the shared guard: without
+    /// it, a highlight pointing into a character reaches `shape_line` as a
+    /// run length that splits it.
+    #[test]
+    fn compute_runs_never_splits_a_multibyte_char() {
+        let text = "— dash — end";
+        let style = TextStyle::default();
+        let bold = HighlightStyle {
+            font_weight: Some(gpui::FontWeight::BOLD),
+            ..HighlightStyle::default()
+        };
+
+        for highlights in [
+            // Inside the leading em dash, from both sides.
+            vec![(0..1, bold)],
+            vec![(1..3, bold)],
+            vec![(2..4, bold)],
+            // Inside the second em dash, after valid text.
+            vec![(0..2, bold), (7..9, bold)],
+            // Past the end, overlapping, and out of order.
+            vec![(5..99, bold)],
+            vec![(0..6, bold), (2..4, bold)],
+            vec![(6..9, bold), (0..3, bold)],
+            vec![],
+        ] {
+            let runs = compute_runs(text, &style, &highlights);
+            let total: usize = runs.iter().map(|run| run.len).sum();
+            assert_eq!(
+                total,
+                text.len(),
+                "runs must tile the text for {highlights:?}"
+            );
+
+            let mut rest = text;
+            for run in &runs {
+                assert!(
+                    rest.is_char_boundary(run.len),
+                    "run of {} bytes splits a character in {rest:?} for {highlights:?}",
+                    run.len
+                );
+                rest = &rest[run.len..];
+            }
+        }
     }
 
     fn test_bounds(x: f32, y: f32, width: f32, height: f32) -> Bounds<Pixels> {

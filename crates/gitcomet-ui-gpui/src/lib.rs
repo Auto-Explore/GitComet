@@ -5,6 +5,7 @@ mod clipboard;
 mod external_editor;
 pub mod focused_diff;
 mod font_preferences;
+mod http;
 mod kit;
 mod launch_guard;
 mod linux_gui_env;

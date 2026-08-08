@@ -360,6 +360,8 @@ mod diff_text;
 mod history;
 mod history_canvas;
 mod history_graph_paint;
+mod markdown_document;
+mod markdown_flow_text;
 mod sidebar;
 mod status;
 
@@ -367,7 +369,16 @@ mod status;
 pub(crate) mod benchmarks;
 
 pub(in crate::view) use self::conflict_resolver::resolved_output_gutter_width;
-pub(in crate::view) use self::history::worktree_markdown_preview_bar_color;
+pub(in crate::view) use self::history::{
+    markdown_preview_alert_bar_color, markdown_preview_alert_label, markdown_preview_flow_image,
+    markdown_preview_highlighted_text, markdown_preview_inline_image,
+    markdown_preview_marker_label, markdown_preview_row_background, markdown_preview_styled_row,
+    worktree_markdown_preview_bar_color,
+};
+pub(in crate::view) use self::markdown_document::{
+    MarkdownDocumentContext, render_markdown_document,
+};
+pub(in crate::view) use self::markdown_flow_text::markdown_flow_row_offset;
 pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 

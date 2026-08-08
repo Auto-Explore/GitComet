@@ -101,6 +101,21 @@ impl MainPaneView {
     ) -> Option<DiffTextPos> {
         let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
         let local = hitbox.bounds.localize(&position)?;
+        if let Some(wrapped) = &hitbox.wrapped {
+            // A wrapped row spans several visual lines, so the click resolves
+            // against the layout it was painted with; `Err` is the clamp to the
+            // nearest boundary, which is what a drag past the text wants.
+            let painted_offset = match wrapped.layout.index_for_position(position) {
+                Ok(offset) | Err(offset) => offset,
+            };
+            return Some(DiffTextPos {
+                source_visible_ix: hitbox.source_visible_ix,
+                region,
+                offset: hitbox
+                    .text_start_offset
+                    .saturating_add(wrapped.row_offset(painted_offset).min(hitbox.text_len)),
+            });
+        }
         let x = local.x.max(px(0.0));
         let local_offset = if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
             if cell_width <= px(0.0) {
@@ -177,7 +192,18 @@ impl MainPaneView {
     }
 
     #[cfg(test)]
-    pub(in crate::view) fn diff_text_offset_for_position_for_tests(
+    pub(in crate::view) fn diff_text_hitbox_bounds_for_tests(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<Bounds<Pixels>> {
+        self.diff_text_hitboxes
+            .get(&(visible_ix, region))
+            .map(|hitbox| hitbox.bounds)
+    }
+
+    /// Byte offset in the text a row painted, for a point inside that row.
+    pub(in crate::view) fn diff_text_offset_for_position(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
@@ -334,6 +360,50 @@ impl MainPaneView {
             offset: line_len,
         };
         self.set_diff_text_selection(anchor, head, 1);
+    }
+
+    /// Open the link menu when a plain click lands on a web link in the
+    /// rendered markdown preview, and report whether it did.
+    ///
+    /// A double or triple click is still a text selection — only a single
+    /// click follows the link, so selecting the words of a link keeps working.
+    pub(in super::super::super) fn handle_markdown_preview_link_click(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+        click_count: usize,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if click_count > 1 || self.diff_text_has_selection() {
+            return false;
+        }
+        let Some(url) = self.markdown_preview_link_at(visible_ix, region, position) else {
+            return false;
+        };
+
+        // Anchor under the row so the menu sits below the link rather than on
+        // top of the text it describes.
+        let anchor = self
+            .diff_text_hitboxes
+            .get(&(visible_ix, region))
+            .map(|hitbox| point(position.x, hitbox.bounds.bottom()))
+            .unwrap_or(position);
+        self.open_popover_at(PopoverKind::MarkdownLinkMenu { url }, anchor, window, cx);
+        true
+    }
+
+    /// Open the link menu for something that is a link in its own right — a
+    /// badge or any other picture wrapped in one — rather than a span of text.
+    pub(in crate::view) fn open_markdown_preview_link_menu(
+        &mut self,
+        url: SharedString,
+        anchor: Point<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover_at(PopoverKind::MarkdownLinkMenu { url }, anchor, window, cx);
     }
 
     pub(in super::super::super) fn handle_diff_text_mouse_down(
@@ -796,7 +866,7 @@ impl MainPaneView {
         // Markdown preview rows already come from pre-rendered preview text, so
         // fall back to the existing materialized path there.
         if self.is_markdown_preview_active() {
-            return self.markdown_preview_row_text(visible_ix, region).len();
+            return self.markdown_preview_row_text_len(visible_ix, region);
         }
 
         if self.is_file_preview_active() {

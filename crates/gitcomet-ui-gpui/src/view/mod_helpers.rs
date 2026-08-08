@@ -593,6 +593,28 @@ pub(super) struct DiffTextHitbox {
     pub(super) text_len: usize,
     pub(super) offset_map: Option<DiffTextOffsetMap>,
     pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
+    /// Set by rows that painted their text with wrapping. Those rows cover
+    /// several visual lines, so a click resolves through the layout they were
+    /// painted with rather than through an x offset along one shaped line.
+    pub(super) wrapped: Option<DiffTextWrappedHit>,
+}
+
+/// The wrapped layout a row painted, plus what it takes to read offsets back
+/// in row coordinates.
+pub(super) struct DiffTextWrappedHit {
+    pub(super) layout: gpui::TextLayout,
+    /// The row's raw text, when tabs were expanded for painting.
+    pub(super) untabbed: Option<SharedString>,
+}
+
+impl DiffTextWrappedHit {
+    /// Offset in row coordinates for an offset in the painted text.
+    pub(super) fn row_offset(&self, painted_offset: usize) -> usize {
+        match &self.untabbed {
+            Some(raw) => crate::view::rows::markdown_flow_row_offset(raw, painted_offset),
+            None => painted_offset,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1176,18 +1198,30 @@ pub(in crate::view) struct MarkdownPreviewWrapKey {
     pub(in crate::view) ui_scale_percent: u32,
     pub(in crate::view) theme_is_dark: bool,
     pub(in crate::view) editor_font_family_hash: u64,
+    pub(in crate::view) has_change_bar: bool,
     pub(in crate::view) document_rev: u64,
 }
 
 /// Cached visual-row mappings for the wrapped markdown preview lists.
 ///
-/// The plans are rebuilt whenever the viewport width, UI scale, font, or the
-/// underlying document changes; the key makes that a cheap equality check on
-/// every frame instead of a re-wrap.
+/// The plans are rebuilt whenever the viewport width, UI scale, font, change
+/// bar, or the underlying document changes; the key makes that a cheap
+/// equality check on every frame instead of a re-wrap.
+///
+/// A slot holding a key with no plan means "measured at this key, not
+/// wrapped" — the document was too large to wrap, and the list renders
+/// unwrapped. Keeping the key is what stops that verdict from being
+/// recomputed on every single frame.
+#[derive(Debug)]
+struct MarkdownPreviewWrapSlot {
+    key: MarkdownPreviewWrapKey,
+    /// `None` once the document proved too large to wrap.
+    plan: Option<crate::view::markdown_preview::MarkdownPreviewWrapPlan>,
+}
+
 #[derive(Debug, Default)]
 pub(in crate::view) struct MarkdownPreviewWrapCache {
-    keys: [Option<MarkdownPreviewWrapKey>; 4],
-    plans: [crate::view::markdown_preview::MarkdownPreviewWrapPlan; 4],
+    slots: [Option<MarkdownPreviewWrapSlot>; 4],
 }
 
 impl MarkdownPreviewWrapCache {
@@ -1204,8 +1238,7 @@ impl MarkdownPreviewWrapCache {
         &self,
         list: MarkdownPreviewList,
     ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
-        let slot = Self::slot(list);
-        self.keys[slot].is_some().then(|| &self.plans[slot])
+        self.slots[Self::slot(list)].as_ref()?.plan.as_ref()
     }
 
     pub(in crate::view) fn is_current(
@@ -1213,30 +1246,89 @@ impl MarkdownPreviewWrapCache {
         list: MarkdownPreviewList,
         key: MarkdownPreviewWrapKey,
     ) -> bool {
-        self.keys[Self::slot(list)] == Some(key)
+        self.slots[Self::slot(list)]
+            .as_ref()
+            .is_some_and(|slot| slot.key == key)
     }
 
     pub(in crate::view) fn store(
         &mut self,
         list: MarkdownPreviewList,
         key: MarkdownPreviewWrapKey,
-        plan: crate::view::markdown_preview::MarkdownPreviewWrapPlan,
+        plan: Option<crate::view::markdown_preview::MarkdownPreviewWrapPlan>,
     ) {
-        let slot = Self::slot(list);
-        self.keys[slot] = Some(key);
-        self.plans[slot] = plan;
+        self.slots[Self::slot(list)] = Some(MarkdownPreviewWrapSlot { key, plan });
     }
 
-    #[cfg(test)]
+    /// Number of visual rows a list renders, or `None` when it is unwrapped.
     pub(in crate::view) fn plan_len(&self, list: MarkdownPreviewList) -> Option<usize> {
         self.plan(list).map(|plan| plan.len())
     }
 
+    /// True once a list has been measured at some key, whether or not that
+    /// produced a plan.
+    #[cfg(test)]
+    pub(in crate::view) fn has_key(&self, list: MarkdownPreviewList) -> bool {
+        self.slots[Self::slot(list)].is_some()
+    }
+
     pub(in crate::view) fn clear_list(&mut self, list: MarkdownPreviewList) {
-        let slot = Self::slot(list);
-        if self.keys[slot].take().is_some() {
-            self.plans[slot] = Default::default();
+        self.slots[Self::slot(list)] = None;
+    }
+}
+
+#[cfg(test)]
+mod markdown_preview_wrap_cache_tests {
+    use super::*;
+
+    fn key(width_px: u32) -> MarkdownPreviewWrapKey {
+        MarkdownPreviewWrapKey {
+            width_px,
+            ui_scale_percent: 100,
+            theme_is_dark: false,
+            editor_font_family_hash: 7,
+            has_change_bar: false,
+            document_rev: 1,
         }
+    }
+
+    #[test]
+    fn storing_no_plan_still_records_the_key_so_the_verdict_is_not_recomputed() {
+        // An oversized document renders unwrapped. Forgetting the key would
+        // make every frame re-attempt the wrap it already knows will fail.
+        let mut cache = MarkdownPreviewWrapCache::default();
+        cache.store(MarkdownPreviewList::Inline, key(800), None);
+
+        assert!(cache.plan(MarkdownPreviewList::Inline).is_none());
+        assert!(cache.is_current(MarkdownPreviewList::Inline, key(800)));
+        assert!(cache.has_key(MarkdownPreviewList::Inline));
+        assert!(!cache.is_current(MarkdownPreviewList::Inline, key(808)));
+    }
+
+    #[test]
+    fn a_change_bar_transition_invalidates_the_key() {
+        let mut cache = MarkdownPreviewWrapCache::default();
+        cache.store(
+            MarkdownPreviewList::Worktree,
+            key(800),
+            Some(Default::default()),
+        );
+
+        let with_bar = MarkdownPreviewWrapKey {
+            has_change_bar: true,
+            ..key(800)
+        };
+        assert!(!cache.is_current(MarkdownPreviewList::Worktree, with_bar));
+    }
+
+    #[test]
+    fn clearing_a_list_drops_both_its_key_and_plan() {
+        let mut cache = MarkdownPreviewWrapCache::default();
+        cache.store(MarkdownPreviewList::Old, key(800), Some(Default::default()));
+        cache.clear_list(MarkdownPreviewList::Old);
+
+        assert!(!cache.has_key(MarkdownPreviewList::Old));
+        assert!(cache.plan(MarkdownPreviewList::Old).is_none());
     }
 }
 
@@ -3734,6 +3826,10 @@ pub(super) enum PopoverKind {
     DiffHunkMenu {
         repo_id: RepoId,
         src_ix: usize,
+    },
+    /// Actions for a web link clicked in the rendered markdown preview.
+    MarkdownLinkMenu {
+        url: SharedString,
     },
     DiffEditorMenu {
         repo_id: RepoId,

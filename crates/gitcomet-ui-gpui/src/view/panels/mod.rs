@@ -286,6 +286,9 @@ pub(in crate::view) enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    OpenWebUrl {
+        url: String,
+    },
     CopyDiffSelection {
         text: String,
     },

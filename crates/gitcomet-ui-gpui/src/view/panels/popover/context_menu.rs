@@ -16,6 +16,7 @@ mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
 mod history_branch_filter;
+mod markdown_link;
 mod mergetool_settings;
 mod previous_commit_messages;
 mod pull;
@@ -317,6 +318,7 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
             } => Some(remote::model(self, *repo_id, name)),
+            PopoverKind::MarkdownLinkMenu { url } => Some(markdown_link::model(url)),
             PopoverKind::StashMenu {
                 repo_id,
                 index,
@@ -1152,6 +1154,15 @@ impl PopoverHost {
             ContextMenuAction::CopyText { text } => {
                 window.activate_window();
                 crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
+            }
+            ContextMenuAction::OpenWebUrl { url } => {
+                if let Err(err) = crate::view::platform_open::open_url(&url) {
+                    self.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open link: {err}"),
+                        cx,
+                    );
+                }
             }
             ContextMenuAction::CopyDiffSelection { text } => {
                 window.activate_window();

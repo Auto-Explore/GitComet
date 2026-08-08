@@ -9387,7 +9387,7 @@ fn patch_diff_text_multi_clicks_match_editor_selection_behavior(cx: &mut gpui::T
     let expected_word = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         let offset = pane
-            .diff_text_offset_for_position_for_tests(visible_ix, DiffTextRegion::Inline, click)
+            .diff_text_offset_for_position(visible_ix, DiffTextRegion::Inline, click)
             .expect("expected diff text offset for click");
         let word_range = crate::text_selection::token_range_for_offset(&expected_line, offset);
         expected_line[word_range].to_string()

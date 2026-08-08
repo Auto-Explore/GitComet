@@ -20,6 +20,10 @@ fn image_diff_ready_shows_processing(has_file: bool, cache_active: bool) -> bool
 /// Inset between an image/SVG preview column and its artwork.
 const IMAGE_PREVIEW_CELL_PADDING_PX: f32 = 16.0;
 
+/// Gap above the first and below the last row of a rendered markdown preview,
+/// so the document does not start and end flush against the pane edges.
+pub(in crate::view) const MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX: f32 = 12.0;
+
 impl MainPaneView {
     pub(in crate::view) fn render_diff_horizontal_scrollbar(
         theme: AppTheme,
@@ -347,35 +351,13 @@ impl MainPaneView {
                             Loadable::Ready(preview) => {
                                 let preview = std::sync::Arc::clone(preview);
                                 let document_rev = self.file_markdown_preview_seq;
-                                let (inline_width, split_width) =
-                                    self.markdown_preview_wrap_widths(cx);
-                                let old_len = self.ensure_markdown_preview_wrap_plan(
-                                    MarkdownPreviewList::Old,
-                                    &preview.old,
-                                    document_rev,
-                                    split_width,
-                                    None,
-                                    window,
-                                    cx,
-                                );
-                                let new_len = self.ensure_markdown_preview_wrap_plan(
-                                    MarkdownPreviewList::New,
-                                    &preview.new,
-                                    document_rev,
-                                    split_width,
-                                    None,
-                                    window,
-                                    cx,
-                                );
-                                let inline_len = self.ensure_markdown_preview_wrap_plan(
-                                    MarkdownPreviewList::Inline,
-                                    &preview.inline,
-                                    document_rev,
-                                    inline_width,
-                                    None,
-                                    window,
-                                    cx,
-                                );
+                                let (old_len, new_len, inline_len) = self
+                                    .ensure_markdown_preview_wrap_plans(
+                                        &preview,
+                                        document_rev,
+                                        window,
+                                        cx,
+                                    );
                                 self.render_markdown_diff_preview(
                                     theme, old_len, new_len, inline_len, cx,
                                 )
@@ -985,11 +967,17 @@ impl MainPaneView {
                 .into_any_element()
         };
 
+        let document_edge_gap = crate::ui_scale::design_px_from_percent(
+            MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX,
+            ui_scale_percent,
+        );
         macro_rules! mk_list {
             ($name:expr, $len:expr, $scroll:expr, $proc:expr) => {
                 uniform_list($name, $len, $proc)
                     .h_full()
                     .min_h(px(0.0))
+                    .pt(document_edge_gap)
+                    .pb(document_edge_gap)
                     .track_scroll(&$scroll)
                     .with_horizontal_sizing_behavior(
                         gpui::ListHorizontalSizingBehavior::Unconstrained,
