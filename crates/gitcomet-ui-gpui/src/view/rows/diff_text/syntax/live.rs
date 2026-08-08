@@ -765,4 +765,113 @@ mod tests {
             "a language with no wired grammar should fall back rather than build"
         );
     }
+
+    /// The merge tool's resolved output and the diff panes above it must colour
+    /// the same code the same way, and they do not share an engine: this one
+    /// sweeps a `QueryCursor` over the viewport ([`sweep_runs`]), the diff panes
+    /// materialize per-line tokens and resolve overlaps with
+    /// `normalize_non_overlapping_tokens`. Hold the tree constant and check the
+    /// two derivations agree byte for byte.
+    ///
+    /// Deliberately macro-free: [`super::prepared`] also applies
+    /// `*_injections.scm` and this engine does not yet, so a `println!` body is
+    /// a known divergence rather than a regression. See the note on
+    /// [`sweep_runs`] about merging injected layers into its capture stream.
+    #[test]
+    fn the_live_engine_agrees_with_the_prepared_engine_the_diff_panes_use() {
+        let text = concat!(
+            "use std::fmt;\n",
+            "\n",
+            "/// A stage in the pipeline.\n",
+            "pub struct Stage<'a> {\n",
+            "    pub name: &'a str,\n",
+            "    pub retries: usize,\n",
+            "}\n",
+            "\n",
+            "impl Stage<'_> {\n",
+            "    pub fn bump(&mut self) -> usize {\n",
+            "        self.retries = self.retries.wrapping_add(1);\n",
+            "        self.retries\n",
+            "    }\n",
+            "}\n",
+        );
+
+        let theme = AppTheme::gitcomet_dark();
+        let palette = syntax_highlight_palette(theme);
+        let snapshot = document(text, Vec::new()).snapshot(theme);
+
+        let mut live_by_byte = vec![None; text.len()];
+        for (range, style) in snapshot.highlights_for_byte_range(0..text.len()) {
+            for byte in range {
+                live_by_byte[byte] = Some(style);
+            }
+        }
+
+        // Same tree, so any disagreement below is in how the captures are turned
+        // into styles -- which is exactly what differs between the two engines.
+        let line_starts = line_starts_for(text);
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Rust)
+            .expect("rust should have a wired grammar");
+        let per_line = collect_treesitter_document_line_tokens_for_line_window(
+            &snapshot.0.tree,
+            spec,
+            text.as_bytes(),
+            line_starts.as_ref(),
+            0,
+            line_starts.len(),
+        );
+        let mut prepared_by_byte = vec![None; text.len()];
+        for (line_ix, tokens) in per_line.iter().enumerate() {
+            let line_start = line_starts[line_ix];
+            for token in tokens {
+                let Some(style) = palette.style(token.kind) else {
+                    continue;
+                };
+                for byte in (line_start + token.range.start)..(line_start + token.range.end) {
+                    prepared_by_byte[byte] = Some(style);
+                }
+            }
+        }
+
+        // Guards against the comparison passing because both sides are empty.
+        for (needle, kind) in [
+            ("Stage<'a>", SyntaxTokenKind::Type),
+            ("usize", SyntaxTokenKind::TypeBuiltin),
+            ("retries: usize", SyntaxTokenKind::Property),
+            ("wrapping_add", SyntaxTokenKind::FunctionMethod),
+        ] {
+            let at = text.find(needle).expect("fixture should contain the probe");
+            assert_eq!(
+                live_by_byte[at],
+                palette.style(kind),
+                "{needle:?} at {at} should carry {kind:?}; without these classes the \
+                 comparison below cannot tell tree-sitter from the heuristic tokenizer"
+            );
+        }
+
+        // Newlines are excluded: `prepared` clips every token to
+        // `line_content_end_byte`, so a capture spanning a line break stops at
+        // the `\n`, while a swept run carries straight through it. Invisible in
+        // rendering -- a newline has no glyph -- and not worth reshaping either
+        // engine over.
+        let mismatched = (0..text.len())
+            .filter(|byte| text.as_bytes()[*byte] != b'\n')
+            .filter(|byte| live_by_byte[*byte] != prepared_by_byte[*byte])
+            .map(|byte| {
+                let line_ix = line_starts.partition_point(|start| *start <= byte) - 1;
+                format!(
+                    "byte {byte} (line {line_ix}, {:?}): live={:?} prepared={:?}",
+                    text.as_bytes()[byte] as char,
+                    live_by_byte[byte].and_then(|style| style.color),
+                    prepared_by_byte[byte].and_then(|style| style.color),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert!(
+            mismatched.is_empty(),
+            "the resolved output and the diff panes must colour identical text \
+             identically; diverging bytes:\n  {}",
+            mismatched.join("\n  ")
+        );
+    }
 }

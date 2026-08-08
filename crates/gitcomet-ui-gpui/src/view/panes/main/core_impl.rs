@@ -1759,6 +1759,9 @@ impl MainPaneView {
             conflict_resolved_output_live_syntax: None,
             conflict_resolved_output_live_syntax_reparse: None,
             conflict_resolved_output_live_syntax_source: None,
+            conflict_resolved_output_provider_theme_epoch: 1,
+            conflict_resolved_output_live_syntax_building: None,
+            conflict_resolved_output_live_syntax_build: None,
             conflict_resolved_output_measure_row: 0,
             conflict_resolved_outline_stash: None,
             #[cfg(test)]
@@ -1818,6 +1821,10 @@ impl MainPaneView {
 
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        self.conflict_resolved_output_provider_theme_epoch = self
+            .conflict_resolved_output_provider_theme_epoch
+            .wrapping_add(1)
+            .max(1);
         self.clear_diff_text_style_caches();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_style_caches();
@@ -2240,6 +2247,111 @@ impl MainPaneView {
         pending
     }
 
+    /// Build the first tree off-thread after the foreground budget ran out.
+    ///
+    /// Guarded on the revision it is building for, so a burst of refreshes over
+    /// the same text schedules one parse rather than one per call. A result for
+    /// text the buffer has since moved past is never installed — it is re-issued
+    /// against the current text instead, so the pane cannot be left on the
+    /// heuristic fallback by an edit that raced the parse.
+    fn ensure_conflict_resolved_output_live_syntax_build(
+        &mut self,
+        language: rows::DiffSyntaxLanguage,
+        text: Arc<str>,
+        line_starts: Arc<[usize]>,
+        mask: Arc<[Range<usize>]>,
+        revision: ResolvedOutputSourceRevision,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolved_output_live_syntax_building == Some(revision) {
+            return;
+        }
+        self.conflict_resolved_output_live_syntax_building = Some(revision);
+
+        let build_mask = Arc::clone(&mask);
+        self.conflict_resolved_output_live_syntax_build =
+            Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
+                let build = move || {
+                    rows::LiveSyntaxDocument::new(language, text, line_starts, build_mask, None)
+                };
+                let built = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(build).await
+                } else {
+                    build()
+                };
+                let _ = view.update(cx, |this, cx| {
+                    if this.conflict_resolved_output_live_syntax_building != Some(revision) {
+                        // A newer generation owns the guard. Leave it alone --
+                        // clearing it here would let its own scheduling check
+                        // pass again and start a duplicate build.
+                        return;
+                    }
+                    this.conflict_resolved_output_live_syntax_building = None;
+                    let Some(document) = built else {
+                        // Unbudgeted, so this is not a timeout: the text is past
+                        // the size ceiling or the language has no wired grammar.
+                        // Both are permanent, so re-issuing would spin. The
+                        // heuristic arm of the refresh is the right answer here,
+                        // and it is the same one the diff panes take.
+                        return;
+                    };
+                    // Zed's `parse_again` (`Buffer::reparse`): a result for text
+                    // the buffer has moved past is useless, but so is waiting --
+                    // nothing else is guaranteed to come along and ask again, so
+                    // re-issue from where the buffer is now.
+                    let still_current = this
+                        .conflict_resolver_input
+                        .read_with(cx, |input, _| {
+                            ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
+                        })
+                        == revision;
+                    if !still_current {
+                        this.reissue_conflict_resolved_output_live_syntax_build(cx);
+                        return;
+                    }
+                    this.conflict_resolved_output_live_syntax = Some(document);
+                    // Record what it was built for, or the next refresh sees a
+                    // stale source, retries in the foreground, fails the budget
+                    // again and schedules another build -- forever.
+                    this.conflict_resolved_output_live_syntax_source = Some((revision, mask));
+                    this.rebind_conflict_resolved_output_highlight_provider(cx);
+                });
+            }));
+    }
+
+    /// Re-run the off-thread first parse against the buffer as it stands now.
+    ///
+    /// Called when a build lands for text the buffer has already moved past.
+    /// Recomputes the source the way [`Self::refresh_conflict_resolved_output_syntax`]
+    /// does, so the two cannot disagree about what the tree is being built over.
+    /// A no-op once a document exists -- from there on, edits go through
+    /// `sync`, which always has a tree to fall back on.
+    fn reissue_conflict_resolved_output_live_syntax_build(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.conflict_resolved_output_live_syntax.is_some() {
+            return;
+        }
+        let Some(language) = self.conflict_resolved_preview_syntax_language else {
+            return;
+        };
+        let output_snapshot = self
+            .conflict_resolver_input
+            .read_with(cx, |input, _| input.text_snapshot());
+        let text: Arc<str> = output_snapshot.as_shared_string().into();
+        let line_starts = output_snapshot.shared_line_starts();
+        let protected_ranges =
+            resolved_output_placeholder_protected_ranges(text.as_ref(), line_starts.as_ref());
+        let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), text.as_ref());
+        let revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
+        self.ensure_conflict_resolved_output_live_syntax_build(
+            language,
+            text,
+            line_starts,
+            mask,
+            revision,
+            cx,
+        );
+    }
+
     /// Finish a reparse the foreground budget could not.
     ///
     /// Only reachable when an edit landed on a document too large to reparse in
@@ -2309,7 +2421,7 @@ impl MainPaneView {
         );
         let binding_key = resolved_output_live_provider_binding_key(
             version,
-            self.theme,
+            self.conflict_resolved_output_provider_theme_epoch,
             unresolved_ranges.as_ref(),
         );
         let provider =
@@ -2389,19 +2501,48 @@ impl MainPaneView {
                     Some((revision, Arc::clone(&mask)));
             }
             None => {
-                self.conflict_resolved_output_live_syntax = language.and_then(|language| {
-                    rows::LiveSyntaxDocument::new(
-                        language,
-                        Arc::clone(&text),
-                        Arc::clone(&line_starts),
-                        Arc::clone(&mask),
-                        budget,
-                    )
-                });
+                // Zed's fast path (`Buffer::reparse` under `sync_parse_timeout`):
+                // worth a budgeted attempt because a small buffer finishes inside
+                // it and never shows a frame of unhighlighted text. Skipped when
+                // a build for exactly this text is already off-thread -- that
+                // attempt has demonstrably failed once, so re-running it on the
+                // keystroke path is pure latency.
+                let already_building =
+                    self.conflict_resolved_output_live_syntax_building == Some(revision);
+                self.conflict_resolved_output_live_syntax =
+                    language.filter(|_| !already_building).and_then(|language| {
+                        rows::LiveSyntaxDocument::new(
+                            language,
+                            Arc::clone(&text),
+                            Arc::clone(&line_starts),
+                            Arc::clone(&mask),
+                            budget,
+                        )
+                    });
                 self.conflict_resolved_output_live_syntax_source = self
                     .conflict_resolved_output_live_syntax
                     .is_some()
                     .then(|| (revision, Arc::clone(&mask)));
+
+                // A first parse has no tree to fall back on, so exhausting the
+                // foreground budget leaves nothing at all -- and an incremental
+                // reparse can never rescue it, because there is no document to
+                // reparse. Finish it off-thread instead. Not a rare path: the
+                // live budget is 1ms and a cold parse of a ~10KB file is
+                // already over it, so without this the resolved output would
+                // sit on heuristic tokens for the whole session.
+                if let Some(language) = language
+                    .filter(|_| self.conflict_resolved_output_live_syntax.is_none())
+                {
+                    self.ensure_conflict_resolved_output_live_syntax_build(
+                        language,
+                        Arc::clone(&text),
+                        Arc::clone(&line_starts),
+                        Arc::clone(&mask),
+                        revision,
+                        cx,
+                    );
+                }
             }
         }
 
@@ -2426,14 +2567,23 @@ impl MainPaneView {
                     // stale patch.
                     let binding_key = resolved_output_live_provider_binding_key(
                         version,
-                        self.theme,
+                        self.conflict_resolved_output_provider_theme_epoch,
                         unresolved_ranges.as_ref(),
                     );
                     input.set_highlight_provider_with_key(binding_key, provider, text.len(), cx);
                 }
                 None => {
-                    // No grammar, or past the size ceiling: heuristic tokens,
-                    // with the open conflicts still called out in red.
+                    // Heuristic tokens, with the open conflicts still called out
+                    // in red. Reachable in exactly two states, both permanent and
+                    // both shared with the diff panes above -- the language has
+                    // no wired grammar, or the text is past
+                    // `PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES`. It is *not*
+                    // a general fallback: the tokenizer knows only keywords,
+                    // strings, numbers and comments, so landing here while a
+                    // grammar exists is precisely the bug where the output stops
+                    // matching the panes above it. A budget-exhausted first parse
+                    // must go to `ensure_conflict_resolved_output_live_syntax_build`
+                    // instead, and this arm is the stopgap only until it lands.
                     let highlights = language
                         .map(|language| {
                             build_resolved_output_syntax_fallback_highlights(

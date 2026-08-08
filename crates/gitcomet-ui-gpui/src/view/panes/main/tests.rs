@@ -2,8 +2,8 @@ use super::{
     ClearDiffSelectionAction, FocusedMergetoolOutput, RenderableConflictFile,
     ResolvedOutputConflictMarker, ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
     apply_conflict_choice_provenance_hints, apply_focused_mergetool_output,
-    apply_resolved_output_unresolved_highlights,
-    apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
+    apply_resolved_output_unresolved_highlights, apply_three_way_empty_base_provenance_hints,
+    build_focused_mergetool_save_payload,
     build_line_starts, build_resolved_output_conflict_markers,
     build_resolved_output_conflict_markers_from_block_ranges,
     clear_diff_selection_action, coalesce_resolved_output_edit_deltas,
@@ -2329,30 +2329,30 @@ fn the_live_provider_binding_key_is_stable_for_unchanged_inputs() {
     // that re-entry would rebind, notify again, and spin forever — the observe
     // loop would never settle and the pane would hang. The key must therefore
     // be a function of what the provider closes over, not a counter.
-    let theme = AppTheme::gitcomet_dark();
     let ranges: Arc<[std::ops::Range<usize>]> = Arc::from([5..21usize]);
 
-    let key = resolved_output_live_provider_binding_key(7, theme, ranges.as_ref());
+    let key = resolved_output_live_provider_binding_key(7, 3, ranges.as_ref());
     assert_eq!(
         key,
-        resolved_output_live_provider_binding_key(7, theme, ranges.as_ref()),
+        resolved_output_live_provider_binding_key(7, 3, ranges.as_ref()),
         "identical inputs must produce an identical key, or the observe cycle never settles"
     );
 
     assert_ne!(
         key,
-        resolved_output_live_provider_binding_key(8, theme, ranges.as_ref()),
+        resolved_output_live_provider_binding_key(8, 3, ranges.as_ref()),
         "a new document version must rebind so interpolation is reset"
     );
     assert_ne!(
         key,
-        resolved_output_live_provider_binding_key(7, AppTheme::gitcomet_light(), ranges.as_ref()),
-        "the theme is baked into the provider's palette, so it must rebind"
+        resolved_output_live_provider_binding_key(7, 4, ranges.as_ref()),
+        "the syntax palette is baked into the snapshot, so a theme change must rebind. \
+         A theme epoch is used rather than sampled colours because two dark themes can \
+         agree on any few colours you sample and still differ on the palette."
     );
     assert_ne!(
         key,
-        resolved_output_live_provider_binding_key(7, theme, &[5..21usize, 40..56]),
+        resolved_output_live_provider_binding_key(7, 3, &[5..21usize, 40..56]),
         "the unresolved overlay is baked into the closure, so it must rebind"
     );
 }
-

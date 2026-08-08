@@ -4681,6 +4681,15 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
     base_lines.extend(
         (base_lines.len()..fixture_line_count).map(|ix| format!("let base_bg_{ix}: usize = {ix};")),
     );
+    // Carry classes the heuristic tokenizer cannot produce: a `type_identifier`,
+    // a `field_identifier` and a method call. `syntax/heuristic.rs` colours
+    // keywords, strings, numbers and comments and nothing else, so these are the
+    // only probes that can tell a real tree-sitter parse from the fallback.
+    let discriminating_lines = [
+        "struct Stage { retries: usize }".to_string(),
+        "fn bump(stage: &mut Stage) { stage.retries = stage.retries.wrapping_add(1); }".to_string(),
+    ];
+    base_lines.extend(discriminating_lines.iter().cloned());
     let base_text = base_lines.join("\n");
 
     let mut ours_lines = base_lines.clone();
@@ -4705,6 +4714,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
         (current_lines.len()..fixture_line_count)
             .map(|ix| format!("let resolved_bg_{ix}: usize = {ix};")),
     );
+    current_lines.extend(discriminating_lines.iter().cloned());
     let current_text = current_lines.join("\n");
     let resolved_output = crate::view::conflict_resolver::generate_resolved_text(
         crate::view::conflict_resolver::parse_conflict_markers(&current_text).as_slice(),
@@ -4862,9 +4872,134 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
                     "row {target_ix} continues a block comment and should be comment-coloured \
                      straight away: {highlights:?}"
                 );
+
+                // Do not assert on a keyword here. `syntax/heuristic.rs` colours
+                // keywords too, so a `let`-shaped assertion passes in exactly the
+                // broken state this test exists to catch -- the pane silently
+                // falling back to the tokenizer because it never got a live
+                // tree-sitter document. Only classes the tokenizer cannot
+                // produce can tell the two engines apart.
+                let all = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..text.len())
+                });
+                assert_resolved_output_carries_treesitter_classes(&text, &all, pane.theme);
             });
         });
     });
+
+    // The real regression this guards: a cold parse of a ~10KB output does not
+    // fit the 1ms live foreground budget, so the first `LiveSyntaxDocument::new`
+    // returns None. There is no tree to reparse incrementally, so unless the
+    // build is finished off-thread the view stays on heuristic tokens forever --
+    // which loses exactly the classes tree-sitter adds over a tokenizer: method
+    // calls and field accesses.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                // Drop the document so the next refresh takes the *first parse*
+                // path. An edit alone would not do: `sync` still has the old
+                // tree to fall back on, so it recovers through the ordinary
+                // deferred-reparse route and the bug stays hidden.
+                pane.conflict_resolved_output_live_syntax = None;
+                pane.conflict_resolved_output_live_syntax_source = None;
+                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                    foreground_parse: std::time::Duration::ZERO,
+                });
+                pane.conflict_resolver_input.update(cx, |input, cx| {
+                    let at = input.text().len();
+                    input.replace_utf8_range(at..at, "\n", cx);
+                });
+            });
+        });
+    });
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolved output recovers a live document after a budget-exhausted first parse",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| pane.conflict_resolved_output_live_syntax.is_some(),
+        |pane| {
+            format!(
+                "live_syntax={} building={:?}",
+                pane.conflict_resolved_output_live_syntax.is_some(),
+                pane.conflict_resolved_output_live_syntax_building,
+            )
+        },
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.set_full_document_syntax_budget_override_for_tests(rows::DiffSyntaxBudget {
+                    foreground_parse: std::time::Duration::from_secs(1),
+                });
+                let snapshot = pane.conflict_resolver_input.read(cx).text_snapshot();
+                let text: Arc<str> = snapshot.as_shared_string().into();
+                let live = pane
+                    .conflict_resolved_output_live_syntax
+                    .as_ref()
+                    .expect("recovered live document")
+                    .snapshot(pane.theme)
+                    .highlights_for_byte_range(0..text.len());
+                let cold = rows::LiveSyntaxDocument::new(
+                    rows::DiffSyntaxLanguage::Rust,
+                    Arc::clone(&text),
+                    snapshot.shared_line_starts(),
+                    resolved_output_placeholder_protected_ranges_for_test(&text),
+                    None,
+                )
+                .expect("cold parse")
+                .snapshot(pane.theme)
+                .highlights_for_byte_range(0..text.len());
+                assert!(!live.is_empty(), "the recovered document must highlight");
+                assert_eq!(
+                    live, cold,
+                    "the off-thread build must produce the same tree as an unbudgeted parse"
+                );
+
+                // And the recovered document must reach the *pane*, not just sit
+                // in the field: the input is still showing whatever the earlier
+                // fallback installed until the provider is rebound over it.
+                let effective = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..text.len())
+                });
+                assert_resolved_output_carries_treesitter_classes(&text, &effective, pane.theme);
+            });
+        });
+    });
+
+    // Switching theme must actually re-colour the output. The syntax palette is
+    // baked into LiveSyntaxSnapshot at build time, and `set_highlight_provider_with_key`
+    // early-returns on an unchanged key -- so if the key does not move on a theme
+    // change, the old palette stays installed and the text keeps its old colours.
+    let (dark_runs, light_runs) = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                let len = pane.conflict_resolver_input.read(cx).text().len();
+                let dark = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..len.min(400))
+                });
+                // Deliberately another *dark* theme that differs only in its
+                // syntax palette. A key built from sampled theme colours (or
+                // from `is_dark`) would collide here and silently keep the old
+                // palette; only a theme epoch catches it.
+                pane.set_theme(other_dark_theme(), cx);
+                let light = pane.conflict_resolver_input.update(cx, |input, _| {
+                    input.debug_effective_highlights_for_range(0..len.min(400))
+                });
+                pane.set_theme(crate::theme::AppTheme::gitcomet_dark(), cx);
+                (dark, light)
+            })
+        })
+    });
+    assert!(!dark_runs.is_empty() && !light_runs.is_empty());
+    assert_ne!(
+        dark_runs, light_runs,
+        "a theme change must rebind the provider so the new syntax palette is used"
+    );
+    assert!(
+        dark_runs.iter().zip(light_runs.iter()).any(|((_, a), (_, b))| a.color != b.color),
+        "the difference must be in the colours themselves, not just run boundaries"
+    );
 
     // Settling must be idempotent. Installing a highlight provider notifies the
     // input, which re-enters the `cx.observe` that installed it; if a quiet
@@ -7120,4 +7255,100 @@ fn measure_resolved_output_typing_rerenders(cx: &mut gpui::TestAppContext) {
     );
 
     std::fs::remove_dir_all(&workdir).expect("cleanup typing fixture");
+}
+
+/// Assert the resolved output is coloured by tree-sitter rather than by the
+/// heuristic tokenizer.
+///
+/// The two engines agree on keywords, strings, numbers and comments, so an
+/// assertion built from those classes cannot see the difference. These four
+/// probes can: `syntax/heuristic.rs` has no notion of a `primitive_type`, a
+/// `type_identifier`, a `field_identifier` or a method call, and leaves all of
+/// them plain. If any comes back uncoloured, the pane is on the fallback --
+/// which is what the diff panes above it are *not* on, hence the mismatch.
+fn assert_resolved_output_carries_treesitter_classes(
+    text: &str,
+    highlights: &[(std::ops::Range<usize>, gpui::HighlightStyle)],
+    theme: crate::theme::AppTheme,
+) {
+    for (needle, class, expected) in [
+        ("usize", "primitive_type", theme.syntax.type_builtin),
+        ("Stage {", "type_identifier", theme.syntax.type_name),
+        ("retries: usize", "field_identifier", theme.syntax.property),
+        ("wrapping_add", "method call", theme.syntax.function_method),
+    ] {
+        let at = text
+            .find(needle)
+            .unwrap_or_else(|| panic!("fixture should contain {needle:?}"));
+        let found = highlights
+            .iter()
+            .find(|(range, _)| range.start <= at && range.end > at)
+            .and_then(|(_, style)| style.color);
+        assert_eq!(
+            found,
+            Some(expected.into()),
+            "{needle:?} at {at} is a {class} and must carry its tree-sitter colour; \
+             the heuristic tokenizer leaves it plain, so a mismatch here means the \
+             resolved output never got a live document"
+        );
+    }
+}
+
+/// A dark theme that differs from `gitcomet_dark` only in its syntax palette.
+fn other_dark_theme() -> crate::theme::AppTheme {
+    crate::theme::AppTheme::from_json_str(
+        r##"{
+            "name": "OtherDark",
+            "themes": [
+                {
+                    "key": "other_dark",
+                    "name": "OtherDark",
+                    "appearance": "dark",
+                    "colors": {
+                        "window_bg": "#0d1016ff",
+                        "surface_bg": "#1f2127ff",
+                        "surface_bg_elevated": "#1f2127ff",
+                        "active_section": "#2d2f34ff",
+                        "border": "#2d2f34ff",
+                        "text": "#bfbdb6ff",
+                        "text_muted": "#8a8986ff",
+                        "accent": "#5ac1feff",
+                        "hover": "#2d2f34ff",
+                        "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
+                        "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
+                        "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
+                        "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
+                        "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
+                        "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
+                        "danger": "#ef7177ff",
+                        "warning": "#feb454ff",
+                        "success": "#aad84cff"
+                    },
+                    "syntax": {
+                        "keyword": "#112233ff",
+                        "comment": "#445566ff"
+                    },
+                    "radii": { "panel": 2.0, "pill": 2.0, "row": 2.0 }
+                }
+            ]
+        }"##,
+    )
+    .expect("fixture theme JSON should parse")
+}
+
+/// The placeholder mask for a resolved-output text, matching what the pane
+/// derives: the placeholder rows minus their line terminator.
+fn resolved_output_placeholder_protected_ranges_for_test(
+    text: &str,
+) -> Arc<[std::ops::Range<usize>]> {
+    let mut mask = Vec::new();
+    let mut offset = 0usize;
+    for line in text.split_inclusive('\n') {
+        let trimmed = line.trim_end_matches('\n').trim_end_matches('\r');
+        if conflict_resolver::line_is_unresolved_conflict_placeholder(trimmed) {
+            mask.push(offset..offset + trimmed.len());
+        }
+        offset += line.len();
+    }
+    mask.into()
 }

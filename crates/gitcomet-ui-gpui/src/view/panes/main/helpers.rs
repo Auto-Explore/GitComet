@@ -1257,20 +1257,14 @@ pub(super) fn resolved_output_live_syntax_mask(
 /// unresolved-conflict spans are the other two things baked into the closure.
 pub(super) fn resolved_output_live_provider_binding_key(
     document_version: u64,
-    theme: AppTheme,
+    theme_epoch: u64,
     unresolved_ranges: &[Range<usize>],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = rustc_hash::FxHasher::default();
     document_version.hash(&mut hasher);
-    theme.is_dark.hash(&mut hasher);
-    if let Some(color) = resolved_output_unresolved_highlight_style(theme).color {
-        color.h.to_bits().hash(&mut hasher);
-        color.s.to_bits().hash(&mut hasher);
-        color.l.to_bits().hash(&mut hasher);
-        color.a.to_bits().hash(&mut hasher);
-    }
+    theme_epoch.hash(&mut hasher);
     unresolved_ranges.hash(&mut hasher);
     hasher.finish()
 }
@@ -2862,6 +2856,21 @@ pub(crate) struct MainPaneView {
     /// triggered the refresh, into an unbreakable loop.
     pub(in crate::view) conflict_resolved_output_live_syntax_source:
         Option<(ResolvedOutputSourceRevision, Arc<[Range<usize>]>)>,
+    /// Bumped on every theme change. The syntax palette is baked into
+    /// `LiveSyntaxSnapshot`, so a new theme needs a new provider -- and the
+    /// binding key is the only thing that makes `TextInput` adopt one.
+    /// Hashing theme *colours* into the key instead is not enough: two dark
+    /// themes can agree on the few colours sampled and still differ on the
+    /// syntax palette, leaving stale colours installed.
+    pub(in crate::view) conflict_resolved_output_provider_theme_epoch: u64,
+    /// Revision an off-thread first parse is currently running for, so repeated
+    /// refreshes over the same text do not pile up duplicate builds.
+    pub(in crate::view) conflict_resolved_output_live_syntax_building:
+        Option<ResolvedOutputSourceRevision>,
+    /// In-flight *first* parse. Kept apart from the reparse slot: that one is
+    /// cleared whenever there is no document to reparse, which is exactly the
+    /// state a first parse runs in -- sharing the slot would cancel it.
+    pub(in crate::view) conflict_resolved_output_live_syntax_build: Option<gpui::Task<()>>,
     pub(in crate::view) conflict_resolved_output_measure_row: usize,
     pub(in crate::view) conflict_resolved_outline_stash: Option<StashedResolvedOutlineState>,
     #[cfg(test)]
