@@ -78,8 +78,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) staged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) commit_files_path_alignment_group:
         components::PathTruncationAlignmentGroup,
-    pub(in super::super) range_files_path_alignment_group:
-        components::PathTruncationAlignmentGroup,
+    pub(in super::super) range_files_path_alignment_group: components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {

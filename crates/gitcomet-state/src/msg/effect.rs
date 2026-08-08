@@ -126,6 +126,9 @@ pub enum Effect {
         from: CommitId,
         /// `None` lists files between `from` and the working tree.
         to: Option<CommitId>,
+        /// Echoed back on the reply so a completion that lost a race against a
+        /// newer load can be dropped. See `HistoryState::range_files_request`.
+        request: u64,
     },
     LoadSquashMessagePreview {
         repo_id: RepoId,

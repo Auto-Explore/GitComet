@@ -90,6 +90,11 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.clear_head_dependent_cached_state();
     repo_state.set_selected_commit(None);
     repo_state.set_commit_details(Loadable::NotLoaded);
+    // A reload can follow a reset or a dropped branch, which may have taken the
+    // marked commit with it. `set_selected_commit(None)` already dissolved the
+    // active comparison; the mark is the same kind of stale reference, and
+    // leaving it would keep offering a "Compare with …" that can only fail.
+    repo_state.comparison_mark = None;
     // A full reload may rewrite history (rebase/amend/branch switch underneath),
     // so back/forward snapshots can reference commits or file revisions that no
     // longer resolve. Start the navigation stacks fresh.
@@ -218,19 +223,25 @@ pub(super) fn repo_externally_changed(
     // results are dropped if the selection no longer matches (see
     // `range_files_loaded`), so a late reply after the user re-selects is safe.
     if (change.git_state || change.index || change.worktree)
-        && let Some(range) = repo_state
+        && let Some(from) = repo_state
             .history_state
             .range_selection
             .as_ref()
             .filter(|range| range.to.is_none())
+            .map(|range| range.from.clone())
+        // A refresh means two full-tree `git diff` calls, so a debounced save
+        // storm must not stack them up. One in flight absorbs the rest and is
+        // re-run once when it lands, the same coalescing the status and tag
+        // reloads above get from `RepoLoadsInFlight`.
+        && let Some(request) = repo_state.request_range_files_refresh()
     {
         // Keep the current list visible until the refresh lands (no flicker
         // to a loading state on every debounced save).
-        let from = range.from.clone();
         effects.push(Effect::LoadRangeFiles {
             repo_id,
             from,
             to: None,
+            request,
         });
     }
 

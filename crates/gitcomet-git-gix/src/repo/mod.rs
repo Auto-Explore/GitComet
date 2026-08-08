@@ -2,10 +2,9 @@ use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
-    DiffTarget,
-    FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage,
-    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
-    SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
+    DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
+    RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus,
+    StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};

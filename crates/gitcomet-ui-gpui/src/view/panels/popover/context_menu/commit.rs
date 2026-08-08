@@ -212,9 +212,14 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         }),
     });
     // Comparison: mark this commit as a base, or compare it against a mark.
+    // Look the repo up by id rather than via `active_repo`, so a menu opened for
+    // a non-active repo offers the same comparison entries the branch and tag
+    // menus do — the dispatched `Msg` carries `repo_id` and works either way.
     let comparison_mark = this
-        .active_repo()
-        .filter(|repo| repo.id == repo_id)
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
         .and_then(|repo| repo.comparison_mark.clone());
     items.push(ContextMenuItem::Entry {
         label: format!("Mark {short} for comparison").into(),

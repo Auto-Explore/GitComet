@@ -1119,6 +1119,7 @@ pub(super) fn schedule_load_range_files(
     repo_id: RepoId,
     from: gitcomet_core::domain::CommitId,
     to: Option<gitcomet_core::domain::CommitId>,
+    request: u64,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let result = repo.diff_range_files(&from, to.as_ref());
@@ -1128,6 +1129,7 @@ pub(super) fn schedule_load_range_files(
                 repo_id,
                 from: from.clone(),
                 to: to.clone(),
+                request,
                 result,
             }),
         );

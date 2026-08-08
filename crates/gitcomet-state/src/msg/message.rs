@@ -979,6 +979,8 @@ pub enum InternalMsg {
         from: CommitId,
         /// `None` when the tip is the working tree.
         to: Option<CommitId>,
+        /// The `Effect::LoadRangeFiles` request this answers.
+        request: u64,
         result: Result<Vec<CommitFileChange>, Error>,
     },
     SquashMessagePreviewLoaded {

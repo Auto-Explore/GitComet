@@ -2511,6 +2511,7 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
         }),
         content_preview: false,
         selected_commit: Some(commit_y.clone()),
+        range_selection: None,
     };
     state.repos[0].nav_history.record(snap(None));
     state.repos[0]
@@ -2546,6 +2547,88 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
             Loadable::NotLoaded
         ),
         "details are reset to NotLoaded before the reload"
+    );
+}
+
+/// The comparison view takes precedence over both commit-detail views, so a
+/// back/forward step that doesn't carry the comparison would restore a target
+/// and selection the pane never gets around to showing. Stepping back out of a
+/// comparison must leave it, and stepping forward into one must re-enter it —
+/// including re-issuing the file-list load, since leaving dropped the list.
+#[test]
+fn global_nav_enters_and_leaves_a_range_comparison() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let from = CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into());
+    let to = CommitId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into());
+    let range = crate::model::RangeSelection {
+        from: from.clone(),
+        to: Some(to.clone()),
+        from_label: "base".into(),
+        to_label: "tip".into(),
+    };
+
+    // Step 0: the history log. Step 1: a comparison (which clears the diff pane).
+    state.repos[0]
+        .nav_history
+        .record(crate::model::MainViewSnapshot {
+            diff_target: None,
+            content_preview: false,
+            selected_commit: None,
+            range_selection: None,
+        });
+    state.repos[0]
+        .nav_history
+        .record(crate::model::MainViewSnapshot {
+            diff_target: None,
+            content_preview: false,
+            selected_commit: None,
+            range_selection: Some(range.clone()),
+        });
+    // Live view matches the nav tail so the reduce-wrapper's reconcile no-ops.
+    state.repos[0].set_range_selection(Some(range.clone()));
+
+    // Back to the history log: the comparison must dissolve, not linger.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id },
+    );
+    assert!(
+        state.repos[0].history_state.range_selection.is_none(),
+        "stepping back past a comparison must leave it"
+    );
+
+    // Forward into it again: restored, and its file list re-requested because
+    // leaving dropped it.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavForward { repo_id },
+    );
+    assert_eq!(
+        state.repos[0].history_state.range_selection,
+        Some(range),
+        "stepping forward into a comparison must restore its endpoints"
+    );
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadRangeFiles { from: f, to: t, .. } if *f == from && *t == Some(to.clone())
+        )),
+        "the restored comparison must reload its changed-file list"
     );
 }
 

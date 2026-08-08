@@ -337,9 +337,11 @@ impl GixRepo {
                 let old =
                     self.file_diff_source_from_revision_path(&repo, from_commit_id.as_ref(), path)?;
                 let new = match to_commit_id {
-                    Some(to_commit_id) => {
-                        self.file_diff_source_from_revision_path(&repo, to_commit_id.as_ref(), path)?
-                    }
+                    Some(to_commit_id) => self.file_diff_source_from_revision_path(
+                        &repo,
+                        to_commit_id.as_ref(),
+                        path,
+                    )?,
                     // Working-tree tip: the new side is the live worktree file.
                     None => {
                         let repo_path = to_repo_path(path, &self.spec.workdir)?;

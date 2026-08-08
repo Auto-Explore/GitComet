@@ -263,12 +263,14 @@ impl std::fmt::Debug for InternalMsg {
                 repo_id,
                 from,
                 to,
+                request,
                 result,
             } => f
                 .debug_struct("RangeFilesLoaded")
                 .field("repo_id", repo_id)
                 .field("from", from)
                 .field("to", to)
+                .field("request", request)
                 .field("result", result)
                 .finish(),
             InternalMsg::SquashMessagePreviewLoaded {
