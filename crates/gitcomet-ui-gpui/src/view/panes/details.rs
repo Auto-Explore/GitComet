@@ -41,6 +41,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) staged_scroll: UniformListScrollHandle,
     pub(in super::super) commit_files_scroll: UniformListScrollHandle,
     pub(in super::super) commit_multi_scroll: UniformListScrollHandle,
+    pub(in super::super) range_files_scroll: UniformListScrollHandle,
     pub(in super::super) commit_message_scroll: ScrollHandle,
     pub(in super::super) commit_scroll: ScrollHandle,
 
@@ -70,11 +71,14 @@ pub(in super::super) struct DetailsPaneView {
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     commit_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    range_file_rows:
+        std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     pub(in super::super) untracked_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) unstaged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) staged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) commit_files_path_alignment_group:
         components::PathTruncationAlignmentGroup,
+    pub(in super::super) range_files_path_alignment_group: components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -397,6 +401,7 @@ impl DetailsPaneView {
             staged_scroll: UniformListScrollHandle::default(),
             commit_files_scroll: UniformListScrollHandle::default(),
             commit_multi_scroll: UniformListScrollHandle::default(),
+            range_files_scroll: UniformListScrollHandle::default(),
             commit_message_scroll,
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
@@ -423,10 +428,14 @@ impl DetailsPaneView {
             commit_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            range_file_rows: std::cell::RefCell::new(
+                crate::view::rows::CommitFileRowPresentationCache::default(),
+            ),
             untracked_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             unstaged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             staged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             commit_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            range_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -847,6 +856,32 @@ impl DetailsPaneView {
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
         let mut cache = self.commit_file_rows.borrow_mut();
         cache.rows_for(&(repo_id, commit_details_rev), files)
+    }
+
+    pub(in super::super) fn cached_range_file_rows(
+        &self,
+        repo_id: RepoId,
+        range_files_rev: u64,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
+        let mut cache = self.range_file_rows.borrow_mut();
+        cache.rows_for(&(repo_id, range_files_rev), files)
+    }
+
+    pub(in super::super) fn range_files_visible_signature(
+        &self,
+        repo_id: RepoId,
+        range_files_rev: u64,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo_id,
+            range_files_rev,
+            total_rows,
+            range.start,
+            range.end,
+        ))
     }
 
     pub(in super::super) fn status_path_alignment_group(

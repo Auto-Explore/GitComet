@@ -1228,6 +1228,7 @@ fn reload_repo_clears_stale_navigation_history() {
         }),
         content_preview: false,
         selected_commit: Some(c.clone()),
+        range_selection: None,
     };
     state.repos[0].nav_history.record(snap(&commit_a));
     state.repos[0].nav_history.record(snap(&commit_b));
@@ -1270,6 +1271,41 @@ fn reload_repo_clears_stale_navigation_history() {
     assert!(
         state.repos[0].view_history.entries.is_empty(),
         "view_history must be cleared on reload"
+    );
+}
+
+#[test]
+fn reload_repo_clears_a_stale_comparison_mark() {
+    // A reload can follow a reset or a dropped branch that took the marked
+    // commit with it. Keeping the mark would leave the context menus offering a
+    // "Compare with …" whose only possible outcome is a backend error.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(repo_id);
+    state.repos[0].comparison_mark = Some(crate::model::ComparisonMark {
+        commit_id: CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+        label: "feature".into(),
+    });
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ReloadRepo { repo_id },
+    );
+
+    assert!(
+        state.repos[0].comparison_mark.is_none(),
+        "a mark that a reload may have invalidated must not survive it"
     );
 }
 

@@ -29,7 +29,7 @@ fn push_inline_submodule_diff_content_mode_state(
     let path = PathBuf::from("src/lib.rs");
     let target = gitcomet_core::domain::DiffTarget::CommitRange {
         from_commit_id: gitcomet_core::domain::CommitId("aaaa".into()),
-        to_commit_id: gitcomet_core::domain::CommitId("bbbb".into()),
+        to_commit_id: Some(gitcomet_core::domain::CommitId("bbbb".into())),
         path: Some(path.clone()),
     };
     let unified = "\

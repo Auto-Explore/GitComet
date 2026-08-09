@@ -87,6 +87,24 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    MarkForComparison {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    CompareWithMarked {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    CompareWithWorkingTree {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    ClearComparisonMark {
+        repo_id: RepoId,
+    },
     CheckoutCommit {
         repo_id: RepoId,
         commit_id: CommitId,

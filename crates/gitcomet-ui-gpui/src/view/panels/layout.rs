@@ -1,5 +1,5 @@
 use super::*;
-use gpui::{AnyElement, Div};
+use gpui::{AnyElement, Div, Stateful};
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
@@ -83,6 +83,20 @@ fn commit_details_author_row(
 }
 
 const MULTI_COMMIT_ROW_HEIGHT_PX: f32 = 44.0;
+
+/// How much of the comparison body the compared-commit cards may fill before
+/// they start scrolling instead of growing. A range comparison has two
+/// endpoints, but a multi-selection comparison has one card per selected
+/// commit, and an unbounded column of those would push the changed-file list —
+/// the part the user actually came for — off the bottom of the pane. At half,
+/// the two lists split the body evenly once the selection is large enough to
+/// need it, whatever height the pane happens to have.
+const COMPARISON_CARDS_MAX_BODY_FRACTION: f32 = 0.5;
+
+/// Floor for the comparison's changed-file section — a label plus a row or two
+/// of list. Keeps the capped card block above it from claiming the whole pane
+/// when the pane is shorter than the card cap allows for.
+const RANGE_FILES_SECTION_MIN_HEIGHT_PX: f32 = 44.0;
 
 fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyElement) -> Div {
     div()
@@ -778,13 +792,134 @@ impl DetailsPaneView {
         let Loadable::Ready(page) = &repo.log else {
             return Vec::new();
         };
+        // Hash the selection first: this runs per frame (twice, and once more
+        // per visible row batch) over the whole loaded page, and
+        // `CommitMultiSelection::contains` is a linear scan — so a large
+        // selection against a large page would be quadratic on every repaint.
+        let selected: std::collections::HashSet<&CommitId> = selection.commits.iter().collect();
         page.commits
             .iter()
-            .filter(|commit| selection.contains(&commit.id))
+            .filter(|commit| selected.contains(&commit.id))
             .cloned()
             .collect()
     }
 
+    /// Commits to preview as cards while a two-point comparison is active.
+    /// Prefers a multi-selection *only* when it is genuinely multi, because that
+    /// is the one case where the selection is what is being compared (its merged
+    /// diff). A single leftover selection — every plain history click leaves one
+    /// — describes an unrelated commit, so the mark + compare, branch/tag and
+    /// working-tree flows derive their endpoints from the range itself, looking
+    /// each SHA up in the loaded log so its summary/author/time can be shown.
+    /// Ordered newest first (tip before base) to match the log. The working tree
+    /// has no commit of its own, so a compare-against-working-tree range yields
+    /// a single card.
+    fn range_comparison_commits(repo: &RepoState) -> Vec<Commit> {
+        if repo.history_state.multi_selection.is_multi() {
+            let multi = Self::multi_selected_commits_in_log_order(repo);
+            if !multi.is_empty() {
+                return multi;
+            }
+        }
+        let Some(range) = repo.history_state.range_selection.as_ref() else {
+            return Vec::new();
+        };
+        let Loadable::Ready(page) = &repo.log else {
+            return Vec::new();
+        };
+        let find = |id: &CommitId| page.commits.iter().find(|c| &c.id == id).cloned();
+        let mut commits = Vec::new();
+        if let Some(to) = range.to.as_ref().and_then(&find) {
+            commits.push(to);
+        }
+        if let Some(from) = find(&range.from) {
+            commits.push(from);
+        }
+        commits
+    }
+
+    /// One selected/compared-commit preview card: avatar, summary, an author +
+    /// relative-time line, and the short SHA. Shared by the multi-selection and
+    /// range-comparison lists so both read identically.
+    fn commit_card_element(
+        &self,
+        ix: usize,
+        commit: &Commit,
+        now: std::time::SystemTime,
+        show_border: bool,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, self.ui_scale_percent);
+
+        let short_sha: SharedString = commit
+            .id
+            .as_ref()
+            .get(0..8)
+            .unwrap_or(commit.id.as_ref())
+            .to_string()
+            .into();
+        let summary: SharedString = commit.summary.to_string().into();
+        let author = commit.author.to_string();
+        let unix_secs = commit
+            .time
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs() as i64)
+            .unwrap_or(0);
+        let when: SharedString = format!(
+            "{} · {}",
+            author,
+            crate::view::date_time::format_relative_time(unix_secs, now)
+        )
+        .into();
+
+        div()
+            .id(("commit_multi_row", ix))
+            .debug_selector(move || format!("commit_multi_row_{ix}"))
+            .h(scaled_px(MULTI_COMMIT_ROW_HEIGHT_PX))
+            .w_full()
+            .flex()
+            .items_center()
+            .gap(scaled_px(8.0))
+            .px(scaled_px(8.0))
+            // The last card sits directly above the files section's own top
+            // separator, so it omits its bottom border to avoid a double line.
+            .when(show_border, |row| {
+                row.border_b_1().border_color(theme.colors.border)
+            })
+            .child(components::author_avatar(theme, ui_scale, &author))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .flex()
+                    .flex_col()
+                    .gap(scaled_px(2.0))
+                    .child(div().text_sm().line_clamp(1).child(summary))
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .child(when),
+                    ),
+            )
+            .child(
+                div()
+                    .flex_none()
+                    .text_xs()
+                    .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
+                    .text_color(theme.colors.text_muted)
+                    .child(short_sha),
+            )
+            .into_any_element()
+    }
+
+    /// Rows for both the comparison view's endpoint cards and the plain
+    /// multi-selection list. `range_comparison_commits` already resolves to the
+    /// multi-selection when that is what is being compared, so one renderer
+    /// serves both and the two views cannot drift apart.
     pub(in super::super) fn render_multi_commit_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -795,80 +930,75 @@ impl DetailsPaneView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
-        let commits = Self::multi_selected_commits_in_log_order(repo);
-        let theme = this.theme;
-        let ui_scale_percent = this.ui_scale_percent;
-        let scaled_px =
-            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let commits = Self::range_comparison_commits(repo);
+        let last_ix = commits.len().saturating_sub(1);
         let now = std::time::SystemTime::now();
-
         range
-            .filter_map(|ix| commits.get(ix).map(|commit| (ix, commit)))
-            .map(|(ix, commit)| {
-                let short_sha: SharedString = commit
-                    .id
-                    .as_ref()
-                    .get(0..8)
-                    .unwrap_or(commit.id.as_ref())
-                    .to_string()
-                    .into();
-                let summary: SharedString = commit.summary.to_string().into();
-                let unix_secs = commit
-                    .time
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs() as i64)
-                    .unwrap_or(0);
-                let when: SharedString = format!(
-                    "{} · {}",
-                    commit.author,
-                    crate::view::date_time::format_relative_time(unix_secs, now)
-                )
-                .into();
-
-                div()
-                    .id(("commit_multi_row", ix))
-                    .debug_selector(move || format!("commit_multi_row_{ix}"))
-                    .h(scaled_px(MULTI_COMMIT_ROW_HEIGHT_PX))
-                    .w_full()
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .gap(scaled_px(2.0))
-                    .px(scaled_px(8.0))
-                    .border_b_1()
-                    .border_color(theme.colors.border)
-                    .child(
-                        div()
-                            .flex()
-                            .items_center()
-                            .gap(scaled_px(8.0))
-                            .min_w(px(0.0))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-                                    .text_color(theme.colors.text_muted)
-                                    .child(short_sha),
-                            )
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w(px(0.0))
-                                    .text_sm()
-                                    .line_clamp(1)
-                                    .child(summary),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .line_clamp(1)
-                            .child(when),
-                    )
-                    .into_any_element()
-            })
+            .filter_map(|ix| commits.get(ix).map(|commit| (ix, commit.clone())))
+            .map(|(ix, commit)| this.commit_card_element(ix, &commit, now, ix != last_ix))
             .collect()
+    }
+
+    /// The details pane's standard vertical-scroll frame: the list fills the
+    /// container, a gutter reserves room for the scrollbar so rows never sit
+    /// underneath it, and the scrollbar overlays the right edge. Every scrolling
+    /// list in this pane is built from this, so they all scroll alike.
+    fn vertical_scroll_frame(
+        theme: AppTheme,
+        container_id: impl Into<ElementId>,
+        scrollbar_id: impl Into<ElementId>,
+        scroll: &UniformListScrollHandle,
+        list: gpui::UniformList,
+    ) -> Stateful<Div> {
+        let list = restrict_scroll_to_vertical_axis(
+            list.w_full().h_full().min_h(px(0.0)).track_scroll(scroll),
+        );
+        let scrollbar_gutter = components::Scrollbar::visible_gutter(
+            scroll.clone(),
+            components::ScrollbarAxis::Vertical,
+        );
+        div()
+            .id(container_id)
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .w_full()
+            .overflow_hidden()
+            .child(
+                div()
+                    .w_full()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .pr(scrollbar_gutter)
+                    .child(list),
+            )
+            .child(components::Scrollbar::new(scrollbar_id, scroll.clone()).render(theme))
+    }
+
+    /// The scrolling column of commit preview cards, shared by the plain
+    /// multi-selection view (where it fills the pane) and the comparison view
+    /// (where it is capped and sits above the changed-file list).
+    fn commit_cards_list(
+        &mut self,
+        repo_id: RepoId,
+        count: usize,
+        cx: &mut gpui::Context<Self>,
+    ) -> Stateful<Div> {
+        Self::vertical_scroll_frame(
+            self.theme,
+            ("commit_multi_container", repo_id.0),
+            ("commit_multi_scrollbar", repo_id.0),
+            &self.commit_multi_scroll,
+            uniform_list(
+                ("commit_multi_list", repo_id.0),
+                count,
+                cx.processor(Self::render_multi_commit_rows),
+            ),
+        )
     }
 
     fn multi_commit_details_view(
@@ -915,47 +1045,7 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, "Close commit details".into()),
             );
 
-        let list = uniform_list(
-            ("commit_multi_list", repo_id.0),
-            count,
-            cx.processor(Self::render_multi_commit_rows),
-        )
-        .w_full()
-        .h_full()
-        .min_h(px(0.0))
-        .track_scroll(&self.commit_multi_scroll);
-        let list = restrict_scroll_to_vertical_axis(list);
-        let scrollbar_gutter = components::Scrollbar::visible_gutter(
-            self.commit_multi_scroll.clone(),
-            components::ScrollbarAxis::Vertical,
-        );
-
-        let body = div()
-            .id(("commit_multi_container", repo_id.0))
-            .relative()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .h_full()
-            .min_h(px(0.0))
-            .w_full()
-            .overflow_hidden()
-            .child(
-                div()
-                    .w_full()
-                    .flex_1()
-                    .h_full()
-                    .min_h(px(0.0))
-                    .pr(scrollbar_gutter)
-                    .child(list),
-            )
-            .child(
-                components::Scrollbar::new(
-                    ("commit_multi_scrollbar", repo_id.0),
-                    self.commit_multi_scroll.clone(),
-                )
-                .render(theme),
-            );
+        let body = self.commit_cards_list(repo_id, count, cx);
 
         div()
             .id("commit_details_container")
@@ -977,6 +1067,222 @@ impl DetailsPaneView {
                     .min_h(px(0.0))
                     .p_2()
                     .child(body),
+            )
+            .into_any_element()
+    }
+
+    /// The details-pane view shown while two points are being compared: the
+    /// selected commit cards, a "viewing diff between" subheader, and the list
+    /// of files that differ between them. The diff pane starts empty; clicking a
+    /// file loads that file's range diff in the main pane.
+    fn range_comparison_view(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+
+        /// What the files section has to say for itself, kept separate from the
+        /// count so a failed load can't read as an empty comparison.
+        enum RangeFilesState {
+            Loading,
+            Failed(String),
+            Loaded(usize),
+        }
+
+        let (card_count, is_merged_selection, range, files_state) = {
+            let Some(repo) = self.active_repo() else {
+                return div().into_any_element();
+            };
+            let Some(range) = repo.history_state.range_selection.clone() else {
+                return div().into_any_element();
+            };
+            let card_count = Self::range_comparison_commits(repo).len();
+            // Only a genuine multi-selection is a "merged diff of N commits";
+            // every other flow compares two named points, however many of them
+            // happen to resolve to a card.
+            let is_merged_selection = repo.history_state.multi_selection.is_multi();
+            let files_state = match &repo.history_state.range_files {
+                Loadable::Ready(files) => RangeFilesState::Loaded(files.len()),
+                Loadable::Error(e) => RangeFilesState::Failed(e.clone()),
+                Loadable::Loading | Loadable::NotLoaded => RangeFilesState::Loading,
+            };
+            (card_count, is_merged_selection, range, files_state)
+        };
+
+        let header_title: SharedString = if is_merged_selection {
+            format!("{card_count} commits selected").into()
+        } else {
+            "Comparison".into()
+        };
+        let subheader: SharedString = if is_merged_selection {
+            format!("Viewing merged diff of {card_count} commits").into()
+        } else {
+            format!("Viewing diff: {} → {}", range.from_label, range.to_label).into()
+        };
+
+        let header = div()
+            .flex()
+            .items_center()
+            .justify_between()
+            .h(components::control_height_md(ui_scale))
+            .px_2()
+            .bg(theme.colors.surface_bg_elevated)
+            .border_b_1()
+            .border_color(theme.colors.border)
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    .line_clamp(1)
+                    .child(header_title),
+            )
+            .child(
+                components::Button::new("range_comparison_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.text_muted,
+                        px(12.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .on_click(theme, cx, |this, _e, _w, cx| {
+                        if let Some(repo_id) = this.active_repo_id() {
+                            this.store.dispatch(Msg::ClearComparison { repo_id });
+                        }
+                        cx.notify();
+                    })
+                    .gitcomet_tooltip(theme, "Close comparison".into()),
+            );
+
+        // Compared-commit preview cards. A two-point comparison has one or two,
+        // but a multi-selection has one per selected commit, so the section
+        // grows with the selection only up to half the comparison body and
+        // scrolls past that — an even split with the changed-file list below,
+        // rather than crowding it out.
+        //
+        // The cap is relative to the body, so it tracks the pane at whatever
+        // height the splitter leaves it. The requested height stays definite
+        // though: the card list is a `uniform_list`, which paints nothing when
+        // its viewport height is indefinite, so `max_h` does the capping rather
+        // than the height itself being content-derived.
+        let card_row_height = ui_scale.px(MULTI_COMMIT_ROW_HEIGHT_PX);
+        let cards = (card_count > 0).then(|| {
+            div()
+                .debug_selector(|| "range_comparison_cards".to_string())
+                .flex()
+                .flex_col()
+                .w_full()
+                .h(card_row_height * card_count as f32)
+                .max_h(relative(COMPARISON_CARDS_MAX_BODY_FRACTION))
+                .min_h(card_row_height)
+                .child(self.commit_cards_list(repo_id, card_count, cx))
+        });
+
+        // No count until there is one: claiming "0 changed" while the diff is
+        // still running states a number that is usually about to be wrong. The
+        // selector names which of the two the label is, so a test can tell them
+        // apart without reading painted text.
+        let (files_label, files_label_selector): (SharedString, &'static str) = match &files_state {
+            RangeFilesState::Loading | RangeFilesState::Failed(_) => {
+                ("Changed files".into(), "range_files_label_pending")
+            }
+            RangeFilesState::Loaded(count) => {
+                (format!("{count} changed").into(), "range_files_label_count")
+            }
+        };
+        let files_body: AnyElement = match &files_state {
+            RangeFilesState::Loading => div()
+                .debug_selector(|| "range_files_loading".to_string())
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child("Loading")
+                .into_any_element(),
+            // An error must not render as "No files." — that is exactly what a
+            // pair of identical commits looks like, so the user would read a
+            // failed comparison as a successful, empty one.
+            RangeFilesState::Failed(message) => div()
+                .debug_selector(|| "range_files_error".to_string())
+                .text_sm()
+                .text_color(theme.colors.danger)
+                .child(SharedString::from(message.clone()))
+                .into_any_element(),
+            RangeFilesState::Loaded(0) => div()
+                .debug_selector(|| "range_files_empty".to_string())
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child("No files.")
+                .into_any_element(),
+            RangeFilesState::Loaded(count) => Self::vertical_scroll_frame(
+                theme,
+                ("range_files_container", repo_id.0),
+                ("range_files_scrollbar", repo_id.0),
+                &self.range_files_scroll,
+                uniform_list(
+                    ("range_files_list", repo_id.0),
+                    *count,
+                    cx.processor(Self::render_range_file_rows),
+                ),
+            )
+            .into_any_element(),
+        };
+
+        div()
+            .id("range_comparison_container")
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .child(header)
+            .child(
+                div()
+                    .id("range_comparison_body")
+                    .debug_selector(|| "range_comparison_body".to_string())
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap_2()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .p_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.colors.text_muted)
+                            .line_clamp(1)
+                            .child(subheader),
+                    )
+                    .children(cards)
+                    .child(
+                        div()
+                            .debug_selector(|| "range_comparison_files".to_string())
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .flex_1()
+                            .h_full()
+                            // A real floor, not `px(0.0)`: the cards above are
+                            // sized from the window, so on a pane shorter than
+                            // that this is what stops them from taking the whole
+                            // pane and collapsing the list to nothing.
+                            .min_h(ui_scale.px(RANGE_FILES_SECTION_MIN_HEIGHT_PX))
+                            .border_t_1()
+                            .border_color(theme.colors.border_variant)
+                            .pt_2()
+                            .child(
+                                div()
+                                    .debug_selector(move || files_label_selector.to_string())
+                                    .text_sm()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(files_label),
+                            )
+                            .child(files_body),
+                    ),
             )
             .into_any_element()
     }
@@ -1007,6 +1313,15 @@ impl DetailsPaneView {
         let selected_id = self
             .active_repo()
             .and_then(|repo| repo.history_state.selected_commit.clone());
+
+        // An active two-point comparison takes precedence over both the single
+        // and multi commit-detail views: show the range's changed files.
+        let has_range_comparison = self
+            .active_repo()
+            .is_some_and(|repo| repo.history_state.range_selection.is_some());
+        if let (Some(repo_id), true) = (active_repo_id, has_range_comparison) {
+            return self.range_comparison_view(repo_id, cx);
+        }
 
         let multi_count = self
             .active_repo()
@@ -1105,49 +1420,19 @@ impl DetailsPaneView {
                                     .child("No files.")
                                     .into_any_element()
                             } else {
-                                let total_files = details.files.len();
-                                let list = uniform_list(
-                                    ("commit_details_files_list", repo_id.0),
-                                    total_files,
-                                    cx.processor(Self::render_commit_file_rows),
+                                Self::vertical_scroll_frame(
+                                    theme,
+                                    ("commit_details_files_container", repo_id.0),
+                                    ("commit_details_files_scrollbar", repo_id.0),
+                                    &self.commit_files_scroll,
+                                    uniform_list(
+                                        ("commit_details_files_list", repo_id.0),
+                                        details.files.len(),
+                                        cx.processor(Self::render_commit_file_rows),
+                                    ),
                                 )
-                                .w_full()
-                                .h_full()
-                                .min_h(px(0.0))
-                                .track_scroll(&self.commit_files_scroll);
-                                let list = restrict_scroll_to_vertical_axis(list);
-                                let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
-                                    self.commit_files_scroll.clone(),
-                                    components::ScrollbarAxis::Vertical,
-                                );
-
-                                div()
-                                    .id(("commit_details_files_container", repo_id.0))
-                                    .relative()
-                                    .flex()
-                                    .flex_col()
-                                    .flex_1()
-                                    .h_full()
-                                    .min_h(commit_files_min_viewport_height)
-                                    .w_full()
-                                    .overflow_hidden()
-                                    .child(
-                                        div()
-                                            .w_full()
-                                            .flex_1()
-                                            .h_full()
-                                            .min_h(px(0.0))
-                                            .pr(files_scrollbar_gutter)
-                                            .child(list),
-                                    )
-                                    .child(
-                                        components::Scrollbar::new(
-                                            ("commit_details_files_scrollbar", repo_id.0),
-                                            self.commit_files_scroll.clone(),
-                                        )
-                                        .render(theme),
-                                    )
-                                    .into_any_element()
+                                .min_h(commit_files_min_viewport_height)
+                                .into_any_element()
                             };
 
                             self.sync_retained_commit_details_message_input(
@@ -1252,49 +1537,19 @@ impl DetailsPaneView {
                                 .child("No files.")
                                 .into_any_element()
                         } else {
-                            let total_files = details.files.len();
-                            let list = uniform_list(
-                                ("commit_details_files_list", repo_id.0),
-                                total_files,
-                                cx.processor(Self::render_commit_file_rows),
+                            Self::vertical_scroll_frame(
+                                theme,
+                                ("commit_details_files_container", repo_id.0),
+                                ("commit_details_files_scrollbar", repo_id.0),
+                                &self.commit_files_scroll,
+                                uniform_list(
+                                    ("commit_details_files_list", repo_id.0),
+                                    details.files.len(),
+                                    cx.processor(Self::render_commit_file_rows),
+                                ),
                             )
-                            .w_full()
-                            .h_full()
-                            .min_h(px(0.0))
-                            .track_scroll(&self.commit_files_scroll);
-                            let list = restrict_scroll_to_vertical_axis(list);
-                            let files_scrollbar_gutter = components::Scrollbar::visible_gutter(
-                                self.commit_files_scroll.clone(),
-                                components::ScrollbarAxis::Vertical,
-                            );
-
-                            div()
-                                .id(("commit_details_files_container", repo_id.0))
-                                .relative()
-                                .flex()
-                                .flex_col()
-                                .flex_1()
-                                .h_full()
-                                .min_h(commit_files_min_viewport_height)
-                                .w_full()
-                                .overflow_hidden()
-                                .child(
-                                    div()
-                                        .w_full()
-                                        .flex_1()
-                                        .h_full()
-                                        .min_h(px(0.0))
-                                        .pr(files_scrollbar_gutter)
-                                        .child(list),
-                                )
-                                .child(
-                                    components::Scrollbar::new(
-                                        ("commit_details_files_scrollbar", repo_id.0),
-                                        self.commit_files_scroll.clone(),
-                                    )
-                                    .render(theme),
-                                )
-                                .into_any_element()
+                            .min_h(commit_files_min_viewport_height)
+                            .into_any_element()
                         };
 
                         self.sync_commit_details_message_input(

@@ -207,6 +207,44 @@ pub enum Msg {
     ClearCommitSelection {
         repo_id: RepoId,
     },
+    /// Compare two points (commits, or branch/tag tips resolved to commit ids).
+    /// `from` is the base/older side. Loads the changed-file list and drives the
+    /// whole-range patch into the diff pane.
+    CompareCommitRange {
+        repo_id: RepoId,
+        from: CommitId,
+        to: CommitId,
+        from_label: String,
+        to_label: String,
+    },
+    /// Compare a commit/branch/tag (resolved to `from`) against the live working
+    /// tree. Loads the changed-file list; the tip tracks uncommitted changes.
+    CompareWithWorkingTree {
+        repo_id: RepoId,
+        from: CommitId,
+        from_label: String,
+    },
+    /// Clear an active range comparison, returning to single/empty selection.
+    ClearComparison {
+        repo_id: RepoId,
+    },
+    /// Mark a commit/branch/tag (resolved to `commit_id`) as the base for a
+    /// later "Compare with marked".
+    MarkForComparison {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    /// Compare the previously marked point (base) against this commit/branch/tag.
+    CompareWithMarked {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    /// Forget the marked-for-comparison point.
+    ClearComparisonMark {
+        repo_id: RepoId,
+    },
     SelectDiff {
         repo_id: RepoId,
         target: DiffTarget,
@@ -935,6 +973,15 @@ pub enum InternalMsg {
         repo_id: RepoId,
         commit_id: CommitId,
         result: Result<CommitDetails, Error>,
+    },
+    RangeFilesLoaded {
+        repo_id: RepoId,
+        from: CommitId,
+        /// `None` when the tip is the working tree.
+        to: Option<CommitId>,
+        /// The `Effect::LoadRangeFiles` request this answers.
+        request: u64,
+        result: Result<Vec<CommitFileChange>, Error>,
     },
     SquashMessagePreviewLoaded {
         repo_id: RepoId,
