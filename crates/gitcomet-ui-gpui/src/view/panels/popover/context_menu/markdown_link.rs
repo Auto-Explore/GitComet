@@ -23,8 +23,8 @@ fn model_for_markdown_link(url: &str) -> ContextMenuModel {
             icon: Some("icons/copy.svg".into()),
             shortcut: None,
             disabled: false,
-            action: Box::new(ContextMenuAction::CopyText {
-                text: url.to_owned(),
+            action: Box::new(ContextMenuAction::CopyLinkAddress {
+                url: url.to_owned(),
             }),
         },
     ])
@@ -79,6 +79,31 @@ mod tests {
         assert!(matches!(
             open.as_ref(),
             ContextMenuAction::OpenWebUrl { url } if url == "https://example.com/page"
+        ));
+    }
+
+    #[test]
+    fn copy_entry_copies_the_address_and_says_so() {
+        // A link's address is never on screen — the document shows its text —
+        // so the copy has to announce itself. That is what separates this from
+        // the plain `CopyText` every other menu uses.
+        let model = model_for_markdown_link("https://example.com/page");
+        let copy = model
+            .items
+            .iter()
+            .find_map(|item| match item {
+                ContextMenuItem::Entry { label, action, .. }
+                    if label.as_ref() == "Copy link address" =>
+                {
+                    Some(action)
+                }
+                _ => None,
+            })
+            .expect("copy entry");
+
+        assert!(matches!(
+            copy.as_ref(),
+            ContextMenuAction::CopyLinkAddress { url } if url == "https://example.com/page"
         ));
     }
 }

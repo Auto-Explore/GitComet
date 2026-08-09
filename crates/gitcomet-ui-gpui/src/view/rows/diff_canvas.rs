@@ -2728,6 +2728,7 @@ pub(super) fn worktree_preview_row_canvas(
     streamed_spec: Option<StreamedDiffTextPaintSpec>,
     raw_text: Option<&str>,
     reveal_whitespace_chars: bool,
+    wrap: Option<DiffTextWrapSlice>,
 ) -> AnyElement {
     let paint_payload = diff_text_paint_payload(
         styled,
@@ -2735,7 +2736,7 @@ pub(super) fn worktree_preview_row_canvas(
         raw_text,
         reveal_whitespace_chars,
         DiffTextRegion::Inline,
-        None,
+        wrap,
     );
     let text = paint_payload.text;
     let highlights = paint_payload.highlights;
@@ -3300,6 +3301,12 @@ pub(super) fn diff_gutter_total_width(ui_scale_percent: u32) -> Pixels {
         diff_row_horizontal_padding(ui_scale_percent),
         ui_scale_percent,
     )
+}
+
+/// Width of the bar marking a wholly added or removed file, which the row's
+/// content is inset past.
+pub(in crate::view) fn diff_change_bar_width(ui_scale_percent: u32) -> Pixels {
+    diff_scaled_px(DIFF_CHANGE_BAR_WIDTH_PX, ui_scale_percent)
 }
 
 pub(in crate::view) fn diff_single_column_text_start(ui_scale_percent: u32) -> Pixels {

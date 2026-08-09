@@ -191,16 +191,74 @@ fn preview_lines_source_len(lines: &[String]) -> usize {
 
 fn build_single_markdown_preview_document(
     source: &str,
-) -> Result<Arc<markdown_preview::MarkdownPreviewDocument>, String> {
+) -> Result<Arc<markdown_preview::MarkdownPreviewDocument>, markdown_preview::MarkdownPreviewRefusal>
+{
+    use markdown_preview::MarkdownPreviewRefusal;
+
     if source.len() > markdown_preview::MAX_PREVIEW_SOURCE_BYTES {
-        return Err(markdown_preview::single_preview_unavailable_reason(source.len()).to_string());
+        return Err(MarkdownPreviewRefusal::Unavailable(
+            markdown_preview::single_preview_unavailable_reason(source.len()).to_owned(),
+        ));
     }
 
-    markdown_preview::parse_markdown(source)
-        .map(Arc::new)
-        .ok_or_else(|| {
-            markdown_preview::single_preview_unavailable_reason(source.len()).to_string()
-        })
+    let document = markdown_preview::parse_markdown(source).ok_or_else(|| {
+        MarkdownPreviewRefusal::Unavailable(
+            markdown_preview::single_preview_unavailable_reason(source.len()).to_owned(),
+        )
+    })?;
+    // The single-document preview lays every row out on every frame, so its
+    // budget is tighter than the parser's. This one is recoverable: the source
+    // is still readable, so the reader is sent there instead of to an error.
+    if document.rows.len() > markdown_preview::MAX_FLOWING_PREVIEW_ROWS {
+        return Err(MarkdownPreviewRefusal::TooManyRowsToRender);
+    }
+
+    Ok(Arc::new(document))
+}
+
+/// The pixel size of every picture in `document` that can be measured without
+/// decoding it, keyed by the source the document wrote.
+///
+/// A picture's box is not known until its file has been read, and reading a GIF
+/// means decoding every frame — seconds of work for a long one. Its header says
+/// how big it is in a few bytes, which is enough to hold the right amount of
+/// room open in the meantime. Runs beside the parse, off the UI thread, so a
+/// document that carries no pictures pays nothing.
+fn measure_markdown_preview_pictures(
+    document: &markdown_preview::MarkdownPreviewDocument,
+    image_base_dir: Option<&std::path::Path>,
+) -> rows::MarkdownPreviewPictureSizes {
+    let mut sizes: HashMap<SharedString, (u32, u32)> = HashMap::default();
+    let mut measure = |source: &SharedString| {
+        if sizes.contains_key(source) {
+            return;
+        }
+        // Only a local file can be measured this cheaply. A remote picture
+        // would have to be fetched, which is the expensive half anyway, and
+        // `gpui` is already fetching it.
+        let Some(rows::MarkdownPreviewImageSource::File(path)) =
+            rows::markdown_preview_image_source(image_base_dir, source.as_ref())
+        else {
+            return;
+        };
+        if let Ok((width, height)) = image::image_dimensions(&path)
+            && width > 0
+            && height > 0
+        {
+            sizes.insert(source.clone(), (width, height));
+        }
+    };
+
+    for row in document.rows.iter() {
+        if let Some(image) = row.image.as_ref() {
+            measure(&image.source);
+        }
+        for inline in row.inline_images.iter() {
+            measure(&inline.image.source);
+        }
+    }
+
+    Arc::new(sizes)
 }
 
 #[derive(Clone, Debug, Default)]
@@ -1571,17 +1629,24 @@ impl MainPaneView {
         let source_text =
             (!self.worktree_preview_text.is_empty()).then_some(self.worktree_preview_text.clone());
         let source_path = self.worktree_preview_source_path.clone();
+        let image_base_dir = self.markdown_preview_image_base_dir();
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let build_preview = move || {
-                    let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
-                    let source_text = match source_text {
-                        Some(source_text) => source_text,
-                        None => {
-                            let source_path = source_path
-                                .ok_or_else(|| "Preview source path is unavailable.".to_string())?;
-                            std::fs::read_to_string(&source_path)
+                type BuiltPreview = (
+                    Arc<markdown_preview::MarkdownPreviewDocument>,
+                    rows::MarkdownPreviewPictureSizes,
+                );
+                let build_preview =
+                    move || -> Result<BuiltPreview, markdown_preview::MarkdownPreviewRefusal> {
+                        let _perf_scope = perf::span(ViewPerfSpan::MarkdownPreviewParse);
+                        let source_text = match source_text {
+                            Some(source_text) => source_text,
+                            None => {
+                                let source_path = source_path.ok_or_else(|| {
+                                    "Preview source path is unavailable.".to_string()
+                                })?;
+                                std::fs::read_to_string(&source_path)
                                 .map(SharedString::from)
                                 .map_err(|e| {
                                     if e.kind() == std::io::ErrorKind::InvalidData {
@@ -1591,10 +1656,18 @@ impl MainPaneView {
                                         e.to_string()
                                     }
                                 })?
-                        }
+                            }
+                        };
+                        let document =
+                            build_single_markdown_preview_document(source_text.as_ref())?;
+                        // Measured here rather than on the first frame: it reads
+                        // files, and this is already the thread that does that.
+                        let picture_sizes = measure_markdown_preview_pictures(
+                            document.as_ref(),
+                            image_base_dir.as_deref(),
+                        );
+                        Ok((document, picture_sizes))
                     };
-                    build_single_markdown_preview_document(source_text.as_ref())
-                };
                 let result = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(build_preview).await
                 } else {
@@ -1613,8 +1686,28 @@ impl MainPaneView {
 
                     this.worktree_markdown_preview_inflight = None;
                     match result {
-                        Ok(document) => this.worktree_markdown_preview = Loadable::Ready(document),
-                        Err(error) => this.worktree_markdown_preview = Loadable::Error(error),
+                        Ok((document, picture_sizes)) => {
+                            this.worktree_markdown_preview_picture_sizes = picture_sizes;
+                            // The blocks these positions belonged to are gone
+                            // with the document that described them.
+                            this.worktree_markdown_preview_block_scrolls.clear();
+                            this.worktree_markdown_preview = Loadable::Ready(document);
+                        }
+                        Err(refusal) => {
+                            let prefers_source = refusal.prefers_source();
+                            this.worktree_markdown_preview =
+                                Loadable::Error(refusal.into_message());
+                            // A document that parsed but is too big to lay out
+                            // still reads fine as source, so the reader is
+                            // taken there rather than left on an empty pane
+                            // with a message and a toggle to find.
+                            if prefers_source {
+                                this.rendered_preview_modes.set(
+                                    RenderedPreviewKind::Markdown,
+                                    RenderedPreviewMode::Source,
+                                );
+                            }
+                        }
                     }
                     cx.notify();
                 });
@@ -3075,6 +3168,7 @@ impl MainPaneView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::view::markdown_preview::MarkdownPreviewRefusal;
     use gitcomet_core::domain::{DiffArea, DiffLine, DiffLineKind, DiffTarget};
     use std::path::Path;
     use std::path::PathBuf;
@@ -3281,10 +3375,15 @@ mod tests {
 
         let error = build_single_markdown_preview_document(source.as_ref())
             .expect_err("row-limit markdown preview should return an error");
+        // The parser cap is unrecoverable: there is no parsed document to show.
+        let MarkdownPreviewRefusal::Unavailable(reason) = &error else {
+            panic!("parser row cap should be unavailable, got {error:?}");
+        };
         assert!(
-            error.contains("row limit"),
-            "row-limit markdown preview should mention the rendered row limit: {error}"
+            reason.contains("row limit"),
+            "row-limit markdown preview should mention the rendered row limit: {reason}"
         );
+        assert!(!error.prefers_source());
     }
 
     #[test]
@@ -3323,6 +3422,81 @@ mod tests {
     }
 
     #[test]
+    fn pictures_are_measured_from_their_headers_without_decoding_them() {
+        // Reading a picture's header is what lets the preview reserve its box
+        // before the decode finishes. Only a local file can be measured that
+        // cheaply — a remote one would have to be fetched, which is the
+        // expensive half — and anything unreadable simply goes unmeasured.
+        let dir = std::env::temp_dir().join(format!(
+            "gitcomet_ui_test_{}_measure_pictures",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create the fixture directory");
+
+        let mut png = std::io::Cursor::new(Vec::new());
+        {
+            use image::ImageEncoder as _;
+            image::codecs::png::PngEncoder::new(&mut png)
+                .write_image(
+                    &vec![0u8; 12 * 5 * 4],
+                    12,
+                    5,
+                    image::ExtendedColorType::Rgba8,
+                )
+                .expect("encode a test png");
+        }
+        std::fs::write(dir.join("shot.png"), png.into_inner()).expect("write the picture");
+        std::fs::write(dir.join("broken.png"), b"not a png").expect("write the broken picture");
+
+        let document = markdown_preview::parse_markdown(
+            "![a](shot.png)\n\n![b](broken.png)\n\n![c](missing.png)\n\n![d](https://example.com/x.png)\n",
+        )
+        .expect("the fixture parses");
+        let sizes = measure_markdown_preview_pictures(&document, Some(dir.as_path()));
+
+        assert_eq!(sizes.get("shot.png").copied(), Some((12, 5)));
+        assert_eq!(sizes.get("broken.png"), None);
+        assert_eq!(sizes.get("missing.png"), None);
+        assert_eq!(sizes.get("https://example.com/x.png"), None);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn build_single_markdown_preview_document_reports_the_flowing_render_budget() {
+        // The single-document preview lays every row out on every frame, so it
+        // refuses a document the parser would happily produce.
+        let rows = crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS + 1;
+        let source: SharedString = "---\n".repeat(rows).into();
+        assert!(rows < crate::view::markdown_preview::MAX_PREVIEW_ROWS);
+        assert!(source.len() < crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
+        assert!(
+            crate::view::markdown_preview::parse_markdown(source.as_ref()).is_some(),
+            "the parser itself accepts this document"
+        );
+
+        let error = build_single_markdown_preview_document(source.as_ref())
+            .expect_err("a document past the flowing budget should return an error");
+        // Distinct from the parser cap, and recoverable: the source still reads.
+        assert_eq!(error, MarkdownPreviewRefusal::TooManyRowsToRender);
+        assert!(error.prefers_source());
+    }
+
+    #[test]
+    fn build_single_markdown_preview_document_accepts_the_flowing_render_budget() {
+        let source: SharedString = "---\n"
+            .repeat(crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS)
+            .into();
+        let document = build_single_markdown_preview_document(source.as_ref())
+            .expect("a document exactly at the budget still renders");
+        assert_eq!(
+            document.rows.len(),
+            crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS
+        );
+    }
+
+    #[test]
     fn build_single_markdown_preview_document_respects_exact_source_length() {
         let mut source = "x".repeat(crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
         source.push('\n');
@@ -3333,9 +3507,12 @@ mod tests {
 
         let error = build_single_markdown_preview_document(&source)
             .expect_err("exact source length over the cap should return an error");
+        let MarkdownPreviewRefusal::Unavailable(reason) = &error else {
+            panic!("the size cap should be unavailable, got {error:?}");
+        };
         assert!(
-            error.contains("1 MiB"),
-            "exact-size markdown preview should mention the size limit: {error}"
+            reason.contains("1 MiB"),
+            "exact-size markdown preview should mention the size limit: {reason}"
         );
     }
 

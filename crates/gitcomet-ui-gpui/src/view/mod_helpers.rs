@@ -1198,15 +1198,14 @@ pub(in crate::view) struct MarkdownPreviewWrapKey {
     pub(in crate::view) ui_scale_percent: u32,
     pub(in crate::view) theme_is_dark: bool,
     pub(in crate::view) editor_font_family_hash: u64,
-    pub(in crate::view) has_change_bar: bool,
     pub(in crate::view) document_rev: u64,
 }
 
 /// Cached visual-row mappings for the wrapped markdown preview lists.
 ///
-/// The plans are rebuilt whenever the viewport width, UI scale, font, change
-/// bar, or the underlying document changes; the key makes that a cheap
-/// equality check on every frame instead of a re-wrap.
+/// The plans are rebuilt whenever the viewport width, UI scale, font, or the
+/// underlying document changes; the key makes that a cheap equality check on
+/// every frame instead of a re-wrap.
 ///
 /// A slot holding a key with no plan means "measured at this key, not
 /// wrapped" — the document was too large to wrap, and the list renders
@@ -1287,7 +1286,6 @@ mod markdown_preview_wrap_cache_tests {
             ui_scale_percent: 100,
             theme_is_dark: false,
             editor_font_family_hash: 7,
-            has_change_bar: false,
             document_rev: 1,
         }
     }
@@ -1303,22 +1301,6 @@ mod markdown_preview_wrap_cache_tests {
         assert!(cache.is_current(MarkdownPreviewList::Inline, key(800)));
         assert!(cache.has_key(MarkdownPreviewList::Inline));
         assert!(!cache.is_current(MarkdownPreviewList::Inline, key(808)));
-    }
-
-    #[test]
-    fn a_change_bar_transition_invalidates_the_key() {
-        let mut cache = MarkdownPreviewWrapCache::default();
-        cache.store(
-            MarkdownPreviewList::Worktree,
-            key(800),
-            Some(Default::default()),
-        );
-
-        let with_bar = MarkdownPreviewWrapKey {
-            has_change_bar: true,
-            ..key(800)
-        };
-        assert!(!cache.is_current(MarkdownPreviewList::Worktree, with_bar));
     }
 
     #[test]

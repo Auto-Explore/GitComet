@@ -669,91 +669,13 @@ fn worktree_markdown_preview_short_code_block_shell_spans_preview_width(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-
-    let repo_id = gitcomet_state::model::RepoId(72);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_code_block_width",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/snippet.md");
-    let abs_path = workdir.join(&file_rel);
-    let source = "```sh\necho hi\n```\n";
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
-        .expect("create markdown code block width workdir");
-    std::fs::write(&abs_path, source).expect("write markdown code block width fixture");
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            set_test_file_status(
-                &mut repo,
-                file_rel.clone(),
-                gitcomet_core::domain::FileStatusKind::Untracked,
-                gitcomet_core::domain::DiffArea::Unstaged,
-            );
-
-            let next_state = app_state_with_repo(repo, repo_id);
-
-            push_test_state(this, next_state, cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
+    let fixture = RenderedPreviewFixture::open(
         cx,
         &view,
-        "worktree markdown code block width target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| {
-            format!(
-                "active_repo={:?} diff_target={:?}",
-                pane.active_repo().map(|repo| repo.id),
-                pane.active_repo()
-                    .and_then(|repo| repo.diff_state.diff_target.clone()),
-            )
-        },
+        gitcomet_state::model::RepoId(72),
+        "markdown_code_block_width",
+        "```sh\necho hi\n```\n",
     );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                set_ready_worktree_preview(
-                    pane,
-                    abs_path.clone(),
-                    Arc::clone(&preview_lines),
-                    source.len(),
-                    cx,
-                );
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::parse_markdown(source)
-                        .expect("short fenced markdown preview should parse"),
-                ));
-                pane.worktree_markdown_preview_inflight = None;
-                cx.notify();
-            });
-        });
-    });
-
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
 
     let container_bounds = cx
         .debug_bounds("worktree_markdown_preview_scroll_container")
@@ -767,7 +689,7 @@ fn worktree_markdown_preview_short_code_block_shell_spans_preview_width(
         "expected short fenced code block shell to span preview width; ratio={width_ratio}, shell={code_shell_bounds:?}, container={container_bounds:?}"
     );
 
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown code block width workdir");
+    fixture.cleanup();
 }
 
 #[gpui::test]
@@ -779,91 +701,13 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-
-    let repo_id = gitcomet_state::model::RepoId(73);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_list_selection_box",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/list.md");
-    let abs_path = workdir.join(&file_rel);
-    let source = "- first item\n";
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
-        .expect("create markdown list workdir");
-    std::fs::write(&abs_path, source).expect("write markdown list fixture");
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            set_test_file_status(
-                &mut repo,
-                file_rel.clone(),
-                gitcomet_core::domain::FileStatusKind::Untracked,
-                gitcomet_core::domain::DiffArea::Unstaged,
-            );
-
-            let next_state = app_state_with_repo(repo, repo_id);
-
-            push_test_state(this, next_state, cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
+    let fixture = RenderedPreviewFixture::open(
         cx,
         &view,
-        "worktree markdown list target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| {
-            format!(
-                "active_repo={:?} diff_target={:?}",
-                pane.active_repo().map(|repo| repo.id),
-                pane.active_repo()
-                    .and_then(|repo| repo.diff_state.diff_target.clone()),
-            )
-        },
+        gitcomet_state::model::RepoId(73),
+        "markdown_list_selection_box",
+        "- first item\n",
     );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                set_ready_worktree_preview(
-                    pane,
-                    abs_path.clone(),
-                    Arc::clone(&preview_lines),
-                    source.len(),
-                    cx,
-                );
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::parse_markdown(source)
-                        .expect("markdown list preview should parse"),
-                ));
-                pane.worktree_markdown_preview_inflight = None;
-                cx.notify();
-            });
-        });
-    });
-
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
 
     let row_bounds = cx
         .debug_bounds("markdown_preview_row_box_0")
@@ -883,7 +727,7 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
         "expected the list row to be exactly as tall as its text; text={text_bounds:?}, row={row_bounds:?}"
     );
 
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown list fixture");
+    fixture.cleanup();
 }
 
 #[gpui::test]
@@ -967,6 +811,123 @@ fn secondary_f_from_conflict_markdown_preview_switches_back_to_text_search(
     });
 
     std::fs::remove_dir_all(&workdir).expect("cleanup conflict markdown preview fixture");
+}
+
+#[gpui::test]
+fn a_document_past_the_render_budget_falls_back_to_source(cx: &mut gpui::TestAppContext) {
+    // Unlike the size and parser caps, this one is recoverable: the document
+    // parsed, it is only too big to lay out at once. Leaving the reader on an
+    // empty pane with a message and a toggle to find would be worse than
+    // showing them the source.
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(87);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_render_budget",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("huge.md");
+    let abs_path = workdir.join(&file_rel);
+    let source = "---\n".repeat(crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS + 1);
+    assert!(source.len() < crate::view::markdown_preview::MAX_PREVIEW_SOURCE_BYTES);
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create render budget workdir");
+    std::fs::write(&abs_path, &source).expect("write render budget fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, abs_path.clone(), preview_lines, source.len(), cx);
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+            });
+        });
+    });
+
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.rendered_preview_modes
+                .get(RenderedPreviewKind::Markdown),
+            RenderedPreviewMode::Source,
+            "an over-budget document should put the reader on the source"
+        );
+        let gitcomet_state::model::Loadable::Error(message) = &pane.worktree_markdown_preview
+        else {
+            panic!(
+                "expected the preview to report why it refused, got {:?}",
+                pane.worktree_markdown_preview
+            );
+        };
+        assert!(
+            message.contains("too large to render"),
+            "the message should name this limit, not the parser's: {message}"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup render budget workdir");
+}
+
+#[gpui::test]
+fn the_renderer_refuses_a_document_past_its_budget(cx: &mut gpui::TestAppContext) {
+    // The builder's check is an early exit, not the only guard: a caller that
+    // hands the renderer an unbounded document still must not make the pane lay
+    // one out. Injecting the document directly is exactly that caller.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let source = "---\n".repeat(crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS + 1);
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(88),
+        "markdown_renderer_budget",
+        &source,
+    );
+
+    assert!(
+        fixture.document.rows.len() > crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS,
+        "the fixture injects a document the builder would have refused"
+    );
+    assert!(
+        cx.debug_bounds("markdown_preview_text_box_0").is_none(),
+        "no row of an over-budget document may be laid out"
+    );
+    assert!(
+        cx.debug_bounds("worktree_markdown_preview_scroll_container")
+            .is_some(),
+        "the pane itself still renders, carrying the refusal"
+    );
+
+    fixture.cleanup();
 }
 
 #[gpui::test]
@@ -2238,6 +2199,1083 @@ fn leaked_selector(selector: String) -> &'static str {
     Box::leak(selector.into_boxed_str())
 }
 
+/// Source offsets of every picture a document carries, in order.
+///
+/// A picture's element id and debug selector are both keyed on this, so it is
+/// how a test names the picture it wants to look at.
+fn picture_offsets(
+    document: &crate::view::markdown_preview::MarkdownPreviewDocument,
+) -> Vec<usize> {
+    document
+        .rows
+        .iter()
+        .flat_map(|row| row.inline_images.iter())
+        .map(|inline| inline.source_byte)
+        .collect()
+}
+
+/// A worktree markdown file, seeded and opened in the rendered preview.
+///
+/// Every rendered-preview test needs the same seven steps: write the file, push
+/// a repo state that lists it, wait for the diff target to settle, hand the
+/// pane a ready source preview and a parsed document, and draw. Spelling that
+/// out per test hid what each one was actually about.
+struct RenderedPreviewFixture {
+    workdir: std::path::PathBuf,
+    document: Arc<crate::view::markdown_preview::MarkdownPreviewDocument>,
+}
+
+impl RenderedPreviewFixture {
+    fn open(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        repo_id: gitcomet_state::model::RepoId,
+        name: &str,
+        source: &str,
+    ) -> Self {
+        Self::open_with_status(
+            cx,
+            view,
+            repo_id,
+            name,
+            source,
+            gitcomet_core::domain::FileStatusKind::Untracked,
+        )
+    }
+
+    /// The status matters where the preview's gutter does: an added or removed
+    /// file draws a change bar, an untracked one does not.
+    fn open_with_status(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<super::super::GitCometView>,
+        repo_id: gitcomet_state::model::RepoId,
+        name: &str,
+        source: &str,
+        status: gitcomet_core::domain::FileStatusKind,
+    ) -> Self {
+        let workdir = open_rendered_markdown_preview(cx, view, repo_id, name, source, status);
+        let document = cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            match &pane.worktree_markdown_preview {
+                gitcomet_state::model::Loadable::Ready(document) => Arc::clone(document),
+                other => panic!("expected a ready preview, got {other:?}"),
+            }
+        });
+        Self { workdir, document }
+    }
+
+    /// Document index of the first row whose text is exactly `text`.
+    fn row_ix(&self, text: &str) -> usize {
+        self.document
+            .rows
+            .iter()
+            .position(|row| row.text.as_ref() == text)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no row reads {text:?}; rows: {:?}",
+                    self.document
+                        .rows
+                        .iter()
+                        .map(|row| row.text.as_ref())
+                        .collect::<Vec<_>>()
+                )
+            })
+    }
+
+    /// Source offsets of every picture the document carries, in order.
+    fn picture_offsets(&self) -> Vec<usize> {
+        picture_offsets(&self.document)
+    }
+
+    fn cleanup(self) {
+        std::fs::remove_dir_all(&self.workdir).expect("cleanup preview fixture");
+    }
+}
+
+/// Seed a rendered worktree markdown preview for `source` and draw it.
+fn open_rendered_markdown_preview(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    name: &str,
+    source: &str,
+    status: gitcomet_core::domain::FileStatusKind,
+) -> std::path::PathBuf {
+    let workdir =
+        std::env::temp_dir().join(format!("gitcomet_ui_test_{}_{name}", std::process::id()));
+    let file_rel = std::path::PathBuf::from("docs/preview.md");
+    let abs_path = workdir.join(&file_rel);
+    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
+        .expect("create preview workdir");
+    std::fs::write(&abs_path, source.as_bytes()).expect("write preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                status,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        view,
+        "rendered markdown preview target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| format!("repo={:?}", pane.active_repo().map(|repo| repo.id)),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::clone(&preview_lines),
+                    source.len(),
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.worktree_markdown_preview_path = Some(abs_path.clone());
+                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
+                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::parse_markdown(source)
+                        .expect("preview fixture parses"),
+                ));
+                pane.worktree_markdown_preview_inflight = None;
+                cx.notify();
+            });
+        });
+    });
+
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    workdir
+}
+
+#[gpui::test]
+fn markdown_preview_hitboxes_follow_the_scrolled_viewport(cx: &mut gpui::TestAppContext) {
+    // Rows are only hit-testable near the window. Every other preview test uses
+    // a fixture that fits on screen, so nothing else exercises the gate — and a
+    // gate reading the wrong coordinate space would reject visible rows and
+    // silently stop selection working in any scrolled preview.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    // Far taller than any test window, so the tail starts well off screen.
+    let source = (0..400)
+        .map(|ix| format!("Paragraph number {ix}.\n\n"))
+        .collect::<String>();
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(83),
+        "markdown_scrolled_hitboxes",
+        &source,
+    );
+
+    let last_row_ix = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.markdown_preview_row_count()
+            .expect("a rendered preview has rows")
+            - 1
+    });
+
+    let hitbox = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .diff_text_hitbox_bounds_for_tests(row_ix, DiffTextRegion::Inline)
+        })
+    };
+
+    assert!(
+        hitbox(cx, 0).is_some(),
+        "the first row is on screen before scrolling"
+    );
+    assert!(
+        hitbox(cx, last_row_ix).is_none(),
+        "the tail of a tall document starts far below the window"
+    );
+
+    // Scroll to the bottom; the two ends swap.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+                let max = scroll_handle_max_offset(&handle).height;
+                set_scroll_handle_offset(&handle, point(px(0.0), -max));
+            });
+        });
+    });
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    assert!(
+        hitbox(cx, last_row_ix).is_some(),
+        "the last row is hit-testable once it is on screen"
+    );
+    assert!(
+        hitbox(cx, 0).is_none(),
+        "and the first row stops being, now that it is far above"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::TestAppContext) {
+    // The row under a picture also listens for a left press, so without the
+    // picture stopping propagation the click opens the menu *and* starts a
+    // drag-selection behind it.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    // Two badges, so they stay inline instead of one alone becoming a block.
+    let source = "[![one](badge.svg)](https://example.com/badge)\n[![two](badge.svg)](https://example.com/other)\n";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(85),
+        "markdown_badge_click",
+        source,
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/badge.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"20\"><rect width=\"80\" height=\"20\"/></svg>",
+    )
+    .expect("write the badge the link points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a picture");
+    let badge = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_{source_byte}"
+        )))
+        .expect("the badge is drawn");
+
+    simulate_counted_click(cx, badge.center(), 1);
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let popover = this.popover_host.read(cx).popover_kind_for_tests();
+            assert!(
+                matches!(
+                    popover,
+                    Some(PopoverKind::MarkdownLinkMenu { ref url })
+                        if url.as_ref() == "https://example.com/badge"
+                ),
+                "clicking a badge opens its link menu, got {popover:?}"
+            );
+            assert!(
+                !this.main_pane.read(cx).diff_text_selecting,
+                "and the row underneath must not have started selecting text"
+            );
+        });
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn preview_mode_copies_the_document_it_draws(cx: &mut gpui::TestAppContext) {
+    // The counterpart to `source_mode_copies_the_file_exactly_as_written`: the
+    // rendered preview copies what it drew, so the heading loses its `#` and
+    // the section break under it comes back as the blank line it looks like.
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(96),
+        "markdown_preview_copy",
+        "# Title\n\nBody paragraph.\n",
+    );
+    let first = fixture.row_ix("Title");
+    let last = fixture.row_ix("Body paragraph.");
+    let last_len = fixture.document.rows[last].text.len();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                assert!(
+                    pane.is_markdown_preview_active(),
+                    "the fixture must be showing the rendered document"
+                );
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    source_visible_ix: first,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    source_visible_ix: last,
+                    region: DiffTextRegion::Inline,
+                    offset: last_len,
+                });
+                cx.notify();
+            });
+        });
+    });
+
+    let copied = copied_preview_selection(cx, &view).expect("selecting the preview should copy it");
+    assert_eq!(copied, "Title\n\nBody paragraph.");
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn source_mode_word_wrap_splits_a_long_line_over_several_rows(cx: &mut gpui::TestAppContext) {
+    // Text mode draws the file through the same list every source view uses,
+    // and that list took the file's line count as its length — so the Word wrap
+    // toggle had nothing to act on and a long line just ran off the pane.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let long = "wrap this sentence over several rows ".repeat(12);
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(99),
+        "markdown_source_word_wrap",
+        &format!("Short.\n\n{long}\n"),
+    );
+    let set_mode_and_wrap = |cx: &mut gpui::VisualTestContext, wrap: bool| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.rendered_preview_modes
+                        .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
+                    pane.diff_word_wrap = wrap;
+                    cx.notify();
+                });
+            });
+        });
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+    };
+
+    set_mode_and_wrap(cx, false);
+    let (lines, unwrapped) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.worktree_preview_line_count()
+                .expect("the file is ready"),
+            pane.worktree_preview_visible_len()
+                .expect("the list has rows"),
+        )
+    });
+    assert_eq!(
+        unwrapped, lines,
+        "with wrap off the list draws one row per line"
+    );
+
+    set_mode_and_wrap(cx, true);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let wrapped = pane
+            .worktree_preview_visible_len()
+            .expect("the list has rows");
+        assert!(
+            pane.worktree_preview_wrap_active(),
+            "turning the toggle on has to reach the file preview"
+        );
+        assert!(
+            wrapped > lines,
+            "a line far wider than the pane occupies several rows; \
+             wrapped={wrapped} lines={lines}"
+        );
+
+        // The rows are slices of one line, in order, covering all of it.
+        let long_ix = lines - 2;
+        let slices: Vec<_> = (0..wrapped)
+            .filter(|ix| pane.diff_source_visible_ix_for_visible_ix(*ix) == Some(long_ix))
+            .filter_map(|ix| pane.diff_text_wrap_for_visible_ix(ix))
+            .collect();
+        assert!(
+            slices.len() > 1,
+            "the long line is the one that wrapped, got {} rows",
+            slices.len()
+        );
+        assert_eq!(
+            slices[0].primary_range.start, 0,
+            "the first row opens the line"
+        );
+        for pair in slices.windows(2) {
+            assert_eq!(
+                pair[0].primary_range.end, pair[1].primary_range.start,
+                "each row picks up where the one above it stopped"
+            );
+        }
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn source_mode_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::TestAppContext) {
+    // The trap this repeats from the diff: the rows are painted in the editor
+    // font, but the wrap width is worked out while the ambient UI font is still
+    // current. Measuring the wrong face gives the wrong column count, and every
+    // wrapped row lands short or runs past the pane.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let long = "measure this in the right font ".repeat(20);
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(100),
+        "markdown_source_wrap_font",
+        &format!("{long}\n"),
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
+                pane.diff_word_wrap = true;
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        let editor_font_family = crate::font_preferences::current_editor_font_family(app);
+        let main_pane = view.read(app).main_pane.clone();
+        let (measured, columns) = main_pane.update(app, |pane, cx| {
+            (
+                pane.diff_wrap_measure_font_family(cx),
+                pane.worktree_preview_wrap_columns(window, cx),
+            )
+        });
+
+        assert_eq!(
+            measured.as_ref(),
+            editor_font_family.as_str(),
+            "preview wrap columns must be measured in the editor font the rows are painted in"
+        );
+        // Without this the assertion above guards nothing: it would pass just as
+        // well if both fonts happened to be the same.
+        assert_ne!(
+            window.text_style().font_family.as_ref(),
+            editor_font_family.as_str(),
+            "ambient text style unexpectedly matches the editor font — this test \
+             no longer guards anything"
+        );
+
+        // And the projection has to have used that count, not merely reported it.
+        let pane = main_pane.read(app);
+        let rows = (0..pane.worktree_preview_visible_len().unwrap_or(0))
+            .filter(|ix| pane.diff_source_visible_ix_for_visible_ix(*ix) == Some(0))
+            .count();
+        let expected = long.trim_end().len().div_ceil(columns);
+        assert_eq!(
+            rows,
+            expected,
+            "the long line should occupy ceil(len / columns) rows; \
+             columns={columns} len={}",
+            long.trim_end().len()
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn source_mode_copies_the_file_exactly_as_written(cx: &mut gpui::TestAppContext) {
+    // The two modes copy different things: the rendered preview copies the
+    // document it draws, but Text mode is showing the file itself, so a
+    // selection there has to come back byte for byte — every tag, marker, and
+    // blank line the author wrote.
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    // A picture is what pulls the two modes furthest apart: the rendered
+    // document spreads one over several rows, while the file has it on a line.
+    let source = "# Title\n\n<img alt=\"demo\" src=\"demo.png\" width=\"26\" />\n\nSome **bold** text.\n\n![second](other.png)\n\n- a list item\n\nTail line.\n";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(95),
+        "markdown_source_copy",
+        source,
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
+                cx.notify();
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let lines: Vec<&str> = source.lines().collect();
+    let last_ix = lines.len() - 1;
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                assert!(
+                    !pane.is_markdown_preview_active(),
+                    "the fixture must be showing the file, not the rendered document"
+                );
+                pane.diff_text_anchor = Some(DiffTextPos {
+                    source_visible_ix: 0,
+                    region: DiffTextRegion::Inline,
+                    offset: 0,
+                });
+                pane.diff_text_head = Some(DiffTextPos {
+                    source_visible_ix: last_ix,
+                    region: DiffTextRegion::Inline,
+                    offset: lines[last_ix].len(),
+                });
+                cx.notify();
+            });
+        });
+    });
+
+    let copied = copied_preview_selection(cx, &view).expect("selecting the file should copy it");
+    assert_eq!(
+        copied,
+        lines.join("\n"),
+        "Text mode copies the file verbatim; every line the selection covers belongs in it"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn copying_a_link_address_says_that_it_was_copied(cx: &mut gpui::TestAppContext) {
+    // Nothing on screen changes when a link's address goes to the clipboard —
+    // the document shows the link's text, never its destination — so the copy
+    // has to say so or the reader cannot tell it happened.
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    // Two badges, so they stay inline instead of one alone becoming a block.
+    let source = "[![one](badge.svg)](https://example.com/badge)\n[![two](badge.svg)](https://example.com/other)\n";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(94),
+        "markdown_copy_link_toast",
+        source,
+    );
+    std::fs::write(
+        fixture.workdir.join("docs/badge.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"80\" height=\"20\"><rect width=\"80\" height=\"20\"/></svg>",
+    )
+    .expect("write the badge the link points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a picture");
+    let badge = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_{source_byte}"
+        )))
+        .expect("the badge is drawn");
+
+    simulate_counted_click(cx, badge.center(), 1);
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let copy_entry = cx
+        .debug_bounds("context_menu_copy_link_address")
+        .expect("the link menu offers copying the address")
+        .center();
+    // Menu entries fire on release.
+    cx.simulate_mouse_move(
+        copy_entry,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: copy_entry,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("https://example.com/badge".to_string())
+    );
+    cx.update(|_window, app| {
+        let toasts = view.read(app).toast_host.read(app).toasts_for_tests(app);
+        assert_eq!(
+            toasts,
+            vec![(
+                crate::view::components::ToastKind::Success,
+                "Link copied to clipboard".to_string()
+            )],
+            "copying a link address confirms itself"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_wide_table_scrolls_while_a_narrow_one_still_spans_the_pane(cx: &mut gpui::TestAppContext) {
+    // A table sizes to its content for the same reason a code block does, so a
+    // wide one has somewhere to scroll — but a narrow one must not shrink away
+    // from the pane it used to fill.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let wide_cell = "w".repeat(200);
+    let source = format!(
+        "| a | b |\n| --- | --- |\n| c | d |\n\n| {wide_cell} | {wide_cell} |\n| --- | --- |\n| e | f |\n"
+    );
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(90),
+        "markdown_table_scroll",
+        &source,
+    );
+
+    let first_rows: Vec<usize> = fixture
+        .document
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::TableRow { is_header: true }
+            )
+        })
+        .map(|(ix, _)| ix)
+        .collect();
+    assert_eq!(first_rows.len(), 2, "the fixture has two tables");
+
+    let container = cx
+        .debug_bounds("worktree_markdown_preview_scroll_container")
+        .expect("expected the preview container");
+    let narrow = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_row_box_{}",
+            first_rows[0]
+        )))
+        .expect("the narrow table's header row");
+    let wide = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_row_box_{}",
+            first_rows[1]
+        )))
+        .expect("the wide table's header row");
+
+    assert!(
+        wide.size.width > container.size.width,
+        "the wide table must exceed the pane so it can scroll; \
+         table={wide:?} container={container:?}"
+    );
+    assert!(
+        narrow.size.width <= container.size.width,
+        "and the narrow one must not; table={narrow:?} container={container:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_code_block_wider_than_the_pane_gets_a_scrollbar(cx: &mut gpui::TestAppContext) {
+    // A block that scrolls sideways with nothing to say so leaves the reader
+    // with no idea there is more of the line, and no way to reach it but a
+    // horizontal wheel. The bar is drawn for every block, but only has a thumb
+    // where there is somewhere to scroll to.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let wide = "x".repeat(400);
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(98),
+        "markdown_code_block_scrollbar",
+        &format!("```sh\nfits\n```\n\nBetween.\n\n```sh\n{wide}\n```\n"),
+    );
+
+    let first_rows: Vec<usize> = fixture
+        .document
+        .rows
+        .iter()
+        .enumerate()
+        .filter_map(|(ix, row)| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::CodeLine {
+                    is_first: true,
+                    ..
+                }
+            )
+            .then_some(ix)
+        })
+        .collect();
+    assert_eq!(
+        first_rows.len(),
+        2,
+        "the fixture opens with two code blocks"
+    );
+
+    assert!(
+        cx.debug_bounds("markdown_document_code_block_scrollbar")
+            .is_some(),
+        "a code block carries its own horizontal scrollbar"
+    );
+
+    cx.update(|_window, app| {
+        let scrolls = view
+            .read(app)
+            .main_pane
+            .read(app)
+            .worktree_markdown_preview_block_scrolls
+            .clone();
+        let narrow = scrolls
+            .max_scroll_for_tests(first_rows[0])
+            .expect("the narrow block is tracked");
+        let wide = scrolls
+            .max_scroll_for_tests(first_rows[1])
+            .expect("the wide block is tracked");
+        assert_eq!(
+            narrow,
+            px(0.0),
+            "a block that fits has nowhere to scroll, so its bar stays empty"
+        );
+        assert!(
+            wide > px(0.0),
+            "and one that overflows gives its bar a thumb; got {wide:?}"
+        );
+    });
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_code_block_does_not_swallow_the_page_scroll(cx: &mut gpui::TestAppContext) {
+    // `gpui` sends a plain wheel to whichever axis an element scrolls, so a
+    // block that only scrolls sideways would take the page's scroll the moment
+    // the pointer crossed it and the document would stop moving.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let wide = "x".repeat(400);
+    let filler = (0..200)
+        .map(|ix| format!("Paragraph {ix}.\n\n"))
+        .collect::<String>();
+    let source = format!("```sh\nfirst {wide}\n```\n\n{filler}");
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(91),
+        "markdown_code_block_wheel",
+        &source,
+    );
+
+    let first_row = fixture
+        .document
+        .rows
+        .iter()
+        .position(|row| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::CodeLine {
+                    is_first: true,
+                    ..
+                }
+            )
+        })
+        .expect("the fixture opens with a code block");
+    let body = |cx: &mut gpui::VisualTestContext| {
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_body_{first_row}"
+        )))
+        .expect("the code body should be drawn")
+    };
+    let page_offset = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y
+        })
+    };
+
+    let block_before = body(cx).left();
+    let page_before = page_offset(cx);
+
+    // A plain vertical wheel with the pointer over the code block.
+    let over_block = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_shell_{first_row}"
+        )))
+        .expect("the code shell should be drawn")
+        .center();
+    cx.simulate_mouse_move(over_block, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: over_block,
+        delta: gpui::ScrollDelta::Pixels(point(px(0.0), px(-160.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        page_offset(cx) < page_before,
+        "the document scrolls; before={page_before:?} after={:?}",
+        page_offset(cx)
+    );
+    assert_eq!(
+        body(cx).left(),
+        block_before,
+        "and the block underneath the pointer does not move sideways"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_preview_code_blocks_scroll_independently(cx: &mut gpui::TestAppContext) {
+    // A code line longer than the pane scrolls rather than wrapping or being
+    // clipped, and each block holds its own offset — which is what the per-block
+    // element id is for. A shared id made them scroll as one.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let wide = "x".repeat(400);
+    let source = format!("```sh\nfirst {wide}\n```\n\ntext\n\n```sh\nsecond {wide}\n```\n");
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(86),
+        "markdown_code_block_scroll",
+        &source,
+    );
+
+    // Both blocks are keyed on the row their code starts at.
+    let first_rows: Vec<usize> = fixture
+        .document
+        .rows
+        .iter()
+        .enumerate()
+        .filter(|(_, row)| {
+            matches!(
+                row.kind,
+                crate::view::markdown_preview::MarkdownPreviewRowKind::CodeLine {
+                    is_first: true,
+                    ..
+                }
+            )
+        })
+        .map(|(ix, _)| ix)
+        .collect();
+    assert_eq!(first_rows.len(), 2, "the fixture has two code blocks");
+
+    let shell = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_shell_{row_ix}"
+        )))
+        .unwrap_or_else(|| panic!("code shell for row {row_ix} should be drawn"))
+    };
+    let body = |cx: &mut gpui::VisualTestContext, row_ix: usize| {
+        cx.debug_bounds(leaked_selector(format!(
+            "markdown_preview_code_body_{row_ix}"
+        )))
+        .unwrap_or_else(|| panic!("code body for row {row_ix} should be drawn"))
+    };
+
+    let scrolled_before = body(cx, first_rows[0]);
+    let other_before = body(cx, first_rows[1]);
+    assert!(
+        scrolled_before.size.width > shell(cx, first_rows[0]).size.width,
+        "a long line must exceed its block, or there is nothing to scroll; \
+         body={scrolled_before:?} shell={:?}",
+        shell(cx, first_rows[0])
+    );
+
+    // Scroll the first block sideways; only it may move. The wheel is aimed at
+    // the shell, which is what carries the scroll hitbox — the body now reaches
+    // well past the window.
+    let over_first = shell(cx, first_rows[0]).center();
+    cx.simulate_mouse_move(over_first, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::ScrollWheelEvent {
+        position: over_first,
+        delta: gpui::ScrollDelta::Pixels(point(px(-120.0), px(0.0))),
+        ..Default::default()
+    });
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    let scrolled_after = body(cx, first_rows[0]);
+    let other_after = body(cx, first_rows[1]);
+
+    assert!(
+        scrolled_after.left() < scrolled_before.left(),
+        "the scrolled block moves; before={scrolled_before:?} after={scrolled_after:?}"
+    );
+    assert_eq!(
+        other_after.left(),
+        other_before.left(),
+        "the other block keeps its own offset; before={other_before:?} after={other_after:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn markdown_preview_draws_an_inline_picture_beside_its_heading(cx: &mut gpui::TestAppContext) {
+    // The pictures are sized by `max_h` against a `flex_none` wrapper, which is
+    // the kind of constraint that can collapse to zero without any parse-level
+    // assertion noticing.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let logo = "docs/logo.svg";
+    let source = "# <img alt=\"logo\" src=\"logo.svg\" width=\"26\" /> Title\n\nBody.\n";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(84),
+        "markdown_inline_picture_bounds",
+        source,
+    );
+    std::fs::write(
+        fixture.workdir.join(logo),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"26\" height=\"26\"><rect width=\"26\" height=\"26\"/></svg>",
+    )
+    .expect("write the logo the heading points at");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let source_byte = *fixture
+        .picture_offsets()
+        .first()
+        .expect("the fixture carries a picture");
+
+    let picture = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_inline_image_{source_byte}"
+        )))
+        .expect("the inline picture is drawn");
+    assert!(
+        picture.size.width > px(0.0) && picture.size.height > px(0.0),
+        "the picture must occupy space: {picture:?}"
+    );
+    let heading = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("the heading text box");
+    assert!(
+        picture.right() <= heading.left() + px(1.0),
+        "the logo sits before the heading text it belongs to; picture={picture:?} text={heading:?}"
+    );
+
+    fixture.cleanup();
+}
+
 #[gpui::test]
 fn markdown_diff_preview_draws_rows_that_carry_inline_pictures(cx: &mut gpui::TestAppContext) {
     // The diff preview paints a fixed row grid, so a picture written on a line
@@ -2328,7 +3366,450 @@ fn markdown_diff_preview_draws_rows_that_carry_inline_pictures(cx: &mut gpui::Te
             .collect::<Vec<_>>()
     );
 
+    // And the row grid actually draws them: the pictures are sized against a
+    // `flex_none` wrapper, which can collapse without any parse-level
+    // assertion noticing.
+    let source_bytes = picture_offsets(&document);
+    assert!(!source_bytes.is_empty(), "the fixture carries pictures");
+    for source_byte in source_bytes {
+        let picture = cx
+            .debug_bounds(leaked_selector(format!(
+                "markdown_preview_inline_image_{source_byte}"
+            )))
+            .unwrap_or_else(|| panic!("picture at {source_byte} should be drawn"));
+        assert!(
+            picture.size.width > px(0.0) && picture.size.height > px(0.0),
+            "a picture in the diff preview must occupy space: {picture:?}"
+        );
+    }
+
     std::fs::remove_dir_all(&workdir).ok();
+}
+
+#[gpui::test]
+fn markdown_preview_selection_highlights_every_line_of_a_wrapped_row(
+    cx: &mut gpui::TestAppContext,
+) {
+    // The highlight is a paint-time computation, so a regression that puts
+    // every quad on the first visual line, or steps them by the wrong amount,
+    // is invisible to every other assertion in this file.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(82),
+        "markdown_wrapped_selection",
+        &format!("{}\n", "select this paragraph across its lines ".repeat(40)),
+    );
+
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected the wrapped paragraph's text box");
+
+    // A triple click selects the whole source row, so every visual line the row
+    // occupies has to carry a highlight.
+    simulate_counted_click(cx, text_bounds.center(), 3);
+    cx.run_until_parked();
+    crate::view::rows::clear_markdown_selection_paint_log_for_tests();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let rects = crate::view::rows::markdown_selection_paint_log_for_tests(0);
+    assert!(
+        rects.len() >= 3,
+        "a paragraph wrapped over several lines needs a quad per line, got {}: text={text_bounds:?}",
+        rects.len()
+    );
+
+    let line_height = rects[0].size.height;
+    assert!(line_height > px(0.0), "quads must have height: {rects:?}");
+    for (ix, pair) in rects.windows(2).enumerate() {
+        let (above, below) = (pair[0], pair[1]);
+        assert!(
+            (below.top() - above.top() - line_height).abs() <= px(0.5),
+            "quad {} must sit exactly one line under quad {ix}; above={above:?} below={below:?}",
+            ix + 1
+        );
+        assert_eq!(
+            below.size.height, above.size.height,
+            "every line of one selection is the same height: {rects:?}"
+        );
+    }
+    for rect in &rects {
+        assert!(
+            rect.left() >= text_bounds.left() - px(0.5)
+                && rect.right() <= text_bounds.right() + px(0.5),
+            "a quad must stay inside the text box; quad={rect:?} text={text_bounds:?}"
+        );
+    }
+    // The middle lines of a fully selected row are covered end to end, which is
+    // what distinguishes a real multi-line highlight from one box per line at
+    // the same x.
+    let widest = rects
+        .iter()
+        .map(|rect| rect.size.width)
+        .fold(px(0.0), |a, b| if b > a { b } else { a });
+    assert!(
+        widest > text_bounds.size.width * 0.5,
+        "a wrapped selection must cover whole lines, widest={widest:?} text={text_bounds:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_partial_wrapped_selection_starts_and_ends_where_the_drag_did(cx: &mut gpui::TestAppContext) {
+    // Selecting a whole row is the easy case: every quad spans its line. A drag
+    // that starts and ends mid-line is where the first and last quads have to
+    // be measured rather than assumed.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(89),
+        "markdown_partial_selection",
+        &format!("{}\n", "drag across part of this paragraph ".repeat(40)),
+    );
+
+    let text_bounds = cx
+        .debug_bounds("markdown_preview_text_box_0")
+        .expect("expected the wrapped paragraph's text box");
+    let line_height = text_bounds.size.height / 6.0;
+    // Start a third of the way into the second visual line and end two thirds
+    // across the fourth, so both ends fall mid-line.
+    let start = point(
+        text_bounds.left() + text_bounds.size.width / 3.0,
+        text_bounds.top() + line_height * 1.5,
+    );
+    let end = point(
+        text_bounds.left() + text_bounds.size.width * 2.0 / 3.0,
+        text_bounds.top() + line_height * 3.5,
+    );
+
+    drag_preview_selection(cx, start, end);
+    crate::view::rows::clear_markdown_selection_paint_log_for_tests();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let rects = crate::view::rows::markdown_selection_paint_log_for_tests(0);
+    assert!(
+        rects.len() >= 2,
+        "a drag spanning visual lines needs a quad per line, got {}",
+        rects.len()
+    );
+
+    let first = rects.first().expect("a first quad");
+    let last = rects.last().expect("a last quad");
+    assert!(
+        first.left() > text_bounds.left() + px(1.0),
+        "the first quad starts where the drag did, not at the line start; \
+         quad={first:?} text={text_bounds:?}"
+    );
+    assert!(
+        last.right() < text_bounds.right() - px(1.0),
+        "and the last stops where it ended, not at the line end; \
+         quad={last:?} text={text_bounds:?}"
+    );
+    // Whatever lies between them is a whole line.
+    for middle in rects.iter().take(rects.len().saturating_sub(1)).skip(1) {
+        assert!(
+            middle.size.width > text_bounds.size.width * 0.5,
+            "a line inside the selection is covered end to end: {middle:?}"
+        );
+    }
+
+    fixture.cleanup();
+}
+
+/// Press at `from`, drag to `to`, release.
+///
+/// A click and a drag are different gestures: the press begins the selection,
+/// the move extends it, and only the release ends it.
+fn drag_preview_selection(
+    cx: &mut gpui::VisualTestContext,
+    from: gpui::Point<Pixels>,
+    to: gpui::Point<Pixels>,
+) {
+    cx.simulate_mouse_move(from, None, gpui::Modifiers::default());
+    cx.simulate_event(gpui::MouseDownEvent {
+        position: from,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_move(
+        to,
+        Some(gpui::MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.simulate_event(gpui::MouseUpEvent {
+        position: to,
+        modifiers: gpui::Modifiers::default(),
+        button: gpui::MouseButton::Left,
+        click_count: 1,
+    });
+    cx.run_until_parked();
+}
+
+/// Whatever the preview's selection would put on the clipboard.
+fn copied_preview_selection(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+) -> Option<String> {
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.copy_selected_diff_text_to_clipboard(cx)
+        });
+    });
+    cx.read_from_clipboard().and_then(|item| item.text())
+}
+
+#[gpui::test]
+fn a_drag_that_runs_past_a_short_line_still_selects_it(cx: &mut gpui::TestAppContext) {
+    // A code block sizes every line to its own text so the block has something
+    // to scroll, which leaves the space beside a short line belonging to no
+    // row at all. Hit testing used to refuse any point outside a row, so a drag
+    // that crossed one of those gaps stopped extending the selection and the
+    // reader was left with whatever they had already covered.
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let long = "one line that runs a good deal wider than the line beneath it";
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(91),
+        "markdown_drag_past_short_line",
+        &format!("Intro.\n\n```\n{long}\ntail\n```\n"),
+    );
+
+    let long_box = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix(long)
+        )))
+        .expect("expected the long code line's text box");
+    let short_box = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("tail")
+        )))
+        .expect("expected the short code line's text box");
+    assert!(
+        short_box.right() < long_box.right() - px(8.0),
+        "the fixture needs one code line to end well before the other; \
+         long={long_box:?} short={short_box:?}"
+    );
+
+    // Ends level with the short line but past where its text stops, which is
+    // the gap a code block leaves beside it.
+    drag_preview_selection(
+        cx,
+        long_box.center(),
+        point(long_box.right() - px(2.0), short_box.center().y),
+    );
+
+    let copied = copied_preview_selection(cx, &view).expect("the drag should have selected text");
+    assert!(
+        copied.ends_with("\ntail"),
+        "a drag past the end of a short line still ends on that line, got {copied:?}"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn copying_across_a_picture_writes_its_description_once(cx: &mut gpui::TestAppContext) {
+    // An image block occupies as many rows as it is tall, and every one of them
+    // carries the alt text so the row grid can describe a picture it cannot
+    // draw. Copying walks rows, so a selection that crossed a picture used to
+    // repeat its description once per row.
+    let _visual_guard = lock_visual_test();
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(92),
+        "markdown_copy_over_picture",
+        "Above.\n\n![demo](demo.png)\n\nBelow.\n",
+    );
+    assert!(
+        fixture
+            .document
+            .rows
+            .iter()
+            .filter(|row| row.text.as_ref() == "demo")
+            .count()
+            > 1,
+        "the fixture needs a picture spread over several rows"
+    );
+
+    let above = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Above.")
+        )))
+        .expect("expected the paragraph above the picture");
+    let below = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_text_box_{}",
+            fixture.row_ix("Below.")
+        )))
+        .expect("expected the paragraph below the picture");
+
+    drag_preview_selection(
+        cx,
+        point(above.left(), above.center().y),
+        point(below.right(), below.center().y),
+    );
+
+    let copied = copied_preview_selection(cx, &view).expect("the drag should have selected text");
+    assert_eq!(
+        copied, "Above.\ndemo\nBelow.",
+        "a picture is one line of the document however many rows it occupies"
+    );
+
+    fixture.cleanup();
+}
+
+#[gpui::test]
+fn a_picture_draws_at_the_size_its_skeleton_reserved(cx: &mut gpui::TestAppContext) {
+    // The other half of `a_skeleton_holds_the_box_the_picture_will_fill`: that
+    // one pins the box the skeleton claims from the picture's header, this one
+    // pins the box the picture actually lands in. They have to be the same
+    // numbers, or reserving the room would just move the jump rather than
+    // remove it. The decode itself is too fast to catch mid-flight in a test,
+    // so the skeleton is measured through its own unit test instead.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(97),
+        "markdown_picture_skeleton",
+        "![demo](demo.png)\n\nAfter.\n",
+    );
+    // Narrower than the pane, so the picture keeps its own size rather than
+    // being clamped and the reserved box has to match it exactly.
+    std::fs::write(
+        fixture.workdir.join("docs/demo.png"),
+        test_png_bytes(40, 20).as_slice(),
+    )
+    .expect("write the picture the document points at");
+    let row_ix = fixture.row_ix("demo");
+    for _ in 0..3 {
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+    }
+
+    let picture = cx
+        .debug_bounds(leaked_selector(format!(
+            "markdown_preview_block_image_{row_ix}"
+        )))
+        .expect("the picture is drawn once it has decoded");
+    assert!(
+        (picture.size.width - px(40.0)).abs() <= px(0.5)
+            && (picture.size.height - px(20.0)).abs() <= px(0.5),
+        "a picture narrower than the pane draws at its own size, which is the \
+         box its skeleton reserved; got {picture:?}"
+    );
+
+    fixture.cleanup();
+}
+
+/// A minimal PNG of the given size — only its header is ever read.
+fn test_png_bytes(width: u32, height: u32) -> Vec<u8> {
+    use image::ImageEncoder as _;
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::codecs::png::PngEncoder::new(&mut out)
+        .write_image(
+            &vec![0u8; (width * height * 4) as usize],
+            width,
+            height,
+            image::ExtendedColorType::Rgba8,
+        )
+        .expect("encode a test png");
+    out.into_inner()
+}
+
+#[gpui::test]
+fn a_picture_that_is_still_decoding_is_waited_on(cx: &mut gpui::TestAppContext) {
+    // `gpui` wakes only the first view that asked for an image, so a pane that
+    // starts showing one another pane is already decoding is never told the
+    // decode finished and holds an empty slot. The pane waits on its own
+    // pictures instead of relying on that.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let fixture = RenderedPreviewFixture::open(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(93),
+        "markdown_image_wait",
+        "![demo](demo.svg)\n\nAfter.\n",
+    );
+    // Written after the preview opened, so the first draw resolved nothing and
+    // the next one is the one that finds a picture to load.
+    std::fs::write(
+        fixture.workdir.join("docs/demo.svg"),
+        "<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"40\" height=\"20\"><rect width=\"40\" height=\"20\"/></svg>",
+    )
+    .expect("write the picture the document points at");
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.worktree_markdown_preview_image_waits.is_empty(),
+            "a picture that has not decoded yet needs something waiting to repaint the pane"
+        );
+    });
+
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.worktree_markdown_preview_image_waits.is_empty(),
+            "and the wait is released once the picture has been decided one way or the other"
+        );
+    });
+
+    fixture.cleanup();
 }
 
 #[gpui::test]
@@ -2344,83 +3825,16 @@ fn markdown_preview_hit_testing_follows_a_row_onto_its_wrapped_lines(
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    let repo_id = gitcomet_state::model::RepoId(80);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_wrapped_hit_test",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/wrapped_hits.md");
-    let abs_path = workdir.join(&file_rel);
-    let source = format!(
-        "{}\n",
-        "one paragraph wrapped over several lines ".repeat(40)
-    );
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
-        .expect("create markdown wrapped hit test workdir");
-    std::fs::write(&abs_path, source.as_bytes()).expect("write markdown wrapped hit test fixture");
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            set_test_file_status(
-                &mut repo,
-                file_rel.clone(),
-                gitcomet_core::domain::FileStatusKind::Untracked,
-                gitcomet_core::domain::DiffArea::Unstaged,
-            );
-            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
+    let fixture = RenderedPreviewFixture::open(
         cx,
         &view,
-        "markdown wrapped hit test target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| format!("repo={:?}", pane.active_repo().map(|repo| repo.id)),
+        gitcomet_state::model::RepoId(80),
+        "markdown_wrapped_hit_test",
+        &format!(
+            "{}\n",
+            "one paragraph wrapped over several lines ".repeat(40)
+        ),
     );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                set_ready_worktree_preview(
-                    pane,
-                    abs_path.clone(),
-                    Arc::clone(&preview_lines),
-                    source.len(),
-                    cx,
-                );
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::parse_markdown(&source)
-                        .expect("wrapped paragraph markdown parses"),
-                ));
-                pane.worktree_markdown_preview_inflight = None;
-                cx.notify();
-            });
-        });
-    });
-
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
 
     let text_bounds = cx
         .debug_bounds("markdown_preview_text_box_0")
@@ -2449,7 +3863,7 @@ fn markdown_preview_hit_testing_follows_a_row_onto_its_wrapped_lines(
         );
     });
 
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown wrapped hit test workdir");
+    fixture.cleanup();
 }
 
 #[gpui::test]
@@ -2461,99 +3875,17 @@ fn worktree_markdown_preview_change_bar_is_unbroken_for_a_wholly_added_file(
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
     });
-
-    let repo_id = gitcomet_state::model::RepoId(75);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_change_bar",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/added.md");
-    let abs_path = workdir.join(&file_rel);
     // A top-level heading makes the preview insert a spacer row, and headings
     // carry vertical insets — both used to punch holes in the change bar.
-    let source = "# Title\n\nBody paragraph.\n\n## Section\n\nMore body.\n";
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
-        .expect("create markdown change bar workdir");
-    std::fs::write(&abs_path, source).expect("write markdown change bar fixture");
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            set_test_file_status(
-                &mut repo,
-                file_rel.clone(),
-                gitcomet_core::domain::FileStatusKind::Untracked,
-                gitcomet_core::domain::DiffArea::Unstaged,
-            );
-
-            let next_state = app_state_with_repo(repo, repo_id);
-
-            push_test_state(this, next_state, cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
+    let fixture = RenderedPreviewFixture::open_with_status(
         cx,
         &view,
-        "worktree markdown change bar target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| {
-            format!(
-                "active_repo={:?} diff_target={:?}",
-                pane.active_repo().map(|repo| repo.id),
-                pane.active_repo()
-                    .and_then(|repo| repo.diff_state.diff_target.clone()),
-            )
-        },
+        gitcomet_state::model::RepoId(75),
+        "markdown_change_bar",
+        "# Title\n\nBody paragraph.\n\n## Section\n\nMore body.\n",
+        gitcomet_core::domain::FileStatusKind::Untracked,
     );
-
-    let document = crate::view::markdown_preview::parse_markdown(source)
-        .expect("headed markdown preview should parse");
-    let last_row_ix = document
-        .rows
-        .iter()
-        .position(|row| row.text.as_ref() == "More body.")
-        .expect("fixture should end with a paragraph");
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                set_ready_worktree_preview(
-                    pane,
-                    abs_path.clone(),
-                    Arc::clone(&preview_lines),
-                    source.len(),
-                    cx,
-                );
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview =
-                    gitcomet_state::model::Loadable::Ready(Arc::new(document));
-                pane.worktree_markdown_preview_inflight = None;
-                cx.notify();
-            });
-        });
-    });
-
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
+    let last_row_ix = fixture.row_ix("More body.");
 
     // The flowing preview marks the file with one gutter element rather than a
     // segment per row: blocks are separated by margins, and a per-row bar left
@@ -2580,7 +3912,7 @@ fn worktree_markdown_preview_change_bar_is_unbroken_for_a_wholly_added_file(
          bar={bar:?} first={first_row:?} last={last_row:?}"
     );
 
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown change bar workdir");
+    fixture.cleanup();
 }
 
 #[gpui::test]
@@ -2851,80 +4183,13 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    let repo_id = gitcomet_state::model::RepoId(78);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_link_menu",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/link.md");
-    let abs_path = workdir.join(&file_rel);
-    let source = "[the docs](https://example.com/docs)\n";
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
-        .expect("create markdown link menu workdir");
-    std::fs::write(&abs_path, source).expect("write markdown link menu fixture");
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            set_test_file_status(
-                &mut repo,
-                file_rel.clone(),
-                gitcomet_core::domain::FileStatusKind::Untracked,
-                gitcomet_core::domain::DiffArea::Unstaged,
-            );
-            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
+    let fixture = RenderedPreviewFixture::open(
         cx,
         &view,
-        "markdown link menu target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| format!("repo={:?}", pane.active_repo().map(|repo| repo.id)),
+        gitcomet_state::model::RepoId(78),
+        "markdown_link_menu",
+        "[the docs](https://example.com/docs)\n",
     );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                set_ready_worktree_preview(
-                    pane,
-                    abs_path.clone(),
-                    Arc::clone(&preview_lines),
-                    source.len(),
-                    cx,
-                );
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::parse_markdown(source)
-                        .expect("link markdown parses"),
-                ));
-                pane.worktree_markdown_preview_inflight = None;
-                cx.notify();
-            });
-        });
-    });
-
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
 
     let text_bounds = cx
         .debug_bounds("markdown_preview_text_box_0")
@@ -2960,7 +4225,7 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
         });
     });
 
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown link menu workdir");
+    fixture.cleanup();
 }
 
 #[gpui::test]
@@ -2974,80 +4239,13 @@ fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::Tes
         super::super::GitCometView::new(store, events, None, window, cx)
     });
 
-    let repo_id = gitcomet_state::model::RepoId(79);
-    let workdir = std::env::temp_dir().join(format!(
-        "gitcomet_ui_test_{}_markdown_text_box",
-        std::process::id()
-    ));
-    let file_rel = std::path::PathBuf::from("docs/box.md");
-    let abs_path = workdir.join(&file_rel);
-    let source = "A plain paragraph with enough words to fill the row.\n";
-    let preview_lines = Arc::new(source.lines().map(ToOwned::to_owned).collect::<Vec<_>>());
-    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
-        path: file_rel.clone(),
-        area: gitcomet_core::domain::DiffArea::Unstaged,
-    };
-
-    let _ = std::fs::remove_dir_all(&workdir);
-    std::fs::create_dir_all(abs_path.parent().expect("fixture parent dir"))
-        .expect("create markdown text box workdir");
-    std::fs::write(&abs_path, source).expect("write markdown text box fixture");
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            let mut repo = opening_repo_state(repo_id, &workdir);
-            set_test_file_status(
-                &mut repo,
-                file_rel.clone(),
-                gitcomet_core::domain::FileStatusKind::Untracked,
-                gitcomet_core::domain::DiffArea::Unstaged,
-            );
-            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
-        });
-    });
-
-    wait_for_main_pane_condition(
+    let fixture = RenderedPreviewFixture::open(
         cx,
         &view,
-        "markdown text box target activation",
-        |pane| {
-            pane.active_repo()
-                .and_then(|repo| repo.diff_state.diff_target.clone())
-                == Some(target.clone())
-        },
-        |pane| format!("repo={:?}", pane.active_repo().map(|repo| repo.id)),
+        gitcomet_state::model::RepoId(79),
+        "markdown_text_box",
+        "A plain paragraph with enough words to fill the row.\n",
     );
-
-    cx.update(|_window, app| {
-        view.update(app, |this, cx| {
-            this.main_pane.update(cx, |pane, cx| {
-                set_ready_worktree_preview(
-                    pane,
-                    abs_path.clone(),
-                    Arc::clone(&preview_lines),
-                    source.len(),
-                    cx,
-                );
-                pane.rendered_preview_modes
-                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
-                pane.worktree_markdown_preview_path = Some(abs_path.clone());
-                pane.worktree_markdown_preview_source_rev = pane.worktree_preview_content_rev;
-                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
-                    crate::view::markdown_preview::parse_markdown(source)
-                        .expect("paragraph markdown parses"),
-                ));
-                pane.worktree_markdown_preview_inflight = None;
-                cx.notify();
-            });
-        });
-    });
-
-    for _ in 0..3 {
-        cx.update(|window, app| {
-            let _ = window.draw(app);
-        });
-        cx.run_until_parked();
-    }
 
     let container_bounds = cx
         .debug_bounds("worktree_markdown_preview_scroll_container")
@@ -3089,5 +4287,5 @@ fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::Tes
         });
     });
 
-    std::fs::remove_dir_all(&workdir).expect("cleanup markdown text box workdir");
+    fixture.cleanup();
 }

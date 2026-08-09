@@ -11,6 +11,7 @@ mod picker_prompt;
 mod repository_badge;
 mod resize_grip;
 mod shortcut_keys;
+mod skeleton;
 mod split_button;
 mod tab;
 mod tab_bar;
@@ -44,6 +45,7 @@ pub use repository_badge::{
 };
 pub use resize_grip::{ResizeGripAxis, resize_grip};
 pub use shortcut_keys::shortcut_keys;
+pub use skeleton::skeleton;
 pub use split_button::{SplitButton, SplitButtonStyle};
 pub use tab::Tab;
 pub use tab_bar::{TabBar, TabBarScroll};

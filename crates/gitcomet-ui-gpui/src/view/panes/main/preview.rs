@@ -546,6 +546,28 @@ impl MainPaneView {
         }
     }
 
+    /// Rows the file preview list draws.
+    ///
+    /// With word wrap on a long line occupies several of them, so this is not
+    /// the file's line count — every caller that indexes the list wants this
+    /// one, and everything that means "a line of the file" wants the other.
+    pub(in crate::view) fn worktree_preview_visible_len(&self) -> Option<usize> {
+        let line_count = self.worktree_preview_line_count()?;
+        if !self.worktree_preview_wrap_active() {
+            return Some(line_count);
+        }
+        Some(self.diff_wrap_visible_rows.len())
+    }
+
+    /// Whether the file preview's rows are currently a wrap projection of its
+    /// lines rather than the lines themselves.
+    pub(in crate::view) fn worktree_preview_wrap_active(&self) -> bool {
+        self.is_file_preview_active()
+            && self.diff_word_wrap
+            && self.diff_wrap_visible_cache_key.is_some()
+            && !self.diff_wrap_visible_rows.is_empty()
+    }
+
     pub(in crate::view) fn worktree_preview_line_raw_text(
         &self,
         line_ix: usize,
@@ -609,11 +631,9 @@ impl MainPaneView {
     pub(in crate::view) fn markdown_preview_row_count(&self) -> Option<usize> {
         if self.is_file_preview_active() {
             if let Loadable::Ready(doc) = &self.worktree_markdown_preview {
-                return Some(
-                    self.markdown_preview_wrap
-                        .plan_len(MarkdownPreviewList::Worktree)
-                        .unwrap_or(doc.rows.len()),
-                );
+                // The single document flows rather than wrapping into a fixed
+                // row grid, so a list position is always a source row index.
+                return Some(doc.rows.len());
             }
             return None;
         }
@@ -669,6 +689,101 @@ impl MainPaneView {
                 None => row.text.len(),
             })
             .unwrap_or(0)
+    }
+
+    /// Arrange for the pane to repaint when a picture in the rendered preview
+    /// finishes decoding.
+    ///
+    /// `gpui` decodes an image once and hands the result to everyone, but it
+    /// only wakes the *first* view that asked for it. A pane that starts
+    /// showing a picture another one is already decoding is therefore never
+    /// told the decode finished, and holds an empty slot until something
+    /// unrelated happens to repaint it. Animated pictures are where this bites:
+    /// `gpui` decodes every frame before it yields anything, so a long GIF
+    /// takes seconds — time enough to open the same document in a second tab.
+    pub(in crate::view) fn watch_pending_markdown_preview_images(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        use futures::FutureExt as _;
+
+        let Loadable::Ready(document) = &self.worktree_markdown_preview else {
+            return;
+        };
+        // A document past the flowing renderer's budget is shown as source, so
+        // it draws no pictures and there is nothing to wait for.
+        if document.rows.len() > crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS {
+            return;
+        }
+        let document = Arc::clone(document);
+        let base_dir = self.markdown_preview_image_base_dir();
+
+        let mut resources = Vec::new();
+        let mut push = |source: &str| {
+            if let Some(resolved) =
+                crate::view::rows::markdown_preview_image_source(base_dir.as_deref(), source)
+            {
+                resources.push(resolved.to_resource());
+            }
+        };
+        for row in document.rows.iter() {
+            // Only the first band of a picture draws it; the rest are height.
+            if !row.continues_a_picture()
+                && let Some(image) = row.image.as_ref()
+            {
+                push(image.source.as_ref());
+            }
+            for inline in row.inline_images.iter() {
+                push(inline.image.source.as_ref());
+            }
+        }
+
+        for resource in resources {
+            if self
+                .worktree_markdown_preview_image_waits
+                .contains(&resource)
+            {
+                continue;
+            }
+            let (task, _) = cx.fetch_asset::<gpui::ImgResourceLoader>(&resource);
+            if task.clone().now_or_never().is_some() {
+                continue;
+            }
+            self.worktree_markdown_preview_image_waits
+                .insert(resource.clone());
+            cx.spawn(async move |view, cx| {
+                // Whether the picture decoded or failed, the pane has to hear
+                // about it: a failure is what draws the stand-in.
+                let _ = task.await;
+                let _ = view.update(cx, |this, cx| {
+                    this.worktree_markdown_preview_image_waits.remove(&resource);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Whether a markdown preview row only continues a picture an earlier row
+    /// already carries.
+    ///
+    /// An image block occupies as many rows as it is tall so the row grid can
+    /// give it height, and every one of them carries the picture's alt text.
+    /// Only the first is a line of the document, so copying a selection that
+    /// runs over a picture would otherwise repeat its alt text once per row.
+    ///
+    /// Only the rendered preview is laid out that way. Text mode is showing the
+    /// file, where a row index is a line number, and the parsed document that
+    /// is still cached beside it describes nothing about those lines.
+    pub(in crate::view) fn markdown_preview_row_repeats_a_picture(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> bool {
+        self.is_markdown_preview_active()
+            && self
+                .markdown_preview_row_at(visible_ix, region)
+                .is_some_and(|(row, _)| row.continues_a_picture())
     }
 
     /// Directory that relative image paths in the rendered preview resolve

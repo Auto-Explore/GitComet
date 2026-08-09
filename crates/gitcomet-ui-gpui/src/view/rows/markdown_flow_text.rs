@@ -62,7 +62,9 @@ impl MarkdownFlowText {
         }
 
         let color = self.view.read(cx).diff_text_selection_color();
-        for rect in markdown_flow_selection_rects(layout, start, end) {
+        let rects = markdown_flow_selection_rects(layout, start, end);
+        record_selection_paint_for_tests(self.row_ix, &rects);
+        for rect in rects {
             window.paint_quad(fill(rect, color));
         }
     }
@@ -101,7 +103,10 @@ fn markdown_flow_selection_rects(
             .get(boundary.run_ix)
             .and_then(|run| run.glyphs.get(boundary.glyph_ix))
         else {
-            continue;
+            // Every later line's position is counted from the boundaries before
+            // it, so skipping one would paint the rest of the highlight a line
+            // too high. Painting nothing is the honest failure.
+            return Vec::new();
         };
         edges.push(glyph.index);
     }
@@ -157,6 +162,61 @@ pub(in crate::view) fn markdown_flow_row_offset(raw: &str, painted_offset: usize
 
 /// Tabs are painted as this many spaces; `maybe_expand_tabs` is the producer.
 const MARKDOWN_FLOW_TAB_COLUMNS: usize = 4;
+
+/// How far past the window a row still counts as reachable, so a drag that
+/// runs off the edge and the rows a flick is about to bring in keep their
+/// hitboxes.
+const MARKDOWN_FLOW_HITBOX_MARGIN: f32 = 2.0;
+
+/// Whether a row is close enough to the window to be worth hit testing.
+fn markdown_flow_row_is_near_viewport(bounds: Bounds<Pixels>, window: &Window) -> bool {
+    let height = window.viewport_size().height;
+    let margin = height * MARKDOWN_FLOW_HITBOX_MARGIN;
+    bounds.bottom() >= -margin && bounds.top() <= height + margin
+}
+
+// Selection quads painted this frame, keyed by row. The highlight is a
+// paint-time computation with no other observable effect, so this is the only
+// way a test can see where it landed.
+#[cfg(test)]
+thread_local! {
+    static SELECTION_PAINT_LOG: RefCell<Vec<(usize, Bounds<Pixels>)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+fn record_selection_paint_for_tests(row_ix: usize, rects: &[Bounds<Pixels>]) {
+    SELECTION_PAINT_LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        log.extend(rects.iter().map(|rect| (row_ix, *rect)));
+    });
+}
+
+#[cfg(not(test))]
+fn record_selection_paint_for_tests(_row_ix: usize, _rects: &[Bounds<Pixels>]) {}
+
+#[cfg(test)]
+pub(in crate::view) fn clear_markdown_selection_paint_log_for_tests() {
+    SELECTION_PAINT_LOG.with(|log| log.borrow_mut().clear());
+}
+
+/// Selection quads painted since the last clear, in paint order.
+#[cfg(test)]
+pub(in crate::view) fn markdown_selection_paint_log_for_tests(
+    row_ix: usize,
+) -> Vec<Bounds<Pixels>> {
+    // Draining on read is what keeps the log safe to use without knowing it
+    // exists: gpui tests share worker threads, so anything left behind would
+    // surface in whichever test ran next on this one.
+    SELECTION_PAINT_LOG.with(|log| {
+        let mut log = log.borrow_mut();
+        let (mine, rest) = std::mem::take(&mut *log)
+            .into_iter()
+            .partition(|(logged_ix, _)| *logged_ix == row_ix);
+        *log = rest;
+        mine.into_iter().map(|(_, rect)| rect).collect()
+    })
+}
 
 impl gpui::IntoElement for MarkdownFlowText {
     type Element = Self;
@@ -218,12 +278,19 @@ impl gpui::Element for MarkdownFlowText {
         window: &mut Window,
         cx: &mut App,
     ) {
+        // A row outside the window cannot be clicked and its quads would be
+        // clipped, so neither its selection geometry nor its hitbox is worth
+        // computing. The virtualized list this renderer replaced built nothing
+        // for such a row at all.
+        let on_screen = markdown_flow_row_is_near_viewport(bounds, window);
         let layout = self
             .layout
             .clone()
             .expect("markdown flow text should be laid out before paint");
         // The highlight sits behind the glyphs, so it is painted first.
-        self.paint_selection(&layout, window, cx);
+        if on_screen {
+            self.paint_selection(&layout, window, cx);
+        }
         self.inner
             .as_mut()
             .expect("markdown flow text should be laid out before paint")
@@ -236,6 +303,10 @@ impl gpui::Element for MarkdownFlowText {
                 window,
                 cx,
             );
+
+        if !on_screen {
+            return;
+        }
 
         let row_ix = self.row_ix;
         let region = self.region;

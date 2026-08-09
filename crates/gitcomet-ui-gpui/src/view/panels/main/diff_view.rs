@@ -2484,6 +2484,7 @@ impl MainPaneView {
                     }
                     Loadable::Ready(_) => {
                         self.ensure_single_markdown_preview_cache(cx);
+                        self.watch_pending_markdown_preview_images(cx);
                         match &self.worktree_markdown_preview {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, "Preview", "Loading")
@@ -2521,6 +2522,12 @@ impl MainPaneView {
                                             ui_scale_percent,
                                             editor_font_family: editor_font_family.clone().into(),
                                             image_base_dir,
+                                            picture_sizes: std::sync::Arc::clone(
+                                                &self.worktree_markdown_preview_picture_sizes,
+                                            ),
+                                            block_scrolls: self
+                                                .worktree_markdown_preview_block_scrolls
+                                                .clone(),
                                             view: Some(cx.entity()),
                                             text_region: DiffTextRegion::Inline,
                                             change_bar_color:
@@ -2601,12 +2608,22 @@ impl MainPaneView {
                             .into_any_element()
                     }
                     Loadable::Ready(line_count) => {
-                        if *line_count == 0 {
+                        let line_count = *line_count;
+                        if line_count == 0 {
                             components::empty_state(theme, "File", "Empty file.").into_any_element()
                         } else {
+                            // Word wrap turns one line into several rows, so the
+                            // projection has to be built before the list is
+                            // asked how long it is.
+                            self.ensure_diff_wrap_visible_rows(window, cx);
+                            let row_count = self
+                                .worktree_preview_visible_len()
+                                .unwrap_or(line_count)
+                                .max(1);
+                            let wrapped = self.worktree_preview_wrap_active();
                             let list = uniform_list(
                                 "worktree_preview_list",
-                                *line_count,
+                                row_count,
                                 cx.processor(Self::render_worktree_preview_rows),
                             )
                             .h_full()
@@ -2644,14 +2661,18 @@ impl MainPaneView {
                                     )
                                     .render(theme),
                                 )
-                                .child(
-                                    components::Scrollbar::horizontal(
-                                        "worktree_preview_hscrollbar",
-                                        scroll_handle,
+                                // Wrapped rows end at the pane, so there is
+                                // nothing left of the line to scroll to.
+                                .when(!wrapped, |container| {
+                                    container.child(
+                                        components::Scrollbar::horizontal(
+                                            "worktree_preview_hscrollbar",
+                                            scroll_handle,
+                                        )
+                                        .always_visible()
+                                        .render(theme),
                                     )
-                                    .always_visible()
-                                    .render(theme),
-                                )
+                                })
                                 .into_any_element()
                         }
                     }

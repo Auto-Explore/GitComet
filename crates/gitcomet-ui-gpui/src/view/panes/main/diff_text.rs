@@ -100,7 +100,41 @@ impl MainPaneView {
         position: Point<Pixels>,
     ) -> Option<DiffTextPos> {
         let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
-        let local = hitbox.bounds.localize(&position)?;
+        // A press off the text is not a press on it: the caller has to be able
+        // to tell "not this row" from "the start of this row", or clicking a
+        // row's padding would begin a selection and follow whatever link the
+        // nearest character happens to sit in.
+        if !hitbox.bounds.contains(&position) {
+            return None;
+        }
+        self.diff_text_pos_in_hitbox(hitbox, region, position)
+    }
+
+    /// Where a point outside every row belongs, once the nearest row is known.
+    ///
+    /// Unlike [`Self::diff_text_pos_from_hitbox`] this pulls the point onto the
+    /// row rather than rejecting it. Leaving the text is how a drag selects
+    /// past the end of a line, and the flowing markdown preview is full of
+    /// places to leave it: the margins between blocks, the padding inside a
+    /// code block, a picture, and every line shorter than its neighbours.
+    fn diff_text_pos_from_nearest_hitbox(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextPos> {
+        let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
+        self.diff_text_pos_in_hitbox(hitbox, region, position)
+    }
+
+    /// The offset a point resolves to inside one row, clamping to the row's
+    /// edges. For a point the row already contains the clamp does nothing.
+    fn diff_text_pos_in_hitbox(
+        &self,
+        hitbox: &DiffTextHitbox,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextPos> {
         if let Some(wrapped) = &hitbox.wrapped {
             // A wrapped row spans several visual lines, so the click resolves
             // against the layout it was painted with; `Err` is the clamp to the
@@ -116,19 +150,28 @@ impl MainPaneView {
                     .saturating_add(wrapped.row_offset(painted_offset).min(hitbox.text_len)),
             });
         }
-        let x = local.x.max(px(0.0));
-        let local_offset = if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
-            if cell_width <= px(0.0) {
-                0
-            } else {
-                (((x / cell_width) + 0.5).floor() as usize).min(hitbox.text_len)
-            }
+        // A single shaped line lies wholly below a point above it and wholly
+        // above one below it, so those resolve to its ends rather than to
+        // whatever character shares their x.
+        let local_offset = if position.y < hitbox.bounds.top() {
+            0
+        } else if position.y > hitbox.bounds.bottom() {
+            hitbox.text_len
         } else {
-            let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
-            layout
-                .closest_index_for_x(x)
-                .min(layout.len())
-                .min(hitbox.text_len)
+            let x = (position.x - hitbox.bounds.left()).max(px(0.0));
+            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+                if cell_width <= px(0.0) {
+                    0
+                } else {
+                    (((x / cell_width) + 0.5).floor() as usize).min(hitbox.text_len)
+                }
+            } else {
+                let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
+                layout
+                    .closest_index_for_x(x)
+                    .min(layout.len())
+                    .min(hitbox.text_len)
+            }
         };
         let local_offset = hitbox
             .offset_map
@@ -163,7 +206,12 @@ impl MainPaneView {
             }
         }
 
-        let mut best: Option<((usize, DiffTextRegion), Pixels)> = None;
+        // Vertical distance decides first. Text runs in lines, so the row a
+        // point off the text belongs to is the one beside it, however far along
+        // the line it is — adding the two distances instead let a point in the
+        // margin between two blocks pick a row several blocks away that merely
+        // shared its column.
+        let mut best: Option<((usize, DiffTextRegion), (Pixels, Pixels))> = None;
         for (key, hitbox) in &self.diff_text_hitboxes {
             if restrict_region.is_some_and(|restrict| restrict != key.1) {
                 continue;
@@ -182,13 +230,21 @@ impl MainPaneView {
             } else {
                 px(0.0)
             };
-            let score = dy + dx;
-            if best.is_none() || score < best.unwrap().1 {
-                best = Some((*key, score));
+            // Rows are stored in a hash map, so ties are broken on the row
+            // itself rather than on iteration order.
+            let rank = (dy, dx, key.0, key.1.order());
+            let closer = match best {
+                None => true,
+                Some((best_key, (best_dy, best_dx))) => {
+                    rank < (best_dy, best_dx, best_key.0, best_key.1.order())
+                }
+            };
+            if closer {
+                best = Some((*key, (dy, dx)));
             }
         }
         let ((visible_ix, region), _) = best?;
-        self.diff_text_pos_from_hitbox(visible_ix, region, position)
+        self.diff_text_pos_from_nearest_hitbox(visible_ix, region, position)
     }
 
     #[cfg(test)]
@@ -545,6 +601,14 @@ impl MainPaneView {
         diff_text_local_range_from_source_ranges(selected, visual_range)
     }
 
+    /// The part of one row a selection covers, or `None` when the selection
+    /// does not reach that row at all.
+    ///
+    /// An empty range is a real answer, not a miss: a blank line inside a
+    /// selection covers no characters and is still one of its lines, and so is
+    /// a line the selection only touches the edge of. Callers that paint the
+    /// highlight ignore an empty range; the one that copies has to keep it, or
+    /// every blank line falls out of the text.
     fn diff_text_source_selection_range(
         &self,
         source_visible_ix: usize,
@@ -606,10 +670,7 @@ impl MainPaneView {
             }
         }
 
-        if a >= b {
-            return None;
-        }
-        Some(a..b)
+        Some(a..b.max(a))
     }
 
     fn diff_text_wrap_range_for_region(
@@ -1265,8 +1326,23 @@ impl MainPaneView {
             crate::view::diff_utils::multiline_text_copy_capacity_hint(selected_line_count),
         );
         let mut expanded_tabs = String::new();
+        // Separators are counted rather than inferred from `out` being empty:
+        // the first row of a selection can be a blank line, and it still opens
+        // the text with a line of its own.
+        let mut rows_written = 0usize;
+        // A picture is one line of the document however many rows it was given,
+        // and every one of them carries its description. The row the selection
+        // starts on always contributes, so a selection that begins inside a
+        // picture still describes it once.
+        let repeats_a_picture = |this: &Self, source_visible_ix: usize, region| {
+            source_visible_ix != start.source_visible_ix
+                && this.markdown_preview_row_repeats_a_picture(source_visible_ix, region)
+        };
         for source_visible_ix in start.source_visible_ix..=end.source_visible_ix {
             if force_inline || self.diff_view == DiffViewMode::Inline {
+                if repeats_a_picture(self, source_visible_ix, DiffTextRegion::Inline) {
+                    continue;
+                }
                 let line_len = self
                     .diff_text_full_line_len_for_region(source_visible_ix, DiffTextRegion::Inline);
                 let Some(range) = self.diff_text_source_selection_range(
@@ -1276,9 +1352,10 @@ impl MainPaneView {
                 ) else {
                     continue;
                 };
-                if !out.is_empty() {
+                if rows_written > 0 {
                     out.push('\n');
                 }
+                rows_written += 1;
                 self.append_diff_text_source_region_slice(
                     &mut out,
                     source_visible_ix,
@@ -1297,15 +1374,19 @@ impl MainPaneView {
             .then_some(start.region);
 
             if let Some(region) = split_region {
+                if repeats_a_picture(self, source_visible_ix, region) {
+                    continue;
+                }
                 let line_len = self.diff_text_full_line_len_for_region(source_visible_ix, region);
                 let Some(range) =
                     self.diff_text_source_selection_range(source_visible_ix, region, line_len)
                 else {
                     continue;
                 };
-                if !out.is_empty() {
+                if rows_written > 0 {
                     out.push('\n');
                 }
+                rows_written += 1;
                 self.append_diff_text_source_region_slice(
                     &mut out,
                     source_visible_ix,
@@ -1344,9 +1425,10 @@ impl MainPaneView {
                     continue;
                 }
 
-                if !out.is_empty() {
+                if rows_written > 0 {
                     out.push('\n');
                 }
+                rows_written += 1;
                 if let Some(range) = left_range {
                     self.append_diff_text_source_region_slice(
                         &mut out,
@@ -1371,7 +1453,9 @@ impl MainPaneView {
             }
         }
 
-        if out.is_empty() { None } else { Some(out) }
+        // A selection of nothing but blank lines is still a selection, so this
+        // asks whether any row was written rather than whether text came out.
+        if rows_written == 0 { None } else { Some(out) }
     }
 
     pub(in super::super::super) fn copy_selected_diff_text_to_clipboard(

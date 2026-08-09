@@ -1155,6 +1155,15 @@ impl PopoverHost {
                 window.activate_window();
                 crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::ContextMenu);
             }
+            ContextMenuAction::CopyLinkAddress { url } => {
+                window.activate_window();
+                crate::clipboard::write_text(cx, url, crate::clipboard::CopySource::ContextMenu);
+                self.push_toast(
+                    components::ToastKind::Success,
+                    "Link copied to clipboard".to_string(),
+                    cx,
+                );
+            }
             ContextMenuAction::OpenWebUrl { url } => {
                 if let Err(err) = crate::view::platform_open::open_url(&url) {
                     self.push_toast(

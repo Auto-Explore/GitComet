@@ -128,10 +128,28 @@ impl MainPaneView {
         };
         let blame_ctx = this.blame_render_ctx();
 
+        // With word wrap on, a list position is a visual row and one file line
+        // owns several of them. Everything that describes the *line* — its
+        // text, syntax, blame, number — is looked up by `line_ix`; everything
+        // that addresses the *row* on screen keeps `visible_ix`.
+        let visible_len = this.worktree_preview_visible_len().unwrap_or(line_count);
         range
-            .take_while(|ix| *ix < line_count)
-            .map(|ix| {
-                let blame = blame_ctx.as_ref().and_then(|ctx| {
+            .take_while(|ix| *ix < visible_len)
+            .map(|visible_ix| {
+                let wrap = this.diff_text_wrap_for_visible_ix(visible_ix);
+                let is_continuation = wrap.is_some_and(|wrap| wrap.wrap_ix > 0);
+                let ix = this
+                    .diff_source_visible_ix_for_visible_ix(visible_ix)
+                    .unwrap_or(visible_ix)
+                    .min(line_count.saturating_sub(1));
+                // A wrapped line is one line however many rows it takes, so its
+                // number and its blame belong to the first of them.
+                let line_no = if is_continuation {
+                    SharedString::default()
+                } else {
+                    line_number_string(u32::try_from(ix + 1).ok())
+                };
+                let blame = blame_ctx.as_ref().filter(|_| !is_continuation).and_then(|ctx| {
                     // The file-content view renders every line contiguously, so the
                     // previous rendered line is `ix` (1-based), absent for line 1.
                     let prev_new_line = u32::try_from(ix).ok().filter(|&p| p >= 1);
@@ -154,16 +172,17 @@ impl MainPaneView {
                         theme,
                         cx.entity(),
                         ui_scale_percent,
-                        ix,
+                        visible_ix,
                         min_width,
                         annotation_width,
                         blame,
                         bar_color,
-                        line_number_string(u32::try_from(ix + 1).ok()),
+                        line_no,
                         None,
                         None,
                         None,
                         this.reveal_whitespace_chars,
+                        wrap,
                     );
                 };
                 let streamed_spec = worktree_preview_streamed_spec(
@@ -221,12 +240,11 @@ impl MainPaneView {
                 let cached_styled = this.worktree_preview_segments_cache_get(ix);
                 let styled = pending_styled.as_ref().or(cached_styled);
 
-                let line_no = line_number_string(u32::try_from(ix + 1).ok());
                 diff_canvas::worktree_preview_row_canvas(
                     theme,
                     cx.entity(),
                     ui_scale_percent,
-                    ix,
+                    visible_ix,
                     min_width,
                     annotation_width,
                     blame,
@@ -236,6 +254,7 @@ impl MainPaneView {
                     streamed_spec,
                     Some(raw_text.as_ref()),
                     this.reveal_whitespace_chars,
+                    wrap,
                 )
             })
             .collect()
@@ -267,7 +286,6 @@ impl MainPaneView {
         this.update_markdown_preview_horizontal_min_width(
             &preview.old,
             range.clone(),
-            None,
             editor_font_family.as_ref(),
             window,
             cx,
@@ -286,7 +304,6 @@ impl MainPaneView {
             range,
             &MarkdownPreviewRenderContext {
                 theme,
-                bar_color: None,
                 min_width,
                 editor_font_family,
                 ui_scale_percent,
@@ -324,7 +341,6 @@ impl MainPaneView {
         this.update_markdown_preview_horizontal_min_width(
             &preview.inline,
             range.clone(),
-            None,
             editor_font_family.as_ref(),
             window,
             cx,
@@ -339,7 +355,6 @@ impl MainPaneView {
             range,
             &MarkdownPreviewRenderContext {
                 theme,
-                bar_color: None,
                 min_width,
                 editor_font_family,
                 ui_scale_percent,
@@ -377,7 +392,6 @@ impl MainPaneView {
         this.update_markdown_preview_horizontal_min_width(
             &preview.new,
             range.clone(),
-            None,
             editor_font_family.as_ref(),
             window,
             cx,
@@ -392,7 +406,6 @@ impl MainPaneView {
             range,
             &MarkdownPreviewRenderContext {
                 theme,
-                bar_color: None,
                 min_width,
                 editor_font_family,
                 ui_scale_percent,
@@ -417,12 +430,10 @@ impl MainPaneView {
         document: &MarkdownPreviewDocument,
         document_rev: u64,
         available_width: Pixels,
-        bar_color: Option<gpui::Rgba>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> usize {
-        let Some(measure) =
-            self.markdown_preview_wrap_measure(document_rev, available_width, bar_color, cx)
+        let Some(measure) = self.markdown_preview_wrap_measure(document_rev, available_width, cx)
         else {
             self.markdown_preview_wrap.clear_list(list);
             return document.rows.len();
@@ -452,7 +463,7 @@ impl MainPaneView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> (usize, usize) {
-        let measure = self.markdown_preview_wrap_measure(document_rev, available_width, None, cx);
+        let measure = self.markdown_preview_wrap_measure(document_rev, available_width, cx);
 
         match measure {
             None => {
@@ -519,7 +530,6 @@ impl MainPaneView {
                     &preview.inline,
                     document_rev,
                     inline_width,
-                    None,
                     window,
                     cx,
                 );
@@ -552,7 +562,6 @@ impl MainPaneView {
         &self,
         document_rev: u64,
         available_width: Pixels,
-        bar_color: Option<gpui::Rgba>,
         cx: &mut gpui::Context<Self>,
     ) -> Option<MarkdownPreviewWrapMeasure> {
         const WRAP_WIDTH_BUCKET_PX: u32 = 8;
@@ -576,13 +585,9 @@ impl MainPaneView {
                 ui_scale_percent,
                 theme_is_dark: self.theme.is_dark,
                 editor_font_family_hash: markdown_preview_font_family_hash(&editor_font_family),
-                // The change bar widens the row chrome, so a file that gains
-                // or loses it must re-wrap even when its text is unchanged.
-                has_change_bar: bar_color.is_some(),
                 document_rev,
             },
             wrap_width: px(width_px as f32),
-            bar_color,
             editor_font_family,
             ui_scale_percent,
         })
@@ -592,7 +597,6 @@ impl MainPaneView {
         &mut self,
         document: &MarkdownPreviewDocument,
         range: Range<usize>,
-        bar_color: Option<gpui::Rgba>,
         editor_font_family: &str,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
@@ -611,7 +615,6 @@ impl MainPaneView {
                 window,
                 self.theme,
                 row,
-                bar_color,
                 &editor_font_family,
                 ui_scale_percent,
             );
@@ -630,7 +633,6 @@ const MARKDOWN_PREVIEW_BASE_LINE_HEIGHT_PX: f32 = 20.0;
 pub(in crate::view) const MARKDOWN_PREVIEW_CONTENT_PAD_X_PX: f32 = 18.0;
 const MARKDOWN_PREVIEW_BOXED_EDGE_GAP_PX: f32 = 8.0;
 pub(super) const MARKDOWN_PREVIEW_INDENT_STEP_PX: f32 = 24.0;
-const MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 pub(super) const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_WIDTH_PX: f32 = 4.0;
 const MARKDOWN_PREVIEW_BLOCKQUOTE_BAR_GAP_PX: f32 = 8.0;
 const MARKDOWN_PREVIEW_BLOCKQUOTE_GUTTER_MARGIN_RIGHT_PX: f32 = 12.0;
@@ -679,7 +681,6 @@ struct MarkdownPreviewRowHorizontalPadding {
 struct MarkdownPreviewWrapMeasure {
     key: MarkdownPreviewWrapKey,
     wrap_width: Pixels,
-    bar_color: Option<gpui::Rgba>,
     editor_font_family: SharedString,
     ui_scale_percent: u32,
 }
@@ -696,7 +697,6 @@ impl MarkdownPreviewWrapMeasure {
                 window,
                 theme,
                 row,
-                self.bar_color,
                 self.wrap_width,
                 &self.editor_font_family,
                 self.ui_scale_percent,
@@ -707,7 +707,6 @@ impl MarkdownPreviewWrapMeasure {
 
 pub(super) struct MarkdownPreviewRenderContext<'a> {
     pub(super) theme: AppTheme,
-    pub(super) bar_color: Option<gpui::Rgba>,
     pub(super) min_width: Pixels,
     pub(super) editor_font_family: SharedString,
     pub(super) ui_scale_percent: u32,
@@ -861,7 +860,6 @@ fn markdown_preview_row_element(
     context: &MarkdownPreviewRenderContext<'_>,
 ) -> AnyElement {
     let theme = context.theme;
-    let bar_color = context.bar_color;
     let min_width = context.min_width;
     let text_region = context.text_region;
     let ui_scale_percent = context.ui_scale_percent;
@@ -874,17 +872,6 @@ fn markdown_preview_row_element(
             .min_h(markdown_preview_row_height(ui_scale_percent))
             .w(min_width)
             .min_w(min_width)
-            // Spacer rows carry the change bar too, so a wholly added or
-            // removed file shows one unbroken line down the gutter instead of
-            // a gap wherever the preview inserts section spacing.
-            .when_some(bar_color, |container, color| {
-                container.child(markdown_preview_change_bar(
-                    color,
-                    row_ix,
-                    MarkdownPreviewRowLayout::default(),
-                    ui_scale_percent,
-                ))
-            })
             .into_any_element();
     }
 
@@ -906,14 +893,6 @@ fn markdown_preview_row_element(
             .items_center()
             .when_some(markdown_preview_row_background(theme, row), |div, bg| {
                 div.bg(bg)
-            })
-            .when_some(bar_color, |container, color| {
-                container.child(markdown_preview_change_bar(
-                    color,
-                    row_ix,
-                    MarkdownPreviewRowLayout::default(),
-                    ui_scale_percent,
-                ))
             })
             .child(
                 div()
@@ -1242,20 +1221,22 @@ fn markdown_preview_row_element(
                 // The diff preview's rows are a fixed height, so an inline
                 // picture is capped to the line and sits ahead of the text
                 // rather than flowing at the offset it was written at.
-                for (image_ix, inline) in inline_images.iter().enumerate() {
+                for inline in inline_images.iter() {
                     line = line.child(
                         div()
                             .flex_none()
                             .h_full()
-                            .mr(markdown_preview_scaled_px(4.0, ui_scale_percent))
+                            .mr(markdown_preview_scaled_px(
+                                MARKDOWN_PREVIEW_INLINE_IMAGE_GAP_PX,
+                                ui_scale_percent,
+                            ))
                             .overflow_hidden()
                             .child(markdown_preview_inline_image(
                                 inline,
-                                row_ix,
-                                image_ix,
                                 theme,
                                 ui_scale_percent,
                                 context.image_base_dir.as_deref(),
+                                markdown_preview_no_picture_sizes(),
                             )),
                     );
                 }
@@ -1309,14 +1290,6 @@ fn markdown_preview_row_element(
             .pb(px(row_layout.bottom_inset_px))
             .when_some(markdown_preview_row_background(theme, row), |div, bg| {
                 div.bg(bg)
-            })
-            .when_some(bar_color, |container, color| {
-                container.child(markdown_preview_change_bar(
-                    color,
-                    row_ix,
-                    row_layout,
-                    ui_scale_percent,
-                ))
             })
             .min_w(min_width)
             .on_mouse_down(gpui::MouseButton::Left, {
@@ -1379,14 +1352,6 @@ fn markdown_preview_row_element(
             .when_some(markdown_preview_row_background(theme, row), |div, bg| {
                 div.bg(bg)
             })
-            .when_some(bar_color, |container, color| {
-                container.child(markdown_preview_change_bar(
-                    color,
-                    row_ix,
-                    row_layout,
-                    ui_scale_percent,
-                ))
-            })
             .min_w(min_width);
         row_container
             .child(build_row_content().child(row_body))
@@ -1398,7 +1363,6 @@ fn markdown_preview_row_required_width(
     window: &mut Window,
     theme: AppTheme,
     row: &MarkdownPreviewRow,
-    bar_color: Option<gpui::Rgba>,
     editor_font_family: &SharedString,
     ui_scale_percent: u32,
 ) -> Pixels {
@@ -1440,11 +1404,7 @@ fn markdown_preview_row_required_width(
         u32::from(width.round())
     });
 
-    let mut width = px(base_width as f32);
-    if bar_color.is_some() {
-        width += markdown_preview_scaled_px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX, ui_scale_percent);
-    }
-    width
+    px(base_width as f32)
 }
 
 /// Width a row spends on everything that is not its text: padding, blockquote
@@ -1511,6 +1471,20 @@ fn markdown_preview_row_chrome_width(
         width += markdown_preview_scaled_px(MARKDOWN_PREVIEW_ALERT_BADGE_GAP_PX, ui_scale_percent);
     }
 
+    // Pictures painted on this line push the text right and widen the row.
+    // Their natural size is only known once loaded, so a declared width is used
+    // where there is one and the inline height cap stands in otherwise — the
+    // point is that the row is not measured as if the pictures were absent.
+    for inline in row.inline_images.iter() {
+        let reserved = inline
+            .image
+            .width_px
+            .map(|width| width as f32)
+            .unwrap_or(MARKDOWN_PREVIEW_INLINE_IMAGE_MAX_HEIGHT_PX);
+        width += markdown_preview_scaled_px(reserved, ui_scale_percent);
+        width += markdown_preview_scaled_px(MARKDOWN_PREVIEW_INLINE_IMAGE_GAP_PX, ui_scale_percent);
+    }
+
     width += match row.kind {
         MarkdownPreviewRowKind::CodeLine { .. } => markdown_preview_scaled_px(
             MARKDOWN_PREVIEW_SHELL_PAD_X_PX * 2.0 + MARKDOWN_PREVIEW_CODE_BORDER_PX * 2.0,
@@ -1539,7 +1513,6 @@ pub(super) fn markdown_preview_row_wrap_ranges(
     window: &mut Window,
     theme: AppTheme,
     row: &MarkdownPreviewRow,
-    bar_color: Option<gpui::Rgba>,
     available_width: Pixels,
     editor_font_family: &SharedString,
     ui_scale_percent: u32,
@@ -1557,23 +1530,13 @@ pub(super) fn markdown_preview_row_wrap_ranges(
     // cached per row and keyed only by font, so on a resize this is a hash and
     // a comparison rather than a re-measure — which is what keeps a wide
     // document from re-shaping every row on every frame of a resize drag.
-    if markdown_preview_row_required_width(
-        window,
-        theme,
-        row,
-        bar_color,
-        editor_font_family,
-        ui_scale_percent,
-    ) <= available_width
+    if markdown_preview_row_required_width(window, theme, row, editor_font_family, ui_scale_percent)
+        <= available_width
     {
         return Vec::new();
     }
 
-    let mut chrome = markdown_preview_row_chrome_width(window, row, ui_scale_percent);
-    if bar_color.is_some() {
-        chrome +=
-            markdown_preview_scaled_px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX, ui_scale_percent);
-    }
+    let chrome = markdown_preview_row_chrome_width(window, row, ui_scale_percent);
     let wrap_width = available_width - chrome;
     if wrap_width <= px(0.0) {
         return Vec::new();
@@ -1673,6 +1636,17 @@ fn markdown_preview_expanded_slice_range(
     expand(range.start)..expand(range.end)
 }
 
+/// Pixel sizes read from picture headers, keyed by the source the document
+/// wrote. Empty for anything that could not be measured without decoding.
+pub(in crate::view) type MarkdownPreviewPictureSizes = Arc<HashMap<SharedString, (u32, u32)>>;
+
+/// Shared stand-in for a preview that measured nothing. The diff preview draws
+/// its pictures into fixed-height bands, so it has no use for their real sizes.
+fn markdown_preview_no_picture_sizes() -> &'static MarkdownPreviewPictureSizes {
+    static EMPTY: std::sync::OnceLock<MarkdownPreviewPictureSizes> = std::sync::OnceLock::new();
+    EMPTY.get_or_init(Default::default)
+}
+
 /// Where a markdown image source resolves to.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) enum MarkdownPreviewImageSource {
@@ -1680,6 +1654,21 @@ pub(in crate::view) enum MarkdownPreviewImageSource {
     File(std::path::PathBuf),
     /// An `http(s)` URL, fetched and cached by `gpui`'s image loader.
     Remote(SharedString),
+}
+
+impl MarkdownPreviewImageSource {
+    /// The key `gpui` stores this picture's decoded frames under.
+    ///
+    /// Everything that wants to know whether a picture is ready — the element
+    /// that draws it and the pane waiting to be told it finished decoding —
+    /// has to name it the same way, or they would be asking about two
+    /// different entries in the asset cache.
+    pub(in crate::view) fn to_resource(&self) -> gpui::Resource {
+        match self {
+            Self::File(path) => gpui::Resource::from(path.clone()),
+            Self::Remote(url) => gpui::Resource::Uri(gpui::SharedUri::from(url.to_string())),
+        }
+    }
 }
 
 /// Resolve a markdown image source to something the preview can draw.
@@ -1790,15 +1779,19 @@ pub(in crate::view) fn markdown_preview_flow_image(
     theme: AppTheme,
     ui_scale_percent: u32,
     image_base_dir: Option<&std::path::Path>,
+    picture_sizes: &MarkdownPreviewPictureSizes,
 ) -> AnyElement {
     let label_color = theme.colors.text_muted;
     let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
-    let source = row
-        .image
-        .as_ref()
-        .and_then(|image| markdown_preview_image_source(image_base_dir, image.source.as_ref()));
 
-    let Some(source) = source else {
+    let picture = row.image.as_ref().and_then(|image| {
+        markdown_preview_resolved_picture(
+            image.source.as_ref(),
+            ("markdown_preview_block_image", row_ix).into(),
+            image_base_dir,
+        )
+    });
+    let Some(image) = picture else {
         return markdown_preview_image_placeholder_element(
             markdown_preview_image_label(row, "Image unavailable"),
             font_size,
@@ -1809,10 +1802,7 @@ pub(in crate::view) fn markdown_preview_flow_image(
 
     let declared = row.image.as_ref().and_then(|image| image.width_px);
     let failed_label = markdown_preview_image_label(row, "Failed to load");
-    let image = markdown_preview_image_element(
-        source,
-        markdown_preview_image_element_id("markdown_preview_block_image", row_ix, 0),
-    );
+    let skeleton = markdown_preview_picture_skeleton(row, ui_scale_percent, picture_sizes);
     let image = match declared {
         Some(width) => image.w(markdown_preview_scaled_px(width as f32, ui_scale_percent)),
         // Without a declared size the picture keeps its own, up to the width
@@ -1823,16 +1813,106 @@ pub(in crate::view) fn markdown_preview_flow_image(
     div()
         .w_full()
         .min_w(px(0.0))
-        .child(image.with_fallback(move || {
-            markdown_preview_image_placeholder_element(failed_label.clone(), font_size, label_color)
-                .into_any_element()
-        }))
+        .child(
+            image
+                .debug_selector(move || format!("markdown_preview_block_image_{row_ix}"))
+                .with_fallback(move || {
+                    markdown_preview_image_placeholder_element(
+                        failed_label.clone(),
+                        font_size,
+                        label_color,
+                    )
+                    .into_any_element()
+                })
+                .with_loading(move || skeleton.render(theme)),
+        )
         .into_any_element()
+}
+
+/// The box a picture will occupy, worked out before it has been decoded.
+///
+/// `gpui` reads every frame of an animated picture before it reports a size, so
+/// a block that waited for that would leave a hole in the document and then
+/// shove everything down when the picture arrived. What the document declared
+/// comes first; the picture's own header fills in the rest.
+#[derive(Clone, Copy)]
+struct MarkdownPreviewPictureSkeleton {
+    /// Widest the picture will draw, or `None` to fill the document.
+    width: Option<Pixels>,
+    /// Width over height, or `None` when only a height is known.
+    aspect_ratio: Option<f32>,
+    /// Used when the aspect ratio is unknown: the rows the parser set aside.
+    reserved_height: Pixels,
+}
+
+impl MarkdownPreviewPictureSkeleton {
+    fn render(self, theme: AppTheme) -> AnyElement {
+        let mut block = components::skeleton(theme)
+            .debug_selector(|| "markdown_preview_picture_skeleton".to_string());
+        block = match self.width {
+            Some(width) => block.w(width).max_w_full(),
+            None => block.w_full(),
+        };
+        block = match self.aspect_ratio {
+            Some(ratio) => block.aspect_ratio(ratio),
+            None => block.h(self.reserved_height),
+        };
+        block.into_any_element()
+    }
+}
+
+fn markdown_preview_picture_skeleton(
+    row: &MarkdownPreviewRow,
+    ui_scale_percent: u32,
+    picture_sizes: &MarkdownPreviewPictureSizes,
+) -> MarkdownPreviewPictureSkeleton {
+    let image = row.image.as_ref();
+    let declared_width = image.and_then(|image| image.width_px).filter(|w| *w > 0);
+    let declared_height = image.and_then(|image| image.height_px).filter(|h| *h > 0);
+    // A declared size is in design pixels and scales with the UI; a size read
+    // from the file is in the picture's own pixels, which is what `gpui` lays
+    // an undeclared picture out at.
+    let measured = image
+        .and_then(|image| picture_sizes.get(&image.source))
+        .copied();
+
+    let width = match (declared_width, measured) {
+        (Some(width), _) => Some(markdown_preview_scaled_px(width as f32, ui_scale_percent)),
+        (None, Some((width, _))) => Some(px(width as f32)),
+        (None, None) => None,
+    };
+    let aspect_ratio = match (declared_width, declared_height, measured) {
+        (Some(width), Some(height), _) => Some(width as f32 / height as f32),
+        (_, _, Some((width, height))) => Some(width as f32 / height as f32),
+        _ => None,
+    };
+
+    MarkdownPreviewPictureSkeleton {
+        width,
+        aspect_ratio,
+        reserved_height: markdown_preview_row_height(ui_scale_percent)
+            * f32::from(markdown_preview_image_block_rows(row).max(1)),
+    }
+}
+
+/// Rows an image block was given, which is the height it reserved.
+fn markdown_preview_image_block_rows(row: &MarkdownPreviewRow) -> u8 {
+    match row.kind {
+        MarkdownPreviewRowKind::Image { slice_count, .. } => slice_count,
+        _ => 1,
+    }
 }
 
 /// Tallest an inline picture may be when the document declares no size, so a
 /// stray screenshot written mid-sentence cannot push the line open.
 const MARKDOWN_PREVIEW_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 26.0;
+
+/// Space between an inline picture and whatever shares its line.
+///
+/// Both previews use it, but only the row grid has to reserve it: that preview
+/// measures a row's width to drive horizontal scrolling, so the gap is part of
+/// the row chrome there and purely visual in the flowing renderer.
+pub(in crate::view) const MARKDOWN_PREVIEW_INLINE_IMAGE_GAP_PX: f32 = 4.0;
 
 /// One picture drawn on the same line as the text around it.
 ///
@@ -1841,51 +1921,94 @@ const MARKDOWN_PREVIEW_INLINE_IMAGE_MAX_HEIGHT_PX: f32 = 26.0;
 /// and anything else keeps its own size up to the inline height cap.
 pub(in crate::view) fn markdown_preview_inline_image(
     inline: &MarkdownInlineImage,
-    row_ix: usize,
-    image_ix: usize,
     theme: AppTheme,
     ui_scale_percent: u32,
     image_base_dir: Option<&std::path::Path>,
+    picture_sizes: &MarkdownPreviewPictureSizes,
 ) -> AnyElement {
+    let source_byte = inline.source_byte;
     let label_color = theme.colors.text_muted;
     let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
-    let describe = |reason: &str| -> SharedString {
-        let described = if inline.alt.is_empty() {
-            inline.image.source.clone()
-        } else {
-            inline.alt.clone()
-        };
-        SharedString::from(format!("{reason}: {described}"))
+    let described = if inline.alt.is_empty() {
+        inline.image.source.clone()
+    } else {
+        inline.alt.clone()
     };
+    let measured_aspect_ratio = picture_sizes
+        .get(&inline.image.source)
+        .filter(|(width, height)| *width > 0 && *height > 0)
+        .map(|(width, height)| *width as f32 / *height as f32);
 
-    let Some(source) = markdown_preview_image_source(image_base_dir, inline.image.source.as_ref())
-    else {
+    let picture = markdown_preview_resolved_picture(
+        inline.image.source.as_ref(),
+        ("markdown_preview_inline_image", source_byte).into(),
+        image_base_dir,
+    );
+    let Some(image) = picture else {
         return markdown_preview_inline_image_placeholder(
-            describe("Image unavailable"),
+            markdown_preview_image_reason("Image unavailable", &described),
+            source_byte,
             font_size,
             label_color,
         );
     };
 
-    let failed_label = describe("Failed to load");
-    let image = markdown_preview_image_element(
-        source,
-        markdown_preview_image_element_id("markdown_preview_inline_image", row_ix, image_ix),
-    );
+    let failed_label = markdown_preview_image_reason("Failed to load", &described);
+    let image =
+        image.debug_selector(move || format!("markdown_preview_inline_image_{source_byte}"));
     let image = match inline.image.width_px {
         Some(width) => image.w(markdown_preview_scaled_px(width as f32, ui_scale_percent)),
         None => image.max_h(markdown_preview_scaled_px(
             MARKDOWN_PREVIEW_INLINE_IMAGE_MAX_HEIGHT_PX,
             ui_scale_percent,
         )),
+    }
+    // The height cap leaves a wide, short banner unbounded, and a declared
+    // width can be larger than the pane; either would push the document into
+    // horizontal overflow.
+    .max_w_full();
+
+    // A badge that has not arrived yet still holds its slot, so the line it
+    // shares does not reflow the moment it does. Inline pictures are sized to
+    // the line rather than to their own pixels, so the cap is the height and a
+    // measured picture only decides how wide the slot is.
+    let loading_height = markdown_preview_scaled_px(
+        MARKDOWN_PREVIEW_INLINE_IMAGE_MAX_HEIGHT_PX,
+        ui_scale_percent,
+    );
+    let loading_width = match (inline.image.width_px, measured_aspect_ratio) {
+        (Some(width), _) => markdown_preview_scaled_px(width as f32, ui_scale_percent),
+        (None, Some(ratio)) => loading_height * ratio,
+        (None, None) => markdown_preview_scaled_px(
+            MARKDOWN_PREVIEW_INLINE_IMAGE_LOADING_WIDTH_PX,
+            ui_scale_percent,
+        ),
     };
 
     image
         .with_fallback(move || {
-            markdown_preview_inline_image_placeholder(failed_label.clone(), font_size, label_color)
+            markdown_preview_inline_image_placeholder(
+                failed_label.clone(),
+                source_byte,
+                font_size,
+                label_color,
+            )
+        })
+        .with_loading(move || {
+            components::skeleton(theme)
+                .debug_selector(move || format!("markdown_preview_inline_image_{source_byte}"))
+                .flex_none()
+                .w(loading_width)
+                .h(loading_height)
+                .max_w_full()
+                .into_any_element()
         })
         .into_any_element()
 }
+
+/// Slot an inline picture of unknown size holds while it loads. Wide enough for
+/// the badges a README opens with, which is what this mostly stands in for.
+const MARKDOWN_PREVIEW_INLINE_IMAGE_LOADING_WIDTH_PX: f32 = 90.0;
 
 /// A picture element that keeps per-frame state.
 ///
@@ -1896,29 +2019,22 @@ fn markdown_preview_image_element(
     source: MarkdownPreviewImageSource,
     id: gpui::ElementId,
 ) -> gpui::Stateful<gpui::Img> {
-    match source {
-        MarkdownPreviewImageSource::File(path) => gpui::img(path),
-        MarkdownPreviewImageSource::Remote(url) => {
-            gpui::img(gpui::SharedUri::from(url.to_string()))
-        }
-    }
-    .id(id)
+    gpui::img(gpui::ImageSource::Resource(source.to_resource())).id(id)
 }
 
-fn markdown_preview_image_element_id(
-    prefix: &'static str,
-    row_ix: usize,
-    image_ix: usize,
-) -> gpui::ElementId {
-    gpui::ElementId::from(SharedString::from(format!("{prefix}_{row_ix}_{image_ix}")))
-}
-
+/// Stand-in for a picture that cannot be drawn.
+///
+/// It carries the picture's selector too: the slot has to hold its place
+/// whether or not the source loaded, and a test asking whether the picture was
+/// drawn is really asking whether that slot exists.
 fn markdown_preview_inline_image_placeholder(
     label: SharedString,
+    source_byte: usize,
     font_size: Pixels,
     color: gpui::Rgba,
 ) -> AnyElement {
     div()
+        .debug_selector(move || format!("markdown_preview_inline_image_{source_byte}"))
         .flex_none()
         .text_size(font_size)
         .text_color(color)
@@ -1937,11 +2053,31 @@ fn markdown_preview_image_label(row: &MarkdownPreviewRow, reason: &str) -> Share
     } else {
         row.text.clone()
     };
+    markdown_preview_image_reason(reason, &described)
+}
+
+/// "reason: what the picture was", or just the reason when nothing describes it.
+fn markdown_preview_image_reason(reason: &str, described: &SharedString) -> SharedString {
     if described.is_empty() {
         SharedString::from(reason.to_owned())
     } else {
         SharedString::from(format!("{reason}: {described}"))
     }
+}
+
+/// The picture element for `source`, or `None` when the source does not resolve
+/// to something drawable at all.
+///
+/// Both previews take the same two steps — resolve the source against the
+/// document's directory, then build an element that keeps per-frame state — and
+/// differ only in how they size the result and what they show in its place.
+fn markdown_preview_resolved_picture(
+    source: &str,
+    id: gpui::ElementId,
+    image_base_dir: Option<&std::path::Path>,
+) -> Option<gpui::Stateful<gpui::Img>> {
+    markdown_preview_image_source(image_base_dir, source)
+        .map(|source| markdown_preview_image_element(source, id))
 }
 
 /// Stand-in shown in place of a picture, so the row is never silently blank.
@@ -1986,8 +2122,12 @@ fn markdown_preview_image_row(
     let ui_scale_percent = context.ui_scale_percent;
     let row_height = markdown_preview_row_height(ui_scale_percent);
     let block_height = row_height * f32::from(slice_count.max(1));
-    let source = row.image.as_ref().and_then(|image| {
-        markdown_preview_image_source(context.image_base_dir.as_deref(), image.source.as_ref())
+    let picture = row.image.as_ref().and_then(|image| {
+        markdown_preview_resolved_picture(
+            image.source.as_ref(),
+            ("markdown_preview_image_band", row_ix).into(),
+            context.image_base_dir.as_deref(),
+        )
     });
     // A declared width is the size the document asked for; without one the
     // picture fills the block.
@@ -1998,7 +2138,7 @@ fn markdown_preview_image_row(
         .map(|width| markdown_preview_scaled_px(width as f32, ui_scale_percent));
 
     let band = div().relative().w_full().h(row_height).overflow_hidden();
-    let Some(source) = source else {
+    let Some(image) = picture else {
         // Nothing to draw: the first band describes the picture instead, and
         // the rest stay blank so the block keeps its shape.
         if slice_ix != 0 {
@@ -2019,12 +2159,6 @@ fn markdown_preview_image_row(
     let failed_font_size =
         markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
     let failed_color = context.theme.colors.text_muted;
-    // `gpui` loads and caches both sources, decoding raster formats and
-    // rendering SVG, and fetches remote ones through the app's HTTP client.
-    let image = markdown_preview_image_element(
-        source,
-        markdown_preview_image_element_id("markdown_preview_image_band", row_ix, 0),
-    );
     // `Contain` keeps the aspect ratio inside whichever box the document asked
     // for, so a declared width never stretches the picture across the row.
     let image = match declared_width {
@@ -2058,35 +2192,6 @@ fn markdown_preview_image_row(
             ),
     )
     .into_any_element()
-}
-
-/// Gutter bar marking a row as added or removed.
-///
-/// The painted bar is absolutely positioned so it covers the row's full
-/// height rather than only the box left over after the row's vertical insets;
-/// otherwise a file that is added or removed in its entirety renders as a
-/// dashed column with a gap at every heading and spacer. The wrapper keeps the
-/// gutter's width in the flex flow so row content still starts beside it.
-fn markdown_preview_change_bar(
-    color: gpui::Rgba,
-    row_ix: usize,
-    row_layout: MarkdownPreviewRowLayout,
-    ui_scale_percent: u32,
-) -> impl IntoElement {
-    let width = markdown_preview_scaled_px(MARKDOWN_PREVIEW_CHANGE_BAR_WIDTH_PX, ui_scale_percent);
-    div().flex_none().w(width).h_full().child(
-        div()
-            .absolute()
-            .left_0()
-            // Absolute insets are measured from the row's content box, so the
-            // row's vertical insets are cancelled out here to stretch the bar
-            // back over the full row.
-            .top(px(-row_layout.top_inset_px))
-            .bottom(px(-row_layout.bottom_inset_px))
-            .w(width)
-            .bg(color)
-            .debug_selector(|| format!("markdown_preview_change_bar_{row_ix}")),
-    )
 }
 
 fn markdown_preview_font_family_hash(font_family: &str) -> u64 {
@@ -3080,12 +3185,14 @@ fn working_tree_summary_history_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource, MarkdownPreviewRow,
-        MarkdownPreviewRowKind, build_cached_diff_styled_text,
-        history_scope_shows_graph_color_marker, history_worktree_node_color,
-        markdown_preview_alert_title_label, markdown_preview_expanded_slice_range,
-        markdown_preview_image_source, markdown_preview_inline_highlight,
-        markdown_preview_row_background, markdown_preview_row_horizontal_padding,
+        MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource,
+        MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
+        build_cached_diff_styled_text, history_scope_shows_graph_color_marker,
+        history_worktree_node_color, markdown_preview_alert_title_label,
+        markdown_preview_expanded_slice_range, markdown_preview_image_source,
+        markdown_preview_inline_highlight, markdown_preview_no_picture_sizes,
+        markdown_preview_picture_skeleton, markdown_preview_row_background,
+        markdown_preview_row_height, markdown_preview_row_horizontal_padding,
         markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
         markdown_preview_row_typography, worktree_preview_apply_query_overlay,
     };
@@ -3096,7 +3203,7 @@ mod tests {
     use crate::view::rows::diff_text::DIFF_WRAP_TAB_EXPANDED_COLUMNS;
     use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
     use gitcomet_core::domain::LogScope;
-    use gpui::{FontWeight, SharedString};
+    use gpui::{FontWeight, SharedString, px};
     use std::sync::Arc;
     use std::time::{Duration, UNIX_EPOCH};
 
@@ -3774,6 +3881,90 @@ mod tests {
 
         let _ = std::fs::remove_dir_all(&dir);
         let _ = std::fs::remove_file(&outside);
+    }
+
+    /// A picture row carrying `source`, and whatever size the document declared.
+    fn picture_row(
+        source: &str,
+        width_px: Option<u32>,
+        height_px: Option<u32>,
+    ) -> MarkdownPreviewRow {
+        let mut row = markdown_row(MarkdownPreviewRowKind::Image {
+            slice_ix: 0,
+            slice_count: 8,
+        });
+        row.image = Some(Arc::new(crate::view::markdown_preview::MarkdownImage {
+            source: SharedString::from(source.to_owned()),
+            width_px,
+            height_px,
+        }));
+        row
+    }
+
+    fn measured(source: &str, width: u32, height: u32) -> MarkdownPreviewPictureSizes {
+        Arc::new(
+            [(SharedString::from(source.to_owned()), (width, height))]
+                .into_iter()
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_skeleton_holds_the_box_the_picture_will_fill() {
+        // The whole point of measuring a picture's header is that the space it
+        // is going to take is reserved before it has been decoded, so the
+        // document does not jump when it arrives.
+        let empty = markdown_preview_no_picture_sizes();
+
+        // Read from the file: the picture's own pixels, which is what an
+        // undeclared picture lays out at.
+        let skeleton = markdown_preview_picture_skeleton(
+            &picture_row("demo.gif", None, None),
+            100,
+            &measured("demo.gif", 1280, 720),
+        );
+        assert_eq!(skeleton.width, Some(px(1280.0)));
+        assert_eq!(skeleton.aspect_ratio, Some(1280.0 / 720.0));
+
+        // A declared size wins, and scales with the UI the way the picture will.
+        let skeleton = markdown_preview_picture_skeleton(
+            &picture_row("demo.gif", Some(200), Some(100)),
+            200,
+            &measured("demo.gif", 1280, 720),
+        );
+        assert_eq!(skeleton.width, Some(px(400.0)));
+        assert_eq!(skeleton.aspect_ratio, Some(2.0));
+
+        // Nothing to go on: fall back to the rows the parser set aside, which
+        // is all the row grid ever had.
+        let skeleton =
+            markdown_preview_picture_skeleton(&picture_row("demo.gif", None, None), 100, empty);
+        assert_eq!(skeleton.width, None);
+        assert_eq!(skeleton.aspect_ratio, None);
+        assert_eq!(
+            skeleton.reserved_height,
+            markdown_preview_row_height(100) * 8.0
+        );
+    }
+
+    #[test]
+    fn a_picture_is_named_the_same_way_wherever_it_is_asked_about() {
+        // The element that draws a picture and the pane waiting to hear that it
+        // decoded look it up in the same cache, so both have to arrive at the
+        // key `gpui` filed it under. Building the element one way and the key
+        // another would leave the pane waiting on an entry nobody writes.
+        let path = std::path::PathBuf::from("assets").join("shot.png");
+        assert_eq!(
+            MarkdownPreviewImageSource::File(path.clone()).to_resource(),
+            gpui::Resource::Path(path.as_path().into())
+        );
+        assert_eq!(
+            MarkdownPreviewImageSource::Remote(SharedString::from("https://example.com/a.png"))
+                .to_resource(),
+            gpui::Resource::Uri(gpui::SharedUri::from(
+                "https://example.com/a.png".to_owned()
+            ))
+        );
     }
 
     #[test]

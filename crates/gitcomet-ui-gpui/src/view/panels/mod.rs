@@ -286,6 +286,14 @@ pub(in crate::view) enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    /// Copy a link's destination, and say so.
+    ///
+    /// Separate from [`ContextMenuAction::CopyText`] because a link's address
+    /// is never on screen — the document shows its text — so the reader has no
+    /// way to tell the copy happened without being told.
+    CopyLinkAddress {
+        url: String,
+    },
     OpenWebUrl {
         url: String,
     },
