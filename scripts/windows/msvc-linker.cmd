@@ -50,7 +50,7 @@ if not exist "%MSVC_TOOLS%" (
 )
 
 set "MSVC_VER="
-for /f "delims=" %%I in ('dir /b /ad "%MSVC_TOOLS%" ^| sort /r') do (
+for /f "delims=" %%I in ('dir /b /ad "%MSVC_TOOLS%" ^| "%SystemRoot%\System32\sort.exe" /r') do (
   set "MSVC_VER=%%I"
   goto :msvc_version_found
 )
@@ -89,7 +89,7 @@ if not exist "%KITS_LIB%" (
 )
 
 set "SDK_VER="
-for /f "delims=" %%I in ('dir /b /ad "%KITS_LIB%" ^| sort /r') do (
+for /f "delims=" %%I in ('dir /b /ad "%KITS_LIB%" ^| "%SystemRoot%\System32\sort.exe" /r') do (
   if exist "%KITS_LIB%\%%I\um\%SDK_ARCH%\kernel32.lib" (
     set "SDK_VER=%%I"
     goto :sdk_found
