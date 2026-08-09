@@ -561,6 +561,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: history_scope,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: Vec::new(),
@@ -810,6 +811,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: history_scope,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: Vec::new(),
@@ -823,7 +825,8 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
             repo_id: RepoId(1),
             scope,
             limit: 200,
-            cursor: None
+            cursor: None,
+            ..
         }] if *scope == history_scope
     ));
 }
@@ -1354,6 +1357,7 @@ fn load_more_history_emits_paginated_load_log_effect() {
         [Effect::LoadLog {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
+            author: None,
             limit: 200,
             cursor: Some(_)
         }]
@@ -1518,7 +1522,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
     assert!(
         repo_state
             .loads_in_flight
-            .request_log(LogScope::FullReachable, 200, None)
+            .request_log(LogScope::FullReachable, None, 200, None)
     );
 
     let effects = reduce(
@@ -1569,6 +1573,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::FullReachable,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![],
@@ -1585,6 +1590,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
             [Effect::LoadLog {
                 repo_id: RepoId(1),
                 scope: LogScope::NoMerges,
+                author: None,
                 limit: 200,
                 cursor: None,
             }]
@@ -1669,6 +1675,7 @@ fn log_loaded_appends_when_loading_more() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
+            author: None,
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
                 resume_from: None,
@@ -1737,6 +1744,7 @@ fn log_loaded_reconciles_commit_multi_selection() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![commit("kept"), commit("other")],
@@ -1790,6 +1798,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
+            author: None,
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
                 resume_from: None,
@@ -1882,6 +1891,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: LogScope::AllBranches,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![Commit {
@@ -1938,6 +1948,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
             scope: history_scope,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits,
@@ -1983,6 +1994,7 @@ fn log_loaded_bumps_log_rev() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             scope: history_scope,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![Commit {
@@ -2040,6 +2052,7 @@ fn detached_head_target_tracks_current_branch_log_head() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             scope: LogScope::CurrentBranch,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![
@@ -2126,6 +2139,7 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
             Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                 repo_id,
                 scope,
+                author: None,
                 cursor: None,
                 result: Ok(LogPage {
                     commits,

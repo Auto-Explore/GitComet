@@ -275,14 +275,65 @@ pub(super) fn set_history_scope(
         mode: scope,
         action: "updating history mode",
     }];
+    let author_filter = state.repos[repo_ix]
+        .history_state
+        .history_author_filter
+        .clone();
     if state.repos[repo_ix].loads_in_flight.request_log(
         scope,
+        author_filter.clone(),
         super::util::DEFAULT_LOG_PAGE_SIZE,
         None,
     ) {
         effects.push(Effect::LoadLog {
             repo_id,
             scope,
+            author: author_filter,
+            limit: super::util::DEFAULT_LOG_PAGE_SIZE,
+            cursor: None,
+        });
+    }
+    effects
+}
+
+pub(super) fn set_history_author_filter(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    author: Option<String>,
+) -> Vec<Effect> {
+    let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    let workdir = {
+        let repo_state = &mut state.repos[repo_ix];
+        if repo_state.history_state.history_author_filter == author {
+            return Vec::new();
+        }
+
+        repo_state.set_history_author_filter(author.clone());
+        repo_state.retain_log_while_loading();
+        repo_state.set_log(Loadable::Loading);
+        repo_state.set_log_loading_more(false);
+        repo_state.spec.workdir.clone()
+    };
+    let mut effects = vec![Effect::PersistRepoHistoryAuthorFilter {
+        repo_id: Some(repo_id),
+        workdir,
+        author: author.clone(),
+        action: "updating history author filter",
+    }];
+    let history_scope = state.repos[repo_ix].history_state.history_scope;
+    if state.repos[repo_ix].loads_in_flight.request_log(
+        history_scope,
+        author.clone(),
+        super::util::DEFAULT_LOG_PAGE_SIZE,
+        None,
+    ) {
+        effects.push(Effect::LoadLog {
+            repo_id,
+            scope: history_scope,
+            author,
             limit: super::util::DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
@@ -310,14 +361,17 @@ pub(super) fn load_more_history(
     };
 
     repo_state.set_log_loading_more(true);
+    let author = repo_state.history_state.history_author_filter.clone();
     if repo_state.loads_in_flight.request_log(
         repo_state.history_state.history_scope,
+        author.clone(),
         super::util::DEFAULT_LOG_PAGE_SIZE,
         Some(cursor.clone()),
     ) {
         vec![Effect::LoadLog {
             repo_id,
             scope: repo_state.history_state.history_scope,
+            author,
             limit: super::util::DEFAULT_LOG_PAGE_SIZE,
             cursor: Some(cursor),
         }]
@@ -484,6 +538,7 @@ pub(super) fn log_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     scope: LogScope,
+    author: Option<String>,
     cursor: Option<LogCursor>,
     result: std::result::Result<LogPage, Error>,
 ) -> Vec<Effect> {
@@ -491,7 +546,11 @@ pub(super) fn log_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
 
-        if repo_state.history_state.history_scope != scope {
+        // Drop replies that no longer match the requested scope or author
+        // filter; the newest pending request, if any, is replayed below.
+        if repo_state.history_state.history_scope != scope
+            || repo_state.history_state.history_author_filter.as_deref() != author.as_deref()
+        {
             if is_load_more {
                 repo_state.set_log_loading_more(false);
             }
@@ -500,6 +559,7 @@ pub(super) fn log_loaded(
                 effects.push(Effect::LoadLog {
                     repo_id,
                     scope: next.scope,
+                    author: next.author,
                     limit: next.limit,
                     cursor: next.cursor,
                 });
@@ -597,6 +657,7 @@ pub(super) fn log_loaded(
             effects.push(Effect::LoadLog {
                 repo_id,
                 scope: next.scope,
+                author: next.author,
                 limit: next.limit,
                 cursor: next.cursor,
             });

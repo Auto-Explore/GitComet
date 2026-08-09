@@ -198,6 +198,7 @@ fn send_unavailable_git_effect_result(
         | Effect::PersistRecentRepo { .. }
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
+        | Effect::PersistRepoHistoryAuthorFilter { .. }
         | Effect::CancelRepoLoads { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
@@ -257,11 +258,13 @@ fn send_unavailable_git_effect_result(
         Effect::LoadLog {
             repo_id,
             scope,
+            author,
             cursor,
             ..
         } => send(Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
             scope,
+            author,
             cursor,
             result: Err(git_unavailable_error(runtime)),
         })),
@@ -1311,6 +1314,32 @@ pub(super) fn schedule_effect(
                 }
             });
         }
+        Effect::PersistRepoHistoryAuthorFilter {
+            repo_id,
+            workdir,
+            author,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) = session::persist_repo_history_author_filter_to_path(
+                    &workdir,
+                    author.as_deref(),
+                    &session_file_path,
+                ) {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
         Effect::PersistRepoHistoryModesBatch {
             repo_id,
             updates,
@@ -1476,6 +1505,7 @@ pub(super) fn schedule_effect(
         Effect::LoadLog {
             repo_id,
             scope,
+            author,
             limit,
             cursor,
         } => {
@@ -1488,6 +1518,7 @@ pub(super) fn schedule_effect(
                     msg_tx,
                     repo_id,
                     scope,
+                    author,
                     limit,
                     cursor,
                     cancellation,

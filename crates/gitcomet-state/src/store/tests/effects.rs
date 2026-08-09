@@ -4414,6 +4414,7 @@ fn load_log_effect_uses_history_mode_api() {
         Effect::LoadLog {
             repo_id,
             scope: LogScope::NoMerges,
+            author: None,
             limit: 20,
             cursor: Some(cursor.clone()),
         },
@@ -4426,6 +4427,7 @@ fn load_log_effect_uses_history_mode_api() {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: got_repo_id,
             scope,
+            author: _, // not asserted here
             cursor: got_cursor,
             result: Ok(page),
         }) => {
@@ -4791,6 +4793,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::LoadLog {
                 repo_id,
                 scope: LogScope::CurrentBranch,
+                author: None,
                 limit: 20,
                 cursor: None,
             },
@@ -4800,6 +4803,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
             Effect::LoadLog {
                 repo_id,
                 scope: LogScope::AllBranches,
+                author: None,
                 limit: 20,
                 cursor: Some(LogCursor {
                     last_seen: CommitId("cursor".into()),

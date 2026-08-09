@@ -328,6 +328,28 @@ impl HistoryView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == scope_invoker.as_ref());
+        let author_label: SharedString = self
+            .active_repo()
+            .and_then(|r| r.history_state.history_author_filter.clone())
+            .unwrap_or_else(|| "Author".to_string())
+            .into();
+        let author_invoker: SharedString = "history_author_filter_header".into();
+        let author_anchor_bounds: Rc<RefCell<Option<Bounds<Pixels>>>> = Rc::new(RefCell::new(None));
+        let author_anchor_bounds_for_prepaint = Rc::clone(&author_anchor_bounds);
+        let author_anchor_bounds_for_click = Rc::clone(&author_anchor_bounds);
+        let author_filter_active = self
+            .active_repo()
+            .is_some_and(|r| r.history_state.history_author_filter.is_some());
+        let author_active = self
+            .active_context_menu_invoker
+            .as_ref()
+            .is_some_and(|id| id.as_ref() == author_invoker.as_ref());
+        let author_tooltip: SharedString = self
+            .active_repo()
+            .and_then(|r| r.history_state.history_author_filter.clone())
+            .map(|name| format!("Author filter: {name}"))
+            .unwrap_or_else(|| "Filter history by author".to_string())
+            .into();
 
         let ui_scale_percent = self.ui_scale_percent;
         let active_col_resize = self.history_col_resize;
@@ -525,6 +547,92 @@ impl HistoryView {
                                         theme,
                                         crate::view::history_mode::HISTORY_MODE_TOOLTIP_TEXT.into(),
                                     ),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .on_children_prepainted(move |children_bounds, _w, _cx| {
+                                if let Some(bounds) = children_bounds.first() {
+                                    *author_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
+                                }
+                            })
+                            .child(
+                                div()
+                                    .id("history_author_filter_header")
+                                    .flex()
+                                    .items_center()
+                                    .gap_1()
+                                    .flex_shrink_0()
+                                    .px_1()
+                                    .h(scaled_px(18.0))
+                                    .line_height(scaled_px(18.0))
+                                    .rounded(px(theme.radii.row))
+                                    .when(author_active, |d| d.bg(theme.colors.active))
+                                    .hover(move |s| {
+                                        if author_active {
+                                            s.bg(theme.colors.active)
+                                        } else {
+                                            s.bg(with_alpha(theme.colors.hover, 0.55))
+                                        }
+                                    })
+                                    .active(move |s| s.bg(theme.colors.active))
+                                    .cursor(CursorStyle::PointingHand)
+                                    .child(
+                                        div()
+                                            .max_w(px(90.0))
+                                            .line_clamp(1)
+                                            .whitespace_nowrap()
+                                            .when(author_filter_active, |d| {
+                                                d.text_color(theme.colors.accent)
+                                            })
+                                            .when(!author_filter_active, |d| {
+                                                d.text_color(theme.colors.text_muted)
+                                            })
+                                            .child(author_label.clone()),
+                                    )
+                                    .child(svg_icon(
+                                        "icons/chevron_down.svg",
+                                        icon_muted,
+                                        scaled_px(12.0),
+                                    ))
+                                    .when_some(scope_repo_id, |this, repo_id| {
+                                        let author_invoker = author_invoker.clone();
+                                        let author_anchor_bounds_for_click =
+                                            Rc::clone(&author_anchor_bounds_for_click);
+                                        this.on_click(cx.listener(
+                                            move |this, e: &ClickEvent, window, cx| {
+                                                this.activate_context_menu_invoker(
+                                                    author_invoker.clone(),
+                                                    cx,
+                                                );
+                                                if let Some(bounds) =
+                                                    *author_anchor_bounds_for_click.borrow()
+                                                {
+                                                    this.open_popover_for_bounds(
+                                                        PopoverKind::HistoryAuthorFilter {
+                                                            repo_id,
+                                                        },
+                                                        bounds,
+                                                        window,
+                                                        cx,
+                                                    );
+                                                } else {
+                                                    this.open_popover_at(
+                                                        PopoverKind::HistoryAuthorFilter {
+                                                            repo_id,
+                                                        },
+                                                        e.position(),
+                                                        window,
+                                                        cx,
+                                                    );
+                                                }
+                                            },
+                                        ))
+                                    })
+                                    .when(scope_repo_id.is_none(), |this| {
+                                        this.opacity(0.6).cursor(CursorStyle::Arrow)
+                                    })
+                                    .gitcomet_tooltip(theme, author_tooltip),
                             ),
                     ),
             )

@@ -929,6 +929,89 @@ fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppC
 }
 
 #[gpui::test]
+fn history_author_filter_menu_suggests_authors_from_loaded_log(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(712);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_author_filter",
+        std::process::id()
+    ));
+    let mut repo = shortcut_fixture_repo(
+        repo_id,
+        &workdir,
+        &CommitId("deadbeefdeadbeef".into()),
+    );
+    let log_page: Loadable<std::sync::Arc<gitcomet_core::domain::LogPage>> = Loadable::Ready(
+        gitcomet_core::domain::LogPage {
+            commits: vec![
+                gitcomet_core::domain::Commit {
+                    id: CommitId("deadbeefdeadbeef".into()),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                    summary: "Second commit".into(),
+                    author: "Alice".into(),
+                    time: std::time::SystemTime::UNIX_EPOCH,
+                },
+                gitcomet_core::domain::Commit {
+                    id: CommitId("cafebabecafebabe".into()),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                    summary: "Initial commit".into(),
+                    author: "Bob".into(),
+                    time: std::time::SystemTime::UNIX_EPOCH,
+                },
+            ],
+            next_cursor: None,
+        }
+        .into(),
+    );
+    repo.log = log_page.clone();
+    repo.history_state.log = log_page;
+    repo.history_state.history_author_filter = Some("Alice".into());
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    let author_model = cx.update(|_window, app| {
+        context_menu_model_for(&view, app, PopoverKind::HistoryAuthorFilter { repo_id })
+    });
+    let entries: Vec<(String, Option<String>, Box<ContextMenuAction>)> = author_model
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry {
+                label,
+                icon,
+                action,
+                ..
+            } => Some((label.to_string(), icon.as_ref().map(|i| i.to_string()), action.clone())),
+            _ => None,
+        })
+        .collect();
+
+    // All authors is present and unchecked while a filter is active.
+    assert_eq!(entries[0].0, "All authors");
+    assert_eq!(entries[0].1, None);
+    assert!(matches!(
+        entries[0].2.as_ref(),
+        ContextMenuAction::SetHistoryAuthorFilter { author: None, .. }
+    ));
+    // Suggestions come from the loaded log, deduplicated and sorted; the
+    // active filter is marked with a check.
+    assert_eq!(entries[1].0, "Alice");
+    assert_eq!(entries[1].1, Some("icons/check.svg".into()));
+    assert!(matches!(
+        entries[1].2.as_ref(),
+        ContextMenuAction::SetHistoryAuthorFilter {
+            author: Some(name),
+            ..
+        } if name == "Alice"
+    ));
+    assert_eq!(entries[2].0, "Bob");
+    assert_eq!(entries[2].1, None);
+}
+
+#[gpui::test]
 fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

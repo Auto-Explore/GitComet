@@ -84,6 +84,7 @@ pub struct RepoLoadsInFlight {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingLogLoad {
     pub scope: LogScope,
+    pub author: Option<String>,
     pub limit: usize,
     pub cursor: Option<LogCursor>,
 }
@@ -162,27 +163,32 @@ impl RepoLoadsInFlight {
         }
     }
 
-    /// For log loads: coalesce by keeping only the latest requested `(scope, cursor)` while a log
-    /// load is already in flight.
+    /// For log loads: coalesce by keeping only the latest requested
+    /// `(scope, author, cursor)` while a log load is already in flight.
     pub fn request_log(
         &mut self,
         scope: LogScope,
+        author: Option<String>,
         limit: usize,
         cursor: Option<LogCursor>,
     ) -> bool {
         if self.is_in_flight(Self::LOG) {
             let next = PendingLogLoad {
                 scope,
+                author,
                 limit,
                 cursor,
             };
             match &self.pending_log {
-                // Scope changes invalidate older pending requests (including pagination).
-                Some(existing) if existing.scope != next.scope => {
+                // Scope or author changes invalidate older pending requests
+                // (including pagination).
+                Some(existing)
+                    if existing.scope != next.scope || existing.author != next.author =>
+                {
                     self.pending_log = Some(next);
                 }
                 // Don't let a refresh request (cursor=None) clobber a pending pagination request
-                // for the same scope.
+                // for the same scope and author.
                 Some(existing) if existing.cursor.is_some() && next.cursor.is_none() => {}
                 _ => {
                     self.pending_log = Some(next);
@@ -674,6 +680,9 @@ pub struct PendingCommitRetry {
 #[derive(Clone, Debug)]
 pub struct HistoryState {
     pub history_scope: LogScope,
+    /// Case-insensitive author filter for the history, or `None` for all
+    /// authors. Matches the author name shown in the UI.
+    pub history_author_filter: Option<String>,
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
@@ -725,6 +734,7 @@ impl Default for HistoryState {
     fn default() -> Self {
         Self {
             history_scope: LogScope::default(),
+            history_author_filter: None,
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
@@ -1510,6 +1520,14 @@ impl RepoState {
         self.bump_log_revs();
     }
 
+    pub(crate) fn set_history_author_filter(&mut self, author: Option<String>) {
+        if self.history_state.history_author_filter == author {
+            return;
+        }
+        self.history_state.history_author_filter = author;
+        self.bump_log_revs();
+    }
+
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
         if v.is_none() {
             // Clearing the selection always dissolves any multi-selection too;
@@ -2208,23 +2226,24 @@ mod tests {
     #[test]
     fn request_log_scope_change_replaces_pending_log_request() {
         let mut loads = RepoLoadsInFlight::default();
-        assert!(loads.request_log(LogScope::FullReachable, 20, None));
+        assert!(loads.request_log(LogScope::FullReachable, None, 20, None));
 
         assert!(!loads.request_log(
             LogScope::AllBranches,
+            None,
             20,
             Some(LogCursor {
                 last_seen: CommitId("older".into()),
                 resume_from: None,
                 resume_token: None,
             }),
-        ));
-        assert!(!loads.request_log(LogScope::NoMerges, 20, None));
+        ));        assert!(!loads.request_log(LogScope::NoMerges, None, 20, None));
 
         assert_eq!(
             loads.finish_log(),
             Some(PendingLogLoad {
                 scope: LogScope::NoMerges,
+                author: None,
                 limit: 20,
                 cursor: None,
             })
@@ -2240,16 +2259,73 @@ mod tests {
             resume_token: None,
         };
 
-        assert!(loads.request_log(LogScope::MergesOnly, 20, None));
-        assert!(!loads.request_log(LogScope::MergesOnly, 20, Some(cursor.clone())));
-        assert!(!loads.request_log(LogScope::MergesOnly, 20, None));
+        assert!(loads.request_log(LogScope::MergesOnly, None, 20, None));
+        assert!(!loads.request_log(
+            LogScope::MergesOnly,
+            None,
+            20,
+            Some(cursor.clone())
+        ));
+        assert!(!loads.request_log(LogScope::MergesOnly, None, 20, None));
 
         assert_eq!(
             loads.finish_log(),
             Some(PendingLogLoad {
                 scope: LogScope::MergesOnly,
+                author: None,
                 limit: 20,
                 cursor: Some(cursor),
+            })
+        );
+    }
+
+    #[test]
+    fn request_log_author_change_replaces_pending_pagination() {
+        let mut loads = RepoLoadsInFlight::default();
+        let cursor = LogCursor {
+            last_seen: CommitId("page-1".into()),
+            resume_from: None,
+            resume_token: None,
+        };
+
+        assert!(loads.request_log(LogScope::MergesOnly, None, 20, None));
+        // A pagination request for the same scope+author is kept pending.
+        assert!(!loads.request_log(
+            LogScope::MergesOnly,
+            None,
+            20,
+            Some(cursor.clone())
+        ));
+        // Switching the author invalidates the pending pagination entirely.
+        assert!(!loads.request_log(LogScope::MergesOnly, Some("alice".into()), 20, None));
+
+        assert_eq!(
+            loads.finish_log(),
+            Some(PendingLogLoad {
+                scope: LogScope::MergesOnly,
+                author: Some("alice".into()),
+                limit: 20,
+                cursor: None,
+            })
+        );
+    }
+
+    #[test]
+    fn request_log_author_change_does_not_clobber_pending_pagination_of_other_author() {
+        let mut loads = RepoLoadsInFlight::default();
+
+        assert!(loads.request_log(LogScope::NoMerges, Some("alice".into()), 20, None));
+        assert!(!loads.request_log(LogScope::NoMerges, Some("alice".into()), 20, None));
+        // A different author replaces the pending request (pagination reset).
+        assert!(!loads.request_log(LogScope::NoMerges, Some("bob".into()), 20, None));
+
+        assert_eq!(
+            loads.finish_log(),
+            Some(PendingLogLoad {
+                scope: LogScope::NoMerges,
+                author: Some("bob".into()),
+                limit: 20,
+                cursor: None,
             })
         );
     }

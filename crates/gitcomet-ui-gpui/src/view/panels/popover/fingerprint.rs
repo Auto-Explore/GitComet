@@ -188,7 +188,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::TagMenu { repo_id, .. }
         | PopoverKind::TerminalMenu { repo_id, .. }
         | PopoverKind::TagRefMenu { repo_id, .. }
-        | PopoverKind::HistoryBranchFilter { repo_id } => Some(*repo_id),
+        | PopoverKind::HistoryBranchFilter { repo_id }
+        | PopoverKind::HistoryAuthorFilter { repo_id } => Some(*repo_id),
     }?;
 
     state.repos.iter().find(|r| r.id == repo_id)
@@ -274,6 +275,12 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.branches_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
             repo.tags_rev.hash(hasher);
+        }
+
+        PopoverKind::HistoryAuthorFilter { .. } => {
+            repo.history_state.history_author_filter.hash(hasher);
+            // Author suggestions come from the loaded log pages.
+            repo.log_rev.hash(hasher);
         }
 
         PopoverKind::PullPicker
@@ -685,6 +692,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::HistoryBranchFilter { repo_id } => {
             48u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
+        PopoverKind::HistoryAuthorFilter { repo_id } => {
+            97u8.hash(hasher);
             repo_id.hash(hasher);
         }
         PopoverKind::TerminalMenu { repo_id, context } => {

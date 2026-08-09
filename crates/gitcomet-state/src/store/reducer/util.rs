@@ -684,6 +684,7 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadLog {
             repo_id,
             scope,
+            author: repo_state.history_state.history_author_filter.clone(),
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
@@ -704,16 +705,19 @@ pub(super) fn append_refresh_primary_effects(
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
     append_requested_status_refresh_effects(repo_state, effects);
-    if repo_state
-        .loads_in_flight
-        .request_log(scope, DEFAULT_LOG_PAGE_SIZE, None)
-    {
+    if repo_state.loads_in_flight.request_log(
+        scope,
+        repo_state.history_state.history_author_filter.clone(),
+        DEFAULT_LOG_PAGE_SIZE,
+        None,
+    ) {
         // Block pagination while a refresh log load is in flight, to avoid concurrent LogLoaded
         // merges with different cursors.
         repo_state.set_log_loading_more(false);
         effects.push_effect(Effect::LoadLog {
             repo_id,
             scope,
+            author: repo_state.history_state.history_author_filter.clone(),
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });
@@ -761,6 +765,7 @@ pub(super) fn append_refresh_full_effects(
     append_requested_status_refresh_effects(repo_state, effects);
     if repo_state.loads_in_flight.request_log(
         repo_state.history_state.history_scope,
+        repo_state.history_state.history_author_filter.clone(),
         DEFAULT_LOG_PAGE_SIZE,
         None,
     ) {
@@ -768,6 +773,7 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(Effect::LoadLog {
             repo_id,
             scope: repo_state.history_state.history_scope,
+            author: repo_state.history_state.history_author_filter.clone(),
             limit: DEFAULT_LOG_PAGE_SIZE,
             cursor: None,
         });

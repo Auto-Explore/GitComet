@@ -184,6 +184,12 @@ pub enum Msg {
         repo_id: RepoId,
         scope: LogScope,
     },
+    /// Restricts the history to commits authored by `author` (case-insensitive
+    /// match on the author name). `None` clears the filter.
+    SetHistoryAuthorFilter {
+        repo_id: RepoId,
+        author: Option<String>,
+    },
     SetFetchPruneDeletedRemoteTrackingBranches {
         repo_id: RepoId,
         enabled: bool,
@@ -876,6 +882,7 @@ pub enum InternalMsg {
     LogLoaded {
         repo_id: RepoId,
         scope: LogScope,
+        author: Option<String>,
         cursor: Option<LogCursor>,
         result: Result<LogPage, Error>,
     },

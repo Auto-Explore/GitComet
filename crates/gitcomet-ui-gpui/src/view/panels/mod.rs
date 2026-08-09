@@ -139,6 +139,10 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         scope: gitcomet_core::domain::LogScope,
     },
+    SetHistoryAuthorFilter {
+        repo_id: RepoId,
+        author: Option<String>,
+    },
     SetDiffContentMode {
         mode: DiffContentMode,
     },

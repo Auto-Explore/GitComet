@@ -362,6 +362,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::InteractiveRebaseAutosquashMenu
             | PopoverKind::MergetoolSettingsMenu
             | PopoverKind::HistoryBranchFilter { .. }
+            | PopoverKind::HistoryAuthorFilter { .. }
             | PopoverKind::DiffContentModeSettings
             | PopoverKind::ChangeTrackingSettings
             | PopoverKind::UiScalePicker
@@ -685,6 +686,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. }
@@ -818,6 +820,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
@@ -3689,6 +3692,9 @@ impl PopoverHost {
             }
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
+            }
+            PopoverKind::HistoryAuthorFilter { repo_id } => {
+                self.context_menu_view(PopoverKind::HistoryAuthorFilter { repo_id }, cx)
             }
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)

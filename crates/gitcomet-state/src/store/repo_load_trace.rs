@@ -189,6 +189,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         Effect::PersistRecentRepo { repo_id, .. } => *repo_id,
         Effect::PersistRepoHistoryMode { repo_id, .. } => *repo_id,
         Effect::PersistRepoHistoryModesBatch { repo_id, .. } => *repo_id,
+        Effect::PersistRepoHistoryAuthorFilter { repo_id, .. } => *repo_id,
         _ => None,
     }
 }

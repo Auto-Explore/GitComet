@@ -316,6 +316,34 @@ pub trait GitRepository: Send + Sync {
         Ok(page)
     }
 
+    /// Like [`Self::log_history_mode_page`], but restricted to commits whose
+    /// author matches `author` (case-insensitive substring match against the
+    /// author name shown in the UI). The default implementation ignores the
+    /// filter; backends that support it override this method.
+    fn log_history_mode_page_filtered(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        let _ = author;
+        self.log_history_mode_page(mode, limit, cursor)
+    }
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        cancellation.check_cancelled()?;
+        let page = self.log_history_mode_page_filtered(mode, author, limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
+    }
+
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;
     fn log_head_page_cancellable(
         &self,

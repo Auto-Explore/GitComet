@@ -3600,6 +3600,7 @@ mod tests {
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
             scope: initial_scope,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![commit("feature-tip"), commit("main-tip")],
@@ -3706,6 +3707,7 @@ mod tests {
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
             scope: initial_scope,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![commit("main-tip")],
@@ -3824,6 +3826,7 @@ mod tests {
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
             scope: initial_scope,
+            author: None,
             cursor: None,
             result: Ok(LogPage {
                 commits: vec![commit("main-tip")],

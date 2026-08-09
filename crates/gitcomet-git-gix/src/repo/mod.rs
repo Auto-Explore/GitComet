@@ -147,6 +147,8 @@ struct LogHeadPageCacheKey {
     limit: usize,
     last_seen: Option<CommitId>,
     resume_from: Option<CommitId>,
+    /// Lowercased author filter, or `None` for the unfiltered walk.
+    author: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -258,6 +260,29 @@ impl GitRepository for GixRepo {
     ) -> Result<LogPage> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
         self.log_history_mode_page_cancellable_impl(mode, limit, cursor, cancellation)
+    }
+
+    fn log_history_mode_page_filtered(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_filtered_impl(mode, author, limit, cursor)
+    }
+
+    fn log_history_mode_page_filtered_cancellable(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_filtered_cancellable_impl(mode, author, limit, cursor, cancellation)
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {

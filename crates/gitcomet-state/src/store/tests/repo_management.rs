@@ -2209,6 +2209,7 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
         );
         assert!(repo1_state.loads_in_flight.request_log(
             repo1_state.history_state.history_scope,
+            None,
             50,
             None,
         ));
@@ -2892,7 +2893,7 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
 
     let has_status = has_status_refresh_effects(&effects, repo1);
     let has_log = effects.iter().any(|e| {
-        matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
+        matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _, .. } if *repo_id == repo1)
     });
     let has_selected_diff_reload = effects.iter().any(|e| {
         matches!(

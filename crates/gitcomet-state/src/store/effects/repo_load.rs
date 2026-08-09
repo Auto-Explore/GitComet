@@ -473,11 +473,13 @@ pub(super) fn schedule_load_log(
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
     scope: LogScope,
+    author: Option<String>,
     limit: usize,
     cursor: Option<LogCursor>,
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
+    let author_on_missing = author.clone();
     spawn_detached_with_repo_or_else(
         executor,
         "load-log",
@@ -487,13 +489,20 @@ pub(super) fn schedule_load_log(
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
-                repo.log_history_mode_page_cancellable(scope, limit, cursor_ref, &cancellation)
+                repo.log_history_mode_page_filtered_cancellable(
+                    scope,
+                    author.as_deref(),
+                    limit,
+                    cursor_ref,
+                    &cancellation,
+                )
             };
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
                     scope,
+                    author,
                     cursor,
                     result,
                 }),
@@ -505,6 +514,7 @@ pub(super) fn schedule_load_log(
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
                     scope,
+                    author: author_on_missing,
                     cursor: cursor_on_missing,
                     result: Err(missing_repo_error(repo_id)),
                 }),

@@ -93,12 +93,14 @@ impl std::fmt::Debug for InternalMsg {
             InternalMsg::LogLoaded {
                 repo_id,
                 scope,
+                author,
                 cursor,
                 result,
             } => f
                 .debug_struct("LogLoaded")
                 .field("repo_id", repo_id)
                 .field("scope", scope)
+                .field("author", author)
                 .field("cursor", cursor)
                 .field("result", result)
                 .finish(),
