@@ -1694,6 +1694,10 @@ impl MainPaneView {
                             this.worktree_markdown_preview = Loadable::Ready(document);
                         }
                         Err(refusal) => {
+                            // The document these described is gone too, so they
+                            // are cleared here for the same reason as above.
+                            this.worktree_markdown_preview_picture_sizes = Default::default();
+                            this.worktree_markdown_preview_block_scrolls.clear();
                             let prefers_source = refusal.prefers_source();
                             this.worktree_markdown_preview =
                                 Loadable::Error(refusal.into_message());

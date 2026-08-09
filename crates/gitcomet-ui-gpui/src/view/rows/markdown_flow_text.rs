@@ -148,14 +148,18 @@ pub(in crate::view) fn markdown_flow_painted_offset(raw: &str, row_offset: usize
 pub(in crate::view) fn markdown_flow_row_offset(raw: &str, painted_offset: usize) -> usize {
     let mut painted = 0usize;
     for (ix, byte) in raw.bytes().enumerate() {
-        if painted >= painted_offset {
-            return ix;
-        }
-        painted += if byte == b'\t' {
+        let width = if byte == b'\t' {
             MARKDOWN_FLOW_TAB_COLUMNS
         } else {
             1
         };
+        // A column that falls within this character's own columns belongs to
+        // it rather than to the next one, so a click inside an expanded tab
+        // resolves to the tab and a selection started there keeps the indent.
+        if painted + width > painted_offset {
+            return ix;
+        }
+        painted += width;
     }
     raw.len()
 }
@@ -351,7 +355,7 @@ mod tests {
 
         assert_eq!(markdown_flow_row_offset(raw, 0), 0);
         // Any column inside the expanded tab resolves to the tab itself.
-        assert_eq!(markdown_flow_row_offset(raw, 2), 1);
+        assert_eq!(markdown_flow_row_offset(raw, 2), 0);
         assert_eq!(markdown_flow_row_offset(raw, 4), 1);
         assert_eq!(markdown_flow_row_offset(raw, 8), 5);
         assert_eq!(markdown_flow_row_offset(raw, 1_000), raw.len());

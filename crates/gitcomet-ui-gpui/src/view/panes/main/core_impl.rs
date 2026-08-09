@@ -1862,6 +1862,7 @@ impl MainPaneView {
             worktree_markdown_preview: Loadable::NotLoaded,
             worktree_markdown_preview_picture_sizes: Default::default(),
             worktree_markdown_preview_block_scrolls: Default::default(),
+            worktree_markdown_preview_blocks: Default::default(),
             worktree_markdown_preview_image_waits: HashSet::default(),
             worktree_markdown_preview_seq: 0,
             worktree_markdown_preview_inflight: None,

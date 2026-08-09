@@ -233,8 +233,7 @@ impl MainPaneView {
     /// Translate a source row index into the row the list actually scrolls to,
     /// which differs once word wrap has split earlier rows.
     fn markdown_preview_visual_ix(&self, list: MarkdownPreviewList, row_ix: usize) -> usize {
-        self.markdown_preview_wrap
-            .plan(list)
+        self.markdown_preview_wrap_plan(list)
             .map(|plan| plan.visual_ix_for_row(row_ix))
             .unwrap_or(row_ix)
     }

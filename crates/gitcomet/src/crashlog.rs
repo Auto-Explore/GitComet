@@ -140,12 +140,30 @@ fn install_terminal_interrupt_handler() -> bool {
     gitcomet_win32_window_utils::install_console_ctrl_handler(handle_console_ctrl_event)
 }
 
+/// How long the recovery-marker cleanup gets before a console interrupt ends
+/// the process regardless of whether it finished.
+#[cfg(windows)]
+const CONSOLE_CTRL_CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[cfg(windows)]
 fn handle_console_ctrl_event(event: u32) -> bool {
     if !console_ctrl_event_ends_process(event) {
         // Not an event that ends the process, so leave it to the console.
         return false;
     }
+
+    // Retiring the marker takes a lock and writes to the crash directory, and
+    // either can stall — another thread mid-session-lifecycle, or a LOCALAPPDATA
+    // on an unreachable network share. Arm the exit before running it so a
+    // stalled cleanup cannot restore the very hang this handler prevents.
+    let _ = std::thread::Builder::new()
+        .name("gitcomet-ctrl-c-watchdog".to_string())
+        .spawn(|| {
+            std::thread::sleep(CONSOLE_CTRL_CLEANUP_GRACE);
+            gitcomet_win32_window_utils::terminate_current_process(
+                gitcomet_win32_window_utils::CONTROL_C_EXIT_CODE,
+            );
+        });
 
     retire_active_session();
     // Declining the event here would hand termination to the console's default

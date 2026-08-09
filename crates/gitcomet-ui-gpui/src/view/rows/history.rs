@@ -309,7 +309,7 @@ impl MainPaneView {
                 ui_scale_percent,
                 view: Some(view),
                 text_region: region,
-                wrap_plan: this.markdown_preview_wrap.plan(MarkdownPreviewList::Old),
+                wrap_plan: this.markdown_preview_wrap_plan(MarkdownPreviewList::Old),
                 image_base_dir: image_base_dir.clone(),
             },
         )
@@ -360,7 +360,7 @@ impl MainPaneView {
                 ui_scale_percent,
                 view: Some(view),
                 text_region: DiffTextRegion::Inline,
-                wrap_plan: this.markdown_preview_wrap.plan(MarkdownPreviewList::Inline),
+                wrap_plan: this.markdown_preview_wrap_plan(MarkdownPreviewList::Inline),
                 image_base_dir: image_base_dir.clone(),
             },
         )
@@ -411,7 +411,7 @@ impl MainPaneView {
                 ui_scale_percent,
                 view: Some(view),
                 text_region: DiffTextRegion::SplitRight,
-                wrap_plan: this.markdown_preview_wrap.plan(MarkdownPreviewList::New),
+                wrap_plan: this.markdown_preview_wrap_plan(MarkdownPreviewList::New),
                 image_base_dir: image_base_dir.clone(),
             },
         )

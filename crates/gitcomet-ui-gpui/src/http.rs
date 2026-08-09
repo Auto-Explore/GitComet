@@ -84,21 +84,24 @@ fn fetch(
 
     let response = request.call()?;
     let status = response.status();
-    let mut body = Vec::new();
-    // Read one byte past the ceiling so the difference between a body that fits
-    // and one that was cut short is visible. Returning the truncated bytes with
-    // a success status would hand a decoder a corrupt file and let it report
-    // the wrong reason.
-    response
-        .into_body()
-        .into_reader()
-        .take(MAX_RESPONSE_BYTES + 1)
-        .read_to_end(&mut body)?;
-    if body.len() as u64 > MAX_RESPONSE_BYTES {
-        anyhow::bail!("response body exceeds the {MAX_RESPONSE_BYTES} byte limit: {url}");
-    }
+    let body = read_body_within_limit(response.into_body().into_reader(), MAX_RESPONSE_BYTES, url)?;
 
     Ok(HttpResponse { status, body })
+}
+
+/// Read a whole body, or fail if it is larger than `limit`.
+///
+/// Reads one byte past the ceiling so the difference between a body that fits
+/// and one that was cut short is visible. Returning the truncated bytes with a
+/// success status would hand a decoder a corrupt file and let it report the
+/// wrong reason.
+fn read_body_within_limit(reader: impl Read, limit: u64, url: &str) -> anyhow::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    reader.take(limit + 1).read_to_end(&mut body)?;
+    if body.len() as u64 > limit {
+        anyhow::bail!("response body exceeds the {limit} byte limit: {url}");
+    }
+    Ok(body)
 }
 
 /// The client to install on the application.
@@ -123,53 +126,31 @@ mod tests {
         assert!(client.user_agent.contains(std::env::consts::ARCH));
     }
 
-    /// Serve one response with a body of `body_len` bytes and return its URL.
-    ///
-    /// The listener closes after a single request, so the test owns its port
-    /// for exactly as long as it needs it.
-    fn serve_one_body(body_len: usize) -> String {
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a local port");
-        let url = format!("http://{}/body", listener.local_addr().expect("local addr"));
-
-        std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else {
-                return;
-            };
-            use std::io::Write;
-            // Read just enough of the request line for the client to consider
-            // the exchange started; the response is what the test is about.
-            let mut discard = [0u8; 1024];
-            let _ = std::io::Read::read(&mut stream, &mut discard);
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Length: {body_len}\r\nConnection: close\r\n\r\n"
-            );
-            let _ = stream.write_all(&vec![b'x'; body_len]);
-            let _ = stream.flush();
-        });
-
-        url
-    }
+    /// The ceiling is the only thing these tests are about, so they drive the
+    /// bounded read directly at a small limit rather than pushing 16 MiB
+    /// through a real socket for a boundary check.
+    const TEST_LIMIT: u64 = 8;
 
     #[test]
     fn a_body_at_the_ceiling_is_returned_whole() {
         // The ceiling itself is not too big: an off-by-one here would reject
         // every response of exactly the limit.
-        let client = GitCometHttpClient::new();
-        let url = serve_one_body(MAX_RESPONSE_BYTES as usize);
+        let body = vec![b'x'; TEST_LIMIT as usize];
 
-        let response = smol::block_on(client.get(&url, true)).expect("a body at the limit is fine");
-        assert_eq!(response.body.len() as u64, MAX_RESPONSE_BYTES);
+        let read = read_body_within_limit(body.as_slice(), TEST_LIMIT, "http://example.com/body")
+            .expect("a body at the limit is fine");
+        assert_eq!(read.len() as u64, TEST_LIMIT);
     }
 
     #[test]
     fn a_body_over_the_ceiling_fails_instead_of_truncating() {
-        // Returning the first 16 MiB with a success status would hand a decoder
-        // a corrupt file and let it report the wrong reason.
-        let client = GitCometHttpClient::new();
-        let url = serve_one_body(MAX_RESPONSE_BYTES as usize + 1);
+        // Returning the first N bytes with a success status would hand a
+        // decoder a corrupt file and let it report the wrong reason.
+        let body = vec![b'x'; TEST_LIMIT as usize + 1];
 
-        let Err(error) = smol::block_on(client.get(&url, true)) else {
+        let Err(error) =
+            read_body_within_limit(body.as_slice(), TEST_LIMIT, "http://example.com/body")
+        else {
             panic!("a body past the limit must surface as an error");
         };
         assert!(

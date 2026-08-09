@@ -1240,6 +1240,23 @@ impl MarkdownPreviewWrapCache {
         self.slots[Self::slot(list)].as_ref()?.plan.as_ref()
     }
 
+    /// The plan for `list`, but only while it describes document `document_rev`.
+    ///
+    /// A plan indexes rows of the document it was built from, so readers that
+    /// resolve a list position to a source row must not use one left over from
+    /// an earlier document — the row it names may not exist any more.
+    pub(in crate::view) fn plan_for_rev(
+        &self,
+        list: MarkdownPreviewList,
+        document_rev: u64,
+    ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
+        let slot = self.slots[Self::slot(list)].as_ref()?;
+        if slot.key.document_rev != document_rev {
+            return None;
+        }
+        slot.plan.as_ref()
+    }
+
     pub(in crate::view) fn is_current(
         &self,
         list: MarkdownPreviewList,

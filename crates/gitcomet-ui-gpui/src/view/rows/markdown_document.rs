@@ -41,6 +41,8 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) picture_sizes: crate::view::rows::MarkdownPreviewPictureSizes,
     /// Where each sideways-scrolling block is scrolled to.
     pub(in crate::view) block_scrolls: MarkdownDocumentBlockScrolls,
+    /// The block grouping of the document being rendered, kept across frames.
+    pub(in crate::view) blocks: MarkdownDocumentBlockCache,
     /// Set when the preview is interactive: text selection, copy, the link
     /// menu, and the diff context menu all go through this view.
     pub(in crate::view) view: Option<Entity<MainPaneView>>,
@@ -59,9 +61,42 @@ const TABLE_CELL_PAD_Y_PX: f32 = 4.0;
 /// Width of the gutter marking a wholly added or removed file.
 const MARKDOWN_DOCUMENT_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 
+/// Blocks the flowing renderer last grouped, and the document they describe.
+///
+/// Grouping depends only on the document, but this renderer runs on every
+/// frame — a scroll, a hover, a cursor blink — and re-deriving it means a scan
+/// of every row plus an allocation each time. Holding the document alongside
+/// its blocks is what makes the identity check sound: while the cache keeps
+/// that `Arc` alive, no later document can occupy the same address.
+#[derive(Clone, Default)]
+pub(in crate::view) struct MarkdownDocumentBlockCache(
+    std::rc::Rc<
+        std::cell::RefCell<
+            Option<(
+                Arc<MarkdownPreviewDocument>,
+                std::rc::Rc<Vec<MarkdownBlock>>,
+            )>,
+        >,
+    >,
+);
+
+impl MarkdownDocumentBlockCache {
+    fn blocks(&self, document: &Arc<MarkdownPreviewDocument>) -> std::rc::Rc<Vec<MarkdownBlock>> {
+        let mut slot = self.0.borrow_mut();
+        if let Some((cached, blocks)) = slot.as_ref()
+            && Arc::ptr_eq(cached, document)
+        {
+            return std::rc::Rc::clone(blocks);
+        }
+        let blocks = std::rc::Rc::new(markdown_document_blocks(document));
+        *slot = Some((Arc::clone(document), std::rc::Rc::clone(&blocks)));
+        blocks
+    }
+}
+
 /// Render a whole document as one flowing element tree.
 pub(in crate::view) fn render_markdown_document(
-    document: &MarkdownPreviewDocument,
+    document: &Arc<MarkdownPreviewDocument>,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
     // The budget belongs to this renderer, so this is where it is enforced —
@@ -76,7 +111,7 @@ pub(in crate::view) fn render_markdown_document(
             .into_any_element();
     }
 
-    let blocks = markdown_document_blocks(document);
+    let blocks = context.blocks.blocks(document);
     // The whole document lays out at once, so the rows the blocks cover are the
     // render cost. Spacers are not among them: the block builder drops them and
     // the flowing layout spends a margin instead.
@@ -307,7 +342,10 @@ fn render_row_line(
     for inline in leading() {
         line = line.child(render_inline_image(inline, context));
     }
-    if !row.text.is_empty() {
+    // A row of nothing but pictures still has to paint its (empty) text: that
+    // element is what registers the row's hit-test box, and without one a drag
+    // across the row finds no target and the selection skips over it.
+    if !row.text.is_empty() || context.view.is_some() {
         line = line.child(render_row_text(row_ix, row, context));
     }
     for inline in trailing() {

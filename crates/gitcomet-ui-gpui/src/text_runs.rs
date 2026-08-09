@@ -97,6 +97,19 @@ pub(crate) fn text_runs_for_highlights(
         return vec![default_style.to_run(text.len())];
     }
 
+    // The walk below advances a cursor, so an out-of-order range would be
+    // skipped outright rather than repaired. Callers reach this directly, so
+    // sort here for the same result `sanitize_highlights` produces.
+    let sorted;
+    let highlights = if highlights_are_shapeable(text, highlights) {
+        highlights
+    } else {
+        let mut repaired = highlights.to_vec();
+        sanitize_highlights(text, &mut repaired);
+        sorted = repaired;
+        &sorted
+    };
+
     let mut runs = Vec::with_capacity(highlights.len() * 2 + 1);
     let mut ix = 0usize;
     for (range, highlight) in highlights {

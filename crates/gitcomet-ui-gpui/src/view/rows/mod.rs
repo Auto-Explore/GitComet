@@ -377,7 +377,8 @@ pub(in crate::view) use self::history::{
     worktree_markdown_preview_bar_color,
 };
 pub(in crate::view) use self::markdown_document::{
-    MarkdownDocumentBlockScrolls, MarkdownDocumentContext, render_markdown_document,
+    MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls, MarkdownDocumentContext,
+    render_markdown_document,
 };
 pub(in crate::view) use self::markdown_flow_text::markdown_flow_row_offset;
 #[cfg(test)]

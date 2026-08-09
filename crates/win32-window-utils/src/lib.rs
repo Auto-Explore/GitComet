@@ -4,7 +4,7 @@ use std::sync::OnceLock;
 use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, TRUE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
 use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, SetConsoleCtrlHandler};
-use windows_sys::Win32::System::Threading::{GetCurrentProcess, TerminateProcess};
+use windows_sys::Win32::System::Threading::{ExitProcess, GetCurrentProcess, TerminateProcess};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, HTCAPTION, IsIconic,
@@ -68,8 +68,11 @@ pub fn send_console_ctrl_break(process_group_id: u32) -> bool {
 /// kernel to tear the process down instead, which needs neither the loader
 /// lock nor any module detach routine.
 pub fn terminate_current_process(exit_code: u32) -> ! {
-    unsafe {
-        let _ = TerminateProcess(GetCurrentProcess(), exit_code);
+    // A hooked or otherwise refused `TerminateProcess` must not leave this
+    // thread parked forever with the process still alive: fall back to the
+    // teardown that can deadlock rather than to no teardown at all.
+    if unsafe { TerminateProcess(GetCurrentProcess(), exit_code) } == 0 {
+        unsafe { ExitProcess(exit_code) }
     }
     // Termination is asynchronous for the calling thread, so wait here rather
     // than returning into code that assumed this call never comes back.

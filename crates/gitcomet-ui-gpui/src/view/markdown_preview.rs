@@ -159,13 +159,14 @@ impl MarkdownImage {
     /// screenful of blank rows. `object_fit: contain` letterboxes anything
     /// that turns out to be taller.
     pub(super) fn block_rows(&self) -> u8 {
+        // A declared size of zero says nothing about how tall the picture is,
+        // so it is treated as undeclared rather than collapsing the block to a
+        // single row — and each dimension is judged on its own, so `height="0"`
+        // falls through to a usable width instead of discarding it.
         let Some(declared) = self
             .height_px
-            .or(self.width_px)
-            // A declared size of zero says nothing about how tall the picture
-            // is, so it is treated as undeclared rather than collapsing the
-            // block to a single row.
             .filter(|declared| *declared > 0)
+            .or(self.width_px.filter(|declared| *declared > 0))
         else {
             return MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS;
         };
@@ -355,7 +356,7 @@ impl<'a> MarkdownPreviewRowInput<'a> {
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct MarkdownPreviewRowDecoration {
     footnote_label: Option<SharedString>,
     alert_kind: Option<MarkdownAlertKind>,
@@ -1832,24 +1833,30 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         pop_matching_inline_style(&mut span_stack, style);
                         continue;
                     }
-                    HtmlHandling::Image { image, alt } => {
+                    HtmlHandling::Images(images) => {
                         if in_table_row {
                             // As with a markdown image: a table cell keeps the
                             // description rather than a picture that cannot be
                             // placed in its column.
-                            text_buf.push_str(&alt);
+                            for (_, _, alt) in &images {
+                                text_buf.push_str(alt);
+                            }
                             continue;
                         }
                         // An `<img>` records itself the way a markdown image
                         // does; the row it closes decides whether it is inline
                         // or a block.
-                        row_ctx.pending_images.push(MarkdownInlineImage {
-                            byte_offset: text_buf.len(),
-                            source_byte: event_range.start,
-                            image: Arc::new(image),
-                            alt: SharedString::from(alt),
-                            link_url: current_link_url(&link_stack),
-                        });
+                        for (tag_offset, image, alt) in images {
+                            row_ctx.pending_images.push(MarkdownInlineImage {
+                                byte_offset: text_buf.len(),
+                                // Several tags can share one event, so the id
+                                // is the tag's own position, not the event's.
+                                source_byte: event_range.start.saturating_add(tag_offset),
+                                image: Arc::new(image),
+                                alt: SharedString::from(alt),
+                                link_url: current_link_url(&link_stack),
+                            });
+                        }
                         // A block-level tag has no paragraph to close it, so it
                         // flushes its own row.
                         if is_block_html {
@@ -2005,12 +2012,9 @@ enum HtmlHandling {
     StartInlineStyle(MarkdownInlineStyle),
     EndInlineStyle(MarkdownInlineStyle),
     AppendText(String),
-    /// An `<img>` tag with a usable source; `alt` describes it if the picture
-    /// cannot be drawn.
-    Image {
-        image: MarkdownImage,
-        alt: String,
-    },
+    /// The `<img>` tags a fragment holds, each with the byte offset of its tag
+    /// inside that fragment and the `alt` describing it if it cannot be drawn.
+    Images(Vec<(usize, MarkdownImage, String)>),
     AppendLiteral,
 }
 
@@ -2071,8 +2075,9 @@ fn classify_supported_html(html: &str) -> HtmlHandling {
     if let Some(summary_source) = extract_html_summary_content(trimmed) {
         return HtmlHandling::DetailsSummary(summary_source);
     }
-    if let Some((image, alt)) = extract_html_image(trimmed) {
-        return HtmlHandling::Image { image, alt };
+    let images = extract_html_images(trimmed);
+    if !images.is_empty() {
+        return HtmlHandling::Images(images);
     }
     if let Some(alt_text) = extract_html_image_alt(trimmed) {
         return HtmlHandling::AppendText(alt_text);
@@ -2158,22 +2163,40 @@ fn extract_html_image_alt(html: &str) -> Option<String> {
 
 /// The image an `<img>` tag describes, for the tags markdown documents use in
 /// place of `![alt](src)` — typically a logo sized with `width`.
-fn extract_html_image(html: &str) -> Option<(MarkdownImage, String)> {
+/// One fragment often holds several — a row of badges is written as a single
+/// block of HTML — so every tag is collected, and each is bounded to its own
+/// `>` before its attributes are read so it cannot borrow the next tag's.
+fn extract_html_images(html: &str) -> Vec<(usize, MarkdownImage, String)> {
     let lower = html.to_ascii_lowercase();
-    let img_ix = lower.find("<img")?;
-    let tag = &html[img_ix..];
-    let source = extract_html_attribute(tag, "src")?;
-    if source.trim().is_empty() {
-        return None;
+    let mut images = Vec::new();
+    let mut search_start = 0usize;
+
+    while let Some(offset) = lower[search_start..].find("<img") {
+        let tag_start = search_start + offset;
+        let tag_end = lower[tag_start..]
+            .find('>')
+            .map_or(html.len(), |end| tag_start + end + 1);
+        search_start = tag_end;
+
+        let tag = &html[tag_start..tag_end];
+        let Some(source) = extract_html_attribute(tag, "src") else {
+            continue;
+        };
+        if source.trim().is_empty() {
+            continue;
+        }
+        images.push((
+            tag_start,
+            MarkdownImage {
+                source: source.into(),
+                width_px: extract_html_pixel_attribute(tag, "width"),
+                height_px: extract_html_pixel_attribute(tag, "height"),
+            },
+            extract_html_attribute(tag, "alt").unwrap_or_default(),
+        ));
     }
-    Some((
-        MarkdownImage {
-            source: source.into(),
-            width_px: extract_html_pixel_attribute(tag, "width"),
-            height_px: extract_html_pixel_attribute(tag, "height"),
-        },
-        extract_html_attribute(tag, "alt").unwrap_or_default(),
-    ))
+
+    images
 }
 
 /// A `width`/`height` attribute in CSS pixels.
@@ -2365,8 +2388,10 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
                     }
                     // An inline fragment (a `<summary>` label) has nowhere to
                     // put a block, so an image there keeps describing itself.
-                    HtmlHandling::Image { alt, .. } => {
-                        text_buf.push_str(&alt);
+                    HtmlHandling::Images(images) => {
+                        for (_, _, alt) in images {
+                            text_buf.push_str(&alt);
+                        }
                     }
                     HtmlHandling::AppendText(text) => {
                         text_buf.push_str(&text);
@@ -2466,10 +2491,7 @@ fn push_image_block_rows(
                 row.indent_level,
                 row.blockquote_level,
             ),
-            decoration.take().unwrap_or(MarkdownPreviewRowDecoration {
-                alert_kind: continuation.alert_kind,
-                ..MarkdownPreviewRowDecoration::default()
-            }),
+            decoration.take().unwrap_or_else(|| continuation.clone()),
         )?;
     }
     Some(())

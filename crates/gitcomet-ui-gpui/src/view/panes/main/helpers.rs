@@ -2650,6 +2650,9 @@ pub(crate) struct MainPaneView {
     /// Where each sideways-scrolling block of the rendered preview is scrolled
     /// to, so its scrollbar has something to read.
     pub(in crate::view) worktree_markdown_preview_block_scrolls: rows::MarkdownDocumentBlockScrolls,
+    /// Block grouping of the document the rendered preview last drew, so it is
+    /// not re-derived on every frame.
+    pub(in crate::view) worktree_markdown_preview_blocks: rows::MarkdownDocumentBlockCache,
     /// Pictures in the rendered preview that are still decoding and already
     /// have someone waiting to repaint the pane when they finish.
     pub(in crate::view) worktree_markdown_preview_image_waits: HashSet<gpui::Resource>,

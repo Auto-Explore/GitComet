@@ -638,8 +638,10 @@ impl MainPaneView {
             return None;
         }
         if let Loadable::Ready(diff) = &self.file_markdown_preview {
-            let wrapped_len =
-                |list, rows: usize| self.markdown_preview_wrap.plan_len(list).unwrap_or(rows);
+            let wrapped_len = |list, rows: usize| {
+                self.markdown_preview_wrap_plan(list)
+                    .map_or(rows, |plan| plan.len())
+            };
             return Some(match self.diff_view {
                 DiffViewMode::Inline => {
                     wrapped_len(MarkdownPreviewList::Inline, diff.inline.rows.len())
@@ -835,6 +837,16 @@ impl MainPaneView {
             .and_then(|span| span.link_url.clone())
     }
 
+    /// The wrap plan `list` renders with, once it is confirmed to describe the
+    /// preview document currently loaded rather than one it replaced.
+    pub(in crate::view) fn markdown_preview_wrap_plan(
+        &self,
+        list: MarkdownPreviewList,
+    ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
+        self.markdown_preview_wrap
+            .plan_for_rev(list, self.file_markdown_preview_seq)
+    }
+
     /// The source row a list position paints, plus the visual row describing
     /// which slice of it — `None` when the list is not wrapped.
     fn markdown_preview_row_at(
@@ -843,7 +855,7 @@ impl MainPaneView {
         region: DiffTextRegion,
     ) -> Option<(&MarkdownPreviewRow, Option<&MarkdownPreviewVisualRow>)> {
         let (list, document) = self.markdown_preview_list_for_region(region)?;
-        let Some(plan) = self.markdown_preview_wrap.plan(list) else {
+        let Some(plan) = self.markdown_preview_wrap_plan(list) else {
             return document.rows.get(visible_ix).map(|row| (row, None));
         };
         let visual = plan.get(visible_ix)?;

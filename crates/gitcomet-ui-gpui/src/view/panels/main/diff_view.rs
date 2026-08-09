@@ -2516,7 +2516,7 @@ impl MainPaneView {
                                         .markdown_preview_image_base_dir()
                                         .map(|dir| std::sync::Arc::from(dir.as_path()));
                                     let body = rows::render_markdown_document(
-                                        document.as_ref(),
+                                        &document,
                                         &rows::MarkdownDocumentContext {
                                             theme,
                                             ui_scale_percent,
@@ -2528,6 +2528,7 @@ impl MainPaneView {
                                             block_scrolls: self
                                                 .worktree_markdown_preview_block_scrolls
                                                 .clone(),
+                                            blocks: self.worktree_markdown_preview_blocks.clone(),
                                             view: Some(cx.entity()),
                                             text_region: DiffTextRegion::Inline,
                                             change_bar_color:
