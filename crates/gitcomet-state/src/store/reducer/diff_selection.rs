@@ -1,3 +1,4 @@
+use super::actions_emit_effects::invalidate_loaded_blame;
 use super::util::{
     SelectedConflictTarget, SelectedDiffLoadPlan, apply_selected_diff_load_plan_state,
     diff_target_preview_flags, selected_conflict_target, selected_diff_load_plan,
@@ -51,7 +52,7 @@ fn inline_submodule_entries_from_range(
             kind: change.kind,
             target: DiffTarget::CommitRange {
                 from_commit_id: (*from_commit_id).clone(),
-                to_commit_id: (*to_commit_id).clone(),
+                to_commit_id: Some((*to_commit_id).clone()),
                 path: Some(change.path.clone()),
             },
             section: InlineSubmoduleDiffSection::Range(range.kind),
@@ -326,6 +327,39 @@ pub(super) fn global_nav(
         }
     }
 
+    // Restore the two-point comparison. This has to run before the diff-target
+    // restore below: entering a comparison clears the diff pane, so doing it
+    // afterwards would wipe the very target this step is meant to show.
+    //
+    // The multi-selection that may have started the comparison is not part of
+    // the snapshot, so `compare_range` drops it and the restored view names
+    // itself after the endpoints instead of "N commits selected". The files it
+    // lists are the same either way — the endpoints are what the comparison is.
+    let restore_range = {
+        let Some(repo_state) = state.repos.iter().find(|r| r.id == repo_id) else {
+            return effects;
+        };
+        repo_state.history_state.range_selection != snapshot.range_selection
+    };
+    if restore_range {
+        match snapshot.range_selection {
+            Some(range) => effects.extend(super::effects::compare_range(
+                state,
+                repo_id,
+                range.from,
+                range.to,
+                range.from_label,
+                range.to_label,
+                super::effects::ComparisonSource::Explicit,
+            )),
+            None => {
+                if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                    repo_state.clear_range_comparison();
+                }
+            }
+        }
+    }
+
     // Restore the main content target: a diff/file view, or the history log.
     match snapshot.diff_target {
         Some(target) => {
@@ -583,6 +617,11 @@ pub(super) fn diff_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.diff_state.diff_target.as_ref() == Some(&target)
     {
+        // The reload this was waiting for has arrived, whatever it carries and
+        // whichever branch below claims it: the rows on screen are about to stop
+        // being a generation behind the index.
+        repo_state.diff_state.diff_reload_in_flight = false;
+
         if selected_conflict_target(repo_state, &target).is_some() {
             return Vec::new();
         }
@@ -590,15 +629,28 @@ pub(super) fn diff_loaded(
         if !current_plan.load_patch_diff {
             return Vec::new();
         }
-        repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
-        repo_state.diff_state.diff = match result {
-            Ok(v) => Loadable::Ready(Arc::new(v)),
+        match result {
+            // A refresh that found no change must not churn the UI: keep the
+            // existing `Arc` so pointer-identity fingerprints stay put, leave
+            // the revs alone, and leave blame painted. `Loading`/`Error`/
+            // `NotLoaded` → `Ready` always falls through to the bump below, so
+            // a freshly selected diff is unaffected.
+            Ok(v) if matches!(&repo_state.diff_state.diff, Loadable::Ready(cur) if **cur == v) => {}
+            Ok(v) => {
+                repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
+                repo_state.diff_state.diff = Loadable::Ready(Arc::new(v));
+                repo_state.bump_diff_state_rev();
+                // The annotation column is derived from the content the diff
+                // shows, so blame is stale exactly when that content changed.
+                invalidate_loaded_blame(repo_state);
+            }
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                repo_state.diff_state.diff_rev = repo_state.diff_state.diff_rev.wrapping_add(1);
+                repo_state.diff_state.diff = Loadable::Error(e.to_string());
+                repo_state.bump_diff_state_rev();
             }
-        };
-        repo_state.bump_diff_state_rev();
+        }
     }
     Vec::new()
 }
@@ -619,15 +671,29 @@ pub(super) fn diff_file_loaded(
         if !current_plan.load_file_text {
             return Vec::new();
         }
-        repo_state.diff_state.diff_file_rev = repo_state.diff_state.diff_file_rev.wrapping_add(1);
-        repo_state.diff_state.diff_file = match result {
-            Ok(v) => Loadable::Ready(v.map(Arc::new)),
+        // Same content-driven guard as `diff_loaded`. Required, not merely
+        // symmetric: in content-preview mode `load_patch_diff` is false and
+        // `diff_loaded` returns early above, so `diff_file` is the only signal
+        // that the shown content changed.
+        match result {
+            Ok(v)
+                if matches!(&repo_state.diff_state.diff_file, Loadable::Ready(cur)
+                    if cur.as_deref() == v.as_ref()) => {}
+            Ok(v) => {
+                repo_state.diff_state.diff_file_rev =
+                    repo_state.diff_state.diff_file_rev.wrapping_add(1);
+                repo_state.diff_state.diff_file = Loadable::Ready(v.map(Arc::new));
+                repo_state.bump_diff_state_rev();
+                invalidate_loaded_blame(repo_state);
+            }
             Err(e) => {
                 super::util::push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
-                Loadable::Error(e.to_string())
+                repo_state.diff_state.diff_file_rev =
+                    repo_state.diff_state.diff_file_rev.wrapping_add(1);
+                repo_state.diff_state.diff_file = Loadable::Error(e.to_string());
+                repo_state.bump_diff_state_rev();
             }
-        };
-        repo_state.bump_diff_state_rev();
+        }
     }
     Vec::new()
 }

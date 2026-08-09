@@ -5,7 +5,7 @@ use gpui::prelude::*;
 use gpui::{CursorStyle, Div, ElementId, Rgba, SharedString, Stateful, WeakEntity, div, px};
 
 use super::control_height_md;
-use super::{TextTruncationProfile, TruncatedText, TruncatedTextTooltipMode};
+use super::{TextTruncationProfile, TruncatedText, TruncatedTextTooltipMode, shortcut_keys};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ContextMenuText {
@@ -201,6 +201,7 @@ pub struct ContextMenuEntry {
     label: ContextMenuText,
     icon: ContextMenuIconSlot,
     shortcut: Option<SharedString>,
+    shortcut_keycaps: bool,
     selected: bool,
     disabled: bool,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
@@ -213,6 +214,7 @@ impl ContextMenuEntry {
             label: label.into(),
             icon: ContextMenuIconSlot::None,
             shortcut: None,
+            shortcut_keycaps: false,
             selected: false,
             disabled: false,
             tooltip_host: None,
@@ -226,6 +228,11 @@ impl ContextMenuEntry {
 
     pub fn shortcut(mut self, shortcut: Option<SharedString>) -> Self {
         self.shortcut = shortcut;
+        self
+    }
+
+    pub fn shortcut_keycaps(mut self, shortcut_keycaps: bool) -> Self {
+        self.shortcut_keycaps = shortcut_keycaps;
         self
     }
 
@@ -265,6 +272,7 @@ fn context_menu_entry<V: 'static>(
         label,
         icon,
         shortcut,
+        shortcut_keycaps,
         selected,
         disabled,
         tooltip_host,
@@ -277,19 +285,11 @@ fn context_menu_entry<V: 'static>(
         ContextMenuIconSlot::Reserved | ContextMenuIconSlot::None => None,
     };
     let icon_color = context_menu_icon_color(theme, disabled, label.as_ref(), icon_path);
-    let text_color = if disabled {
-        theme.colors.text_muted
-    } else if icon_color == theme.colors.danger {
-        // Destructive entries carry the danger tint on the label too, not
-        // just the icon.
-        theme.colors.danger
-    } else {
-        theme.colors.text
-    };
+    let text_color = context_menu_entry_text_color(theme, disabled, icon_color);
     // Text-alpha overlays stay visible on the elevated popover surface, where
     // the `hover` token (tuned for the darker canvas) has no contrast.
-    let hover_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.07 } else { 0.05 });
-    let active_overlay = with_alpha(theme.colors.text, if theme.is_dark { 0.11 } else { 0.08 });
+    let hover_overlay = theme.hover_overlay();
+    let active_overlay = theme.active_overlay();
 
     let mut row = div()
         .id(id)
@@ -361,7 +361,11 @@ fn context_menu_entry<V: 'static>(
         .text_color(theme.colors.text_muted);
 
     if let Some(shortcut) = shortcut {
-        end = end.child(shortcut);
+        end = if shortcut_keycaps {
+            end.child(shortcut_keys(shortcut.as_ref(), theme, ui_scale))
+        } else {
+            end.child(shortcut)
+        };
     }
     row = row.child(end);
 
@@ -374,6 +378,21 @@ fn context_menu_entry<V: 'static>(
     row
 }
 
+fn context_menu_entry_text_color(
+    theme: AppTheme,
+    disabled: bool,
+    icon_color: gpui::Rgba,
+) -> gpui::Rgba {
+    if disabled {
+        theme.colors.text_muted
+    } else if icon_color == theme.colors.danger {
+        // Destructive entries carry the danger tint on both icon and label.
+        theme.colors.danger
+    } else {
+        theme.colors.text
+    }
+}
+
 fn context_menu_icon_color(
     theme: AppTheme,
     disabled: bool,
@@ -382,6 +401,10 @@ fn context_menu_icon_color(
 ) -> gpui::Rgba {
     if disabled {
         return theme.colors.text_muted;
+    }
+
+    if label == "Close" && icon_path == Some("icons/repo_tab_close.svg") {
+        return theme.colors.accent;
     }
 
     // Semantic-ish mapping for common actions.
@@ -452,6 +475,7 @@ fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
         "icons/cloud.svg" => Some("icons/cloud.svg"),
         "icons/computer.svg" => Some("icons/computer.svg"),
         "icons/history.svg" => Some("icons/history.svg"),
+        "icons/pin.svg" => Some("icons/pin.svg"),
         _ => None,
     };
     if by_icon.is_some() {
@@ -528,11 +552,6 @@ fn context_menu_text_content<V: 'static>(
         .into_any_element()
 }
 
-fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
-    color.a = alpha;
-    color
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +590,7 @@ mod tests {
             "icons/pencil.svg",
             "icons/cloud.svg",
             "icons/computer.svg",
+            "icons/pin.svg",
         ];
 
         for path in paths {
@@ -615,11 +635,29 @@ mod tests {
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg")),
-            theme.colors.danger
+            theme.colors.accent
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Force push", Some("icons/warning.svg")),
             theme.colors.warning
+        );
+    }
+
+    #[test]
+    fn context_menu_close_uses_normal_text_and_standard_icon_color() {
+        let theme = AppTheme::gitcomet_dark();
+        let close_icon =
+            context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg"));
+
+        assert_eq!(close_icon, theme.colors.accent);
+        assert_eq!(
+            context_menu_entry_text_color(theme, false, close_icon),
+            theme.colors.text
+        );
+        assert_eq!(
+            context_menu_entry_text_color(theme, false, theme.colors.danger),
+            theme.colors.danger,
+            "other destructive entries should retain their danger text"
         );
     }
 
@@ -654,6 +692,7 @@ mod tests {
             "icons/minus.svg",
             "icons/cloud.svg",
             "icons/computer.svg",
+            "icons/pin.svg",
         ];
         for path in paths {
             assert_eq!(

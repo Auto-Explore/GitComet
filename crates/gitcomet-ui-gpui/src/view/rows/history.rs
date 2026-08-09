@@ -1788,11 +1788,7 @@ impl HistoryView {
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id)
                     || repo.history_state.multi_selection.is_multi()
                         && repo.history_state.multi_selection.contains(&commit.id);
-                let selected_branch_entry_text = this.selected_branch_entry_text_for_history_row(
-                    repo.id,
-                    base_row_vm.is_head,
-                    selected,
-                );
+                let selected_branch = this.selected_branch_for_history_row(repo.id, selected);
                 let show_graph_color_marker =
                     history_scope_shows_graph_color_marker(repo.history_state.history_scope);
                 let is_stash_node = base_row_vm.is_stash
@@ -1823,7 +1819,7 @@ impl HistoryView {
                     connect_from_top_col,
                     Arc::clone(&decoration_row_vm.tag_names),
                     Arc::clone(&decoration_row_vm.ref_items),
-                    selected_branch_entry_text,
+                    selected_branch,
                     base_row_vm.author.clone(),
                     base_row_vm.summary.clone(),
                     when,
@@ -1885,7 +1881,7 @@ fn history_table_row(
     connect_from_top_col: Option<usize>,
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
-    selected_branch_entry_text: Option<SharedString>,
+    selected_branch: Option<SelectedHistoryBranch>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
@@ -1921,7 +1917,7 @@ fn history_table_row(
         graph_row_ix,
         tag_names,
         ref_items,
-        selected_branch_entry_text,
+        selected_branch,
         author,
         summary,
         when,
@@ -1946,9 +1942,12 @@ fn history_table_row(
         })
         .active(move |s| s.bg(theme.colors.active))
         .child(commit_row)
-        .on_mouse_up(
+        // Selecting on press, like the sidebar rows: the row the gesture
+        // *starts* on owns it, so a release that merely drifted here — the end
+        // of a text-selection drag in the details pane, say — selects nothing.
+        .on_mouse_down(
             MouseButton::Left,
-            cx.listener(move |this, e: &MouseUpEvent, _w, cx| {
+            cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                 let modifiers = e.modifiers;
                 let mode = if modifiers.shift {
                     CommitSelectMode::Range

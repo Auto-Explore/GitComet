@@ -29,7 +29,7 @@ fn push_inline_submodule_diff_content_mode_state(
     let path = PathBuf::from("src/lib.rs");
     let target = gitcomet_core::domain::DiffTarget::CommitRange {
         from_commit_id: gitcomet_core::domain::CommitId("aaaa".into()),
-        to_commit_id: gitcomet_core::domain::CommitId("bbbb".into()),
+        to_commit_id: Some(gitcomet_core::domain::CommitId("bbbb".into())),
         path: Some(path.clone()),
     };
     let unified = "\
@@ -148,6 +148,94 @@ fn push_regular_diff_content_mode_state_with_rev(
     });
 
     target
+}
+
+#[gpui::test]
+fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(70720);
+    let path = PathBuf::from("src/lib.rs");
+
+    let unified_before = concat!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n",
+        "--- a/src/lib.rs\n",
+        "+++ b/src/lib.rs\n",
+        "@@ -1,3 +1,3 @@\n",
+        " one\n",
+        "-two\n",
+        "+two_mod\n",
+        " three\n",
+    );
+    push_regular_diff_content_mode_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        "keep_rows",
+        path.clone(),
+        1,
+        unified_before.to_string(),
+        "one\ntwo\nthree\n".to_string(),
+        "one\ntwo_mod\nthree\n".to_string(),
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "the file diff rows to be built",
+        |pane| pane.file_diff_cache_content_signature.is_some() && pane.diff_visible_len() > 0,
+        |pane| format!("visible_len={}", pane.diff_visible_len()),
+    );
+
+    // Staging a line reloads the same file with different content. The rebuild
+    // must not blank the pane: the previous rows stay up until the new ones land.
+    let unified_after = concat!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n",
+        "--- a/src/lib.rs\n",
+        "+++ b/src/lib.rs\n",
+        "@@ -1,3 +1,3 @@\n",
+        " one\n",
+        "-three\n",
+        "+three_mod\n",
+    );
+    push_regular_diff_content_mode_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        "keep_rows",
+        path,
+        2,
+        unified_after.to_string(),
+        "one\ntwo_mod\nthree\n".to_string(),
+        "one\ntwo_mod\nthree_mod\n".to_string(),
+    );
+
+    // Draw without draining, so the rebuild is still in flight.
+    crate::view::test_support::redraw(cx);
+    let (inflight, has_rows) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.file_diff_cache_inflight.is_some(),
+            pane.file_diff_cache_content_signature.is_some(),
+        )
+    });
+    assert!(inflight, "expected the same-file rebuild to be in flight");
+    assert!(
+        has_rows,
+        "the previous rows must survive the rebuild, or the pane flashes a placeholder"
+    );
+
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.update(|_window, app| view
+            .read(app)
+            .main_pane
+            .read(app)
+            .file_diff_cache_content_signature
+            .is_some()),
+        "the rebuilt rows must be in place once the refresh lands"
+    );
 }
 
 fn build_collapsed_diff_fixture_texts() -> (String, String, String) {
@@ -2617,6 +2705,370 @@ index 1111111..2222222 100644
 
     cx.update(|_window, app| {
         crate::app::set_app_ui_scale_percent(app, crate::ui_scale::DEFAULT_UI_SCALE_PERCENT);
+    });
+}
+
+#[gpui::test]
+async fn diff_word_wrap_column_count_consistency_with_available_width(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1200.0), px(600.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    let long_new_line = format!("consistency {}", "x".repeat(200));
+    let unified = format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n\
+         index 1111111..2222222 100644\n\
+         --- a/src/lib.rs\n\
+         +++ b/src/lib.rs\n\
+         @@ -1 +1 @@\n\
+         -old line\n\
+         +{long_new_line}\n"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(199),
+        "wrap_column_consistency",
+        path,
+        unified,
+        "old line\n".to_string(),
+        format!("{long_new_line}\n"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "wrap column consistency ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| {
+            format!(
+                "inflight={:?} active={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active()
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    let (inline_columns, char_width, show_line_numbers) = cx.update(|window, app| {
+        let editor_font_family = crate::font_preferences::current_editor_font_family(app);
+        let pane = view.read(app).main_pane.read(app);
+        let cache_key = pane
+            .diff_wrap_visible_cache_key
+            .expect("wrap cache key must be populated after rendering with wrap on");
+        let inline_columns = cache_key.inline_columns;
+        let char_width = rows::diff_canvas_text_wrap_char_width(window, editor_font_family);
+        let show_line_numbers = pane.diff_show_line_numbers;
+        (inline_columns, char_width, show_line_numbers)
+    });
+
+    // Compute expected text-area pixel width.
+    let ui_scale_percent = 100u32;
+    let content_width = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        crate::view::panes::main::pane_content_width_for_layout(
+            pane.last_window_size.width,
+            pane.layout_sidebar_render_width,
+            pane.layout_details_render_width,
+            pane.layout_sidebar_collapsed,
+            pane.layout_details_collapsed,
+        )
+    });
+    let scrollbar_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
+    let available_width = (content_width - scrollbar_gutter).max(px(0.0));
+    let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
+    let inline_text_start = if show_line_numbers {
+        rows::diff_canvas_inline_text_start(ui_scale_percent)
+    } else {
+        pad
+    };
+    let text_area_px = (available_width - inline_text_start - pad).max(px(0.0));
+
+    let expected_columns = diff_wrap_column_for_width(text_area_px, char_width);
+
+    assert!(
+        inline_columns > 1,
+        "wrap columns should be > 1 (got {inline_columns})"
+    );
+
+    let diff = inline_columns.abs_diff(expected_columns);
+    let max_tol = (expected_columns / 10).max(2);
+    assert!(
+        diff <= max_tol,
+        "inline_columns ({inline_columns}) differs from expected ({expected_columns}) \
+         by {diff}, max acceptable {max_tol} \
+         (text_area_px={text_area_px:?}, char_width={char_width:?})"
+    );
+
+    let occupied_px = char_width * inline_columns as f32;
+    assert!(
+        occupied_px <= text_area_px + char_width,
+        "wrapped text width ({occupied_px:?}) should not exceed text area \
+         ({text_area_px:?}) by more than one char width"
+    );
+
+    let unused = (text_area_px - occupied_px).max(px(0.0));
+    assert!(
+        unused <= char_width * 3.0,
+        "unused space ({unused:?}) should be < 3 chars ({:?}) — \
+         lines break too early if larger",
+        char_width * 3.0
+    );
+}
+
+fn diff_wrap_column_for_width(width: Pixels, char_width: Pixels) -> usize {
+    let cw = f32::from(char_width.max(px(1.0)));
+    ((f32::from(width.max(px(0.0))) / cw).floor() as usize).max(1)
+}
+
+/// Display columns a wrapped segment occupies, matching the tab expansion the
+/// wrap algorithm uses (`DIFF_WRAP_TAB_EXPANDED_COLUMNS`).
+fn wrap_display_columns(text: &str) -> usize {
+    text.chars().map(|ch| if ch == '\t' { 4 } else { 1 }).sum()
+}
+
+/// Greedy word wrap must emit *maximal* segments: a non-final segment may only
+/// stop short of the column budget when the next word could not have fit.
+///
+/// This is the invariant that "lines break too early" violates. It is stated in
+/// columns rather than pixels on purpose — `#[gpui::test]` runs on gpui's
+/// `NoopTextSystem`, where every glyph advances an identical 0.6em regardless of
+/// font, so pixel measurements taken in a test cannot distinguish fonts at all.
+#[gpui::test]
+async fn diff_word_wrap_segments_are_maximal_for_their_column_budget(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), px(520.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    // Short words only, so every break lands on whitespace. A segment that
+    // stops early here is a genuine wrap bug — unlike a single long token,
+    // which correctly gets pushed to the next row and leaves the previous one
+    // partly empty.
+    let long_new_line = "let value = compute(alpha, beta, gamma) + delta * epsilon - zeta / eta; "
+        .repeat(6)
+        .trim_end()
+        .to_string();
+    let unified = format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n\
+         index 1111111..2222222 100644\n\
+         --- a/src/lib.rs\n\
+         +++ b/src/lib.rs\n\
+         @@ -1 +1 @@\n\
+         -old line\n\
+         +{long_new_line}\n"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(200),
+        "wrap_segments_maximal",
+        path,
+        unified,
+        "old line\n".to_string(),
+        format!("{long_new_line}\n"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "wrap segments ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| {
+            format!(
+                "inflight={:?} active={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active()
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let wrap_columns = pane
+            .diff_wrap_visible_cache_key
+            .expect("wrap cache key must be populated after rendering with wrap on")
+            .inline_columns;
+        assert!(
+            wrap_columns > 8,
+            "degenerate wrap budget ({wrap_columns} columns)"
+        );
+
+        let visible_len = pane.diff_visible_len();
+        let mut checked = 0usize;
+        for visible_ix in 0..visible_len {
+            let rows = &pane.diff_wrap_visible_rows;
+            let (Some(row), Some(next_row)) = (rows.get(visible_ix), rows.get(visible_ix + 1))
+            else {
+                continue;
+            };
+            // Only non-final segments of a wrapped source row are constrained;
+            // the last segment is free to be short.
+            if next_row.source_visible_ix != row.source_visible_ix {
+                continue;
+            }
+
+            let text = pane.diff_text_line_for_region(visible_ix, DiffTextRegion::Inline);
+            let next_text = pane.diff_text_line_for_region(visible_ix + 1, DiffTextRegion::Inline);
+            if text.is_empty() || next_text.is_empty() {
+                continue;
+            }
+
+            let used = wrap_display_columns(text.as_ref());
+            // What appending the next row's first word to this row would have
+            // cost, including any whitespace the row opens with (a row starts
+            // with whitespace when the previous word ended exactly on the
+            // column boundary).
+            let next_word: String = {
+                let next_text = next_text.as_ref();
+                let leading_ws = next_text.len() - next_text.trim_start().len();
+                let word = next_text
+                    .trim_start()
+                    .chars()
+                    .take_while(|ch| !ch.is_whitespace());
+                next_text[..leading_ws].chars().chain(word).collect()
+            };
+            let next_word_columns = wrap_display_columns(&next_word);
+
+            assert!(
+                used <= wrap_columns,
+                "visible_ix={visible_ix}: segment overflows its budget \
+                 ({used} columns of {wrap_columns}). text={text:?}"
+            );
+            assert!(
+                used + next_word_columns > wrap_columns,
+                "visible_ix={visible_ix}: line broke too early — {used} of \
+                 {wrap_columns} columns used and the next word {next_word:?} \
+                 ({next_word_columns} columns) would still have fit. \
+                 text={text:?}"
+            );
+            checked += 1;
+        }
+        assert!(
+            checked > 0,
+            "expected at least one source row that wraps to multiple visual rows"
+        );
+    });
+}
+
+/// Wrap columns must be measured in the font the rows are *painted* in.
+///
+/// `MainPane::diff_wrap_columns` runs while the diff pane is building its
+/// element tree, before the rows container pushes
+/// `.font_family(editor_font_family)` onto the window text style stack. The
+/// ambient style there is a proportional UI font, and the wrap width sample is
+/// `"WWWWWWWWWW"` — the widest glyph in a proportional face (IBM Plex Sans `W`
+/// is 0.891em against Lilex's uniform 0.600em), which overestimated the column
+/// width by ~1.5x and wrapped every line at roughly two thirds of the width it
+/// actually had.
+///
+/// The assertion is on font *identity*, not measured width: gpui's test
+/// `NoopTextSystem` maps every font descriptor to the same `FontId` and every
+/// glyph to the same advance, so no width-based test can catch this.
+#[gpui::test]
+async fn diff_word_wrap_columns_are_measured_in_the_editor_font(cx: &mut gpui::TestAppContext) {
+    let _clipboard_guard = lock_clipboard_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1000.0), px(520.0)));
+
+    let path = PathBuf::from("src/lib.rs");
+    let long_new_line = format!("fonttest {}", "abc def ghi ".repeat(30));
+    let unified = format!(
+        "diff --git a/src/lib.rs b/src/lib.rs\n\
+         index 1111111..2222222 100644\n\
+         --- a/src/lib.rs\n\
+         +++ b/src/lib.rs\n\
+         @@ -1 +1 @@\n\
+         -old line\n\
+         +{long_new_line}\n"
+    );
+    push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(201),
+        "wrap_measure_font",
+        path,
+        unified,
+        "old line\n".to_string(),
+        format!("{long_new_line}\n"),
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_content_mode(DiffContentMode::Full, cx);
+            this.main_pane.update(cx, |pane, _| {
+                pane.diff_view = DiffViewMode::Inline;
+            });
+            this.set_diff_word_wrap(true, cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "wrap measure font ready",
+        |pane| pane.file_diff_cache_inflight.is_none() && pane.is_file_diff_view_active(),
+        |pane| {
+            format!(
+                "inflight={:?} active={}",
+                pane.file_diff_cache_inflight,
+                pane.is_file_diff_view_active()
+            )
+        },
+    );
+    draw_and_drain_test_window(cx);
+
+    cx.update(|window, app| {
+        let editor_font_family = crate::font_preferences::current_editor_font_family(app);
+        let main_pane = view.read(app).main_pane.clone();
+        let measured = main_pane.update(app, |pane, cx| pane.diff_wrap_measure_font_family(cx));
+
+        assert_eq!(
+            measured.as_ref(),
+            editor_font_family.as_str(),
+            "wrap columns must be measured in the editor font the rows are painted in"
+        );
+        // The trap: outside the rows container the ambient text style is never
+        // the editor font, so measuring against `window.text_style()` silently
+        // measures the wrong face.
+        assert_ne!(
+            window.text_style().font_family.as_ref(),
+            editor_font_family.as_str(),
+            "ambient text style unexpectedly matches the editor font — this test \
+             no longer guards anything"
+        );
     });
 }
 
@@ -12834,6 +13286,88 @@ fn file_image_diff_cache_falls_back_to_cached_svg_paths_for_invalid_svg_payloads
     });
 }
 
+/// An untracked SVG is preview-only, so no patch is loaded for it — but an SVG
+/// never reaches the text-file preview path, so the diff pane's Code view is
+/// the only place its source is ever shown. It has to render the file text in
+/// either diff mode, and the Image/Code toggle has to stay reachable.
+#[gpui::test]
+fn untracked_svg_keeps_the_code_view_and_toggle_in_collapsed_mode(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(151);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_untracked_svg_code_view",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let path = PathBuf::from("assets/diagram.svg");
+    let source = String::from_utf8(image_diff_svg_fixture(64, 64, "#22cc66"))
+        .expect("svg fixture should be utf-8");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff_state_rev = 1;
+            // Preview-only: the state layer loads no patch for an untracked file.
+            repo.diff_state.diff = gitcomet_state::model::Loadable::NotLoaded;
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new(path.clone(), None, Some(source.clone())),
+            )));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            push_test_state(this, next_state, cx);
+
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.diff_content_mode = DiffContentMode::Collapsed;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Svg, RenderedPreviewMode::Source);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.is_file_preview_active(),
+            "an SVG is classified as an image, so it must not take the text-file preview path"
+        );
+        // Nothing to collapse without a patch, so the pane falls back to Full.
+        assert_eq!(pane.effective_diff_content_mode(), DiffContentMode::Full);
+        assert!(pane.wants_file_diff_view(false));
+        assert!(!pane.is_collapsed_diff_projection_active());
+        assert_eq!(
+            crate::view::main_diff_rendered_preview_toggle_kind(
+                pane.wants_file_diff_view(false),
+                pane.wants_collapsed_diff_view(false),
+                false,
+                crate::view::diff_target_rendered_preview_kind(Some(&target)),
+            ),
+            Some(RenderedPreviewKind::Svg),
+            "the Image/Code toggle must stay available while Collapsed is selected"
+        );
+        assert!(
+            pane.file_diff_inline_row_len() > 0,
+            "the Code view should have the SVG source to render"
+        );
+    });
+}
+
 #[gpui::test]
 fn file_diff_view_renders_split_and_inline_syntax_from_real_documents(
     cx: &mut gpui::TestAppContext,
@@ -17053,4 +17587,255 @@ fn yaml_same_content_rev_refresh_invalidates_cached_heuristic_file_diff_rows(
             "same-content refresh should preserve inline diff background for line {line_no}"
         );
     }
+}
+
+/// Opens an unstaged text diff so the diff toolbar (Inline/Split + Blame)
+/// renders, and puts the pane in `mode`.
+fn push_unstaged_text_diff_for_blame_toggle(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+    mode: DiffViewMode,
+) {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_{fixture_name}",
+        std::process::id()
+    ));
+    let path = PathBuf::from("src/lib.rs");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            repo.diff_state.diff_target = Some(target.clone());
+            repo.diff_state.diff =
+                gitcomet_state::model::Loadable::Ready(Arc::new(gitcomet_core::domain::Diff {
+                    target: target.clone(),
+                    lines: vec![
+                        gitcomet_core::domain::DiffLine {
+                            kind: gitcomet_core::domain::DiffLineKind::Context,
+                            text: "fn main() {".into(),
+                        },
+                        gitcomet_core::domain::DiffLine {
+                            kind: gitcomet_core::domain::DiffLineKind::Add,
+                            text: "    let x = 1;".into(),
+                        },
+                        gitcomet_core::domain::DiffLine {
+                            kind: gitcomet_core::domain::DiffLineKind::Context,
+                            text: "}".into(),
+                        },
+                    ],
+                }));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    // Go through the root setter so the root and the pane agree, exactly as the
+    // toolbar buttons and the session restore do.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_diff_view_mode(mode, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+}
+
+fn click_blame_toggle(cx: &mut gpui::VisualTestContext) {
+    let bounds = cx
+        .debug_bounds("diff_annotate")
+        .expect("the diff toolbar should render the blame toggle");
+    cx.simulate_click(bounds.center(), gpui::Modifiers::default());
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+}
+
+/// Regression: enabling blame used to force Split → Inline (and restore it on
+/// toggle-off). Blame is an annotation column, not a view mode — the split left
+/// column renders it just as the inline view does — so the selected mode must
+/// survive the toggle in both directions.
+#[gpui::test]
+fn blame_toggle_keeps_split_view(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(281);
+
+    push_unstaged_text_diff_for_blame_toggle(
+        cx,
+        &view,
+        repo_id,
+        "blame_toggle_split",
+        DiffViewMode::Split,
+    );
+
+    click_blame_toggle(cx);
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        let pane = root.main_pane.read(app);
+        assert!(pane.annotate_enabled, "clicking blame should enable it");
+        assert_eq!(
+            pane.diff_view,
+            DiffViewMode::Split,
+            "enabling blame must not switch the diff view to Inline"
+        );
+        assert_eq!(root.diff_view_mode, DiffViewMode::Split);
+    });
+
+    click_blame_toggle(cx);
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        let pane = root.main_pane.read(app);
+        assert!(!pane.annotate_enabled);
+        assert_eq!(
+            pane.diff_view,
+            DiffViewMode::Split,
+            "disabling blame must not change the diff view either"
+        );
+        assert_eq!(root.diff_view_mode, DiffViewMode::Split);
+    });
+}
+
+#[gpui::test]
+fn blame_toggle_keeps_inline_view(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(282);
+
+    push_unstaged_text_diff_for_blame_toggle(
+        cx,
+        &view,
+        repo_id,
+        "blame_toggle_inline",
+        DiffViewMode::Inline,
+    );
+
+    click_blame_toggle(cx);
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        let pane = root.main_pane.read(app);
+        assert!(pane.annotate_enabled);
+        assert_eq!(pane.diff_view, DiffViewMode::Inline);
+        assert_eq!(root.diff_view_mode, DiffViewMode::Inline);
+    });
+}
+
+/// The annotation column narrows the left split column, so the shared split
+/// wrap width must shrink when blame is on — the guarantee that made forcing
+/// Inline unnecessary in the first place.
+#[gpui::test]
+fn split_annotate_reserves_the_annotation_column(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(283);
+
+    push_unstaged_text_diff_for_blame_toggle(
+        cx,
+        &view,
+        repo_id,
+        "blame_split_columns",
+        DiffViewMode::Split,
+    );
+
+    let (_, split_without_blame) = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| pane.diff_wrap_columns(window, cx))
+    });
+
+    click_blame_toggle(cx);
+
+    let (_, split_with_blame) = cx.update(|window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            assert!(
+                pane.annotation_active(),
+                "an unstaged working-tree diff supports blame, so the column is active"
+            );
+            pane.diff_wrap_columns(window, cx)
+        })
+    });
+
+    assert!(
+        split_with_blame < split_without_blame,
+        "the annotation column must narrow the split wrap width \
+         (with blame: {split_with_blame}, without: {split_without_blame})"
+    );
+}
+
+/// The command palette and the Settings window route mode changes through
+/// `GitCometView::set_diff_view_mode` rather than the toolbar buttons, so the
+/// styled-segment cache clear has to live in the pane setter: inline keys those
+/// segments by `row_ix` while split keys them by `row_ix * 2` / `row_ix * 2 + 1`
+/// against the same epochs, so a stale entry can paint the wrong row.
+#[gpui::test]
+fn toggle_diff_view_command_clears_styled_segment_caches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(284);
+
+    push_unstaged_text_diff_for_blame_toggle(
+        cx,
+        &view,
+        repo_id,
+        "toggle_diff_view_cache",
+        DiffViewMode::Inline,
+    );
+
+    // Seed the inline key space directly: which rows a draw happens to cache
+    // depends on syntax availability and streaming heuristics, and the contract
+    // under test is only that a mode change drops whatever is cached.
+    let cached = cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, _cx| {
+            for key in 0..3 {
+                pane.diff_text_segments_cache_set(
+                    key,
+                    0,
+                    crate::view::diff_text_model::CachedDiffStyledText {
+                        text: "let x = 1;".into(),
+                        highlights: Arc::from(Vec::new()),
+                        highlights_hash: 0,
+                        text_hash: 0,
+                    },
+                );
+            }
+            pane.diff_text_segments_cache.iter().flatten().count()
+        })
+    });
+    assert_eq!(cached, 3);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.execute_command("toggle-diff-view", None, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let root = view.read(app);
+        let pane = root.main_pane.read(app);
+        assert_eq!(pane.diff_view, DiffViewMode::Split);
+        assert_eq!(
+            pane.diff_text_segments_cache.iter().flatten().count(),
+            0,
+            "switching modes outside the toolbar must still clear the aliasing cache"
+        );
+    });
 }

@@ -344,13 +344,20 @@ pub struct ViewHistoryEntry {
 /// A snapshot of the main content view for the broad, global navigation history
 /// (the mouse back/forward stack). Captures everything that decides what the
 /// main pane shows: the diff/file target (`None` = history log view), whether it
-/// is a full-content preview, and the selected commit. Replaying a snapshot only
-/// restores view/selection state; it never re-runs operations like a checkout.
+/// is a full-content preview, the selected commit, and any active two-point
+/// comparison. Replaying a snapshot only restores view/selection state; it never
+/// re-runs operations like a checkout.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MainViewSnapshot {
     pub diff_target: Option<DiffTarget>,
     pub content_preview: bool,
     pub selected_commit: Option<CommitId>,
+    /// The comparison the details pane is showing, if any. Without this a
+    /// back/forward step could neither reproduce a comparison nor leave one:
+    /// the comparison view takes precedence over the commit-detail views, so a
+    /// snapshot that omitted it would restore a target and selection that the
+    /// pane never gets around to showing.
+    pub range_selection: Option<RangeSelection>,
 }
 
 /// Browser-style back/forward stack. `cursor` indexes the currently shown entry
@@ -485,6 +492,11 @@ pub struct AppState {
     pub banner_error: Option<BannerErrorState>,
     pub auth_prompt: Option<AuthPromptState>,
     pub submodule_trust_prompt: Option<SubmoduleTrustPromptState>,
+    /// A submodule trust check is running in the background. Set the moment the
+    /// add/update/load is triggered and cleared when the check resolves, so the
+    /// UI can show a pending/spinner state instead of a dead gap before the
+    /// trust dialog (or a silent proceed) appears.
+    pub submodule_trust_check_pending: Option<SubmoduleTrustCheckState>,
     pub git_runtime: GitRuntimeState,
     pub git_log_settings: GitLogSettings,
     pub sidebar_mode: SidebarMode,
@@ -561,6 +573,21 @@ pub struct SubmoduleTrustPromptState {
     pub sources: Vec<SubmoduleTrustTarget>,
 }
 
+/// Which pending action a background trust check belongs to. Mirrors the
+/// operation so the spinner's title matches the trust dialog that may follow.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SubmoduleTrustCheckOperation {
+    Add,
+    Update,
+    Load,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct SubmoduleTrustCheckState {
+    pub repo_id: RepoId,
+    pub operation: SubmoduleTrustCheckOperation,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct AppNotification {
     pub time: SystemTime,
@@ -630,6 +657,11 @@ pub struct CommandLogEntry {
     pub summary: String,
     pub stdout: String,
     pub stderr: String,
+    /// Whether finishing this command is worth telling the user about. Routine,
+    /// user-initiated edits announce themselves through the change they make —
+    /// a toast per staged line is noise — but they still belong in the log.
+    /// Failures are always surfaced, whatever this says.
+    pub announce_success: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -651,11 +683,35 @@ pub struct HistoryState {
     pub blame_path: Option<PathBuf>,
     pub blame_source: Option<BlameSource>,
     pub blame: Loadable<Shared<Vec<BlameLine>>>,
+    /// Annotations to keep painting while blame reloads for the same target, so
+    /// the annotation column does not blank out on every refresh.
+    pub retained_blame_while_loading: Option<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
     pub multi_selection: CommitMultiSelection,
+    /// Active "compare two points" selection: when two commits are selected (or
+    /// a mark/compare pair is chosen), this holds the ordered `from`/`to` pair
+    /// and the changed-file list between them. `None` when no comparison is
+    /// active. The per-file and whole-range diffs render through the normal
+    /// `DiffState` pipeline via a `DiffTarget::CommitRange`.
+    pub range_selection: Option<RangeSelection>,
+    pub range_files: Loadable<Shared<Vec<CommitFileChange>>>,
+    pub range_files_rev: u64,
+    /// Monotonic id of the newest issued range-file load. A reply carrying an
+    /// older id is dropped, so out-of-order completions cannot overwrite a
+    /// newer list. The `(from, to)` pair alone cannot decide this: a
+    /// commit↔working-tree comparison keeps the same pair across every
+    /// refresh, so every reply would look current.
+    pub range_files_request: u64,
+    /// A range-file load is outstanding. Refreshes raised while it runs are
+    /// folded into `range_files_refresh_queued` rather than each spawning
+    /// their own pair of full-tree `git diff` calls.
+    pub range_files_in_flight: bool,
+    /// The worktree moved again while a load was in flight; re-run once it
+    /// lands, so the list still ends up describing the final state.
+    pub range_files_refresh_queued: bool,
     pub squash_preview: Loadable<SquashPreview>,
     pub squash_preview_rev: u64,
     /// The `(oldest, head)` range whose message preview is currently being
@@ -678,11 +734,18 @@ impl Default for HistoryState {
             blame_path: None,
             blame_source: None,
             blame: Loadable::NotLoaded,
+            retained_blame_while_loading: None,
             selected_commit: None,
             selected_commit_rev: 0,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
             multi_selection: CommitMultiSelection::default(),
+            range_selection: None,
+            range_files: Loadable::NotLoaded,
+            range_files_rev: 0,
+            range_files_request: 0,
+            range_files_in_flight: false,
+            range_files_refresh_queued: false,
             squash_preview: Loadable::NotLoaded,
             squash_preview_rev: 0,
             squash_preview_pending: None,
@@ -713,6 +776,19 @@ impl CommitMultiSelection {
     }
 }
 
+/// A "compare two points" selection. `from` is the base/older side and `to`
+/// the newer side, so `git diff from to` reads as "what `to` adds". A `to` of
+/// `None` compares `from` against the live working tree. The labels are what the
+/// UI shows (short shas for commits, ref names for branches/tags, "Working
+/// tree" for the worktree tip).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RangeSelection {
+    pub from: CommitId,
+    pub to: Option<CommitId>,
+    pub from_label: String,
+    pub to_label: String,
+}
+
 /// Backend-built default message for the squash confirmation prompt.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SquashPreview {
@@ -733,6 +809,15 @@ pub struct DiffState {
     pub content_preview: bool,
     pub diff_target_rev: u64,
     pub diff_state_rev: u64,
+    /// A reload of the *same* target is in flight and the content still on
+    /// screen is the generation from before it. Set when a reload keeps that
+    /// content rather than blanking it, and cleared when the reload lands.
+    ///
+    /// Anything that builds a patch out of the rendered rows — staging a line or
+    /// a hunk out of the diff — has to sit out this window: those rows describe
+    /// the index as it was before the last command, so a patch cut from them no
+    /// longer applies.
+    pub diff_reload_in_flight: bool,
     pub diff_rev: u64,
     pub diff: Loadable<Shared<Diff>>,
     pub diff_file_rev: u64,
@@ -753,6 +838,7 @@ impl Default for DiffState {
             content_preview: false,
             diff_target_rev: 0,
             diff_state_rev: 0,
+            diff_reload_in_flight: false,
             diff_rev: 0,
             diff: Loadable::NotLoaded,
             diff_file_rev: 0,
@@ -955,6 +1041,20 @@ pub struct RepoState {
     pub pending_commit_retry: Option<PendingCommitRetry>,
     pub load_epoch: u64,
     pub pending_force_push_lease: Option<ForcePushLease>,
+    /// A commit/branch/tag the user "marked for comparison" via the context
+    /// menu. The next "Compare with marked" resolves the target's commit and
+    /// starts a range comparison (mark = base, target = tip). `None` when
+    /// nothing is marked.
+    pub comparison_mark: Option<ComparisonMark>,
+}
+
+/// A point marked for comparison via the "Mark for comparison" context-menu
+/// action. `commit_id` is the resolved commit (branch/tag tips resolve to their
+/// target); `label` is what the menu shows (short sha, branch, or tag name).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ComparisonMark {
+    pub commit_id: CommitId,
+    pub label: String,
 }
 
 impl RepoState {
@@ -1032,6 +1132,7 @@ impl RepoState {
             pending_commit_retry: None,
             load_epoch: 0,
             pending_force_push_lease: None,
+            comparison_mark: None,
         }
     }
 
@@ -1374,6 +1475,24 @@ impl RepoState {
         }
     }
 
+    /// Hold on to the currently loaded annotations so the blame column keeps
+    /// painting them while the same target reloads, instead of blanking out.
+    /// Only valid while `blame_path`/`blame_source` still describe them —
+    /// callers that re-target blame must call [`Self::clear_retained_blame`].
+    pub(crate) fn retain_blame_while_loading(&mut self) {
+        if self.history_state.retained_blame_while_loading.is_some() {
+            return;
+        }
+
+        if let Loadable::Ready(lines) = &self.history_state.blame {
+            self.history_state.retained_blame_while_loading = Some(Arc::clone(lines));
+        }
+    }
+
+    pub(crate) fn clear_retained_blame(&mut self) {
+        self.history_state.retained_blame_while_loading = None;
+    }
+
     pub(crate) fn set_log_loading_more(&mut self, v: bool) {
         if self.history_state.log_loading_more == v && self.log_loading_more == v {
             return;
@@ -1395,12 +1514,76 @@ impl RepoState {
         if v.is_none() {
             // Clearing the selection always dissolves any multi-selection too;
             // every clear site (scope change, repo switch, diff selection)
-            // relies on this.
+            // relies on this. A range comparison is likewise a form of
+            // selection, so it must dissolve here as well.
             self.history_state.multi_selection = CommitMultiSelection::default();
+            self.clear_range_comparison();
         }
         self.history_state.selected_commit = v;
         self.history_state.selected_commit_rev =
             self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    /// Leave comparison mode: drop the endpoints and the file list, and retire
+    /// any load still in flight so its reply cannot repopulate the list of a
+    /// comparison the user has already left. Returns whether there was anything
+    /// to leave — a plain commit click runs through here on every selection, and
+    /// bumping the revs for a comparison that was never active would invalidate
+    /// the range-file row cache for nothing.
+    pub(crate) fn clear_range_comparison(&mut self) -> bool {
+        if self.history_state.range_selection.is_none() && !self.history_state.range_files_in_flight
+        {
+            return false;
+        }
+        self.set_range_selection(None);
+        self.set_range_files(Loadable::NotLoaded);
+        self.history_state.range_files_request =
+            self.history_state.range_files_request.wrapping_add(1);
+        self.history_state.range_files_in_flight = false;
+        self.history_state.range_files_refresh_queued = false;
+        true
+    }
+
+    /// Claim the next range-file load. Returns the request id to carry through
+    /// the effect and back on the reply; anything older is stale by definition.
+    pub(crate) fn begin_range_files_load(&mut self) -> u64 {
+        self.history_state.range_files_request =
+            self.history_state.range_files_request.wrapping_add(1);
+        self.history_state.range_files_in_flight = true;
+        self.history_state.range_files_refresh_queued = false;
+        self.history_state.range_files_request
+    }
+
+    /// Raise a refresh of the current comparison's file list. `Some(request)`
+    /// claims the load and must be issued; `None` means one is already running
+    /// and this was folded into it, to be re-issued when that reply lands.
+    ///
+    /// Claiming and issuing are one call on purpose: a caller that decided to
+    /// refresh but forgot to claim would leave `range_files_in_flight` false
+    /// forever, and every later change would start its own pair of full-tree
+    /// `git diff` calls.
+    pub(crate) fn request_range_files_refresh(&mut self) -> Option<u64> {
+        if self.history_state.range_files_in_flight {
+            self.history_state.range_files_refresh_queued = true;
+            return None;
+        }
+        Some(self.begin_range_files_load())
+    }
+
+    pub(crate) fn set_range_selection(&mut self, v: Option<RangeSelection>) {
+        if self.history_state.range_selection == v {
+            return;
+        }
+        self.history_state.range_selection = v;
+        // The details pane keys its comparison-vs-single/multi decision off the
+        // commit-selection revision, so bump it when the comparison changes.
+        self.history_state.selected_commit_rev =
+            self.history_state.selected_commit_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_range_files(&mut self, v: Loadable<Shared<Vec<CommitFileChange>>>) {
+        self.history_state.range_files = v;
+        self.history_state.range_files_rev = self.history_state.range_files_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_commit_multi_selection(&mut self, v: CommitMultiSelection) {
@@ -1504,6 +1687,7 @@ impl RepoState {
             diff_target: self.diff_state.diff_target.clone(),
             content_preview: self.diff_state.content_preview,
             selected_commit: self.history_state.selected_commit.clone(),
+            range_selection: self.history_state.range_selection.clone(),
         }
     }
 
@@ -1514,6 +1698,7 @@ impl RepoState {
         self.diff_state.diff_target == other.diff_target
             && self.diff_state.content_preview == other.content_preview
             && self.history_state.selected_commit == other.selected_commit
+            && self.history_state.range_selection == other.range_selection
     }
 
     pub(crate) fn set_diff_target(&mut self, target: Option<DiffTarget>) {
@@ -1595,11 +1780,13 @@ mod tests {
             diff_target: None,
             content_preview: false,
             selected_commit: None,
+            range_selection: None,
         };
         let commit_view = MainViewSnapshot {
             diff_target: None,
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
+            range_selection: None,
         };
         let file_view = MainViewSnapshot {
             diff_target: Some(DiffTarget::Commit {
@@ -1608,6 +1795,7 @@ mod tests {
             }),
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
+            range_selection: None,
         };
 
         let mut h: NavStack<MainViewSnapshot> = NavStack::default();
@@ -1786,11 +1974,13 @@ mod tests {
             diff_target: None,
             content_preview: false,
             selected_commit: None,
+            range_selection: None,
         };
         let commit_view = MainViewSnapshot {
             diff_target: None,
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
+            range_selection: None,
         };
         let file_diff = MainViewSnapshot {
             diff_target: Some(DiffTarget::Commit {
@@ -1799,6 +1989,7 @@ mod tests {
             }),
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
+            range_selection: None,
         };
 
         let mut h: NavStack<MainViewSnapshot> = NavStack::default();
@@ -1830,6 +2021,7 @@ mod tests {
             }),
             content_preview: false,
             selected_commit: None,
+            range_selection: None,
         };
         let view_b = MainViewSnapshot {
             diff_target: Some(DiffTarget::WorkingTree {
@@ -1838,6 +2030,7 @@ mod tests {
             }),
             content_preview: false,
             selected_commit: None,
+            range_selection: None,
         };
 
         let mut h: NavStack<MainViewSnapshot> = NavStack::default();
@@ -1845,6 +2038,7 @@ mod tests {
             diff_target: None,
             content_preview: false,
             selected_commit: None,
+            range_selection: None,
         };
         h.reconcile(empty.clone(), false);
         h.reconcile(view_a.clone(), true);

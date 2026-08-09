@@ -6,6 +6,7 @@ fn advanced_toggle(
     focus_handle: &FocusHandle,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Stateful<gpui::Div> {
+    let scaled_px = super::popover_scaled_px_fn(cx);
     focusable_toggle_row(
         "submodule_add_advanced_toggle",
         "submodule_add_advanced_toggle",
@@ -14,14 +15,21 @@ fn advanced_toggle(
         cx,
     )
     .flex()
-    .child(div().text_sm().child("Advanced"))
     .child(
         div()
+            .debug_selector(|| "submodule_add_advanced_label".to_string())
             .text_sm()
-            .font_family(UI_MONOSPACE_FONT_FAMILY)
-            .text_color(theme.colors.text_muted)
-            .child(if expanded { "^" } else { "v" }),
+            .child("Advanced"),
     )
+    .child(svg_icon(
+        if expanded {
+            "icons/chevron_up.svg"
+        } else {
+            "icons/chevron_down.svg"
+        },
+        theme.colors.text_muted,
+        scaled_px(12.0),
+    ))
 }
 
 fn force_toggle(

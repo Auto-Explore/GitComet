@@ -1,10 +1,10 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitId, Diff, DiffArea, DiffPreviewTextSide, DiffTarget,
-    FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage, RecentCommitMessage,
-    ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule,
-    SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
+    DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
+    RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus,
+    StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -304,6 +304,14 @@ impl GitRepository for GixRepo {
         self.commit_details_impl(id)
     }
 
+    fn diff_range_files(
+        &self,
+        from: &CommitId,
+        to: Option<&CommitId>,
+    ) -> Result<Vec<CommitFileChange>> {
+        self.diff_range_files_impl(from, to)
+    }
+
     fn commit_messages(&self, ids: &[CommitId]) -> Result<Vec<String>> {
         self.commit_messages_impl(ids)
     }
@@ -514,6 +522,10 @@ impl GitRepository for GixRepo {
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()> {
         self.create_branch_impl(name, target)
+    }
+
+    fn rename_branch(&self, old_name: &str, new_name: &str) -> Result<()> {
+        self.rename_branch_impl(old_name, new_name)
     }
 
     fn delete_branch(&self, name: &str) -> Result<()> {

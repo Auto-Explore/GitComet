@@ -5,10 +5,7 @@ pub(super) fn model(
     context: TerminalMenuContext,
     cx: &gpui::Context<PopoverHost>,
 ) -> ContextMenuModel {
-    let clipboard_has_text = cx
-        .read_from_clipboard()
-        .and_then(|item| item.text().map(|text| !text.is_empty()))
-        .unwrap_or(false);
+    let clipboard_has_text = crate::clipboard::read_text(cx).is_some_and(|text| !text.is_empty());
 
     ContextMenuModel::new(vec![
         ContextMenuItem::Entry {

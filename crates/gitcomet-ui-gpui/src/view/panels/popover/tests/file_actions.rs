@@ -1077,7 +1077,7 @@ fn file_preview_context_menu_matches_diff_editor_actions(cx: &mut gpui::TestAppC
                     _ => None,
                 });
                 match copy_action {
-                    Some(ContextMenuAction::CopyText { text }) => {
+                    Some(ContextMenuAction::CopyDiffSelection { text }) => {
                         assert_eq!(text, "beta");
                     }
                     _ => panic!("expected Copy action in preview context menu"),

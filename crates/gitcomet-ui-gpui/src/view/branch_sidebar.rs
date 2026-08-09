@@ -9,8 +9,12 @@ use std::{
     num::NonZeroU32,
 };
 
+const PINNED_LOCAL_SECTION_KEY: &str = "section:pinned/local";
+const PINNED_REMOTE_SECTION_KEY: &str = "section:pinned/remote";
 const LOCAL_SECTION_KEY: &str = "section:branches/local";
 const REMOTE_SECTION_KEY: &str = "section:branches/remote";
+const PIN_LOCAL_PREFIX: &str = "local:";
+const PIN_REMOTE_PREFIX: &str = "remote:";
 const WORKTREES_SECTION_KEY: &str = "section:worktrees";
 const SUBMODULES_SECTION_KEY: &str = "section:submodules";
 const STASH_SECTION_KEY: &str = "section:stash";
@@ -27,6 +31,37 @@ pub(super) enum BranchSection {
 }
 
 type BranchSidebarDepth = u16;
+
+pub(super) const fn pinned_section_storage_key(section: BranchSection) -> &'static str {
+    match section {
+        BranchSection::Local => PINNED_LOCAL_SECTION_KEY,
+        BranchSection::Remote => PINNED_REMOTE_SECTION_KEY,
+    }
+}
+
+/// Build the persisted key identifying a pinned branch (`local:<name>` or
+/// `remote:<remote>/<name>`).
+pub(super) fn branch_pin_storage_key(section: BranchSection, name: &str) -> String {
+    let prefix = match section {
+        BranchSection::Local => PIN_LOCAL_PREFIX,
+        BranchSection::Remote => PIN_REMOTE_PREFIX,
+    };
+    let mut key = String::with_capacity(prefix.len() + name.len());
+    key.push_str(prefix);
+    key.push_str(name);
+    key
+}
+
+/// Parse a stored pin key back into its section and branch name. Unknown
+/// prefixes yield `None` so stale keys are ignored rather than mis-rendered.
+fn parse_branch_pin_key(key: &str) -> Option<(BranchSection, &str)> {
+    if let Some(name) = key.strip_prefix(PIN_LOCAL_PREFIX) {
+        Some((BranchSection::Local, name))
+    } else {
+        key.strip_prefix(PIN_REMOTE_PREFIX)
+            .map(|name| (BranchSection::Remote, name))
+    }
+}
 
 pub(super) const fn local_section_storage_key() -> &'static str {
     LOCAL_SECTION_KEY
@@ -73,6 +108,12 @@ pub(super) fn remote_group_storage_key(remote: &str, path: &str) -> String {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum BranchSidebarRow {
+    PinnedHeader {
+        section: BranchSection,
+        top_border: bool,
+        collapsed: bool,
+        collapse_key: SharedString,
+    },
     SectionHeader {
         section: BranchSection,
         top_border: bool,
@@ -80,6 +121,11 @@ pub(super) enum BranchSidebarRow {
         collapse_key: SharedString,
     },
     SectionSpacer,
+    /// A non-interactive group label. Only the collapsed-rail branch popovers
+    /// emit these, to separate Local from Remote when a filter spans both.
+    FilterGroupHeader {
+        section: BranchSection,
+    },
     Placeholder {
         section: BranchSection,
         message: SharedString,
@@ -667,13 +713,20 @@ pub(super) fn toggle_collapse_state(collapsed_items: &mut BTreeSet<String>, coll
 pub(super) fn branch_sidebar_rows(
     repo: &RepoState,
     collapsed_items: &BTreeSet<String>,
+    pinned_branches: &BTreeSet<String>,
+    branch_filter: &str,
 ) -> Vec<BranchSidebarRow> {
     let head = match &repo.head_branch {
         Loadable::Ready(head) => Some(head.as_str()),
         _ => None,
     };
-    let local_collapsed = is_collapsed(collapsed_items, local_section_storage_key());
-    let remote_collapsed = is_collapsed(collapsed_items, remote_section_storage_key());
+    // The branch filter narrows only the Local/Remote (and pinned) branch
+    // sections; a live query force-expands them so matches are always visible.
+    let filter = branch_filter.trim().to_ascii_lowercase();
+    let filtering = !filter.is_empty();
+    let local_collapsed = !filtering && is_collapsed(collapsed_items, local_section_storage_key());
+    let remote_collapsed =
+        !filtering && is_collapsed(collapsed_items, remote_section_storage_key());
     let worktrees_collapsed = is_collapsed(collapsed_items, worktrees_section_storage_key());
     let submodules_collapsed = is_collapsed(collapsed_items, submodules_section_storage_key());
     let stash_collapsed = is_collapsed(collapsed_items, stash_section_storage_key());
@@ -729,6 +782,37 @@ pub(super) fn branch_sidebar_rows(
         }
     }
 
+    // Pinned branches surface in a Pinned section directly above their home
+    // Local/Remote section, while still remaining in that home section below.
+    let (pinned_local_rows, pinned_remote_rows) =
+        build_pinned_branch_rows(repo, head, pinned_branches, &filter);
+    let emit_pinned_section = |rows: &mut Vec<BranchSidebarRow>,
+                               section: BranchSection,
+                               pinned_rows: Vec<BranchSidebarRow>,
+                               top_border: bool|
+     -> bool {
+        if pinned_rows.is_empty() {
+            return false;
+        }
+        let key = pinned_section_storage_key(section);
+        let pinned_collapsed = !filtering && is_collapsed(collapsed_items, key);
+        rows.push(BranchSidebarRow::PinnedHeader {
+            section,
+            top_border,
+            collapsed: pinned_collapsed,
+            collapse_key: key.into(),
+        });
+        if !pinned_collapsed {
+            rows.extend(pinned_rows);
+        }
+        rows.push(BranchSidebarRow::SectionSpacer);
+        true
+    };
+
+    // The pinned local section leads the whole list, so it needs no divider and
+    // the Local header joins it without one either.
+    let _ = emit_pinned_section(&mut rows, BranchSection::Local, pinned_local_rows, false);
+
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Local,
         top_border: false,
@@ -748,12 +832,18 @@ pub(super) fn branch_sidebar_rows(
                 let mut tree = SlashTree::default();
                 let mut local_leaf_meta = Vec::with_capacity(branches.len());
                 for branch in branches.iter() {
+                    // Metadata (upstream tracking, HEAD upstream) is recorded for
+                    // every local branch so remote tinting stays correct even when
+                    // the filter hides the branch from the tree.
                     record_local_branch_sidebar_metadata(
                         branch,
                         head,
                         &mut local_upstreams,
                         &mut head_upstream_full,
                     );
+                    if !matches_branch_filter(&branch.name, &filter) {
+                        continue;
+                    }
                     local_leaf_meta.push(SlashTreeLeafMeta {
                         divergence: branch.divergence,
                         is_head: head.is_some_and(|current| current == branch.name.as_str()),
@@ -799,9 +889,15 @@ pub(super) fn branch_sidebar_rows(
 
     rows.push(BranchSidebarRow::SectionSpacer);
 
+    // The Remote area's divider sits above the pinned remote section (when it
+    // exists) so the pins live under it, grouped with Remote Branches; otherwise
+    // the Remote header carries the divider itself.
+    let has_pinned_remote =
+        emit_pinned_section(&mut rows, BranchSection::Remote, pinned_remote_rows, true);
+
     rows.push(BranchSidebarRow::SectionHeader {
         section: BranchSection::Remote,
-        top_border: true,
+        top_border: !has_pinned_remote,
         collapsed: remote_collapsed,
         collapse_key: remote_section_storage_key().into(),
     });
@@ -819,6 +915,13 @@ pub(super) fn branch_sidebar_rows(
         match &repo.remote_branches {
             Loadable::Ready(branches) => {
                 for branch in branches.iter() {
+                    if !matches_remote_branch_filter(
+                        branch.remote.as_str(),
+                        branch.name.as_str(),
+                        &filter,
+                    ) {
+                        continue;
+                    }
                     let inserted = push_remote_group_branch(
                         &mut remotes,
                         &mut remote_indexes,
@@ -850,12 +953,18 @@ pub(super) fn branch_sidebar_rows(
 
         if !remote_section_is_loading_or_error {
             for (remote, branch) in local_upstreams.iter().copied() {
+                if !matches_remote_branch_filter(remote, branch, &filter) {
+                    continue;
+                }
                 if push_remote_group_branch(&mut remotes, &mut remote_indexes, remote, branch) {
                     remote_names_need_sort |= slash_tree_label_needs_sort(remote);
                 }
             }
 
-            if let Loadable::Ready(known) = &repo.remotes {
+            // Empty remote groups (and the "No remotes" hint) only make sense in
+            // the unfiltered view; while filtering, a group is shown only if it
+            // has a matching branch.
+            if !filtering && let Loadable::Ready(known) = &repo.remotes {
                 for remote in known.iter() {
                     remote_names_need_sort |= slash_tree_label_needs_sort(remote.name.as_str());
                     ensure_remote_group(&mut remotes, &mut remote_indexes, remote.name.as_str());
@@ -863,10 +972,12 @@ pub(super) fn branch_sidebar_rows(
             }
 
             if remotes.is_empty() {
-                rows.push(BranchSidebarRow::Placeholder {
-                    section: BranchSection::Remote,
-                    message: "No remotes".into(),
-                });
+                if !filtering {
+                    rows.push(BranchSidebarRow::Placeholder {
+                        section: BranchSection::Remote,
+                        message: "No remotes".into(),
+                    });
+                }
             } else {
                 if remote_names_need_sort {
                     remotes.sort_unstable_by(|left, right| {
@@ -1529,6 +1640,121 @@ fn push_slash_tree_child_rows(
     group_path_prefix.truncate(group_path_mark);
 }
 
+/// Case-insensitive substring match of a branch name against the sidebar filter.
+/// `filter` is expected to be already trimmed and lowercased; an empty filter
+/// matches everything.
+fn matches_branch_filter(name: &str, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    name.to_ascii_lowercase().contains(filter)
+}
+
+/// Matches a remote branch against the filter using its full `remote/name` form,
+/// so a query can hit either the remote or the branch portion.
+fn matches_remote_branch_filter(remote: &str, branch: &str, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+    let full = format!("{remote}/{branch}");
+    full.to_ascii_lowercase().contains(filter)
+}
+
+/// Build the `Branch` rows for the pinned sections, split into `(local, remote)`
+/// so each renders under its own header. Each list follows the persisted
+/// (sorted) order; pins whose branch no longer exists are skipped so a deleted
+/// branch simply drops out.
+fn build_pinned_branch_rows(
+    repo: &RepoState,
+    head: Option<&str>,
+    pinned_branches: &BTreeSet<String>,
+    filter: &str,
+) -> (Vec<BranchSidebarRow>, Vec<BranchSidebarRow>) {
+    if pinned_branches.is_empty() {
+        return (Vec::new(), Vec::new());
+    }
+
+    // The upstream of HEAD, used to tint a pinned remote branch as "Upstream"
+    // exactly as the Remote section does.
+    let head_upstream_full: Option<String> =
+        head.and_then(|head| match &repo.branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|branch| branch.name == head)
+                .and_then(|branch| {
+                    branch
+                        .upstream
+                        .as_ref()
+                        .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch))
+                }),
+            _ => None,
+        });
+
+    let mut local_rows: Vec<BranchSidebarRow> = Vec::new();
+    let mut remote_rows: Vec<BranchSidebarRow> = Vec::new();
+
+    for key in pinned_branches.iter() {
+        let Some((section, name)) = parse_branch_pin_key(key) else {
+            continue;
+        };
+        match section {
+            BranchSection::Local => {
+                if !matches_branch_filter(name, filter) {
+                    continue;
+                }
+                let Loadable::Ready(branches) = &repo.branches else {
+                    continue;
+                };
+                let Some(branch) = branches.iter().find(|branch| branch.name == name) else {
+                    continue;
+                };
+                local_rows.push(BranchSidebarRow::Branch {
+                    name: SharedString::new(name),
+                    section: BranchSection::Local,
+                    depth: 0,
+                    muted: false,
+                    divergence_ahead: branch
+                        .divergence
+                        .and_then(|d| branch_sidebar_divergence_count(d.ahead)),
+                    divergence_behind: branch
+                        .divergence
+                        .and_then(|d| branch_sidebar_divergence_count(d.behind)),
+                    is_head: head == Some(name),
+                    is_upstream: false,
+                });
+            }
+            BranchSection::Remote => {
+                if !matches_branch_filter(name, filter) {
+                    continue;
+                }
+                let Loadable::Ready(branches) = &repo.remote_branches else {
+                    continue;
+                };
+                let exists = name.split_once('/').is_some_and(|(remote, branch_name)| {
+                    branches
+                        .iter()
+                        .any(|branch| branch.remote == remote && branch.name == branch_name)
+                });
+                if !exists {
+                    continue;
+                }
+                remote_rows.push(BranchSidebarRow::Branch {
+                    name: SharedString::new(name),
+                    section: BranchSection::Remote,
+                    depth: 0,
+                    muted: false,
+                    divergence_ahead: None,
+                    divergence_behind: None,
+                    is_head: false,
+                    is_upstream: head_upstream_full.as_deref() == Some(name),
+                });
+            }
+        }
+    }
+
+    (local_rows, remote_rows)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_branch_sidebar_branch_row(
     out: &mut Vec<BranchSidebarRow>,
@@ -1648,6 +1874,234 @@ mod tests {
     }
 
     #[test]
+    fn pinned_branches_render_in_a_pinned_section_above_their_home_section() {
+        let repo = populated_repo();
+        let pinned = BTreeSet::from([
+            branch_pin_storage_key(BranchSection::Local, "main"),
+            branch_pin_storage_key(BranchSection::Remote, "origin/main"),
+        ]);
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &pinned, "");
+
+        // The pinned local section leads the whole list.
+        assert!(
+            matches!(
+                rows.first(),
+                Some(BranchSidebarRow::PinnedHeader {
+                    section: BranchSection::Local,
+                    ..
+                })
+            ),
+            "the pinned local section header should be the first row"
+        );
+
+        let pinned_headers: Vec<BranchSection> = rows
+            .iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::PinnedHeader { section, .. } => Some(*section),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            pinned_headers,
+            vec![BranchSection::Local, BranchSection::Remote],
+            "there should be one pinned local header then one pinned remote header"
+        );
+
+        // The pinned local branch sits under the local pinned header, the remote
+        // one under the remote pinned header — never mixed together.
+        let local_pin_pos = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::PinnedHeader {
+                        section: BranchSection::Local,
+                        ..
+                    }
+                )
+            })
+            .expect("pinned local header should exist");
+        let remote_pin_pos = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::PinnedHeader {
+                        section: BranchSection::Remote,
+                        ..
+                    }
+                )
+            })
+            .expect("pinned remote header should exist");
+        let local_header_pos_for_order = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::SectionHeader {
+                        section: BranchSection::Local,
+                        ..
+                    }
+                )
+            })
+            .expect("local section header should exist");
+        let remote_header_pos_for_order = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::SectionHeader {
+                        section: BranchSection::Remote,
+                        ..
+                    }
+                )
+            })
+            .expect("remote section header should exist");
+        // Each pinned section sits directly above its home section: pinned-local
+        // above Local, and pinned-remote between the Local and Remote sections.
+        assert!(
+            local_pin_pos < local_header_pos_for_order,
+            "the pinned local section should render above the Local Branches section"
+        );
+        assert!(
+            local_header_pos_for_order < remote_pin_pos
+                && remote_pin_pos < remote_header_pos_for_order,
+            "the pinned remote section should render above the Remote Branches section, \
+             not at the very top"
+        );
+
+        // The Remote area's divider sits above the pinned remote header (grouping
+        // the pins with Remote Branches), so the pinned remote header carries the
+        // top border and the Remote header does not. The pinned local section
+        // leads the list, so neither it nor the Local header draws a divider.
+        let header_top_border = |pos: usize| match &rows[pos] {
+            BranchSidebarRow::PinnedHeader { top_border, .. }
+            | BranchSidebarRow::SectionHeader { top_border, .. } => *top_border,
+            other => panic!("expected a header row, got {other:?}"),
+        };
+        assert!(
+            !header_top_border(local_pin_pos),
+            "the pinned local header should not draw a divider"
+        );
+        assert!(
+            !header_top_border(local_header_pos_for_order),
+            "the Local Branches header should not draw a divider"
+        );
+        assert!(
+            header_top_border(remote_pin_pos),
+            "the pinned remote header should carry the Remote area divider"
+        );
+        assert!(
+            !header_top_border(remote_header_pos_for_order),
+            "the Remote Branches header should not draw a second divider below the pins"
+        );
+
+        let local_pin_entries: Vec<(&str, BranchSection)> = rows[local_pin_pos + 1..]
+            .iter()
+            .take_while(|row| !matches!(row, BranchSidebarRow::SectionSpacer))
+            .filter_map(|row| match row {
+                BranchSidebarRow::Branch { name, section, .. } => Some((name.as_ref(), *section)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            local_pin_entries,
+            vec![("main", BranchSection::Local)],
+            "the pinned local section should hold only the pinned local branch"
+        );
+        let remote_pin_entries: Vec<(&str, BranchSection)> = rows[remote_pin_pos + 1..]
+            .iter()
+            .take_while(|row| !matches!(row, BranchSidebarRow::SectionSpacer))
+            .filter_map(|row| match row {
+                BranchSidebarRow::Branch { name, section, .. } => Some((name.as_ref(), *section)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            remote_pin_entries,
+            vec![("origin/main", BranchSection::Remote)],
+            "the pinned remote section should hold only the pinned remote branch"
+        );
+
+        // The pinned branch also remains in its home Local section below.
+        let local_header_pos = rows
+            .iter()
+            .position(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::SectionHeader {
+                        section: BranchSection::Local,
+                        ..
+                    }
+                )
+            })
+            .expect("local section header should exist");
+        let main_below_header = rows[local_header_pos..].iter().any(|row| {
+            matches!(
+                row,
+                BranchSidebarRow::Branch {
+                    name,
+                    section: BranchSection::Local,
+                    ..
+                } if name.as_ref() == "main"
+            )
+        });
+        assert!(
+            main_below_header,
+            "a pinned branch should still appear in its home section"
+        );
+    }
+
+    #[test]
+    fn pins_for_missing_branches_produce_no_pinned_section() {
+        let repo = populated_repo();
+        let pinned = BTreeSet::from([branch_pin_storage_key(
+            BranchSection::Local,
+            "branch-that-was-deleted",
+        )]);
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &pinned, "");
+        assert!(
+            !rows
+                .iter()
+                .any(|row| matches!(row, BranchSidebarRow::PinnedHeader { .. })),
+            "a pin for a nonexistent branch should not create a Pinned section"
+        );
+    }
+
+    #[test]
+    fn branch_filter_matches_case_insensitively_and_force_expands_collapsed_sections() {
+        let repo = populated_repo();
+        let has_local_main = |rows: &[BranchSidebarRow]| {
+            rows.iter().any(|row| {
+                matches!(
+                    row,
+                    BranchSidebarRow::Branch {
+                        name,
+                        section: BranchSection::Local,
+                        ..
+                    } if name.as_ref() == "main"
+                )
+            })
+        };
+
+        // A collapsed local section is force-expanded while filtering, and an
+        // uppercase query still matches the lowercase branch name.
+        let collapsed = BTreeSet::from([local_section_storage_key().to_string()]);
+        let rows = branch_sidebar_rows(&repo, &collapsed, &BTreeSet::new(), "MAIN");
+        assert!(
+            has_local_main(&rows),
+            "a matching filter should force-expand the collapsed local section and show the branch"
+        );
+
+        // A non-matching query hides the branch entirely.
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "no-such-branch");
+        assert!(
+            !has_local_main(&rows),
+            "a non-matching filter should hide the local branch"
+        );
+    }
+
+    #[test]
     fn source_fingerprint_ignores_status_only_changes() {
         let mut repo = populated_repo();
         let (before_fingerprint, before_parts) = branch_sidebar_source_fingerprint(&repo, None);
@@ -1752,7 +2206,7 @@ mod tests {
         }]));
         repo.remote_branches_rev = 1;
 
-        let rows = branch_sidebar_rows(&repo, &BTreeSet::new());
+        let rows = branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), "");
         let matches = rows
             .iter()
             .filter(|row| {

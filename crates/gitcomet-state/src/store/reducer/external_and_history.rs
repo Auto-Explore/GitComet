@@ -84,11 +84,17 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.history_state.blame_path = None;
     repo_state.history_state.blame_source = None;
     repo_state.history_state.blame = Loadable::NotLoaded;
+    repo_state.clear_retained_blame();
     repo_state.set_worktrees(Loadable::NotLoaded);
     repo_state.set_submodules(Loadable::NotLoaded);
     repo_state.clear_head_dependent_cached_state();
     repo_state.set_selected_commit(None);
     repo_state.set_commit_details(Loadable::NotLoaded);
+    // A reload can follow a reset or a dropped branch, which may have taken the
+    // marked commit with it. `set_selected_commit(None)` already dissolved the
+    // active comparison; the mark is the same kind of stale reference, and
+    // leaving it would keep offering a "Compare with …" that can only fail.
+    repo_state.comparison_mark = None;
     // A full reload may rewrite history (rebase/amend/branch switch underneath),
     // so back/forward snapshots can reference commits or file revisions that no
     // longer resolve. Start the navigation stacks fresh.
@@ -167,19 +173,36 @@ pub(super) fn repo_externally_changed(
                 change.git_state || change.index || (*area == DiffArea::Unstaged && change.worktree)
             }
             DiffTarget::Commit { .. } => false,
-            DiffTarget::CommitRange { .. } => false,
+            // A commit↔commit range is immutable; a commit↔working-tree range
+            // (to == None) tracks the worktree, so reload it on any change that
+            // moves the index or worktree.
+            DiffTarget::CommitRange { to_commit_id, .. } => {
+                to_commit_id.is_none() && (change.git_state || change.index || change.worktree)
+            }
         });
 
     if should_reload_diff
         && let Some(target) = repo_state.diff_state.diff_target.clone()
-        && matches!(target, DiffTarget::WorkingTree { .. })
+        && matches!(
+            target,
+            DiffTarget::WorkingTree { .. }
+                | DiffTarget::CommitRange {
+                    to_commit_id: None,
+                    ..
+                }
+        )
     {
-        // The working-tree content changed underneath us and the diff is being
-        // reloaded; the annotation column is derived from that same content, so
-        // drop loaded blame too. `blame_path`/`blame_source` are preserved, so
-        // `request_blame_for_current_target` reloads the same target's blame
-        // against the new content instead of painting stale attribution.
-        invalidate_loaded_blame(repo_state);
+        // A moved HEAD (external commit / checkout / rebase) can leave the patch
+        // byte-identical while every line's attribution changes ("Not Committed
+        // Yet" → a real commit), and nothing downstream can detect that, so drop
+        // blame up front for git-state events. A pure worktree/index event leaves
+        // blame painted; `diff_loaded`/`diff_file_loaded` then invalidate it only
+        // if the reloaded content actually differs, so a refresh that finds no
+        // change does not re-run `git blame`. `blame_path`/`blame_source` are
+        // preserved either way, so the view reloads the same target.
+        if change.git_state {
+            invalidate_loaded_blame(repo_state);
+        }
         if let Some(conflict_target) = selected_conflict_target(repo_state, &target) {
             match conflict_target {
                 SelectedConflictTarget::Current => {
@@ -192,6 +215,34 @@ pub(super) fn repo_externally_changed(
         } else {
             effects.extend(diff_reload_effects(repo_state, repo_id, target));
         }
+    }
+
+    // Refresh the changed-file list of an active commit↔working-tree comparison
+    // (to == None) so files appear/disappear as the worktree changes. A
+    // commit↔commit comparison is immutable and needs no refresh. `LoadRangeFiles`
+    // results are dropped if the selection no longer matches (see
+    // `range_files_loaded`), so a late reply after the user re-selects is safe.
+    if (change.git_state || change.index || change.worktree)
+        && let Some(from) = repo_state
+            .history_state
+            .range_selection
+            .as_ref()
+            .filter(|range| range.to.is_none())
+            .map(|range| range.from.clone())
+        // A refresh means two full-tree `git diff` calls, so a debounced save
+        // storm must not stack them up. One in flight absorbs the rest and is
+        // re-run once when it lands, the same coalescing the status and tag
+        // reloads above get from `RepoLoadsInFlight`.
+        && let Some(request) = repo_state.request_range_files_refresh()
+    {
+        // Keep the current list visible until the refresh lands (no flicker
+        // to a loading state on every debounced save).
+        effects.push(Effect::LoadRangeFiles {
+            repo_id,
+            from,
+            to: None,
+            request,
+        });
     }
 
     effects

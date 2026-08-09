@@ -32,12 +32,21 @@ pub(in crate::view) fn selected_branch_row_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.10 })
 }
 
-pub(in crate::view) fn selected_branch_history_entry_text(
+/// Which ref a history row should mark as the one the sidebar selected.
+/// Carries the branch identity rather than its rendered label: the same branch
+/// is drawn as `main` or `HEAD → main` depending on the row, so matching on
+/// display text silently missed whichever form the row happened to use.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct SelectedHistoryBranch {
+    pub(in crate::view) section: BranchSection,
+    pub(in crate::view) name: SharedString,
+}
+
+pub(in crate::view) fn selected_branch_for_history_row(
     selected_branch: Option<&SelectedBranch>,
     repo_id: RepoId,
-    is_head: bool,
     selected: bool,
-) -> Option<SharedString> {
+) -> Option<SelectedHistoryBranch> {
     if !selected {
         return None;
     }
@@ -47,12 +56,10 @@ pub(in crate::view) fn selected_branch_history_entry_text(
         return None;
     }
 
-    match selected_branch.section {
-        BranchSection::Local if is_head => Some(format!("HEAD → {}", selected_branch.name).into()),
-        BranchSection::Local | BranchSection::Remote => {
-            Some(SharedString::from(selected_branch.name.clone()))
-        }
-    }
+    Some(SelectedHistoryBranch {
+        section: selected_branch.section,
+        name: SharedString::from(selected_branch.name.clone()),
+    })
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -324,11 +331,17 @@ pub(super) fn diff_target_rendered_preview_kind(
 
 pub(super) fn main_diff_rendered_preview_toggle_kind(
     wants_file_diff: bool,
+    wants_collapsed_diff: bool,
     is_file_preview: bool,
     preview_kind: Option<RenderedPreviewKind>,
 ) -> Option<RenderedPreviewKind> {
     match preview_kind? {
-        RenderedPreviewKind::Svg if wants_file_diff => Some(RenderedPreviewKind::Svg),
+        // Image/Code is orthogonal to the Full/Collapsed diff mode: the
+        // rendered image is the whole file either way, and the source is a
+        // normal text diff that both modes can show.
+        RenderedPreviewKind::Svg if wants_file_diff || wants_collapsed_diff => {
+            Some(RenderedPreviewKind::Svg)
+        }
         RenderedPreviewKind::Markdown if wants_file_diff || is_file_preview => {
             Some(RenderedPreviewKind::Markdown)
         }
@@ -4094,7 +4107,6 @@ impl AutosquashMode {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum PopoverKind {
     RepoPicker,
-    RecentRepositoryPicker,
     BranchPicker {
         purpose: BranchPickerPurpose,
     },
@@ -4102,6 +4114,11 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         target: String,
         source_selectable: bool,
+    },
+    RenameBranchPrompt {
+        repo_id: RepoId,
+        name: String,
+        is_current_branch: bool,
     },
     CheckoutRemoteBranchPrompt {
         repo_id: RepoId,
@@ -4174,6 +4191,19 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         area: DiffArea,
         path: Option<std::path::PathBuf>,
+    },
+    /// Staging would mark files resolved that still contain conflict markers.
+    /// `paths` is the stage request as issued (empty means everything);
+    /// `unresolved` is what the user is being warned about.
+    ///
+    /// `clear_selection` says whether `paths` came out of the status row
+    /// selection. The selection is deliberately left intact while this dialog is
+    /// up — cancelling must not cost it — so going ahead is what consumes it.
+    StageConflictMarkersConfirm {
+        repo_id: RepoId,
+        paths: Vec<std::path::PathBuf>,
+        unresolved: Vec<std::path::PathBuf>,
+        clear_selection: bool,
     },
     PullReconcilePrompt {
         repo_id: RepoId,
@@ -4690,17 +4720,36 @@ pub(super) struct TerminalViewportView {
     pub(super) last_content: Option<super::terminal_alacritty::TerminalContent>,
     pub(super) viewport_bounds: Option<Bounds<Pixels>>,
     pub(super) pressed_mouse_button: Option<gpui::MouseButton>,
-    /// Last grid cell `(row, col)` reported to the PTY for mouse-motion tracking.
-    /// Used to dedupe motion reports so a TUI in any-event mode (1003) receives at
-    /// most one report per cell instead of one per pixel-level move event.
-    pub(super) last_motion_cell: Option<(u16, u16)>,
+    /// Last grid cell reported to the PTY for mouse-motion tracking. Used to
+    /// dedupe motion reports so a TUI in any-event mode (1003) receives at most
+    /// one report per cell instead of one per pixel-level move event.
+    pub(super) last_motion_cell: Option<TerminalGridPoint>,
     pub(super) was_focused: bool,
+    /// Selection endpoints in grid coordinates. Note these are *not* rotated
+    /// when the PTY emits output: alacritty shifts existing content to
+    /// more-negative rows as lines scroll off, so text can slide under a
+    /// stationary highlight during a drag. Autoscroll itself is safe because
+    /// `scroll_display` moves the viewport, not the content.
     pub(super) selection_start: Option<TerminalGridPoint>,
     pub(super) selection_end: Option<TerminalGridPoint>,
-    /// Set by "select all" so Copy grabs the entire buffer (including scrollback
-    /// history, which the `u16` grid-point selection cannot represent). Cleared
-    /// as soon as a manual selection begins.
+    /// Set by "select all" so Copy grabs the entire buffer through the trimming
+    /// `copy_entire_buffer` path. Cleared as soon as a manual selection begins.
     pub(super) select_all_active: bool,
+    /// True while the left button is held down for a selection drag. Drives the
+    /// window-level `TerminalSelectionTracker` listeners and the autoscroll
+    /// ticker, both of which keep working after the pointer leaves the viewport.
+    pub(super) selecting: bool,
+    /// Most recent pointer position seen during a drag. The autoscroll ticker
+    /// re-reads it every frame so scrolling continues while the pointer is held
+    /// still outside the viewport.
+    pub(super) selection_last_mouse_pos: Point<Pixels>,
+    /// Whether the current drag has actually moved (pointer motion, a wheel
+    /// scroll, or an autoscroll step). The ticker refuses to re-resolve the free
+    /// end until it has: otherwise the first tick after a double- or
+    /// triple-click would drag that word/line selection back to the press cell.
+    pub(super) selection_drag_moved: bool,
+    /// Bumped whenever a drag starts or ends so a stale autoscroll ticker exits.
+    pub(super) selection_autoscroll_seq: u64,
     pub(super) ime_state: Option<super::terminal_alacritty::TerminalImeState>,
 }
 
@@ -4764,14 +4813,19 @@ pub(crate) struct TerminalPanelResizeState {
     pub(super) start_height: Pixels,
 }
 
+/// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
+/// top of the visible screen at the live tail, and scrollback history is
+/// negative down to `-history_size`. Field order matters — the derived `Ord`
+/// gives row-major ordering, which is what normalises a selection's
+/// `start`/`end` pair.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 pub(super) struct TerminalGridPoint {
-    pub(super) row: u16,
+    pub(super) row: i32,
     pub(super) col: u16,
 }
 
 impl TerminalGridPoint {
-    pub(super) fn new(row: u16, col: u16) -> Self {
+    pub(super) fn new(row: i32, col: u16) -> Self {
         Self { row, col }
     }
 }
@@ -5149,10 +5203,8 @@ pub struct GitCometView {
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
     pub(super) popover_host: Entity<PopoverHost>,
-    pub(super) command_palette: super::command_palette::CommandPaletteState,
+    pub(super) command_palette: Entity<super::command_palette::CommandPaletteView>,
     pub(super) command_palette_open: bool,
-    #[allow(dead_code)]
-    pub(super) command_palette_subscription: Option<gpui::Subscription>,
     pub(super) pre_palette_focus: Option<FocusHandle>,
     pub(super) focused_mergetool_bootstrap: Option<FocusedMergetoolBootstrap>,
     pub(super) submodule_diff_bootstrap: Option<SubmoduleDiffBootstrap>,
@@ -5164,6 +5216,9 @@ pub struct GitCometView {
     pub(super) ui_window_size_last_seen: Size<Pixels>,
     pub(super) ui_settings_persist_seq: u64,
     pub(super) last_repo_activation_dispatch_at: HashMap<RepoId, Instant>,
+    /// Set when a deactivation was caused by a move/resize grab we requested, so
+    /// the matching re-activation does not trigger a repo refresh.
+    pub(super) window_grab_activation_suppressed_at: Option<Instant>,
 
     pub(super) date_time_format: DateTimeFormat,
     pub(super) timezone: Timezone,
@@ -5185,9 +5240,6 @@ pub struct GitCometView {
     pub(super) diff_whitespace_mode: DiffWhitespaceMode,
     pub(super) diff_view_mode: DiffViewMode,
     pub(super) annotate_enabled: bool,
-    /// View mode stashed when enabling blame forced Split → Inline; restored
-    /// on toggle-off unless the user changed modes in the meantime.
-    pub(super) diff_view_mode_before_annotate: Option<DiffViewMode>,
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,
@@ -5199,6 +5251,15 @@ pub struct GitCometView {
     pub(super) hover_resize_edge: Option<ResizeEdge>,
 
     pub(super) sidebar_collapsed: bool,
+    /// Which sidebar section is currently shown in the collapsed-rail popover, if
+    /// any. Only meaningful while `sidebar_collapsed` is true.
+    pub(super) sidebar_collapsed_popover: Option<CollapsedSidebarSection>,
+    /// A section whose popover is fading out. Kept mounted (invisible input) for
+    /// the fade-out duration, then cleared by a timer keyed on the anim seq.
+    pub(super) sidebar_collapsed_popover_closing: Option<CollapsedSidebarSection>,
+    /// Bumped on every open/close transition; keys the fade animation (so it
+    /// restarts each time) and guards the close timer against races.
+    pub(super) sidebar_collapsed_popover_anim_seq: u64,
     pub(super) sidebar_collapsed_before_merge_view: Option<bool>,
     pub(super) details_collapsed: bool,
     pub(super) sidebar_width_design: f32,
@@ -5223,6 +5284,8 @@ pub struct GitCometView {
         Option<(RepoId, std::path::PathBuf, Option<String>)>,
     pub(super) pending_submodule_trust_prompt:
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
+    pub(super) pending_submodule_trust_check:
+        Option<gitcomet_state::model::SubmoduleTrustCheckState>,
     pub(super) pending_worktree_branch_removals: HashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]

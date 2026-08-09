@@ -5,7 +5,7 @@ use crate::util::{
     run_git_raw_output, run_git_simple, run_git_with_output,
 };
 use gitcomet_core::domain::{
-    CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
+    CommitFileChange, CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
     SubmoduleDiffRangeKind, SubmoduleDiffSummary, SubmoduleDiffSummaryMode, SubmoduleInnerChange,
     SubmoduleStatus,
 };
@@ -28,6 +28,8 @@ type NumstatCounts = BTreeMap<PathBuf, NumstatLineCounts>;
 const SUBMODULE_HISTORY_UNAVAILABLE_REASON: &str = "Submodule history is not available locally.";
 const SUBMODULE_POINTER_SIDE_UNAVAILABLE_REASON: &str =
     "Only one side of the submodule pointer is available.";
+const GIT_CONFIG_CONTENTION_RETRIES: usize = 6;
+const GIT_CONFIG_CONTENTION_RETRY_DELAY: Duration = Duration::from_millis(25);
 
 fn allow_file_submodule_transport(cmd: &mut Command) {
     // `git submodule` blocks local-path remotes unless `protocol.file.allow` is enabled.
@@ -865,15 +867,39 @@ fn submodule_range_changes_from_commits(
     from: &CommitId,
     to: &CommitId,
 ) -> Result<Vec<SubmoduleInnerChange>> {
-    let status_changes = git_range_status_changes(nested_workdir, from, to)?;
-    let counts = git_range_numstat_counts(nested_workdir, from, to)?;
+    let status_changes = git_range_status_changes(nested_workdir, from, Some(to))?;
+    let counts = git_range_numstat_counts(nested_workdir, from, Some(to))?;
     Ok(status_changes
         .into_iter()
-        .map(|(path, kind)| {
-            let (additions, deletions) = counts.get(&path).cloned().unwrap_or((None, None));
+        .map(|change| {
+            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
             SubmoduleInnerChange {
-                path,
-                kind,
+                path: change.path,
+                kind: change.kind,
+                additions,
+                deletions,
+            }
+        })
+        .collect())
+}
+
+/// List the files that differ between commit `from` and the live working tree
+/// (`git diff <from>`), for the compare-against-working-tree feature. Untracked
+/// files are excluded, matching the unified diff shown in the main pane.
+pub(super) fn diff_commit_to_worktree_files(
+    workdir: &Path,
+    from: &CommitId,
+) -> Result<Vec<CommitFileChange>> {
+    let status_changes = git_range_status_changes(workdir, from, None)?;
+    let counts = git_range_numstat_counts(workdir, from, None)?;
+    Ok(status_changes
+        .into_iter()
+        .map(|change| {
+            let (additions, deletions) = counts.get(&change.path).cloned().unwrap_or((None, None));
+            CommitFileChange {
+                path: change.path,
+                kind: change.kind,
+                is_submodule: change.is_submodule,
                 additions,
                 deletions,
             }
@@ -950,21 +976,40 @@ fn git_numstat_counts(workdir: &Path, cached: bool) -> Result<NumstatCounts> {
     Ok(counts)
 }
 
+/// One entry of a `git diff --raw` listing: what changed at `path`, and whether
+/// that entry is a gitlink on either side (i.e. a submodule pointer rather than
+/// a file).
+struct RangeStatusChange {
+    path: PathBuf,
+    kind: gitcomet_core::domain::FileStatusKind,
+    is_submodule: bool,
+}
+
+/// Git's tree entry mode for a gitlink (a submodule pointer).
+const GITLINK_ENTRY_MODE: &[u8] = b"160000";
+
+/// `--raw` rather than `--name-status` because the entry modes are the only
+/// thing in a CLI diff that identifies a submodule pointer, and callers that
+/// build `CommitFileChange` have to flag those the same way the gix tree-diff
+/// path does.
 fn git_range_status_changes(
     workdir: &Path,
     from: &CommitId,
-    to: &CommitId,
-) -> Result<Vec<(PathBuf, gitcomet_core::domain::FileStatusKind)>> {
+    to: Option<&CommitId>,
+) -> Result<Vec<RangeStatusChange>> {
     let mut command = git_workdir_cmd_for(workdir);
     command
         .arg("--no-optional-locks")
         .arg("diff")
-        .arg("--name-status")
+        .arg("--raw")
         .arg("-z")
         .arg("--find-renames")
-        .arg(from.as_ref())
-        .arg(to.as_ref());
-    let label = "git diff --name-status -z --find-renames";
+        .arg(from.as_ref());
+    // Omitting `to` makes git compare `from` against the working tree.
+    if let Some(to) = to {
+        command.arg(to.as_ref());
+    }
+    let label = "git diff --raw -z --find-renames";
     let output = run_git_raw_output(command, label)?;
     if !output.status.success() {
         return Err(Error::new(ErrorKind::Backend(format!(
@@ -975,7 +1020,20 @@ fn git_range_status_changes(
 
     let mut fields = output.stdout.split(|byte| *byte == 0);
     let mut changes = Vec::new();
-    while let Some(status_field) = next_non_empty_nul_field(&mut fields) {
+    // Each record is `:<srcmode> <dstmode> <srcsha> <dstsha> <status>\0<path>\0`,
+    // with renames and copies adding a second path field.
+    while let Some(header) = next_non_empty_nul_field(&mut fields) {
+        let Some(header) = header.strip_prefix(b":") else {
+            continue;
+        };
+        let mut tokens = header.split(|byte| *byte == b' ').filter(|t| !t.is_empty());
+        let (Some(src_mode), Some(dst_mode)) = (tokens.next(), tokens.next()) else {
+            continue;
+        };
+        // The two object ids sit between the modes and the status letter.
+        let Some(status_field) = tokens.next_back() else {
+            continue;
+        };
         let Some(status_code) = status_field.first().copied() else {
             continue;
         };
@@ -998,10 +1056,13 @@ fn git_range_status_changes(
             continue;
         }
 
-        changes.push((
-            path_buf_from_git_bytes(path_bytes, "git diff --name-status path")?,
+        changes.push(RangeStatusChange {
+            path: path_buf_from_git_bytes(path_bytes, "git diff --raw path")?,
             kind,
-        ));
+            // A submodule added or removed by the range is a gitlink on only one
+            // side, so either side counts.
+            is_submodule: src_mode == GITLINK_ENTRY_MODE || dst_mode == GITLINK_ENTRY_MODE,
+        });
     }
 
     Ok(changes)
@@ -1010,7 +1071,7 @@ fn git_range_status_changes(
 fn git_range_numstat_counts(
     workdir: &Path,
     from: &CommitId,
-    to: &CommitId,
+    to: Option<&CommitId>,
 ) -> Result<NumstatCounts> {
     let mut command = git_workdir_cmd_for(workdir);
     command
@@ -1019,8 +1080,11 @@ fn git_range_numstat_counts(
         .arg("--numstat")
         .arg("-z")
         .arg("--find-renames")
-        .arg(from.as_ref())
-        .arg(to.as_ref());
+        .arg(from.as_ref());
+    // Omitting `to` makes git compare `from` against the working tree.
+    if let Some(to) = to {
+        command.arg(to.as_ref());
+    }
     let label = "git diff --numstat -z --find-renames";
     let output = run_git_raw_output(command, label)?;
     if !output.status.success() {
@@ -1590,47 +1654,52 @@ fn persist_submodule_trust_approvals(
     trust_root: &Path,
     approved_sources: &[SubmoduleTrustTarget],
 ) -> Result<()> {
-    const GIT_CONFIG_LOCK_RETRIES: usize = 6;
-
     for source in approved_sources {
         let key = submodule_file_transport_consent_key(trust_root, &source.local_source_path);
-        if git_config_get_bool_global(trust_root, &key)?.unwrap_or(false) {
+        if git_config_get_bool_global_with_retry(trust_root, &key)?.unwrap_or(false) {
             continue;
         }
 
-        let mut last_err = None;
-        for attempt in 0..GIT_CONFIG_LOCK_RETRIES {
-            let mut cmd = git_workdir_cmd_for(trust_root);
-            cmd.arg("config").arg("--global").arg(&key).arg("true");
-            match run_git_simple(cmd, &format!("git config --global {key} true")) {
-                Ok(()) => {
-                    last_err = None;
-                    break;
-                }
-                Err(err) => {
-                    if git_config_get_bool_global(trust_root, &key)?.unwrap_or(false) {
-                        last_err = None;
-                        break;
-                    }
-                    let retryable =
-                        attempt + 1 < GIT_CONFIG_LOCK_RETRIES && is_git_config_lock_error(&err);
-                    last_err = Some(err);
-                    if retryable {
-                        thread::sleep(Duration::from_millis(25));
-                        continue;
-                    }
-                    break;
-                }
+        if let Err(write_err) = git_config_set_bool_global_with_retry(trust_root, &key) {
+            if git_config_get_bool_global_with_retry(trust_root, &key)?.unwrap_or(false) {
+                continue;
             }
-        }
-        if let Some(err) = last_err {
-            return Err(err);
+            return Err(write_err);
         }
     }
     Ok(())
 }
 
-fn is_git_config_lock_error(err: &Error) -> bool {
+fn git_config_get_bool_global_with_retry(trust_root: &Path, key: &str) -> Result<Option<bool>> {
+    retry_git_config_contention(|| git_config_get_bool_global(trust_root, key))
+}
+
+fn git_config_set_bool_global_with_retry(trust_root: &Path, key: &str) -> Result<()> {
+    retry_git_config_contention(|| {
+        let mut cmd = git_workdir_cmd_for(trust_root);
+        cmd.arg("config").arg("--global").arg(key).arg("true");
+        run_git_simple(cmd, &format!("git config --global {key} true"))
+    })
+}
+
+fn retry_git_config_contention<T>(mut operation: impl FnMut() -> Result<T>) -> Result<T> {
+    for attempt in 0..GIT_CONFIG_CONTENTION_RETRIES {
+        match operation() {
+            Ok(value) => return Ok(value),
+            Err(err) => {
+                if attempt + 1 == GIT_CONFIG_CONTENTION_RETRIES
+                    || !is_git_config_contention_error(&err)
+                {
+                    return Err(err);
+                }
+                thread::sleep(GIT_CONFIG_CONTENTION_RETRY_DELAY);
+            }
+        }
+    }
+    unreachable!("the retry loop always returns after the final attempt");
+}
+
+fn is_git_config_contention_error(err: &Error) -> bool {
     let text = match err.kind() {
         ErrorKind::Git(failure) => format!(
             "{}{}{}",
@@ -1640,12 +1709,16 @@ fn is_git_config_lock_error(err: &Error) -> bool {
         ),
         _ => err.to_string(),
     };
+    let text = text.to_ascii_lowercase();
     text.contains("could not lock config file")
+        || (text.contains("unable to access")
+            && text.contains("permission denied")
+            && text.contains("reading the configuration files"))
 }
 
 fn submodule_source_trusted(trust_root: &Path, source: &SubmoduleTrustTarget) -> Result<bool> {
     let key = submodule_file_transport_consent_key(trust_root, &source.local_source_path);
-    Ok(git_config_get_bool_global(trust_root, &key)?.unwrap_or(false))
+    Ok(git_config_get_bool_global_with_retry(trust_root, &key)?.unwrap_or(false))
 }
 
 fn untrusted_local_submodule_error(source: &SubmoduleTrustTarget, action: &str) -> Error {
@@ -1785,10 +1858,14 @@ fn object_id_to_commit_id(id: gix::ObjectId) -> CommitId {
 
 #[cfg(test)]
 mod tests {
-    use super::{GixRepo, allow_file_submodule_transport, submodule_file_transport_consent_key};
+    use super::{
+        GixRepo, allow_file_submodule_transport, is_git_config_contention_error,
+        retry_git_config_contention, submodule_file_transport_consent_key,
+    };
     use gitcomet_core::domain::{CommitId, DiffArea, DiffTarget, SubmoduleDiffRangeKind};
-    use gitcomet_core::error::ErrorKind;
+    use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
     use gitcomet_core::services::CancellationToken;
+    use std::cell::Cell;
     use std::ffi::OsStr;
     use std::path::Path;
     use std::process::Command;
@@ -1849,6 +1926,70 @@ mod tests {
         assert!(
             !cmd.get_envs()
                 .any(|(key, _)| key == OsStr::new("GIT_ALLOW_PROTOCOL"))
+        );
+    }
+
+    fn git_config_failure(stderr: &str) -> Error {
+        Error::new(ErrorKind::Git(GitFailure::new(
+            "git config --global gitcomet.submodule.allowfiletransport-example true",
+            GitFailureId::CommandFailed,
+            Some(128),
+            Vec::new(),
+            stderr.as_bytes().to_vec(),
+            None,
+        )))
+    }
+
+    #[test]
+    fn git_config_contention_detection_handles_windows_access_denied() {
+        assert!(is_git_config_contention_error(&git_config_failure(
+            "error: could not lock config file .gitconfig: File exists"
+        )));
+        let windows_access_denied = "warning: unable to access 'C:\\Temp\\global.gitconfig': Permission denied\n\
+             fatal: unknown error occurred while reading the configuration files";
+        assert!(is_git_config_contention_error(&git_config_failure(
+            windows_access_denied
+        )));
+        assert!(is_git_config_contention_error(&Error::new(
+            ErrorKind::Backend(format!(
+                "git config --global --type=bool --get key failed: {windows_access_denied}"
+            ))
+        )));
+        assert!(!is_git_config_contention_error(&git_config_failure(
+            "fatal: could not read Username for 'https://example.com': terminal prompts disabled"
+        )));
+    }
+
+    #[test]
+    fn git_config_contention_retry_retries_known_contention() {
+        let attempts = Cell::new(0);
+        retry_git_config_contention(|| {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() == 1 {
+                return Err(git_config_failure(
+                    "error: could not lock config file .gitconfig: File exists",
+                ));
+            }
+            Ok(())
+        })
+        .expect("known config contention should be retried");
+
+        assert_eq!(attempts.get(), 2);
+    }
+
+    #[test]
+    fn git_config_contention_retry_does_not_retry_unrelated_failures() {
+        let attempts = Cell::new(0);
+        let err = retry_git_config_contention(|| {
+            attempts.set(attempts.get() + 1);
+            Err::<(), _>(git_config_failure("fatal: invalid config value"))
+        })
+        .expect_err("unrelated config failure should not be retried");
+
+        assert_eq!(attempts.get(), 1);
+        assert_eq!(
+            err.to_string(),
+            "git config --global gitcomet.submodule.allowfiletransport-example true failed"
         );
     }
 

@@ -38,17 +38,29 @@ fn model_for_state(
         .map(|_| repo_id);
 
     let mut items = vec![ContextMenuItem::Entry {
-        label: "Active".into(),
+        label: "Activate".into(),
         icon: Some("icons/check.svg".into()),
         shortcut: None,
         disabled: state.active_repo == Some(repo_id),
         action: Box::new(ContextMenuAction::ActivateRepo { repo_id }),
     }];
 
+    if let Some(ref workdir) = workdir {
+        items.push(ContextMenuItem::Separator);
+        items.push(ContextMenuItem::Entry {
+            label: "Open repository location".into(),
+            icon: Some("icons/folder.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenRepositoryLocation {
+                path: workdir.clone(),
+            }),
+        });
+    }
+
     if crate::external_editor::configured_setting().is_some()
         && let Some(ref workdir) = workdir
     {
-        items.push(ContextMenuItem::Separator);
         items.push(ContextMenuItem::Entry {
             label: "Open in code editor".into(),
             icon: Some("icons/open_external.svg".into()),
@@ -92,7 +104,7 @@ fn model_for_state(
         },
     ]);
 
-    ContextMenuModel::new(items)
+    ContextMenuModel::new(items).with_shortcut_keycaps()
 }
 
 #[cfg(test)]
@@ -145,11 +157,11 @@ mod tests {
     }
 
     #[test]
-    fn active_entry_activates_inactive_repo_tab() {
+    fn activate_entry_activates_inactive_repo_tab() {
         let state = state_with_repo_tabs(RepoId(1), 3);
         let model = model_for_state(&state, RepoId(2), None);
 
-        let (disabled, action) = entry_action(&model, "Active");
+        let (disabled, action) = entry_action(&model, "Activate");
 
         assert!(!disabled);
         assert!(matches!(
@@ -159,11 +171,11 @@ mod tests {
     }
 
     #[test]
-    fn active_entry_is_disabled_for_active_repo_tab() {
+    fn activate_entry_is_disabled_for_active_repo_tab() {
         let state = state_with_repo_tabs(RepoId(2), 3);
         let model = model_for_state(&state, RepoId(2), None);
 
-        let (disabled, action) = entry_action(&model, "Active");
+        let (disabled, action) = entry_action(&model, "Activate");
 
         assert!(disabled);
         assert!(matches!(
@@ -196,6 +208,33 @@ mod tests {
             action.as_ref(),
             ContextMenuAction::CloseRepo { repo_id } if *repo_id == RepoId(2)
         ));
+    }
+
+    #[test]
+    fn open_repository_location_entry_targets_the_repository_workdir() {
+        let state = state_with_repo_tabs(RepoId(1), 3);
+        let workdir = PathBuf::from("/tmp/repo-tab-menu-2");
+        let model = model_for_state(&state, RepoId(2), Some(workdir.clone()));
+
+        let (disabled, action) = entry_action(&model, "Open repository location");
+
+        assert!(!disabled);
+        assert!(matches!(
+            action,
+            ContextMenuAction::OpenRepositoryLocation { path } if path == &workdir
+        ));
+    }
+
+    #[test]
+    fn repo_tab_menu_uses_shared_shortcut_keycaps() {
+        let state = state_with_repo_tabs(RepoId(1), 3);
+        let model = model_for_state(
+            &state,
+            RepoId(2),
+            Some(PathBuf::from("/tmp/repo-tab-menu-2")),
+        );
+
+        assert!(model.shortcut_keycaps);
     }
 
     #[test]

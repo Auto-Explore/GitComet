@@ -9,6 +9,7 @@ impl Render for TextInput {
         let entity_id = cx.entity().entity_id();
         let chromeless = self.chromeless;
         let multiline = self.multiline;
+        let leading_icon = self.leading_icon;
         // Content-width layout: the wrappers below size to the widest line so an
         // outer `overflow_scroll` container can scroll the field horizontally
         // (and expose a horizontal `max_offset`), instead of clipping to the
@@ -69,7 +70,14 @@ impl Render for TextInput {
             self.interaction.cursor_blink_task = Some(task);
         }
 
-        let mut text_surface = div().px(pad_x).py(pad_y);
+        let mut text_surface = div()
+            .pl(if leading_icon.is_some() {
+                px(6.0)
+            } else {
+                pad_x
+            })
+            .pr(pad_x)
+            .py(pad_y);
         if content_width_layout {
             // At least the viewport, but grow to the widest line so the outer
             // scroll container sees horizontal overflow. No clipping here — the
@@ -145,6 +153,16 @@ impl Render for TextInput {
             })
             .when(!multiline, |d| d.items_center())
             .when(multiline, |d| d.items_start())
+            .when_some(leading_icon, |d, icon_path| {
+                d.child(
+                    div().pl(pad_x).flex_none().child(
+                        gpui::svg()
+                            .path(icon_path)
+                            .size(crate::ui_scale::design_px_from_window(14.0, window))
+                            .text_color(style.placeholder),
+                    ),
+                )
+            })
             .child(text_surface);
 
         if !chromeless {

@@ -1,4 +1,4 @@
-use super::super::branch_sidebar::BranchSection;
+use super::super::branch_sidebar::{BranchSection, BranchSidebarRow};
 use super::super::caches::BranchSidebarFingerprint;
 use super::super::file_icons;
 use super::super::sidebar_presentation::{
@@ -6,7 +6,7 @@ use super::super::sidebar_presentation::{
 };
 use super::super::*;
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
-use gitcomet_state::model::{Loadable, SidebarMode};
+use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
 use rustc_hash::FxHasher;
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,6 +17,7 @@ use std::sync::Arc;
 
 use crate::kit::TextInput;
 use crate::kit::TextInputOptions;
+use crate::view::components::InteractiveRowExt as _;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 
 type FileBrowserRowsCache = std::cell::RefCell<
@@ -34,6 +35,135 @@ struct FileBrowserVisibleRow {
     is_expanded: bool,
 }
 
+const FILE_BROWSER_ROW_HEIGHT_PX: f32 = 22.0;
+
+/// A section of the sidebar that gets its own icon in the collapsed rail and,
+/// when clicked, opens in a floating popover without expanding the sidebar.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum CollapsedSidebarSection {
+    Local,
+    Remote,
+    Worktrees,
+    Submodules,
+    Stashes,
+    Files,
+}
+
+impl CollapsedSidebarSection {
+    /// Rail order, top to bottom.
+    pub(in crate::view) const ALL: [Self; 6] = [
+        Self::Local,
+        Self::Remote,
+        Self::Worktrees,
+        Self::Submodules,
+        Self::Stashes,
+        Self::Files,
+    ];
+
+    pub(in crate::view) fn icon_path(self) -> &'static str {
+        match self {
+            Self::Local => "icons/computer.svg",
+            Self::Remote => "icons/cloud.svg",
+            Self::Worktrees => "icons/git_worktree.svg",
+            Self::Submodules => "icons/box.svg",
+            Self::Stashes => super::super::icons::STASH_ICON_PATH,
+            Self::Files => "icons/file.svg",
+        }
+    }
+
+    pub(in crate::view) fn title(self) -> &'static str {
+        match self {
+            Self::Local => "Local Branches",
+            Self::Remote => "Remote Branches",
+            Self::Worktrees => "Worktrees",
+            Self::Submodules => "Submodules",
+            Self::Stashes => "Stashes",
+            Self::Files => "Files",
+        }
+    }
+
+    pub(in crate::view) fn element_id(self) -> &'static str {
+        match self {
+            Self::Local => "collapsed_sidebar_icon_local",
+            Self::Remote => "collapsed_sidebar_icon_remote",
+            Self::Worktrees => "collapsed_sidebar_icon_worktrees",
+            Self::Submodules => "collapsed_sidebar_icon_submodules",
+            Self::Stashes => "collapsed_sidebar_icon_stashes",
+            Self::Files => "collapsed_sidebar_icon_files",
+        }
+    }
+
+    /// The branch list this section shows, if any. Branch sections are the ones
+    /// that support the popover filter (and can spill results into each other).
+    fn branch_section(self) -> Option<BranchSection> {
+        match self {
+            Self::Local => Some(BranchSection::Local),
+            Self::Remote => Some(BranchSection::Remote),
+            _ => None,
+        }
+    }
+
+    /// The other branch section, whose matches the filter also surfaces.
+    fn counterpart(self) -> Option<Self> {
+        match self {
+            Self::Local => Some(Self::Remote),
+            Self::Remote => Some(Self::Local),
+            _ => None,
+        }
+    }
+
+    /// The section-level menu the expanded sidebar hangs off this section's
+    /// header row, paired with the invoker id that header uses so both routes
+    /// light up the same "menu is open" highlight. Files has no section menu:
+    /// its actions live on the individual file rows.
+    pub(in crate::view) fn section_menu(
+        self,
+        repo_id: RepoId,
+    ) -> Option<(SharedString, PopoverKind)> {
+        let (invoker, kind): (String, PopoverKind) = match self {
+            Self::Local => (
+                format!("branch_section_menu_{}_local", repo_id.0),
+                PopoverKind::BranchSectionMenu {
+                    repo_id,
+                    section: BranchSection::Local,
+                },
+            ),
+            Self::Remote => (
+                format!("branch_section_menu_{}_remote", repo_id.0),
+                PopoverKind::BranchSectionMenu {
+                    repo_id,
+                    section: BranchSection::Remote,
+                },
+            ),
+            Self::Worktrees => (
+                format!("worktrees_section_menu_{}", repo_id.0),
+                PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
+            ),
+            Self::Submodules => (
+                format!("submodules_section_menu_{}", repo_id.0),
+                PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
+            ),
+            Self::Stashes => (
+                format!("stash_section_menu_{}", repo_id.0),
+                PopoverKind::StashPrompt,
+            ),
+            Self::Files => return None,
+        };
+        Some((invoker.into(), kind))
+    }
+
+    fn storage_key(self) -> Option<&'static str> {
+        match self {
+            Self::Local => Some(branch_sidebar::local_section_storage_key()),
+            Self::Remote => Some(branch_sidebar::remote_section_storage_key()),
+            Self::Worktrees => Some(branch_sidebar::worktrees_section_storage_key()),
+            Self::Submodules => Some(branch_sidebar::submodules_section_storage_key()),
+            Self::Stashes => Some(branch_sidebar::stash_section_storage_key()),
+            Self::Files => None,
+        }
+    }
+}
+
 pub(in super::super) struct SidebarPaneView {
     pub(in super::super) store: Arc<AppStore>,
     state: Arc<AppState>,
@@ -41,11 +171,26 @@ pub(in super::super) struct SidebarPaneView {
     _ui_model_subscription: gpui::Subscription,
     branches_scroll: UniformListScrollHandle,
     file_browser_scroll: UniformListScrollHandle,
+    pub(in super::super) collapsed_popover_scroll: gpui::ScrollHandle,
     file_browser_search_input: Entity<TextInput>,
     _search_input_subscription: gpui::Subscription,
+    /// Live filter for the branch sidebar (Local/Remote/pinned sections). The
+    /// input entity owns the text; `branch_filter_query` mirrors it for the row
+    /// builder, kept in sync by `_branch_filter_subscription`.
+    branch_filter_input: Entity<TextInput>,
+    pub(in super::super) branch_filter_query: String,
+    _branch_filter_subscription: gpui::Subscription,
+    /// The collapsed-rail branch popovers keep their filter behind a header
+    /// toggle. Separate from `branch_filter_input` so a popover filter never
+    /// leaks into the expanded sidebar's filter (and vice versa).
+    collapsed_popover_filter_open: bool,
+    collapsed_popover_filter_input: Entity<TextInput>,
+    pub(in super::super) collapsed_popover_filter_query: String,
+    _collapsed_popover_filter_subscription: gpui::Subscription,
     sidebar_presentation_cache: SidebarPresentationCache,
     path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
     sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
+    sidebar_pinned_branches_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
     root_view: WeakEntity<GitCometView>,
     pub(in crate::view) tooltip_host: WeakEntity<TooltipHost>,
     notify_fingerprint: SidebarNotifyFingerprint,
@@ -54,6 +199,14 @@ pub(in super::super) struct SidebarPaneView {
     selected_branch: Option<SelectedBranch>,
     file_search_options: DiffSearchOptions,
     file_browser_rows_cache: FileBrowserRowsCache,
+    /// Set transiently while rendering a collapsed-sidebar section popover so the
+    /// shared branch-row renderer draws the section-scoped rows instead of the
+    /// full cached presentation. `None` during normal (expanded) rendering.
+    pub(in super::super) collapsed_popover_presentation: Option<SidebarPresentation>,
+    /// When set (and the sidebar is collapsed), this pane renders only the given
+    /// section as popover content instead of the full sidebar. The root view
+    /// syncs this to its `sidebar_collapsed_popover` before embedding the pane.
+    collapsed_popover_section: Option<CollapsedSidebarSection>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -99,6 +252,7 @@ impl SidebarPaneView {
         ui_model: Entity<AppUiModel>,
         theme: AppTheme,
         sidebar_collapsed_items_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
+        sidebar_pinned_branches_by_repo: BTreeMap<std::path::PathBuf, BTreeSet<String>>,
         root_view: WeakEntity<GitCometView>,
         tooltip_host: WeakEntity<TooltipHost>,
         cx: &mut gpui::Context<Self>,
@@ -158,6 +312,54 @@ impl SidebarPaneView {
                 cx.notify();
             });
 
+        let branch_filter_input = cx.new(|cx| {
+            TextInput::new_inert(
+                TextInputOptions {
+                    placeholder: "Filter branches...".into(),
+                    leading_icon: Some("icons/git_branch.svg"),
+                    chromeless: true,
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        let branch_filter_subscription =
+            cx.observe(&branch_filter_input, move |this, input, cx| {
+                // The input owns its text (uncontrolled); mirror it into the
+                // local query used by the row builder, never writing back.
+                let text = input.read(cx).text().to_string();
+                if this.branch_filter_query != text {
+                    this.branch_filter_query = text;
+                    this.branches_scroll
+                        .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                    cx.notify();
+                }
+            });
+
+        let collapsed_popover_filter_input = cx.new(|cx| {
+            TextInput::new_inert(
+                TextInputOptions {
+                    placeholder: "Filter branches...".into(),
+                    leading_icon: Some("icons/zoom.svg"),
+                    chromeless: true,
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        let collapsed_popover_filter_subscription =
+            cx.observe(&collapsed_popover_filter_input, move |this, input, cx| {
+                // Uncontrolled, like the sidebar filter: mirror the text into the
+                // query the popover presentation builder reads, never writing back.
+                let text = input.read(cx).text().to_string();
+                if this.collapsed_popover_filter_query != text {
+                    this.collapsed_popover_filter_query = text;
+                    this.collapsed_popover_scroll
+                        .set_offset(gpui::point(px(0.0), px(0.0)));
+                    cx.notify();
+                }
+            });
+
         let mut this = Self {
             store,
             state,
@@ -165,11 +367,20 @@ impl SidebarPaneView {
             _ui_model_subscription: subscription,
             branches_scroll: UniformListScrollHandle::default(),
             file_browser_scroll: UniformListScrollHandle::default(),
+            collapsed_popover_scroll: gpui::ScrollHandle::new(),
             file_browser_search_input,
             _search_input_subscription: search_input_subscription,
+            branch_filter_input,
+            branch_filter_query: String::new(),
+            _branch_filter_subscription: branch_filter_subscription,
+            collapsed_popover_filter_open: false,
+            collapsed_popover_filter_input,
+            collapsed_popover_filter_query: String::new(),
+            _collapsed_popover_filter_subscription: collapsed_popover_filter_subscription,
             sidebar_presentation_cache: SidebarPresentationCache::default(),
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
             sidebar_collapsed_items_by_repo,
+            sidebar_pinned_branches_by_repo,
             root_view,
             tooltip_host,
             notify_fingerprint: initial_fingerprint,
@@ -178,6 +389,8 @@ impl SidebarPaneView {
             selected_branch: None,
             file_search_options: DiffSearchOptions::default(),
             file_browser_rows_cache: std::cell::RefCell::new(None),
+            collapsed_popover_presentation: None,
+            collapsed_popover_section: None,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
@@ -188,6 +401,21 @@ impl SidebarPaneView {
     pub(in super::super) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
         cx.notify();
+    }
+
+    /// Sync the section this pane should render as collapsed-rail popover content.
+    /// No `cx.notify()`: the root re-renders (and re-embeds this pane) whenever the
+    /// value changes, so an extra notify would only cause a redundant paint.
+    pub(in super::super) fn set_collapsed_popover_section(
+        &mut self,
+        section: Option<CollapsedSidebarSection>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.collapsed_popover_section == section {
+            return;
+        }
+        self.collapsed_popover_section = section;
+        self.reset_collapsed_popover_filter(cx);
     }
 
     fn toggle_file_search_option(
@@ -284,6 +512,62 @@ impl SidebarPaneView {
             .collect()
     }
 
+    pub(in super::super) fn saved_sidebar_pinned_branches(
+        &self,
+    ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
+        self.sidebar_pinned_branches_by_repo
+            .iter()
+            .filter(|&(_repo, items)| !items.is_empty())
+            .map(|(repo, items)| (repo.clone(), items.clone()))
+            .collect()
+    }
+
+    pub(in super::super) fn toggle_pinned_branch(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        name: &str,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return;
+        };
+        let repo_path = repo.spec.workdir.clone();
+        let key = branch_sidebar::branch_pin_storage_key(section, name);
+
+        let items = self
+            .sidebar_pinned_branches_by_repo
+            .entry(repo_path.clone())
+            .or_default();
+        if !items.insert(key.clone()) {
+            items.remove(&key);
+        }
+        if items.is_empty() {
+            self.sidebar_pinned_branches_by_repo.remove(&repo_path);
+        }
+
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        self.schedule_ui_settings_persist(cx);
+        self.sync_popover_pinned_branches(cx);
+        cx.notify();
+    }
+
+    /// Mirror the pinned set into the popover host so the branch context menu
+    /// can label its pin entry. Deferred because this runs inside the sidebar
+    /// pane's own update, and the toggle itself may have been dispatched from
+    /// the popover host (which is then mid-update too).
+    fn sync_popover_pinned_branches(&self, cx: &mut gpui::Context<Self>) {
+        let pinned = self.sidebar_pinned_branches_by_repo.clone();
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.popover_host.update(cx, |host, cx| {
+                    host.set_pinned_branches(pinned, cx);
+                });
+            });
+        });
+    }
+
     fn schedule_ui_settings_persist(&mut self, cx: &mut gpui::Context<Self>) {
         let _ = self.root_view.update(cx, |root, cx| {
             root.schedule_ui_settings_persist(cx);
@@ -359,6 +643,8 @@ impl SidebarPaneView {
             &mut self.sidebar_presentation_cache,
             self.state.as_ref(),
             &self.sidebar_collapsed_items_by_repo,
+            &self.sidebar_pinned_branches_by_repo,
+            &self.branch_filter_query,
         )
     }
 
@@ -381,6 +667,475 @@ impl SidebarPaneView {
             .child(content)
     }
 
+    /// Render a single sidebar section as popover content, shown next to the
+    /// collapsed rail without expanding the sidebar. Files reuses the file
+    /// browser; branch sections render a scoped slice of the branch list.
+    pub(in super::super) fn render_collapsed_popover(
+        &mut self,
+        section: CollapsedSidebarSection,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+
+        // Only the branch sections carry a filter; Files has its own always-visible
+        // search bar, and the remaining sections have nothing to narrow.
+        let filterable = section.branch_section().is_some();
+        let filter_open = filterable && self.collapsed_popover_filter_open;
+
+        // Every section but Files has the same header menu the expanded sidebar
+        // hangs off its section row (add a worktree, stash, submodule, ...). The
+        // rail popover shows only the section's rows, so without this button —
+        // and the right-click on the panel behind it — those actions would be
+        // out of reach while the sidebar is collapsed.
+        let section_menu = self
+            .active_repo_id()
+            .and_then(|repo_id| section.section_menu(repo_id));
+        let section_menu_active = section_menu
+            .as_ref()
+            .is_some_and(|(invoker, _)| self.active_context_menu_invoker.as_ref() == Some(invoker));
+
+        let title = div()
+            .flex_none()
+            .flex()
+            .flex_row()
+            .items_center()
+            .pl(scaled_px(10.0))
+            // Keep the vertical metrics of the plain title so the sections
+            // without a toggle (Files especially) lay out exactly as before.
+            .pr(scaled_px(6.0))
+            .pt(scaled_px(8.0))
+            .pb(scaled_px(6.0))
+            .child(
+                div()
+                    .flex_1()
+                    .min_w(px(0.0))
+                    .text_size(scaled_px(12.0))
+                    .font_weight(FontWeight::BOLD)
+                    .text_color(theme.colors.text)
+                    .child(section.title()),
+            )
+            .when(filterable, |header| {
+                header.child(
+                    components::Button::new("collapsed_popover_filter_toggle", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .selected(filter_open)
+                        .selected_bg(with_alpha(
+                            theme.colors.accent,
+                            if theme.is_dark { 0.34 } else { 0.24 },
+                        ))
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/zoom.svg",
+                            if filter_open {
+                                theme.colors.text
+                            } else {
+                                theme.colors.text_muted
+                            },
+                            scaled_px(13.0),
+                        ))
+                        .on_click(theme, cx, move |this, _e, window, cx| {
+                            this.toggle_collapsed_popover_filter(window, cx);
+                        })
+                        .w(scaled_px(22.0))
+                        .h(scaled_px(22.0))
+                        .gitcomet_tooltip(
+                            theme,
+                            if filter_open {
+                                "Hide filter".into()
+                            } else {
+                                "Filter branches".into()
+                            },
+                        )
+                        .debug_selector(|| "collapsed_popover_filter_toggle".to_string()),
+                )
+            })
+            .when_some(section_menu.clone(), |header, (invoker, kind)| {
+                header.child(
+                    components::Button::new("collapsed_popover_section_menu", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .selected(section_menu_active)
+                        .selected_bg(with_alpha(
+                            theme.colors.accent,
+                            if theme.is_dark { 0.34 } else { 0.24 },
+                        ))
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/more_vertical.svg",
+                            if section_menu_active {
+                                theme.colors.text
+                            } else {
+                                theme.colors.text_muted
+                            },
+                            scaled_px(15.0),
+                        ))
+                        .on_click(theme, cx, move |this, e, window, cx| {
+                            this.activate_context_menu_invoker(invoker.clone(), cx);
+                            this.open_popover_at(kind.clone(), e.position(), window, cx);
+                        })
+                        .w(scaled_px(22.0))
+                        .h(scaled_px(22.0))
+                        .gitcomet_tooltip(theme, "More actions".into())
+                        .debug_selector(|| "collapsed_popover_section_menu".to_string()),
+                )
+            });
+
+        let filter_bar = filter_open.then(|| self.render_collapsed_popover_filter_bar(theme, cx));
+
+        let divider = div()
+            .flex_none()
+            .h(px(1.0))
+            .w_full()
+            .bg(theme.colors.border_variant);
+
+        let is_files = matches!(section, CollapsedSidebarSection::Files);
+        let collapsed_popover_scroll = self.collapsed_popover_scroll.clone();
+
+        let surface = div()
+            .id("collapsed_sidebar_popover_content")
+            .debug_selector(|| "collapsed_sidebar_popover_content".to_string())
+            .flex()
+            .flex_col()
+            .flex_1()
+            .min_h(px(0.0))
+            // The rows are rendered by this entity, so scrolling must live here;
+            // an overflow container in the parent entity cannot measure them.
+            .overflow_y_scroll()
+            .track_scroll(&collapsed_popover_scroll)
+            // Establish the base text color for the popover subtree. Rows that rely
+            // on the ambient color (e.g. worktree path labels) would otherwise fall
+            // back to the default text style across the panel/entity boundary and
+            // render near-black.
+            .text_color(theme.colors.text)
+            .child(title)
+            .child(divider)
+            .children(filter_bar);
+
+        let content = if is_files {
+            self.render_collapsed_popover_file_section(theme, window, cx)
+        } else {
+            self.render_collapsed_popover_branch_section(section, window, cx)
+        };
+        let scrollbar = components::Scrollbar::new(
+            "collapsed_sidebar_popover_scrollbar",
+            collapsed_popover_scroll,
+        );
+        #[cfg(test)]
+        let scrollbar = scrollbar.debug_selector("collapsed_sidebar_popover_scrollbar");
+
+        // Keep the scrollbar outside the moving surface. If it is a child of the
+        // surface, GPUI applies the content scroll offset to the track itself.
+        div()
+            .relative()
+            .flex()
+            .flex_col()
+            .min_h(px(0.0))
+            .text_color(theme.colors.text)
+            .child(surface.child(content))
+            .child(scrollbar.render(theme))
+            .into_any()
+    }
+
+    /// The filter field revealed by the popover header's magnifier. It sits below
+    /// the header, above every branch row, and filters both branch sections.
+    fn render_collapsed_popover_filter_bar(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let has_query = !self.collapsed_popover_filter_query.trim().is_empty();
+        div()
+            .flex_none()
+            .px(scaled_px(8.0))
+            .pt(scaled_px(8.0))
+            .pb(scaled_px(2.0))
+            .debug_selector(|| "collapsed_popover_filter_bar".to_string())
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .min_h(scaled_px(28.0))
+                    .pl(scaled_px(8.0))
+                    .pr(scaled_px(2.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.surface_bg)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .py(scaled_px(4.0))
+                            .child(self.collapsed_popover_filter_input.clone()),
+                    )
+                    .when(has_query, |row| {
+                        row.child(
+                            components::Button::new("collapsed_popover_filter_clear", "")
+                                .borderless()
+                                .style(components::ButtonStyle::Subtle)
+                                .start_slot(crate::view::icons::svg_icon(
+                                    "icons/generic_close.svg",
+                                    theme.colors.text_muted,
+                                    scaled_px(12.0),
+                                ))
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    this.clear_collapsed_popover_filter(cx);
+                                })
+                                .w(scaled_px(24.0))
+                                .h(scaled_px(24.0))
+                                .gitcomet_tooltip(theme, "Clear filter".into())
+                                .debug_selector(|| "collapsed_popover_filter_clear".to_string()),
+                        )
+                    }),
+            )
+    }
+
+    /// Show/hide the popover filter. Opening focuses the field so the user can
+    /// type straight away; closing drops the query so the rows come back.
+    fn toggle_collapsed_popover_filter(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.collapsed_popover_filter_open = !self.collapsed_popover_filter_open;
+        if self.collapsed_popover_filter_open {
+            let focus_handle = self.collapsed_popover_filter_input.read(cx).focus_handle();
+            window.focus(&focus_handle, cx);
+        } else {
+            self.clear_collapsed_popover_filter(cx);
+        }
+        cx.notify();
+    }
+
+    fn clear_collapsed_popover_filter(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.collapsed_popover_filter_query.is_empty() {
+            return;
+        }
+        self.collapsed_popover_filter_input.update(cx, |input, cx| {
+            input.set_text("", cx);
+        });
+        self.collapsed_popover_filter_query.clear();
+        cx.notify();
+    }
+
+    /// Reset the popover filter when the rail opens a different section (or the
+    /// popover closes), so a stale query never greets the next section.
+    pub(in super::super) fn reset_collapsed_popover_filter(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.clear_collapsed_popover_filter(cx);
+        if self.collapsed_popover_filter_open {
+            self.collapsed_popover_filter_open = false;
+            cx.notify();
+        }
+    }
+
+    fn render_collapsed_popover_file_section(
+        &mut self,
+        theme: AppTheme,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let search_bar = self.render_file_browser_search_bar(theme, cx);
+        let visible_rows = self.file_browser_visible_rows();
+        let body: AnyElement = if visible_rows.is_empty() {
+            let message = match self.active_repo() {
+                None => "No repository selected.",
+                Some(repo) => match &repo.file_browser.entries {
+                    Loadable::NotLoaded | Loadable::Loading => "Loading files...",
+                    Loadable::Ready(entries) if entries.is_empty() => "Empty repository.",
+                    Loadable::Ready(_) => "No files visible.",
+                    Loadable::Error(_) => "Error loading files.",
+                },
+            };
+            components::empty_state(theme, "Files", message).into_any_element()
+        } else {
+            let rows = Self::render_file_browser_rows(self, 0..visible_rows.len(), window, cx);
+            // Match the branch-section popovers: intrinsic eager rows, with the
+            // enclosing popover panel owning the min/max bounds and scrolling.
+            div()
+                .debug_selector(|| "collapsed_file_browser_rows".to_string())
+                .flex()
+                .flex_col()
+                .pt(px(2.0))
+                .pb(px(6.0))
+                .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+                .children(rows)
+                .into_any_element()
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .child(search_bar)
+            .child(body)
+            .into_any_element()
+    }
+
+    fn render_collapsed_popover_branch_section(
+        &mut self,
+        section: CollapsedSidebarSection,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let Some(presentation) = self.build_collapsed_popover_presentation(section) else {
+            return components::empty_state(theme, section.title(), "No repository selected.")
+                .into_any_element();
+        };
+        let row_count = presentation.rows.len();
+        if row_count == 0 {
+            let filtering = self.collapsed_popover_filter_open
+                && !self.collapsed_popover_filter_query.trim().is_empty();
+            let message = if filtering {
+                "No matching branches."
+            } else {
+                "Nothing here yet."
+            };
+            return components::empty_state(theme, section.title(), message).into_any_element();
+        }
+
+        // Render the scoped rows eagerly (a single section is bounded) so the
+        // shared row renderer can reuse the transient presentation override.
+        self.collapsed_popover_presentation = Some(presentation);
+        let rows = Self::render_branch_sidebar_rows(self, 0..row_count, window, cx);
+        self.collapsed_popover_presentation = None;
+
+        // Intrinsic height: the enclosing popover panel sizes to content and owns
+        // the scroll, so this just stacks the rows.
+        div()
+            .flex()
+            .flex_col()
+            .pt(px(2.0))
+            // A little breathing room below the last row (content-sized popovers
+            // otherwise sit the last item flush against the bottom border).
+            .pb(px(6.0))
+            .pl(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .pr(px(components::ROW_HIGHLIGHT_INSET_PX))
+            .children(rows)
+            .into_any_element()
+    }
+
+    fn build_collapsed_popover_presentation(
+        &mut self,
+        section: CollapsedSidebarSection,
+    ) -> Option<SidebarPresentation> {
+        // Workspace badges are collapse-independent; reuse the cached ones.
+        let base = self.branch_sidebar_presentation_cached()?;
+        let repo = self.active_repo()?;
+        let mut collapsed = self
+            .sidebar_collapsed_items_by_repo
+            .get(&repo.spec.workdir)
+            .cloned()
+            .unwrap_or_default();
+        // Force-expand the target section so its content is present regardless of
+        // the persisted collapse state (which we never mutate here).
+        if let Some(key) = section.storage_key()
+            && branch_sidebar::is_collapsed(&collapsed, key)
+        {
+            branch_sidebar::toggle_collapse_state(&mut collapsed, key);
+        }
+        // Each branch popover surfaces its matching Pinned section, so keep that
+        // one expanded regardless of the persisted collapse state.
+        let pinned_section = match section {
+            CollapsedSidebarSection::Local => Some(BranchSection::Local),
+            CollapsedSidebarSection::Remote => Some(BranchSection::Remote),
+            _ => None,
+        };
+        if let Some(pinned_section) = pinned_section {
+            let pinned_key = branch_sidebar::pinned_section_storage_key(pinned_section);
+            if branch_sidebar::is_collapsed(&collapsed, pinned_key) {
+                branch_sidebar::toggle_collapse_state(&mut collapsed, pinned_key);
+            }
+        }
+        let pinned = self
+            .sidebar_pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .cloned()
+            .unwrap_or_default();
+        let query = if self.collapsed_popover_filter_open {
+            self.collapsed_popover_filter_query.trim()
+        } else {
+            ""
+        };
+        // While filtering, ignore every persisted collapse state: a match hidden
+        // inside a collapsed `feat/` group would make the filter look broken.
+        let collapsed = if query.is_empty() {
+            collapsed
+        } else {
+            BTreeSet::new()
+        };
+        let full = branch_sidebar::branch_sidebar_rows(repo, &collapsed, &pinned, query);
+        let scoped = if query.is_empty() {
+            section_content_rows(&full, section)
+        } else {
+            filter_result_rows(&full, section)
+        };
+        Some(SidebarPresentation {
+            rows: scoped.into(),
+            workspace_badges: base.workspace_badges,
+        })
+    }
+
+    /// Kick off any lazy data load a section needs before it can render in the
+    /// collapsed-rail popover. Worktrees load eagerly, but stashes, submodules,
+    /// and the file browser are only fetched when their section is opened.
+    pub(in super::super) fn ensure_collapsed_section_data(
+        &mut self,
+        section: CollapsedSidebarSection,
+        _cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let repo_id = repo.id;
+        match section {
+            CollapsedSidebarSection::Submodules => {
+                if matches!(repo.submodules, Loadable::NotLoaded | Loadable::Error(_)) {
+                    self.store.dispatch(Msg::LoadSubmodules { repo_id });
+                }
+            }
+            CollapsedSidebarSection::Stashes => {
+                self.store.dispatch(Msg::EnsureSidebarData {
+                    repo_id,
+                    request: SidebarDataRequest {
+                        worktrees: true,
+                        submodules: false,
+                        stashes: true,
+                    },
+                });
+            }
+            CollapsedSidebarSection::Worktrees => {
+                self.store.dispatch(Msg::EnsureSidebarData {
+                    repo_id,
+                    request: SidebarDataRequest {
+                        worktrees: true,
+                        submodules: false,
+                        stashes: false,
+                    },
+                });
+            }
+            CollapsedSidebarSection::Files => {
+                if matches!(
+                    repo.file_browser.entries,
+                    Loadable::NotLoaded | Loadable::Error(_)
+                ) {
+                    let source = repo.file_browser.source.clone();
+                    self.store
+                        .dispatch(Msg::LoadFileBrowser { repo_id, source });
+                }
+            }
+            CollapsedSidebarSection::Local | CollapsedSidebarSection::Remote => {}
+        }
+    }
+
     fn render_tab_bar(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
@@ -390,8 +1145,8 @@ impl SidebarPaneView {
         let store_branches = Arc::clone(&self.store);
         let store_files = Arc::clone(&self.store);
         // `theme.colors.hover` is nearly identical to the sidebar chrome bg,
-        // so use a text-tinted overlay that actually reads on hover.
-        let tab_hover_bg = with_alpha(theme.colors.text, if theme.is_dark { 0.08 } else { 0.05 });
+        // so use the standard text-tinted overlay that reads on hover.
+        let tab_hover_bg = theme.hover_overlay();
 
         let branches_tab = div()
             .flex()
@@ -474,6 +1229,70 @@ impl SidebarPaneView {
             .child(files_tab)
     }
 
+    /// A slim always-visible filter field pinned above the branch tree. It
+    /// narrows the Local/Remote (and pinned) sections live; a query force-expands
+    /// those sections so matches are always visible.
+    fn render_branch_filter_bar(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Div {
+        let ui_scale_percent = ui_scale::current(cx).percent;
+        let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let has_query = !self.branch_filter_query.trim().is_empty();
+        div()
+            .px(scaled_px(8.0))
+            .pt(scaled_px(8.0))
+            .pb(scaled_px(6.0))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .min_h(scaled_px(28.0))
+                    .pl(scaled_px(8.0))
+                    .pr(scaled_px(2.0))
+                    .rounded(px(theme.radii.control))
+                    .border_1()
+                    .border_color(theme.colors.border)
+                    .bg(theme.colors.surface_bg_elevated)
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .py(scaled_px(4.0))
+                            .child(self.branch_filter_input.clone()),
+                    )
+                    .when(has_query, |row| {
+                        row.child(
+                            components::Button::new("branch_filter_clear", "")
+                                .borderless()
+                                .style(components::ButtonStyle::Subtle)
+                                .start_slot(crate::view::icons::svg_icon(
+                                    "icons/generic_close.svg",
+                                    theme.colors.text_muted,
+                                    scaled_px(12.0),
+                                ))
+                                .on_click(theme, cx, |this, _e, _w, cx| {
+                                    this.clear_branch_filter(cx);
+                                })
+                                .w(scaled_px(24.0))
+                                .h(scaled_px(24.0))
+                                .gitcomet_tooltip(theme, "Clear filter".into())
+                                .debug_selector(|| "branch_filter_clear".to_string()),
+                        )
+                    }),
+            )
+    }
+
+    fn clear_branch_filter(&mut self, cx: &mut gpui::Context<Self>) {
+        self.branch_filter_input.update(cx, |input, cx| {
+            input.set_text("", cx);
+        });
+        self.branch_filter_query.clear();
+        cx.notify();
+    }
+
     fn render_branches_content(
         &mut self,
         theme: AppTheme,
@@ -481,12 +1300,14 @@ impl SidebarPaneView {
     ) -> AnyElement {
         const SIDEBAR_TOP_INSET_PX: f32 = 2.0;
 
+        let filter_bar = self.render_branch_filter_bar(theme, cx);
         let Some(presentation) = self.branch_sidebar_presentation_cached() else {
             return div()
                 .flex()
                 .flex_col()
                 .h_full()
                 .min_h(px(0.0))
+                .child(filter_bar)
                 .child(components::empty_state(
                     theme,
                     "Branches",
@@ -537,15 +1358,16 @@ impl SidebarPaneView {
             .flex_col()
             .h_full()
             .min_h(px(0.0))
+            .child(filter_bar)
             .child(panel_body)
             .into_any()
     }
 
-    fn render_file_browser_content(
+    fn render_file_browser_search_bar(
         &mut self,
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
+    ) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
         let search_options = self.file_search_options;
@@ -558,7 +1380,7 @@ impl SidebarPaneView {
             .any(|matcher| matcher.regex_error().is_some());
         let option_selected_bg =
             with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
-        let search_bar = div()
+        div()
             .px(scaled_px(8.0))
             .pt(scaled_px(8.0))
             .pb(scaled_px(6.0))
@@ -643,7 +1465,15 @@ impl SidebarPaneView {
                                     .debug_selector(|| "file_search_regex".to_string()),
                             ),
                     ),
-            );
+            )
+    }
+
+    fn render_file_browser_content(
+        &mut self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let search_bar = self.render_file_browser_search_bar(theme, cx);
 
         let visible_rows = self.file_browser_visible_rows();
 
@@ -681,6 +1511,7 @@ impl SidebarPaneView {
                 .child(list);
             div()
                 .id("file_browser_scroll_container")
+                .debug_selector(|| "file_browser_scroll_container".to_string())
                 .relative()
                 .flex()
                 .flex_col()
@@ -703,13 +1534,18 @@ impl SidebarPaneView {
             .is_some_and(|r| r.browsing_commit().is_some());
         let purple = crate::theme::historical_outline(theme.is_dark);
         div()
+            .relative()
             .flex()
             .flex_col()
             .h_full()
             .min_h(px(0.0))
-            .when(browsing_commit, |d| d.border_2().border_color(purple))
             .child(search_bar)
             .child(body)
+            .when(browsing_commit, |d| {
+                // Overlay the historical frame so entering browse mode does
+                // not inset or resize the file browser beneath it.
+                d.child(div().absolute().inset_0().border_2().border_color(purple))
+            })
             .into_any()
     }
 
@@ -849,7 +1685,6 @@ impl SidebarPaneView {
         const INDENT_STEP_PX: f32 = 8.0;
         const CHEVRON_SLOT_PX: f32 = 12.0;
         const ICON_SLOT_PX: f32 = 16.0;
-        const ROW_HEIGHT_PX: f32 = 22.0;
 
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
@@ -866,6 +1701,15 @@ impl SidebarPaneView {
         // bright accent — match that so the tree reads the same way.
         let icon_color = theme.colors.text_muted;
         let text_color = theme.colors.text;
+        let row_surface = if matches!(
+            this.collapsed_popover_section,
+            Some(CollapsedSidebarSection::Files)
+        ) {
+            theme.colors.surface_bg_elevated
+        } else {
+            theme.colors.sidebar_bg
+        };
+        let row_style = components::InteractiveRowStyle::new(theme, row_surface);
         let store = Arc::clone(&this.store);
         let search_matchers = this
             .active_repo()
@@ -928,20 +1772,26 @@ impl SidebarPaneView {
             .map(|(ix, row, entry)| {
                 let left_pad = scaled_px(6.0 + INDENT_STEP_PX * row.depth as f32);
                 let store = Arc::clone(&store);
+                let menu_invoker = (!row.is_directory)
+                    .then(|| SharedString::from(format!("file_browser_file_{ix}")));
+                let context_menu_active = menu_invoker.as_ref().is_some_and(|invoker| {
+                    this.active_context_menu_invoker.as_ref() == Some(invoker)
+                });
+                let row_state =
+                    components::InteractiveRowState::default().open(context_menu_active);
 
                 let mut row_div = div()
                     .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
+                    .debug_selector(move || format!("file_browser_row_{ix}"))
                     .flex()
                     .flex_row()
                     .items_center()
-                    .h(scaled_px(ROW_HEIGHT_PX))
+                    .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
                     .w_full()
                     .pl(left_pad)
                     .pr_2()
                     .gap(scaled_px(4.0))
-                    .cursor_pointer()
-                    .rounded(px(theme.radii.row))
-                    .hover(|d| d.bg(theme.colors.hover));
+                    .interactive_row(row_style, row_state);
 
                 if row.is_directory {
                     let path = (*entry.path).clone();
@@ -959,7 +1809,7 @@ impl SidebarPaneView {
                     let source = repo
                         .map(|r| r.file_browser.source.clone())
                         .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
-                    let menu_invoker = SharedString::from(format!("file_browser_file_{ix}"));
+                    let menu_invoker = menu_invoker.expect("file rows have a context-menu invoker");
                     row_div = row_div
                         .on_click(
                             cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
@@ -1075,9 +1925,148 @@ impl SidebarPaneView {
 }
 
 impl Render for SidebarPaneView {
-    fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        self.sidebar(cx)
+    fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
+        match self.collapsed_popover_section {
+            Some(section) => self.render_collapsed_popover(section, window, cx),
+            None => self.sidebar(cx).into_any_element(),
+        }
     }
+}
+
+/// True for any row that begins a top-level sidebar section, used to bound a
+/// single section's content when scoping rows for a collapsed-sidebar popover.
+fn is_section_header(row: &BranchSidebarRow) -> bool {
+    matches!(
+        row,
+        BranchSidebarRow::PinnedHeader { .. }
+            | BranchSidebarRow::SectionHeader { .. }
+            | BranchSidebarRow::WorktreesHeader { .. }
+            | BranchSidebarRow::SubmodulesHeader { .. }
+            | BranchSidebarRow::StashHeader { .. }
+    )
+}
+
+/// The rows of a single pinned section (header + pinned branches) for the given
+/// branch section, used to surface pins at the top of the matching branch
+/// popover in the collapsed sidebar.
+fn pinned_section_rows(
+    rows: &[BranchSidebarRow],
+    branch_section: BranchSection,
+) -> Vec<BranchSidebarRow> {
+    let Some(start) = rows.iter().position(|r| {
+        matches!(
+            r,
+            BranchSidebarRow::PinnedHeader { section, .. } if *section == branch_section
+        )
+    }) else {
+        return Vec::new();
+    };
+    let end = rows[start + 1..]
+        .iter()
+        .position(is_section_header)
+        .map(|pos| start + 1 + pos)
+        .unwrap_or(rows.len());
+    rows[start..end]
+        .iter()
+        .filter(|r| !matches!(r, BranchSidebarRow::SectionSpacer))
+        .cloned()
+        .collect()
+}
+
+fn matches_section_header(row: &BranchSidebarRow, section: CollapsedSidebarSection) -> bool {
+    matches!(
+        (row, section),
+        (
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Local,
+                ..
+            },
+            CollapsedSidebarSection::Local,
+        ) | (
+            BranchSidebarRow::SectionHeader {
+                section: BranchSection::Remote,
+                ..
+            },
+            CollapsedSidebarSection::Remote,
+        ) | (
+            BranchSidebarRow::WorktreesHeader { .. },
+            CollapsedSidebarSection::Worktrees,
+        ) | (
+            BranchSidebarRow::SubmodulesHeader { .. },
+            CollapsedSidebarSection::Submodules,
+        ) | (
+            BranchSidebarRow::StashHeader { .. },
+            CollapsedSidebarSection::Stashes,
+        )
+    )
+}
+
+/// The content rows belonging to `section` (between its header and the next
+/// section header), with the header and inter-section spacers dropped — the
+/// popover supplies its own title.
+fn section_content_rows(
+    rows: &[BranchSidebarRow],
+    section: CollapsedSidebarSection,
+) -> Vec<BranchSidebarRow> {
+    // Each branch popover additionally surfaces its matching Pinned section at
+    // the top.
+    let mut out = match section {
+        CollapsedSidebarSection::Local => pinned_section_rows(rows, BranchSection::Local),
+        CollapsedSidebarSection::Remote => pinned_section_rows(rows, BranchSection::Remote),
+        _ => Vec::new(),
+    };
+
+    let Some(start) = rows.iter().position(|r| matches_section_header(r, section)) else {
+        return out;
+    };
+    let end = rows[start + 1..]
+        .iter()
+        .position(is_section_header)
+        .map(|pos| start + 1 + pos)
+        .unwrap_or(rows.len());
+    out.extend(
+        rows[start + 1..end]
+            .iter()
+            .filter(|r| !matches!(r, BranchSidebarRow::SectionSpacer))
+            .cloned(),
+    );
+    out
+}
+
+/// The rows a popover filter shows: the open section's matches first, followed
+/// by the other branch section's matches. A branch you are looking for is worth
+/// finding whichever list it lives in, so filtering Local also surfaces Remote
+/// hits (and vice versa); each half gets a group label once both are present.
+fn filter_result_rows(
+    rows: &[BranchSidebarRow],
+    section: CollapsedSidebarSection,
+) -> Vec<BranchSidebarRow> {
+    let primary = section_content_rows(rows, section);
+    let Some(other) = section.counterpart() else {
+        return primary;
+    };
+    let secondary = section_content_rows(rows, other);
+    if secondary.is_empty() {
+        return primary;
+    }
+
+    let mut out = Vec::with_capacity(primary.len() + secondary.len() + 3);
+    if !primary.is_empty()
+        && let Some(branch_section) = section.branch_section()
+    {
+        out.push(BranchSidebarRow::FilterGroupHeader {
+            section: branch_section,
+        });
+        out.extend(primary);
+        out.push(BranchSidebarRow::SectionSpacer);
+    }
+    if let Some(branch_section) = other.branch_section() {
+        out.push(BranchSidebarRow::FilterGroupHeader {
+            section: branch_section,
+        });
+    }
+    out.extend(secondary);
+    out
 }
 
 fn open_repo_workdirs_fingerprint(state: &AppState) -> (usize, u64) {
@@ -1510,5 +2499,117 @@ mod tests {
         // Only change the INACTIVE repo's file_browser_rev
         state.repos[1].file_browser.file_browser_rev = 42;
         assert_eq!(SidebarNotifyFingerprint::from_state(&state), initial);
+    }
+
+    fn repo_with_local_and_remote_branches() -> RepoState {
+        let mut repo = repo_state(RepoId(1), "/tmp/repo");
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            gitcomet_core::domain::Branch {
+                name: "feature/alpha".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            },
+            gitcomet_core::domain::Branch {
+                name: "main".to_string(),
+                target: CommitId("deadbeef".into()),
+                upstream: None,
+                divergence: None,
+            },
+        ]));
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![
+            gitcomet_core::domain::RemoteBranch {
+                remote: "origin".to_string(),
+                name: "feature/beta".to_string(),
+                target: CommitId("deadbeef".into()),
+            },
+            gitcomet_core::domain::RemoteBranch {
+                remote: "origin".to_string(),
+                name: "release".to_string(),
+                target: CommitId("deadbeef".into()),
+            },
+        ]));
+        repo
+    }
+
+    fn filter_rows(query: &str, section: CollapsedSidebarSection) -> Vec<BranchSidebarRow> {
+        let repo = repo_with_local_and_remote_branches();
+        let full =
+            branch_sidebar::branch_sidebar_rows(&repo, &BTreeSet::new(), &BTreeSet::new(), query);
+        filter_result_rows(&full, section)
+    }
+
+    fn branch_names(rows: &[BranchSidebarRow]) -> Vec<String> {
+        rows.iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::Branch { name, .. } => Some(name.to_string()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn group_header_sections(rows: &[BranchSidebarRow]) -> Vec<BranchSection> {
+        rows.iter()
+            .filter_map(|row| match row {
+                BranchSidebarRow::FilterGroupHeader { section } => Some(*section),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn collapsed_popover_filter_surfaces_the_other_branch_section() {
+        let rows = filter_rows("feature", CollapsedSidebarSection::Local);
+
+        assert_eq!(
+            group_header_sections(&rows),
+            vec![BranchSection::Local, BranchSection::Remote],
+            "a cross-section match should label the open section then the other one"
+        );
+        assert_eq!(
+            branch_names(&rows),
+            vec![
+                "feature/alpha".to_string(),
+                "origin/feature/beta".to_string()
+            ],
+            "local matches lead, remote matches follow"
+        );
+
+        // Symmetric: the Remote popover surfaces local matches the same way.
+        let rows = filter_rows("feature", CollapsedSidebarSection::Remote);
+        assert_eq!(
+            group_header_sections(&rows),
+            vec![BranchSection::Remote, BranchSection::Local]
+        );
+        assert_eq!(
+            branch_names(&rows),
+            vec![
+                "origin/feature/beta".to_string(),
+                "feature/alpha".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn collapsed_popover_filter_stays_unlabelled_when_only_one_section_matches() {
+        let rows = filter_rows("main", CollapsedSidebarSection::Local);
+
+        assert!(
+            group_header_sections(&rows).is_empty(),
+            "a single-section result needs no group labels; the popover title says it"
+        );
+        assert_eq!(branch_names(&rows), vec!["main".to_string()]);
+    }
+
+    #[test]
+    fn collapsed_popover_filter_shows_only_the_other_section_when_the_open_one_misses() {
+        let rows = filter_rows("release", CollapsedSidebarSection::Local);
+
+        assert_eq!(
+            group_header_sections(&rows),
+            vec![BranchSection::Remote],
+            "with no local matches only the remote half is labelled"
+        );
+        assert_eq!(branch_names(&rows), vec!["origin/release".to_string()]);
     }
 }

@@ -409,6 +409,18 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadRangeFiles {
+            repo_id,
+            from,
+            to,
+            request,
+        } => send(Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
+            repo_id,
+            from,
+            to,
+            request,
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::LoadSquashMessagePreview {
             repo_id,
             oldest,
@@ -654,6 +666,9 @@ fn send_unavailable_git_effect_result(
             runtime,
             &send,
         ),
+        Effect::RenameBranch { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::RenameBranch, runtime, &send)
+        }
         Effect::DeleteBranch { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::DeleteBranch, runtime, &send)
         }
@@ -1673,6 +1688,20 @@ pub(super) fn schedule_effect(
                 );
             }
         }
+        Effect::LoadRangeFiles {
+            repo_id,
+            from,
+            to,
+            request,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_range_files(
+                    executor, repos, msg_tx, repo_id, from, to, request,
+                );
+            }
+        }
         Effect::LoadSquashMessagePreview {
             repo_id,
             oldest,
@@ -1923,6 +1952,15 @@ pub(super) fn schedule_effect(
         } => {
             repo_actions::schedule_create_branch_and_checkout(
                 executor, repos, msg_tx, repo_id, name, target,
+            );
+        }
+        Effect::RenameBranch {
+            repo_id,
+            old_name,
+            new_name,
+        } => {
+            repo_actions::schedule_rename_branch(
+                executor, repos, msg_tx, repo_id, old_name, new_name,
             );
         }
         Effect::DeleteBranch { repo_id, name } => {

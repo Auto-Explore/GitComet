@@ -32,7 +32,22 @@ const MAX_IMAGE_DIFF_SIDE_BYTES: u64 = 1024;
 impl GixRepo {
     fn build_unified_diff_command(&self, target: &DiffTarget) -> Command {
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("-c").arg("color.ui=false").arg("--no-pager");
+        cmd.arg("-c").arg("color.ui=false");
+        // Pin the header format: the UI resolves a file's path out of the
+        // `diff --git` / `---` / `+++` lines, and these settings are the ones a
+        // user's git config could otherwise use to reshape them.
+        cmd.arg("-c")
+            // Keeps non-ASCII names as literal UTF-8 instead of octal escapes.
+            .arg("core.quotepath=false")
+            .arg("-c")
+            .arg("diff.mnemonicPrefix=false")
+            .arg("-c")
+            .arg("diff.noprefix=false")
+            .arg("-c")
+            .arg("diff.srcPrefix=a/")
+            .arg("-c")
+            .arg("diff.dstPrefix=b/");
+        cmd.arg("--no-pager");
 
         match target {
             DiffTarget::WorkingTree { path, area } => {
@@ -63,8 +78,11 @@ impl GixRepo {
             } => {
                 cmd.arg("diff")
                     .arg("--no-ext-diff")
-                    .arg(from_commit_id.as_ref())
-                    .arg(to_commit_id.as_ref());
+                    .arg(from_commit_id.as_ref());
+                // `None` tip: `git diff <from>` compares against the working tree.
+                if let Some(to_commit_id) = to_commit_id {
+                    cmd.arg(to_commit_id.as_ref());
+                }
                 if let Some(path) = path {
                     cmd.arg("--").arg(path);
                 }
@@ -320,8 +338,18 @@ impl GixRepo {
                 let repo = self._repo.to_thread_local();
                 let old =
                     self.file_diff_source_from_revision_path(&repo, from_commit_id.as_ref(), path)?;
-                let new =
-                    self.file_diff_source_from_revision_path(&repo, to_commit_id.as_ref(), path)?;
+                let new = match to_commit_id {
+                    Some(to_commit_id) => self.file_diff_source_from_revision_path(
+                        &repo,
+                        to_commit_id.as_ref(),
+                        path,
+                    )?,
+                    // Working-tree tip: the new side is the live worktree file.
+                    None => {
+                        let repo_path = to_repo_path(path, &self.spec.workdir)?;
+                        self.file_diff_source_from_worktree_path_optional(&repo, &repo_path)?
+                    }
+                };
 
                 Ok(Some(FileDiffText::new_sources(path.clone(), old, new)))
             }
@@ -411,10 +439,18 @@ impl GixRepo {
                 };
 
                 let repo = self._repo.to_thread_local();
+                // Working-tree tip + New side: the preview is the live worktree file.
+                if matches!(side, DiffPreviewTextSide::New) && to_commit_id.is_none() {
+                    let repo_path = to_repo_path(path, &self.spec.workdir)?;
+                    return Ok(worktree_file_path_optional(&self.spec.workdir, &repo_path));
+                }
                 let blob_id = match side {
                     DiffPreviewTextSide::New => gix_revision_path_blob_object_id_optional(
                         &repo,
-                        to_commit_id.as_ref(),
+                        to_commit_id
+                            .as_ref()
+                            .expect("worktree tip handled above")
+                            .as_ref(),
                         path,
                     )?,
                     DiffPreviewTextSide::Old => gix_revision_path_blob_object_id_optional(
@@ -590,11 +626,18 @@ impl GixRepo {
                     from_commit_id.as_ref(),
                     path,
                 )?;
-                let new = gix_revision_path_image_blob_bytes_optional(
-                    &repo,
-                    to_commit_id.as_ref(),
-                    path,
-                )?;
+                let new = match to_commit_id {
+                    Some(to_commit_id) => gix_revision_path_image_blob_bytes_optional(
+                        &repo,
+                        to_commit_id.as_ref(),
+                        path,
+                    )?,
+                    // Working-tree tip: read the live worktree image bytes.
+                    None => {
+                        let repo_path = to_repo_path(path, &self.spec.workdir)?;
+                        read_worktree_image_file_bytes_optional(&self.spec.workdir, &repo_path)?
+                    }
+                };
 
                 Ok(Some(FileDiffImage {
                     path: path.clone(),
@@ -746,13 +789,15 @@ fn commit_path_diff_revisions(
         ))),
         DiffTarget::CommitRange {
             from_commit_id,
-            to_commit_id,
+            to_commit_id: Some(to_commit_id),
             path: Some(path),
         } => Ok(Some((
             path.clone(),
             Some(from_commit_id.as_ref().to_string()),
             to_commit_id.as_ref().to_string(),
         ))),
+        // Working-tree tip has no revision string for the new side; fall back to
+        // the full unified-diff parse (which reads the worktree via the CLI).
         _ => Ok(None),
     }
 }

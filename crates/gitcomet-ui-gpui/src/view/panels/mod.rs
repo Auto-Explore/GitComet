@@ -5,7 +5,32 @@ const COMMIT_DETAILS_MESSAGE_MAX_HEIGHT_PX: f32 = 240.0;
 const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
 
 #[derive(Clone)]
+pub(in crate::view) enum AppMenuAction {
+    CommandPalette,
+    Settings,
+    OpenInCodeEditor {
+        path: Option<std::path::PathBuf>,
+    },
+    ApplyPatch {
+        repo_id: Option<RepoId>,
+    },
+    #[cfg(any(target_os = "linux", target_os = "freebsd"))]
+    InstallDesktopIntegration,
+    Quit,
+    CloseWindow,
+}
+
+#[derive(Clone, Copy)]
+pub(in crate::view) enum AddRepoMenuAction {
+    Open,
+    Clone,
+    Initialize,
+}
+
+#[derive(Clone)]
 pub(in crate::view) enum ContextMenuAction {
+    AppMenu(AppMenuAction),
+    AddRepoMenu(AddRepoMenuAction),
     SelectDiff {
         repo_id: RepoId,
         target: DiffTarget,
@@ -20,6 +45,9 @@ pub(in crate::view) enum ContextMenuAction {
     },
     OpenFileLocation {
         repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    OpenRepositoryLocation {
         path: std::path::PathBuf,
     },
     OpenInCodeEditor {
@@ -59,6 +87,24 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    MarkForComparison {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    CompareWithMarked {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    CompareWithWorkingTree {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        label: String,
+    },
+    ClearComparisonMark {
+        repo_id: RepoId,
+    },
     CheckoutCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -81,6 +127,12 @@ pub(in crate::view) enum ContextMenuAction {
     },
     DeleteBranch {
         repo_id: RepoId,
+        name: String,
+    },
+    /// Pins/unpins a branch in the sidebar's dedicated "Pinned" section.
+    ToggleBranchPin {
+        repo_id: RepoId,
+        section: BranchSection,
         name: String,
     },
     SetHistoryScope {
@@ -256,6 +308,9 @@ pub(in crate::view) enum ContextMenuAction {
     CopyText {
         text: String,
     },
+    CopyDiffSelection {
+        text: String,
+    },
     CopyDiffText {
         visible_ix: usize,
         region: DiffTextRegion,
@@ -347,17 +402,31 @@ struct ContextMenuSegment {
 #[derive(Clone)]
 struct ContextMenuModel {
     items: Vec<ContextMenuItem>,
+    /// Render shortcut labels as individual keycaps, matching the Command
+    /// Palette. Most context menus use shortcuts as single-key mnemonics, so
+    /// this remains opt-in.
+    shortcut_keycaps: bool,
     /// Optional hover tooltip per entry index (e.g. the full commit message in the
     /// browse-history menu). Sparse — most menus leave this empty.
     entry_tooltips: std::collections::HashMap<usize, SharedString>,
+    /// Stable debug selectors for menus whose entries predate the shared context-menu
+    /// renderer. Sparse so ordinary menus continue deriving selectors from labels.
+    entry_debug_selectors: std::collections::HashMap<usize, SharedString>,
 }
 
 impl ContextMenuModel {
     fn new(items: Vec<ContextMenuItem>) -> Self {
         Self {
             items,
+            shortcut_keycaps: false,
             entry_tooltips: std::collections::HashMap::new(),
+            entry_debug_selectors: std::collections::HashMap::new(),
         }
+    }
+
+    fn with_shortcut_keycaps(mut self) -> Self {
+        self.shortcut_keycaps = true;
+        self
     }
 
     fn with_entry_tooltips(
@@ -365,6 +434,14 @@ impl ContextMenuModel {
         entry_tooltips: std::collections::HashMap<usize, SharedString>,
     ) -> Self {
         self.entry_tooltips = entry_tooltips;
+        self
+    }
+
+    fn with_entry_debug_selectors(
+        mut self,
+        entry_debug_selectors: std::collections::HashMap<usize, SharedString>,
+    ) -> Self {
+        self.entry_debug_selectors = entry_debug_selectors;
         self
     }
 

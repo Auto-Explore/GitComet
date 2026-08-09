@@ -87,12 +87,106 @@ pub(super) fn model(
             },
         }),
     });
+    if section == BranchSection::Local {
+        items.push(ContextMenuItem::Entry {
+            label: "Rename branch".into(),
+            icon: Some("icons/pencil.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::RenameBranchPrompt {
+                    repo_id,
+                    name: name.clone(),
+                    is_current_branch: false,
+                },
+            }),
+        });
+    }
+
+    // Comparison: mark this branch's tip, or compare it against a mark.
+    let branch_commit_id: Option<CommitId> = match section {
+        BranchSection::Local => repo.and_then(|r| match &r.branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|b| b.name == *name)
+                .map(|b| b.target.clone()),
+            _ => None,
+        }),
+        BranchSection::Remote => repo.and_then(|r| match &r.remote_branches {
+            Loadable::Ready(branches) => branches
+                .iter()
+                .find(|b| format!("{}/{}", b.remote, b.name) == *name)
+                .map(|b| b.target.clone()),
+            _ => None,
+        }),
+    };
+    if let Some(commit_id) = branch_commit_id {
+        let comparison_mark = repo.and_then(|r| r.comparison_mark.clone());
+        items.push(ContextMenuItem::Entry {
+            label: format!("Mark {name} for comparison").into(),
+            icon: Some("icons/git_branch.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::MarkForComparison {
+                repo_id,
+                commit_id: commit_id.clone(),
+                label: name.clone(),
+            }),
+        });
+        items.push(ContextMenuItem::Entry {
+            label: "Compare with working tree".into(),
+            icon: Some("icons/open_external.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CompareWithWorkingTree {
+                repo_id,
+                commit_id: commit_id.clone(),
+                label: name.clone(),
+            }),
+        });
+        if let Some(mark) = comparison_mark.filter(|mark| mark.commit_id != commit_id) {
+            items.push(ContextMenuItem::Entry {
+                label: format!("Compare with {}", mark.label).into(),
+                icon: Some("icons/open_external.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::CompareWithMarked {
+                    repo_id,
+                    commit_id,
+                    label: name.clone(),
+                }),
+            });
+            items.push(ContextMenuItem::Entry {
+                label: "Clear comparison mark".into(),
+                icon: Some("icons/generic_close.svg".into()),
+                shortcut: None,
+                disabled: false,
+                action: Box::new(ContextMenuAction::ClearComparisonMark { repo_id }),
+            });
+        }
+    }
     items.push(ContextMenuItem::Entry {
         label: "Copy branch name".into(),
         icon: Some("icons/copy.svg".into()),
         shortcut: None,
         disabled: false,
         action: Box::new(ContextMenuAction::CopyText { text: name.clone() }),
+    });
+    let pinned = this.is_branch_pinned(repo_id, section, name);
+    items.push(ContextMenuItem::Entry {
+        label: if pinned {
+            "Unpin branch".into()
+        } else {
+            "Pin branch".into()
+        },
+        icon: Some("icons/pin.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::ToggleBranchPin {
+            repo_id,
+            section,
+            name: name.clone(),
+        }),
     });
     if section == BranchSection::Local {
         items.push(ContextMenuItem::Separator);

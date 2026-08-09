@@ -58,6 +58,12 @@ impl MainPaneView {
         self.diff_text_autoscroll_target = None;
     }
 
+    pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
+        self.diff_selection_anchor = None;
+        self.diff_selection_range = None;
+        self.clear_diff_text_selection();
+    }
+
     pub(in super::super::super) fn diff_text_selection_color(&self) -> gpui::Rgba {
         with_alpha(
             self.theme.colors.accent,
@@ -72,6 +78,19 @@ impl MainPaneView {
         hitbox: DiffTextHitbox,
     ) {
         self.diff_text_hitboxes.insert((visible_ix, region), hitbox);
+    }
+
+    /// Record where a row painted its stage/unstage gutter button. Hover and
+    /// click routing go through the row's hitbox; this map exists so tests can
+    /// aim at the button without re-deriving its geometry.
+    pub(in super::super::super) fn set_diff_stage_gutter_cell(
+        &mut self,
+        visible_ix: usize,
+        slot: rows::DiffStageSlot,
+        bounds: gpui::Bounds<Pixels>,
+    ) {
+        self.diff_stage_gutter_cells
+            .insert((visible_ix, slot), bounds);
     }
 
     fn diff_text_pos_from_hitbox(
@@ -325,6 +344,11 @@ impl MainPaneView {
         click_count: usize,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Deliberately does not claim the press: the diff row's own release
+        // handler reads the claim, and this gesture starts on that same row.
+        // A drag that actually moved is suppressed by
+        // `diff_suppress_clicks_remaining` instead, which a plain click leaves
+        // alone.
         match click_count {
             3.. => {
                 self.select_diff_text_line_at_mouse(visible_ix, region, position);
@@ -1287,7 +1311,7 @@ impl MainPaneView {
         let Some(text) = self.selected_diff_text_string() else {
             return;
         };
-        crate::clipboard::write_text(cx, text);
+        crate::clipboard::write_text(cx, text, self.diff_copy_source());
     }
 
     pub(in super::super::super) fn copy_diff_text_for_context_menu_to_clipboard(
@@ -1302,7 +1326,24 @@ impl MainPaneView {
         else {
             return;
         };
-        crate::clipboard::write_text(cx, text);
+        crate::clipboard::write_text(cx, text, crate::clipboard::CopySource::DiffContextMenu);
+    }
+
+    fn diff_copy_source(&self) -> crate::clipboard::CopySource {
+        match self
+            .active_repo()
+            .and_then(|repo| repo.diff_state.diff_target.as_ref())
+        {
+            Some(DiffTarget::Commit { .. }) => crate::clipboard::CopySource::CommitDetailsDiff,
+            Some(DiffTarget::CommitRange { .. }) => crate::clipboard::CopySource::CommitRangeDiff,
+            Some(DiffTarget::WorkingTree {
+                area: DiffArea::Staged,
+                ..
+            }) => crate::clipboard::CopySource::StagedDiff,
+            Some(DiffTarget::WorkingTree { .. }) | None => {
+                crate::clipboard::CopySource::UnstagedDiff
+            }
+        }
     }
 
     pub(in super::super::super) fn open_diff_editor_context_menu(
@@ -1595,12 +1636,24 @@ impl MainPaneView {
                     .map(|_| selected_hunks.len())
                     .unwrap_or(0);
 
-                let lines_patch = build_unified_patch_for_selected_lines_across_hunks(
-                    &materialized_diff,
-                    &selected_change_src_ixs,
-                );
+                // "Stage line(s)" applies forward to the index; "Unstage
+                // line(s)" applies the same selection in reverse, which needs
+                // the opposite treatment of the unselected changes around it or
+                // git rejects the patch.
+                let lines_patch = match area {
+                    DiffArea::Unstaged => build_unified_patch_for_selected_lines_across_hunks(
+                        &materialized_diff,
+                        &selected_change_src_ixs,
+                    ),
+                    DiffArea::Staged => {
+                        build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
+                            &materialized_diff,
+                            &selected_change_src_ixs,
+                        )
+                    }
+                };
                 let discard_lines_patch = if area == DiffArea::Unstaged {
-                    build_unified_patch_for_selected_lines_across_hunks_for_worktree_discard(
+                    build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
                         &materialized_diff,
                         &selected_change_src_ixs,
                     )

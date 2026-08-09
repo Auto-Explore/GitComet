@@ -308,10 +308,12 @@ impl MainPaneView {
         let is_file_preview =
             self.is_file_preview_active() && self.untracked_directory_notice().is_none();
         let wants_file_diff = self.wants_file_diff_view(is_file_preview);
+        let wants_collapsed_diff = self.wants_collapsed_diff_view(is_file_preview);
         let rendered_preview_kind =
             crate::view::diff_target_rendered_preview_kind(self.rendered_diff_target());
         let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
             wants_file_diff,
+            wants_collapsed_diff,
             is_file_preview,
             rendered_preview_kind,
         );

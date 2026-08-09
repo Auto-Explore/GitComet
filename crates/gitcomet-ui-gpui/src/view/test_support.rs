@@ -31,8 +31,30 @@ pub(crate) fn popover_is_open(view: &GitCometView, app: &App) -> bool {
     popover_kind(view, app).is_some()
 }
 
+/// `(scrolled, max_scroll)` of the repository tab strip, in pixels.
+pub(crate) fn repo_tab_scroll(view: &GitCometView, app: &App) -> (Pixels, Pixels) {
+    view.repo_tabs_bar.read(app).tab_scroll_for_tests()
+}
+
+/// Window-space bounds of the scrollable repository tab strip.
+pub(crate) fn repo_tab_strip_viewport(view: &GitCometView, app: &App) -> gpui::Bounds<Pixels> {
+    view.repo_tabs_bar.read(app).tab_strip_viewport_for_tests()
+}
+
+pub(crate) fn pressed_repo_tab(view: &GitCometView, app: &App) -> Option<RepoId> {
+    view.repo_tabs_bar.read(app).pressed_repo_tab_for_tests()
+}
+
 pub(crate) fn add_repo_menu_is_open(view: &GitCometView, app: &App) -> bool {
     matches!(popover_kind(view, app), Some(PopoverKind::AddRepoMenu))
+}
+
+pub(crate) fn app_menu_focus_handle(view: &GitCometView, app: &App) -> FocusHandle {
+    view.title_bar.read(app).app_menu_focus_handle_for_test()
+}
+
+pub(crate) fn titlebar_drag_is_armed(view: &GitCometView, app: &App) -> bool {
+    view.title_bar.read(app).title_drag_armed_for_test()
 }
 
 pub(in crate::view) fn history_refs_hover_is_open(view: &GitCometView, app: &App) -> bool {

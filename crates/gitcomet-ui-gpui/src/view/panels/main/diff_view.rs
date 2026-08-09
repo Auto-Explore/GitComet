@@ -105,7 +105,7 @@ fn inline_submodule_entries(summary: &SubmoduleDiffSummary) -> Vec<InlineSubmodu
             kind: change.kind,
             target: DiffTarget::CommitRange {
                 from_commit_id: from_commit_id.clone(),
-                to_commit_id: to_commit_id.clone(),
+                to_commit_id: Some(to_commit_id.clone()),
                 path: Some(change.path.clone()),
             },
             section: InlineSubmoduleDiffSection::Range(range.kind),
@@ -203,6 +203,7 @@ impl MainPaneView {
                 MouseButton::Left,
                 cx.listener(move |this, e: &MouseDownEvent, _w, cx| {
                     cx.stop_propagation();
+                    crate::press_gesture::claim_press(cx);
                     this.annotate_resize = Some(AnnotateResizeState {
                         start_x: e.position.x,
                         start_width: this.annotate_column_width,
@@ -383,6 +384,37 @@ impl MainPaneView {
             .and_then(|navigation| navigation.next_or_prev_path());
             let status_ready = repo.status_entries_for_area(area).is_some();
 
+            // A multi-file status selection wins over the single shown file, so
+            // the shortcut matches what the status row button and context menu
+            // already do with the same selection.
+            if let Some(paths) = self.status_selection_for_shortcut(repo_id, area, &path, cx) {
+                if self.confirm_stage_conflict_markers(
+                    repo_id,
+                    area,
+                    paths.clone(),
+                    true,
+                    window,
+                    cx,
+                ) {
+                    return true;
+                }
+                self.clear_status_selection_for_shortcut(repo_id, cx);
+                self.stage_or_unstage_status_paths(repo_id, area, paths);
+                self.rebuild_diff_cache(cx);
+                return true;
+            }
+
+            if self.confirm_stage_conflict_markers(
+                repo_id,
+                area,
+                vec![path.clone()],
+                false,
+                window,
+                cx,
+            ) {
+                return true;
+            }
+
             match (status_ready, area) {
                 (true, DiffArea::Unstaged) => {
                     self.store.dispatch(Msg::StagePath {
@@ -481,6 +513,40 @@ impl MainPaneView {
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
 
+                    // A multi-file status selection wins over the single shown
+                    // file, matching the status row button and context menu.
+                    // Resolved before confirming, or the dialog would describe —
+                    // and then stage — only the shown file out of the selection.
+                    if let Some(paths) =
+                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
+                    {
+                        if self.confirm_stage_conflict_markers(
+                            repo_id,
+                            area,
+                            paths.clone(),
+                            true,
+                            window,
+                            cx,
+                        ) {
+                            return true;
+                        }
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        self.rebuild_diff_cache(cx);
+                        return true;
+                    }
+
+                    if self.confirm_stage_conflict_markers(
+                        repo_id,
+                        area,
+                        vec![path.clone()],
+                        false,
+                        window,
+                        cx,
+                    ) {
+                        return true;
+                    }
+
                     if status_ready {
                         self.store.dispatch(Msg::StagePath {
                             repo_id,
@@ -514,6 +580,27 @@ impl MainPaneView {
                         change_tracking_view,
                     )
                     .and_then(|navigation| navigation.next_or_prev_path());
+
+                    // A multi-file status selection wins over the single shown
+                    // file, matching the status row button and context menu.
+                    if let Some(paths) =
+                        self.status_selection_for_shortcut(repo_id, area, &path, cx)
+                    {
+                        if self.confirm_stage_conflict_markers(
+                            repo_id,
+                            area,
+                            paths.clone(),
+                            true,
+                            window,
+                            cx,
+                        ) {
+                            return true;
+                        }
+                        self.clear_status_selection_for_shortcut(repo_id, cx);
+                        self.stage_or_unstage_status_paths(repo_id, area, paths);
+                        self.rebuild_diff_cache(cx);
+                        return true;
+                    }
 
                     if status_ready {
                         self.store.dispatch(Msg::UnstagePath {
@@ -589,7 +676,11 @@ impl MainPaneView {
                     handled = true;
                 }
                 "c" if mods.shift => {
-                    crate::clipboard::write_text(cx, path.display().to_string());
+                    crate::clipboard::write_text(
+                        cx,
+                        path.display().to_string(),
+                        crate::clipboard::CopySource::FilePathShortcut,
+                    );
                     handled = true;
                 }
                 _ => {}
@@ -686,8 +777,7 @@ impl MainPaneView {
                     if conflict_resolver_active {
                         handled = false;
                     } else if self.active_conflict_target().is_some() {
-                        self.diff_view = DiffViewMode::Split;
-                        self.clear_diff_text_style_caches();
+                        self.set_diff_view_mode(DiffViewMode::Split, cx);
                         handled = true;
                         let root_view = self.root_view.clone();
                         cx.defer(move |cx| {
@@ -697,14 +787,17 @@ impl MainPaneView {
                                 });
                             }
                         });
-                    } else if !markdown_preview_active && !self.is_file_preview_active() {
+                    // The markdown diff preview renders both layouts (see
+                    // `render_markdown_diff_preview`), so these switch it just
+                    // like the text diff. The single-pane file preview has no
+                    // old/new pair to split, so it stays excluded.
+                    } else if !self.is_file_preview_active() {
                         let new_mode = if key == "i" {
                             DiffViewMode::Inline
                         } else {
                             DiffViewMode::Split
                         };
-                        self.diff_view = new_mode;
-                        self.clear_diff_text_style_caches();
+                        self.set_diff_view_mode(new_mode, cx);
                         handled = true;
                         let root_view = self.root_view.clone();
                         let mode = new_mode;
@@ -1047,20 +1140,31 @@ impl MainPaneView {
             .annotate_enabled
             .then(|| self.active_repo().map(|repo| &repo.history_state.blame))
             .flatten();
-        let (tooltip, errored): (SharedString, bool) = match blame_status {
-            Some(Loadable::Loading) => ("Loading blame…".into(), false),
-            Some(Loadable::Error(message)) => (
-                format!("Blame failed: {message}\nToggle off and on to retry").into(),
-                true,
-            ),
-            _ => (
-                format!(
-                    "Toggle blame annotations ({})",
-                    crate::view::shortcut_labels::alt_shortcut("B")
-                )
-                .into(),
+        // A rendered preview has no annotation gutter to draw into, so the
+        // toggle greys out there rather than silently doing nothing — matching
+        // Alt+B, which is inert for the same reason. Text mode still annotates.
+        let preview_blocks_blame = self.is_markdown_preview_active();
+        let (tooltip, errored): (SharedString, bool) = if preview_blocks_blame {
+            (
+                "Blame is unavailable in the rendered preview\nSwitch to Text to annotate".into(),
                 false,
-            ),
+            )
+        } else {
+            match blame_status {
+                Some(Loadable::Loading) => ("Loading blame…".into(), false),
+                Some(Loadable::Error(message)) => (
+                    format!("Blame failed: {message}\nToggle off and on to retry").into(),
+                    true,
+                ),
+                _ => (
+                    format!(
+                        "Toggle blame annotations ({})",
+                        crate::view::shortcut_labels::alt_shortcut("B")
+                    )
+                    .into(),
+                    false,
+                ),
+            }
         };
         let selected_bg = if errored {
             with_alpha(theme.colors.danger, if theme.is_dark { 0.30 } else { 0.20 })
@@ -1070,6 +1174,7 @@ impl MainPaneView {
         components::Button::new("diff_annotate", "Blame")
             .borderless()
             .style(components::ButtonStyle::Subtle)
+            .disabled(preview_blocks_blame)
             .selected(self.annotate_enabled)
             .selected_bg(selected_bg)
             .on_click(theme, cx, |this, _e, window, cx| {
@@ -1484,7 +1589,7 @@ impl MainPaneView {
                                     |(from_commit_id, to_commit_id)| {
                                         Some(DiffTarget::CommitRange {
                                             from_commit_id: from_commit_id.clone(),
-                                            to_commit_id: to_commit_id.clone(),
+                                            to_commit_id: Some(to_commit_id.clone()),
                                             path: Some(change_path.clone()),
                                         })
                                     },
@@ -1999,6 +2104,7 @@ impl MainPaneView {
             super::super::diff_target_rendered_preview_kind(self.rendered_diff_target());
         let rendered_view_toggle_kind = super::super::main_diff_rendered_preview_toggle_kind(
             wants_file_diff,
+            wants_collapsed_diff,
             is_file_preview,
             rendered_preview_kind,
         );
@@ -2181,15 +2287,12 @@ impl MainPaneView {
 
                 let diff_inline_btn = components::Button::new("diff_inline", "Inline")
                     .borderless()
+                    .rounded_left()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Inline)
                     .selected_bg(view_toggle_selected_bg)
                     .on_click(theme, cx, |this, _e, window, cx| {
-                        this.diff_view = DiffViewMode::Inline;
-                        this.clear_diff_text_style_caches();
-                        if this.diff_search_has_query() {
-                            this.diff_search_recompute_matches_preserving_current();
-                        }
+                        this.set_diff_view_mode(DiffViewMode::Inline, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         let root_view = this.root_view.clone();
                         cx.defer(move |cx| {
@@ -2213,15 +2316,12 @@ impl MainPaneView {
 
                 let diff_split_btn = components::Button::new("diff_split", "Split")
                     .borderless()
+                    .rounded_right()
                     .style(components::ButtonStyle::Subtle)
                     .selected(self.diff_view == DiffViewMode::Split)
                     .selected_bg(view_toggle_selected_bg)
                     .on_click(theme, cx, |this, _e, window, cx| {
-                        this.diff_view = DiffViewMode::Split;
-                        this.clear_diff_text_style_caches();
-                        if this.diff_search_has_query() {
-                            this.diff_search_recompute_matches_preserving_current();
-                        }
+                        this.set_diff_view_mode(DiffViewMode::Split, cx);
                         this.restore_diff_panel_focus_after_toolbar_action(window, cx);
                         let root_view = this.root_view.clone();
                         cx.defer(move |cx| {
@@ -2248,6 +2348,7 @@ impl MainPaneView {
 
                 let view_toggle = div()
                     .id("diff_view_toggle")
+                    .debug_selector(|| "diff_view_toggle".to_string())
                     .flex()
                     .items_center()
                     .h(components::control_height(ui_scale_percent))
@@ -2256,7 +2357,6 @@ impl MainPaneView {
                     .border_color(view_toggle_border)
                     .bg(gpui::rgba(0x00000000))
                     .overflow_hidden()
-                    .p(px(1.0))
                     .child(diff_inline_btn)
                     .child(div().h_full().w(px(1.0)).bg(view_toggle_divider))
                     .child(diff_split_btn);
@@ -2390,6 +2490,8 @@ impl MainPaneView {
         }
 
         let header = div()
+            .debug_selector(|| "diff_file_header".to_string())
+            .w_full()
             .flex()
             .items_center()
             .justify_between()
@@ -2938,6 +3040,9 @@ impl MainPaneView {
                                                                   _w,
                                                                   cx| {
                                                                 cx.stop_propagation();
+                                                                crate::press_gesture::claim_press(
+                                                                    cx,
+                                                                );
                                                                 this.diff_split_resize = Some(
                                                                     DiffSplitResizeState {
                                                                         handle:
@@ -3020,6 +3125,10 @@ impl MainPaneView {
 
                                             let columns_header = div()
                                                 .id("diff_split_columns_header")
+                                                .debug_selector(|| {
+                                                    "diff_split_columns_header".to_string()
+                                                })
+                                                .w_full()
                                                 .h(components::control_height(ui_scale_percent))
                                                 .flex()
                                                 .items_center()
@@ -3059,14 +3168,15 @@ impl MainPaneView {
                                                 .flex_col()
                                                 .bg(theme.colors.window_bg)
                                                 .font_family(editor_font_family.clone())
+                                                .child(columns_header)
                                                 .child(
                                                     div()
+                                                        .relative()
                                                         .pr(shared_scrollbar_gutter)
                                                         .flex()
                                                         .flex_col()
-                                                        .h_full()
+                                                        .flex_1()
                                                         .min_h(px(0.0))
-                                                        .child(columns_header)
                                                         .child(
                                                             div()
                                                                 .flex_1()
@@ -3211,6 +3321,13 @@ impl MainPaneView {
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.prune_diff_text_layout_cache();
         self.diff_text_hitboxes.clear();
+        // The map still holds last frame's buttons, so it is the one place that
+        // knows a hovered button has stopped being painted — the row itself
+        // clears its hover on the next mouse move, but a row that scrolled away
+        // or stopped being a change line paints no handler to do it, and a wheel
+        // scroll delivers no mouse move at all.
+        self.clear_diff_stage_gutter_hover_if_unpainted(cx);
+        self.diff_stage_gutter_cells.clear();
         let diff_editor_menu_active = self
             .active_context_menu_invoker
             .as_ref()

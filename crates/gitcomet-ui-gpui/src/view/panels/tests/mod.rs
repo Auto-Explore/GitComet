@@ -893,6 +893,7 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
             );
             let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
                 false,
+                false,
                 pane.is_file_preview_active(),
                 rendered_preview_kind,
             );
@@ -909,6 +910,7 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
                     .and_then(|repo| repo.diff_state.diff_target.as_ref()),
             );
             let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
+                false,
                 false,
                 pane.is_file_preview_active(),
                 rendered_preview_kind,
@@ -932,6 +934,7 @@ pub(super) fn assert_markdown_file_preview_toggle_visible(
                 .and_then(|repo| repo.diff_state.diff_target.as_ref()),
         );
         let toggle_kind = crate::view::main_diff_rendered_preview_toggle_kind(
+            false,
             false,
             pane.is_file_preview_active(),
             rendered_preview_kind,
@@ -1174,7 +1177,9 @@ pub(super) fn wait_for_file_image_diff_cache<Ready>(
     );
 }
 
+mod comparison;
 mod conflict;
+mod diff_stage_gutter;
 mod file_diff;
 mod file_preview;
 mod file_status;

@@ -16,11 +16,14 @@ pub struct UiSession {
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
     pub recent_repos: Vec<PathBuf>,
+    pub repo_picker_sort: Option<String>,
     pub repo_sidebar_collapsed_items: BTreeMap<PathBuf, BTreeSet<String>>,
+    pub repo_sidebar_pinned_branches: BTreeMap<PathBuf, BTreeSet<String>>,
     pub window_width: Option<u32>,
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub sidebar_collapsed: Option<bool>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
     pub ui_font_family: Option<String>,
@@ -150,11 +153,14 @@ struct UiSessionFile {
     open_repos: Vec<String>,
     active_repo: Option<String>,
     recent_repos: Option<Vec<String>>,
+    repo_picker_sort: Option<String>,
     repo_sidebar_collapsed_items: Option<BTreeMap<String, BTreeSet<String>>>,
+    repo_sidebar_pinned_branches: Option<BTreeMap<String, BTreeSet<String>>>,
     window_width: Option<u32>,
     window_height: Option<u32>,
     sidebar_width: Option<u32>,
     details_width: Option<u32>,
+    sidebar_collapsed: Option<bool>,
     theme_mode: Option<String>,
     ui_scale_percent: Option<u32>,
     ui_font_family: Option<String>,
@@ -257,15 +263,20 @@ pub fn load_from_path(path: &Path) -> UiSession {
     let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
     let repo_sidebar_collapsed_items =
         parse_path_keyed_string_sets(file.repo_sidebar_collapsed_items.unwrap_or_default());
+    let repo_sidebar_pinned_branches =
+        parse_path_keyed_string_sets(file.repo_sidebar_pinned_branches.unwrap_or_default());
     UiSession {
         open_repos,
         active_repo,
         recent_repos,
+        repo_picker_sort: file.repo_picker_sort,
         repo_sidebar_collapsed_items,
+        repo_sidebar_pinned_branches,
         window_width: file.window_width,
         window_height: file.window_height,
         sidebar_width: file.sidebar_width,
         details_width: file.details_width,
+        sidebar_collapsed: file.sidebar_collapsed,
         theme_mode: file.theme_mode,
         ui_scale_percent: file.ui_scale_percent,
         ui_font_family: file.ui_font_family,
@@ -576,7 +587,9 @@ pub struct UiSettings {
     pub window_height: Option<u32>,
     pub sidebar_width: Option<u32>,
     pub details_width: Option<u32>,
+    pub sidebar_collapsed: Option<bool>,
     pub repo_sidebar_collapsed_items: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
+    pub repo_sidebar_pinned_branches: Option<BTreeMap<PathBuf, BTreeSet<String>>>,
     pub theme_mode: Option<String>,
     pub ui_scale_percent: Option<u32>,
     pub ui_font_family: Option<String>,
@@ -586,6 +599,7 @@ pub struct UiSettings {
     pub timezone: Option<String>,
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
+    pub repo_picker_sort: Option<String>,
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
@@ -640,9 +654,16 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         if let Some(w) = settings.details_width {
             file.details_width = Some(w);
         }
+        if let Some(collapsed) = settings.sidebar_collapsed {
+            file.sidebar_collapsed = Some(collapsed);
+        }
         if let Some(items) = settings.repo_sidebar_collapsed_items {
             let items = path_keyed_string_sets_to_storage(items);
             file.repo_sidebar_collapsed_items = (!items.is_empty()).then_some(items);
+        }
+        if let Some(items) = settings.repo_sidebar_pinned_branches {
+            let items = path_keyed_string_sets_to_storage(items);
+            file.repo_sidebar_pinned_branches = (!items.is_empty()).then_some(items);
         }
         if let Some(theme_mode) = settings.theme_mode {
             file.theme_mode = Some(theme_mode);
@@ -670,6 +691,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.change_tracking_view {
             file.change_tracking_view = Some(value);
+        }
+        if let Some(value) = settings.repo_picker_sort {
+            file.repo_picker_sort = Some(value);
         }
         if let Some(value) = settings.diff_scroll_sync {
             file.diff_scroll_sync = Some(value);
@@ -1851,6 +1875,56 @@ mod tests {
     }
 
     #[test]
+    fn persist_ui_settings_round_trips_sidebar_collapsed() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-session-sidebar-collapsed-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let session_file = dir.join("session.json");
+
+        // Default (unset) leaves the field absent.
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, None);
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                sidebar_collapsed: Some(true),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist collapsed");
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, Some(true));
+
+        // A later settings write that doesn't touch the field preserves it.
+        persist_ui_settings_to_path(
+            UiSettings {
+                theme_mode: Some("dark".to_string()),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist theme");
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, Some(true));
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                sidebar_collapsed: Some(false),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist expanded");
+        assert_eq!(load_from_path(&session_file).sidebar_collapsed, Some(false));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn persist_repo_history_modes_batch_skips_empty_and_unchanged_updates() {
         let dir = unique_session_test_dir("repo-history-mode-batch");
         let session_file = dir.join("session.json");
@@ -2869,6 +2943,53 @@ mod tests {
         assert_eq!(
             loaded.repo_sidebar_collapsed_items,
             repo_sidebar_collapsed_items
+        );
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_repo_sidebar_pinned_branches() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-ui-settings-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+        let repo_a = dir.join("repo-a");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        let mut repo_sidebar_pinned_branches = BTreeMap::new();
+        repo_sidebar_pinned_branches.insert(
+            repo_a.clone(),
+            BTreeSet::from(["local:main".to_string(), "remote:origin/main".to_string()]),
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                repo_sidebar_pinned_branches: Some(repo_sidebar_pinned_branches.clone()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.repo_sidebar_pinned_branches,
+            repo_sidebar_pinned_branches
         );
     }
 

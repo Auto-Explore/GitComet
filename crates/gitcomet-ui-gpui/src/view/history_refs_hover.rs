@@ -519,6 +519,7 @@ impl Render for HistoryRefsHoverHost {
                 .gap_1()
                 .text_xs()
                 .line_height(ui_scale.px(16.0))
+                .rounded(px(theme.radii.row))
                 .text_color(if actionable {
                     theme.colors.text
                 } else {
@@ -561,52 +562,56 @@ impl Render for HistoryRefsHoverHost {
                         .whitespace_nowrap()
                         .child(label),
                 )
-                .on_mouse_up(
-                    MouseButton::Left,
-                    cx.listener({
-                        let commit_id = state.commit_id.clone();
-                        let item_for_left = item.clone();
-                        move |this, e: &MouseUpEvent, window, cx| {
-                            cx.stop_propagation();
-                            if actionable {
-                                this.open_item_menu(
-                                    state.repo_id,
-                                    commit_id.clone(),
-                                    ix,
-                                    &item_for_left,
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
-                            } else {
-                                if this.item_menu_open {
-                                    return;
-                                }
-                                this.select_commit(state.repo_id, commit_id.clone(), cx);
-                                this.close(cx);
-                            }
+                // `on_click`/`on_aux_click` rather than raw mouse-up: the panel
+                // shows on hover, so it can slide under a button that is
+                // already held, and gpui only fires these when the press
+                // landed on this row too.
+                .on_click(cx.listener({
+                    let commit_id = state.commit_id.clone();
+                    let item_for_left = item.clone();
+                    move |this, e: &ClickEvent, window, cx| {
+                        if !e.standard_click() {
+                            return;
                         }
-                    }),
-                )
-                .when(actionable, |row| {
-                    row.on_mouse_up(
-                        MouseButton::Right,
-                        cx.listener({
-                            let commit_id = state.commit_id.clone();
-                            move |this, e: &MouseUpEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.open_item_menu(
-                                    state.repo_id,
-                                    commit_id.clone(),
-                                    ix,
-                                    &item_for_right,
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
+                        cx.stop_propagation();
+                        if actionable {
+                            this.open_item_menu(
+                                state.repo_id,
+                                commit_id.clone(),
+                                ix,
+                                &item_for_left,
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                        } else {
+                            if this.item_menu_open {
+                                return;
                             }
-                        }),
-                    )
+                            this.select_commit(state.repo_id, commit_id.clone(), cx);
+                            this.close(cx);
+                        }
+                    }
+                }))
+                .when(actionable, |row| {
+                    row.on_aux_click(cx.listener({
+                        let commit_id = state.commit_id.clone();
+                        move |this, e: &ClickEvent, window, cx| {
+                            if !e.is_right_click() {
+                                return;
+                            }
+                            cx.stop_propagation();
+                            this.open_item_menu(
+                                state.repo_id,
+                                commit_id.clone(),
+                                ix,
+                                &item_for_right,
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                        }
+                    }))
                 })
                 .when(!actionable, |row| {
                     row.on_mouse_down(

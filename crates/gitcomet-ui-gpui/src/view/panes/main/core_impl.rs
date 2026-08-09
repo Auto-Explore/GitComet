@@ -897,7 +897,11 @@ fn blame_path_rev_for_target(
             ..
         } => Some((
             path.clone(),
-            BlameSource::Revision(Some(to_commit_id.0.to_string())),
+            match to_commit_id {
+                Some(to_commit_id) => BlameSource::Revision(Some(to_commit_id.0.to_string())),
+                // Working-tree tip: the new side is the worktree file.
+                None => BlameSource::WorkingTree(gitcomet_core::domain::DiffArea::Unstaged),
+            },
         )),
         _ => None,
     }
@@ -1567,6 +1571,8 @@ impl MainPaneView {
             annotate_column_width: rows::DIFF_ANNOTATION_COLUMN_WIDTH_PX,
             annotate_resize: None,
             blame_annot_hover: None,
+            diff_stage_gutter_hover: None,
+            diff_stage_gutter_cells: HashMap::default(),
             blame_time_range_cache: None,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap,
@@ -1883,6 +1889,7 @@ impl MainPaneView {
 
     pub(in crate::view) fn invalidate_font_metrics(&mut self, cx: &mut gpui::Context<Self>) {
         self.diff_text_hitboxes.clear();
+        self.diff_stage_gutter_cells.clear();
         self.diff_text_layout_cache_epoch = self.diff_text_layout_cache_epoch.wrapping_add(1);
         self.diff_text_layout_cache.clear();
         cx.notify();
@@ -3568,6 +3575,14 @@ impl MainPaneView {
         }
 
         self.diff_view = next;
+        // Inline keys styled segments by `row_ix` while split keys them by
+        // `row_ix * 2` / `row_ix * 2 + 1` (`file_diff_split_cache_key`) against
+        // the same `split_left`/`split_right` epochs, so the two key spaces
+        // alias. Clear on every mode change, not just the toolbar/hotkey ones.
+        self.clear_diff_text_style_caches();
+        if self.diff_search_has_query() {
+            self.diff_search_recompute_matches_preserving_current();
+        }
         cx.notify();
     }
 
@@ -3609,6 +3624,24 @@ impl MainPaneView {
                 .is_some()
     }
 
+    /// Whether the loaded (or retained) blame describes the diff target being
+    /// rendered right now. `blame_path`/`blame_source` follow the store snapshot,
+    /// which lags the dispatch by at least a frame, so just after a file switch
+    /// they still name the previous file — its annotations must not be painted
+    /// over the new one's rows.
+    pub(in crate::view) fn blame_matches_rendered_target(&self) -> bool {
+        let Some((path, source)) = self
+            .rendered_diff_target()
+            .and_then(blame_path_rev_for_target)
+        else {
+            return false;
+        };
+        self.active_repo().is_some_and(|repo| {
+            repo.history_state.blame_path.as_deref() == Some(path.as_path())
+                && repo.history_state.blame_source.as_ref() == Some(&source)
+        })
+    }
+
     /// Record the hovered blame annotation sub-area and drive the shared tooltip
     /// host. `next` is the (row, area) now hovered, or `None` when leaving; the
     /// blame canvas repaints on `notify` and renders the accent highlight from
@@ -3623,17 +3656,76 @@ impl MainPaneView {
             return;
         }
         self.blame_annot_hover = next;
-        if let Some(host) = self.tooltip_host.upgrade() {
-            host.update(cx, |host, cx| match tooltip {
-                Some(text) => {
-                    host.set_tooltip_text_if_changed(Some(text), cx);
-                }
-                None => {
+        // Only a pointer on the button itself owns a stage tooltip; merely
+        // hovering the row shows the button without one.
+        let stage_hover_owns_tooltip = self
+            .diff_stage_gutter_hover
+            .is_some_and(|hover| hover.on_button);
+        self.apply_diff_hover_tooltip(tooltip, stage_hover_owns_tooltip, cx);
+        cx.notify();
+    }
+
+    /// Drop a stage-gutter hover whose button was not painted in the frame just
+    /// gone. Called while `diff_stage_gutter_cells` still holds that frame's
+    /// buttons, so an entry missing from it means the row no longer offers one
+    /// and can no longer clear the hover itself. Without this the button and its
+    /// tooltip stay pinned under a pointer that is over something else.
+    pub(in crate::view) fn clear_diff_stage_gutter_hover_if_unpainted(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let unpainted = self.diff_stage_gutter_hover.is_some_and(|hover| {
+            !self
+                .diff_stage_gutter_cells
+                .contains_key(&(hover.visible_ix, hover.slot))
+        });
+        if unpainted {
+            self.update_diff_stage_gutter_hover(None, None, cx);
+        }
+    }
+
+    /// Record the hovered stage/unstage gutter button and drive the shared
+    /// tooltip host, mirroring [`Self::update_blame_annot_hover`]. The row canvas
+    /// paints the button from this state (never from the live cursor), so it
+    /// stays in step with the value folded into the canvas revision key.
+    pub(in crate::view) fn update_diff_stage_gutter_hover(
+        &mut self,
+        next: Option<rows::DiffStageHover>,
+        tooltip: Option<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.diff_stage_gutter_hover == next {
+            return;
+        }
+        self.diff_stage_gutter_hover = next;
+        let blame_hover_owns_tooltip = self.blame_annot_hover.is_some();
+        self.apply_diff_hover_tooltip(tooltip, blame_hover_owns_tooltip, cx);
+        cx.notify();
+    }
+
+    /// Shared tooltip plumbing for the two diff-row hover systems (blame column
+    /// and stage gutter). Both write to the same host, so a hover that is leaving
+    /// must not clear a tooltip the other one just set: `other_hover_active` says
+    /// whether the other system currently owns the tooltip.
+    fn apply_diff_hover_tooltip(
+        &mut self,
+        tooltip: Option<SharedString>,
+        other_hover_active: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(host) = self.tooltip_host.upgrade() else {
+            return;
+        };
+        host.update(cx, |host, cx| match tooltip {
+            Some(text) => {
+                host.set_tooltip_text_if_changed(Some(text), cx);
+            }
+            None => {
+                if !other_hover_active {
                     host.clear_tooltip(cx);
                 }
-            });
-        }
-        cx.notify();
+            }
+        });
     }
 
     /// Drop the cached wrapped-row projection so it is recomputed against the
@@ -3724,10 +3816,7 @@ impl MainPaneView {
         self.rebuild_patch_visual_line_kinds_from_current_diff();
         self.diff_word_highlights.clear();
         self.diff_word_highlights_inflight = None;
-        self.file_diff_inline_word_highlights =
-            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
-        self.file_diff_split_word_highlights =
-            rows::new_lru_cache(FILE_DIFF_WORD_HIGHLIGHT_CACHE_MAX_ENTRIES);
+        self.reset_file_diff_word_highlight_caches();
         self.clear_diff_text_style_caches();
         self.clear_diff_text_query_overlay_cache();
         self.clear_conflict_diff_style_caches();
@@ -3921,13 +4010,29 @@ impl MainPaneView {
             && Self::is_file_diff_target(self.rendered_diff_target())
     }
 
+    /// The diff mode actually in effect. Collapsed hides the unchanged parts of
+    /// a patch, so a target the state layer loads as whole-file content — an
+    /// added, deleted, or untracked file, which has no patch — has nothing to
+    /// collapse and stays on Full however the setting is set.
+    pub(in crate::view) fn effective_diff_content_mode(&self) -> DiffContentMode {
+        if self.diff_content_mode == DiffContentMode::Collapsed
+            && matches!(
+                self.rendered_patch_diff_loadable(),
+                Some(Loadable::NotLoaded)
+            )
+        {
+            return DiffContentMode::Full;
+        }
+        self.diff_content_mode
+    }
+
     pub(in crate::view) fn wants_file_diff_view(&self, is_file_preview: bool) -> bool {
-        self.diff_content_mode == DiffContentMode::Full
+        self.effective_diff_content_mode() == DiffContentMode::Full
             && self.supports_diff_content_mode_toggle(is_file_preview)
     }
 
     pub(in crate::view) fn wants_collapsed_diff_view(&self, is_file_preview: bool) -> bool {
-        self.diff_content_mode == DiffContentMode::Collapsed
+        self.effective_diff_content_mode() == DiffContentMode::Collapsed
             && self.supports_diff_content_mode_toggle(is_file_preview)
     }
 
@@ -3990,7 +4095,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn is_collapsed_diff_projection_active(&self) -> bool {
-        self.diff_content_mode == DiffContentMode::Collapsed
+        self.effective_diff_content_mode() == DiffContentMode::Collapsed
             && self.current_main_diff_supports_diff_content_toggle()
             && self.rendered_patch_diff_cache_is_current()
             && self.rendered_file_diff_cache_is_current()
@@ -4655,6 +4760,96 @@ impl MainPaneView {
         );
     }
 
+    /// Paths a stage/unstage shortcut should act on when the file it targets is
+    /// part of a multi-file status selection: the whole selection, resolved the
+    /// same way the status row button and the context menu resolve it. `None`
+    /// means there is no such selection and the caller keeps acting on the one
+    /// file it already resolved.
+    ///
+    /// Reads only. The shortcut may still raise a confirmation the user cancels,
+    /// so [`Self::clear_status_selection_for_shortcut`] is a separate step the
+    /// caller owes once it commits to the action.
+    pub(in crate::view) fn status_selection_for_shortcut(
+        &mut self,
+        repo_id: RepoId,
+        area: DiffArea,
+        path: &std::path::PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<Vec<std::path::PathBuf>> {
+        self.root_view
+            .update(cx, |root, cx| {
+                let (paths, used_selection) = root
+                    .details_pane
+                    .read(cx)
+                    .status_selected_paths_for_action(repo_id, area, path);
+                used_selection.then_some(paths)
+            })
+            .ok()
+            .flatten()
+    }
+
+    /// Drop the row selection a shortcut has just acted on.
+    pub(in crate::view) fn clear_status_selection_for_shortcut(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.details_pane.update(cx, |pane, cx| {
+                pane.clear_status_multi_selection(repo_id);
+                cx.notify();
+            });
+        });
+    }
+
+    /// Raise the unresolved-conflict confirmation if staging `paths` would mark
+    /// files resolved while they still contain conflict markers. Returns whether
+    /// the dialog took over, in which case the caller must not stage: the dialog
+    /// dispatches it if the user goes ahead. Unstaging never marks anything
+    /// resolved, so it is left alone.
+    pub(in crate::view) fn confirm_stage_conflict_markers(
+        &mut self,
+        repo_id: RepoId,
+        area: DiffArea,
+        paths: Vec<std::path::PathBuf>,
+        clear_selection: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        if area != DiffArea::Unstaged {
+            return false;
+        }
+        let Some(confirm) = crate::view::conflict_markers::stage_confirm_popover(
+            &self.state,
+            repo_id,
+            paths,
+            clear_selection,
+        ) else {
+            return false;
+        };
+        let anchor = crate::view::conflict_markers::centered_dialog_anchor(window);
+        self.open_popover_at(confirm, anchor, window, cx);
+        cx.notify();
+        true
+    }
+
+    /// Stage (or unstage) a whole status selection in one batch, clearing the
+    /// diff selection first because every one of those files is about to move to
+    /// the other section. Same order the context menu uses.
+    pub(in crate::view) fn stage_or_unstage_status_paths(
+        &mut self,
+        repo_id: RepoId,
+        area: DiffArea,
+        paths: Vec<std::path::PathBuf>,
+    ) {
+        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        let paths = paths.into();
+        self.store.dispatch(match area {
+            DiffArea::Unstaged => Msg::StagePaths { repo_id, paths },
+            DiffArea::Staged => Msg::UnstagePaths { repo_id, paths },
+        });
+    }
+
     pub(in crate::view) fn clear_status_multi_selection(
         &mut self,
         repo_id: RepoId,
@@ -4743,8 +4938,7 @@ impl MainPaneView {
         let next_diff_target = Self::rendered_diff_target_for_state(next.as_ref());
 
         if prev_diff_target != next_diff_target {
-            self.diff_selection_anchor = None;
-            self.diff_selection_range = None;
+            self.clear_diff_selection_state();
             self.diff_autoscroll_pending = next_diff_target.is_some();
             self.worktree_preview_path = None;
             self.worktree_preview = Loadable::NotLoaded;
@@ -4947,14 +5141,14 @@ impl MainPaneView {
 
 
     pub(in crate::view) fn is_file_diff_view_active(&self) -> bool {
-        self.diff_content_mode == DiffContentMode::Full
+        self.effective_diff_content_mode() == DiffContentMode::Full
             && self.rendered_file_diff_cache_is_current()
     }
 
+    /// Whether the rasterized image diff on screen belongs to the current
+    /// target. Deliberately not gated on [`DiffContentMode`]: an image has no
+    /// collapsed form, so its rendered view is the same in either diff mode.
     pub(in crate::view) fn is_file_image_diff_view_active(&self) -> bool {
-        if self.diff_content_mode != DiffContentMode::Full {
-            return false;
-        }
         let Some((repo_id, diff_file_rev, diff_target, _workdir, abs_path)) =
             self.rendered_file_diff_identity()
         else {
@@ -5155,7 +5349,17 @@ impl MainPaneView {
         }
     }
 
-    fn diff_wrap_columns(
+    /// Font the wrapped diff rows are painted in — the same family the rows
+    /// container applies via `.font_family(editor_font_family)`. Wrap widths
+    /// must be measured in it, never in the ambient text style.
+    pub(in crate::view) fn diff_wrap_measure_font_family(
+        &self,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::SharedString {
+        crate::font_preferences::current_editor_font_family(cx).into()
+    }
+
+    pub(in crate::view) fn diff_wrap_columns(
         &self,
         window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
@@ -5163,7 +5367,11 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::UiScale::current(cx).percent();
         let vertical_gutter = components::Scrollbar::gutter(components::ScrollbarAxis::Vertical);
         let content_width = (self.main_pane_content_width(cx) - vertical_gutter).max(px(0.0));
-        let char_width = rows::diff_canvas_text_wrap_char_width(window);
+        // Measured in the editor font the rows are painted in, not in the
+        // ambient UI font that is still current while this element tree is
+        // being built. See `diff_text_wrap_char_width`.
+        let char_width =
+            rows::diff_canvas_text_wrap_char_width(window, self.diff_wrap_measure_font_family(cx));
         let pad = rows::diff_canvas_row_horizontal_padding(ui_scale_percent);
         let inline_text_start = if self.diff_show_line_numbers {
             rows::diff_canvas_inline_text_start(ui_scale_percent)
@@ -5382,7 +5590,76 @@ impl MainPaneView {
         }
     }
 
-    pub(super) fn diff_src_ixs_for_visible_ix(&self, visible_ix: usize) -> Vec<usize> {
+    /// Patch source lines behind a full-file diff row. The file-diff and
+    /// collapsed views render whole file texts rather than patch rows, so a row
+    /// is matched back to the patch by file path plus line number.
+    pub(in crate::view) fn patch_src_ixs_for_file_diff_row(&self, row_ix: usize) -> Vec<usize> {
+        let (old_line, new_line) = match self.diff_view {
+            DiffViewMode::Inline => {
+                let Some(line) = self.file_diff_inline_render_data(row_ix) else {
+                    return Vec::new();
+                };
+                (line.old_line, line.new_line)
+            }
+            DiffViewMode::Split => {
+                let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                    return Vec::new();
+                };
+                (row.old_line, row.new_line)
+            }
+        };
+        self.patch_src_ixs_for_file_line(old_line, new_line)
+    }
+
+    fn patch_src_ixs_for_file_line(
+        &self,
+        old_line: Option<u32>,
+        new_line: Option<u32>,
+    ) -> Vec<usize> {
+        // A row with no line number on either side cannot identify a patch line.
+        if old_line.is_none() && new_line.is_none() {
+            return Vec::new();
+        }
+        let Some(abs) = self.file_diff_cache_path.as_ref() else {
+            return Vec::new();
+        };
+        let Some(workdir) = self.rendered_diff_workdir() else {
+            return Vec::new();
+        };
+        let rel = abs.strip_prefix(workdir).unwrap_or(abs);
+        // Git diffs use forward slashes even on Windows.
+        let rel_str = rel.to_str().map(|text| text.replace('\\', "/"));
+
+        let mut out = Vec::with_capacity(2);
+        for src_ix in 0..self.patch_diff_row_len() {
+            if self
+                .diff_file_for_src_ix
+                .get(src_ix)
+                .and_then(|p| p.as_deref())
+                != rel_str.as_deref()
+            {
+                continue;
+            }
+            let Some(line) = self.patch_diff_row(src_ix) else {
+                continue;
+            };
+            let matched = match line.kind {
+                gitcomet_core::domain::DiffLineKind::Add => line.new_line == new_line,
+                gitcomet_core::domain::DiffLineKind::Remove
+                | gitcomet_core::domain::DiffLineKind::Context => line.old_line == old_line,
+                gitcomet_core::domain::DiffLineKind::Header
+                | gitcomet_core::domain::DiffLineKind::Hunk => false,
+            };
+            if matched {
+                out.push(src_ix);
+            }
+        }
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
+    pub(in crate::view) fn diff_src_ixs_for_visible_ix(&self, visible_ix: usize) -> Vec<usize> {
         if self.is_collapsed_diff_projection_active() {
             let Some(source_visible_ix) = self.diff_source_visible_ix_for_visible_ix(visible_ix)
             else {
@@ -5396,73 +5673,18 @@ impl MainPaneView {
                     return row.header_action_src_ix().into_iter().collect();
                 }
                 CollapsedDiffVisibleRow::FileRow { row_ix } => {
-                    let Some(abs) = self.file_diff_cache_path.as_ref() else {
-                        return Vec::new();
-                    };
-                    let Some(workdir) = self.rendered_diff_workdir() else {
-                        return Vec::new();
-                    };
-                    let rel = abs.strip_prefix(workdir).unwrap_or(abs);
-                    let rel_str = rel.to_str().map(|text| text.replace('\\', "/"));
-                    let lookup_change =
-                        |old_line: Option<u32>, new_line: Option<u32>| -> Vec<usize> {
-                            let mut out = Vec::with_capacity(2);
-                            for src_ix in 0..self.patch_diff_row_len() {
-                                if self
-                                    .diff_file_for_src_ix
-                                    .get(src_ix)
-                                    .and_then(|p| p.as_deref())
-                                    != rel_str.as_deref()
-                                {
-                                    continue;
-                                }
-                                let Some(line) = self.patch_diff_row(src_ix) else {
-                                    continue;
-                                };
-                                match line.kind {
-                                    gitcomet_core::domain::DiffLineKind::Add => {
-                                        if line.new_line == new_line {
-                                            out.push(src_ix);
-                                        }
-                                    }
-                                    gitcomet_core::domain::DiffLineKind::Remove => {
-                                        if line.old_line == old_line {
-                                            out.push(src_ix);
-                                        }
-                                    }
-                                    gitcomet_core::domain::DiffLineKind::Context => {
-                                        if line.old_line == old_line {
-                                            out.push(src_ix);
-                                        }
-                                    }
-                                    gitcomet_core::domain::DiffLineKind::Header
-                                    | gitcomet_core::domain::DiffLineKind::Hunk => {}
-                                }
-                            }
-                            out.sort_unstable();
-                            out.dedup();
-                            out
-                        };
-                    return match self.diff_view {
-                        DiffViewMode::Inline => self
-                            .file_diff_inline_render_data(row_ix)
-                            .map(|line| lookup_change(line.old_line, line.new_line))
-                            .unwrap_or_default(),
-                        DiffViewMode::Split => self
-                            .file_diff_split_render_data(row_ix)
-                            .map(|row| lookup_change(row.old_line, row.new_line))
-                            .unwrap_or_default(),
-                    };
+                    return self.patch_src_ixs_for_file_diff_row(row_ix);
                 }
             }
         }
 
-        if self.is_file_diff_view_active() {
-            return Vec::new();
-        }
         let Some(mapped_ix) = self.diff_mapped_ix_for_visible_ix(visible_ix) else {
             return Vec::new();
         };
+
+        if self.is_file_diff_view_active() {
+            return self.patch_src_ixs_for_file_diff_row(mapped_ix);
+        }
 
         match self.diff_view {
             DiffViewMode::Inline => vec![mapped_ix],

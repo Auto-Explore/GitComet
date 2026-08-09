@@ -59,7 +59,6 @@ jobs:
       - name: Run headless test suite
         run: |
           cargo test --workspace \
-            --exclude gitcomet-ui \
             --exclude gitcomet-ui-gpui \
             $APP_FEATURES \
             --locked \
@@ -97,7 +96,6 @@ jobs:
         shell: bash
         run: |
           cargo test --workspace \
-            --exclude gitcomet-ui \
             --exclude gitcomet-ui-gpui \
             $APP_FEATURES \
             --locked \
@@ -211,7 +209,6 @@ jobs:
       - name: Run headless test suite
         run: |
           cargo test --workspace \
-            --exclude gitcomet-ui \
             --exclude gitcomet-ui-gpui \
             $APP_FEATURES \
             --locked \
@@ -262,7 +259,6 @@ jobs:
         shell: pwsh
         run: |
           cargo test --workspace `
-            --exclude gitcomet-ui `
             --exclude gitcomet-ui-gpui `
             --no-default-features `
             --features gix `

@@ -18,4 +18,4 @@ pub(in crate::view) use history::{
     history_resize_state_visible_columns_for_current_width,
 };
 pub(crate) use main::MainPaneView;
-pub(super) use sidebar::SidebarPaneView;
+pub(super) use sidebar::{CollapsedSidebarSection, SidebarPaneView};
