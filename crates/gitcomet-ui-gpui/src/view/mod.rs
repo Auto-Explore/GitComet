@@ -975,7 +975,15 @@ impl GitCometView {
                 // TODO: Implement merge branch/ref
             }
             "rebase" => {
-                // TODO: Implement rebase onto
+                if let Some(window) = window {
+                    self.open_popover_centered(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::RebaseOnto,
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
             "create-tag" => {
                 if let Some(repo_id) = self.active_repo_id()

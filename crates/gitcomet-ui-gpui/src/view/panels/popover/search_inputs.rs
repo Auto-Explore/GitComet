@@ -182,10 +182,13 @@ impl PopoverHost {
                 |this| this.inline_branch_picker_active(),
                 |this| &mut this.branch_picker_selected_index,
                 |this, query, _cx| {
-                    let is_delete = matches!(
+                    // The current branch is not offered as a rebase target (it
+                    // cannot be rebased onto itself) and cannot be deleted.
+                    let hide_current_branch = matches!(
                         this.popover,
                         Some(PopoverKind::BranchPicker {
-                            purpose: BranchPickerPurpose::Delete
+                            purpose:
+                                BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto
                         })
                     );
                     let with_refs = branch_picker_offers_refs(this);
@@ -200,7 +203,7 @@ impl PopoverHost {
                     let mut names: Vec<String> = branches
                         .iter()
                         .filter_map(|b| {
-                            if is_delete && head_branch == Some(b.name.as_str()) {
+                            if hide_current_branch && head_branch == Some(b.name.as_str()) {
                                 None
                             } else {
                                 Some(b.name.clone())

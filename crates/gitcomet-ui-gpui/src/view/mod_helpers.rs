@@ -3489,6 +3489,7 @@ pub(super) struct TerminalMenuContext {
 pub(super) enum BranchPickerPurpose {
     Checkout,
     Delete,
+    RebaseOnto,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
