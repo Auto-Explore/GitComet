@@ -1592,7 +1592,6 @@ fn render_markdown_preview_window(
         start..end,
         &super::history::MarkdownPreviewRenderContext {
             theme,
-            bar_color: None,
             min_width: px(0.0),
             editor_font_family: crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY.into(),
             ui_scale_percent: crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
@@ -2164,6 +2163,8 @@ fn build_markdown_preview_row(
         footnote_label: None,
         alert_kind: None,
         starts_alert: false,
+        image: None,
+        inline_images: Arc::from(Vec::new()),
         styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
     }
@@ -2186,6 +2187,10 @@ fn build_markdown_preview_inline_spans(text: &str) -> Arc<Vec<MarkdownInlineSpan
             spans.push(MarkdownInlineSpan {
                 byte_range: start..end,
                 style,
+                // A parsed link span always carries its destination, so the
+                // fixture keeps one too.
+                link_url: (style == MarkdownInlineStyle::Link)
+                    .then(|| SharedString::from("https://example.com/preview")),
             });
         }
     }
