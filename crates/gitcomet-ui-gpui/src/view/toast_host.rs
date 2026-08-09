@@ -365,6 +365,15 @@ impl ToastHost {
         self.toasts.len()
     }
 
+    /// The kind and wording of every toast on screen, oldest first.
+    #[cfg(test)]
+    pub(super) fn toasts_for_tests(&self, cx: &gpui::App) -> Vec<(components::ToastKind, String)> {
+        self.toasts
+            .iter()
+            .map(|toast| (toast.kind, toast.input.read(cx).text().to_string()))
+            .collect()
+    }
+
     pub(super) fn remove_toast(&mut self, id: u64, cx: &mut gpui::Context<Self>) {
         let before = self.toasts.len();
         self.toasts.retain(|t| t.id != id);

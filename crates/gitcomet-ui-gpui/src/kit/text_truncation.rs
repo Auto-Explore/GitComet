@@ -304,33 +304,7 @@ fn compute_highlight_runs(
     default_style: &TextStyle,
     highlights: &[(Range<usize>, HighlightStyle)],
 ) -> Vec<TextRun> {
-    if highlights.is_empty() {
-        return vec![default_style.to_run(text.len())];
-    }
-
-    let mut runs = Vec::with_capacity(highlights.len() * 2 + 1);
-    let mut ix = 0usize;
-    for (range, highlight) in highlights {
-        let start = range.start.min(text.len()).max(ix);
-        let end = range.end.min(text.len());
-        if ix < start {
-            runs.push(default_style.clone().to_run(start - ix));
-        }
-        if start >= end {
-            continue;
-        }
-        runs.push(
-            default_style
-                .clone()
-                .highlight(*highlight)
-                .to_run(end - start),
-        );
-        ix = end;
-    }
-    if ix < text.len() {
-        runs.push(default_style.clone().to_run(text.len() - ix));
-    }
-    runs
+    crate::text_runs::text_runs_for_highlights(text, default_style, highlights)
 }
 
 fn normalized_focus_range(text: &str, focus_range: Option<Range<usize>>) -> Option<Range<usize>> {
