@@ -211,6 +211,24 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
+    if let Some(permalink) = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| match &repo.remotes {
+            Loadable::Ready(remotes) => crate::view::permalink::commit_permalink(remotes, &sha),
+            _ => None,
+        })
+    {
+        items.push(ContextMenuItem::Entry {
+            label: "Copy commit permalink".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyText { text: permalink }),
+        });
+    }
     // Comparison: mark this commit as a base, or compare it against a mark.
     // Look the repo up by id rather than via `active_repo`, so a menu opened for
     // a non-active repo offers the same comparison entries the branch and tag

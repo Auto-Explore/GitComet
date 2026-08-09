@@ -165,6 +165,7 @@ mod panels;
 mod panes;
 mod patch_split;
 mod path_display;
+mod permalink;
 mod perf;
 pub(super) mod platform_open;
 mod poller;
