@@ -3159,6 +3159,8 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
                     file_diff_cache_seq: 0,
                     inline_columns: 8,
                     split_columns: 8,
+                    preview_columns: 8,
+                    preview_content_rev: 0,
                     reveal_whitespace_chars: false,
                 });
                 pane.diff_wrap_visible_rows = vec![DiffWrapVisualRow {

@@ -138,6 +138,8 @@ tree-sitter-yaml = { workspace = true, optional = true }
 tree-sitter-zig = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 url = { workspace = true }
+ureq = { workspace = true }
+anyhow = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
 # Used to SIGTERM the terminal child process group on Linux and macOS.

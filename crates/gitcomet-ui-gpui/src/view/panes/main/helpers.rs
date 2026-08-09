@@ -2522,6 +2522,12 @@ pub(in crate::view) struct DiffWrapVisibleCacheKey {
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) inline_columns: usize,
     pub(in crate::view) split_columns: usize,
+    /// Columns a file preview row wraps at. The preview is a single column
+    /// with its own gutter, so neither of the diff's two widths describes it.
+    pub(in crate::view) preview_columns: usize,
+    /// Bumped when the previewed file's content changes, so the rows are
+    /// rebuilt for the new text rather than kept from the old.
+    pub(in crate::view) preview_content_rev: u64,
     pub(in crate::view) reveal_whitespace_chars: bool,
 }
 
@@ -2764,6 +2770,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_markdown_preview: LoadableMarkdownDiff,
     pub(in crate::view) file_markdown_preview_seq: u64,
     pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
+    pub(in crate::view) markdown_preview_wrap: MarkdownPreviewWrapCache,
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
@@ -2790,6 +2797,18 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_markdown_preview_path: Option<std::path::PathBuf>,
     pub(in crate::view) worktree_markdown_preview_source_rev: u64,
     pub(in crate::view) worktree_markdown_preview: LoadableMarkdownDoc,
+    /// Sizes read from the headers of the pictures the rendered preview draws,
+    /// so a picture that has not decoded yet can still hold its box open.
+    pub(in crate::view) worktree_markdown_preview_picture_sizes: rows::MarkdownPreviewPictureSizes,
+    /// Where each sideways-scrolling block of the rendered preview is scrolled
+    /// to, so its scrollbar has something to read.
+    pub(in crate::view) worktree_markdown_preview_block_scrolls: rows::MarkdownDocumentBlockScrolls,
+    /// Block grouping of the document the rendered preview last drew, so it is
+    /// not re-derived on every frame.
+    pub(in crate::view) worktree_markdown_preview_blocks: rows::MarkdownDocumentBlockCache,
+    /// Pictures in the rendered preview that are still decoding and already
+    /// have someone waiting to repaint the pane when they finish.
+    pub(in crate::view) worktree_markdown_preview_image_waits: HashSet<gpui::Resource>,
     pub(in crate::view) worktree_markdown_preview_seq: u64,
     pub(in crate::view) worktree_markdown_preview_inflight: Option<u64>,
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,

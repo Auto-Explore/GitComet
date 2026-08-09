@@ -51,6 +51,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         PopoverKind::DiffContentModeSettings
+        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -128,6 +129,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -337,6 +339,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -431,6 +434,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
+        PopoverKind::MarkdownLinkMenu { url } => {
+            96u8.hash(hasher);
+            url.hash(hasher);
+        }
         PopoverKind::DiffActionMenu => 69u8.hash(hasher),
         PopoverKind::MergetoolSettingsMenu => 75u8.hash(hasher),
         PopoverKind::CommitOptionsMenu { repo_id } => {

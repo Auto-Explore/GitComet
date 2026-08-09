@@ -12,6 +12,15 @@ pub(super) const MAX_DIFF_PREVIEW_SOURCE_BYTES: usize = 2 * 1_024 * 1_024; // 2 
 /// Maximum number of preview rows per document.
 pub(super) const MAX_PREVIEW_ROWS: usize = 20_000;
 
+/// Maximum number of rows the single-document preview renders.
+///
+/// That preview lays its whole document out at once so text can wrap and
+/// pictures can sit inline, which means every row costs layout on every frame —
+/// unlike the diff preview, which paints a virtualized window of a fixed row
+/// grid and is bounded by [`MAX_PREVIEW_ROWS`] instead. A document past this
+/// budget falls back to source mode rather than making the pane crawl.
+pub(super) const MAX_FLOWING_PREVIEW_ROWS: usize = 4_000;
+
 /// Maximum number of inline spans per row before degrading to plain text.
 const MAX_INLINE_SPANS_PER_ROW: usize = 512;
 
@@ -43,28 +52,154 @@ pub(super) struct MarkdownPreviewRow {
     pub(super) footnote_label: Option<SharedString>,
     pub(super) alert_kind: Option<MarkdownAlertKind>,
     pub(super) starts_alert: bool,
+    /// The image an [`MarkdownPreviewRowKind::Image`] row paints.
+    pub(super) image: Option<Arc<MarkdownImage>>,
+    /// Pictures that share this row's line with its text, in document order.
+    pub(super) inline_images: Arc<[MarkdownInlineImage]>,
     pub(super) styled_text_cache: MarkdownPreviewRowStyledTextCache,
     pub(super) measured_width_px: MarkdownPreviewRowWidthCache,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum MarkdownPreviewRowKind {
-    Heading { level: u8 },
+    Heading {
+        level: u8,
+    },
     Paragraph,
     DetailsSummary,
-    ListItem { number: Option<u64> },
+    ListItem {
+        number: Option<u64>,
+    },
     BlockquoteLine,
-    CodeLine { is_first: bool, is_last: bool },
+    CodeLine {
+        is_first: bool,
+        is_last: bool,
+    },
     ThematicBreak,
-    TableRow { is_header: bool },
+    TableRow {
+        is_header: bool,
+    },
+    /// One horizontal band of an image block.
+    ///
+    /// The preview paints into a uniform (fixed row height) list, so an image
+    /// occupies `slice_count` consecutive rows and each row shows the band of
+    /// the picture at its own `slice_ix`. Slicing it this way — rather than
+    /// letting one tall row overflow its neighbours — keeps the image correct
+    /// when it is scrolled half out of view, because every row draws itself.
+    Image {
+        slice_ix: u8,
+        slice_count: u8,
+    },
     PlainFallback,
     Spacer,
+}
+
+impl MarkdownPreviewRowKind {
+    fn is_image(&self) -> bool {
+        matches!(self, Self::Image { .. })
+    }
+}
+
+impl MarkdownPreviewRow {
+    /// Whether this row only continues a picture an earlier row already
+    /// carries, and so is not a line of the document in its own right.
+    pub(super) fn continues_a_picture(&self) -> bool {
+        matches!(self.kind, MarkdownPreviewRowKind::Image { slice_ix, .. } if slice_ix > 0)
+    }
+}
+
+/// Rows an image block occupies when the document says nothing about the
+/// picture's size.
+pub(super) const MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS: u8 = 8;
+
+/// Design row height, used to turn a declared image size into a row count at
+/// parse time. Must track `MARKDOWN_PREVIEW_ROW_HEIGHT_PX`; both scale with the
+/// UI together, so the row count is scale-independent.
+const MARKDOWN_PREVIEW_IMAGE_ROW_HEIGHT_PX: u32 = 28;
+
+/// A picture that shares a line with the text around it.
+///
+/// Markdown draws no distinction between a picture on a line of its own and one
+/// written mid-sentence — badges, shields, and a logo beside a heading are all
+/// ordinary inline content. A row therefore carries its pictures alongside its
+/// text instead of displacing it, and only a picture that is alone on its line
+/// becomes a block of its own.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MarkdownInlineImage {
+    /// Byte offset in the row's text where the picture belongs.
+    pub(super) byte_offset: usize,
+    /// Byte offset in the *source document* where the picture was written.
+    ///
+    /// Unique across the document, which makes it the element id a renderer
+    /// can key on without allocating one, and the only thing left to tie a
+    /// picture back to the line it came from once its row is built.
+    pub(super) source_byte: usize,
+    pub(super) image: Arc<MarkdownImage>,
+    /// Description shown when the picture cannot be drawn.
+    pub(super) alt: SharedString,
+    /// The link the picture stands in for, when it is wrapped in one.
+    pub(super) link_url: Option<SharedString>,
+}
+
+/// An image a preview row draws, with whatever size the document declared.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MarkdownImage {
+    /// The source exactly as written in the document.
+    pub(super) source: SharedString,
+    pub(super) width_px: Option<u32>,
+    pub(super) height_px: Option<u32>,
+}
+
+impl MarkdownImage {
+    /// Rows this image's block occupies.
+    ///
+    /// A declared height is authoritative. With only a width — the common
+    /// `<img width="26">` used for an inline logo — the picture is assumed no
+    /// taller than it is wide, which keeps small images from reserving a
+    /// screenful of blank rows. `object_fit: contain` letterboxes anything
+    /// that turns out to be taller.
+    pub(super) fn block_rows(&self) -> u8 {
+        // A declared size of zero says nothing about how tall the picture is,
+        // so it is treated as undeclared rather than collapsing the block to a
+        // single row — and each dimension is judged on its own, so `height="0"`
+        // falls through to a usable width instead of discarding it.
+        let Some(declared) = self
+            .height_px
+            .filter(|declared| *declared > 0)
+            .or(self.width_px.filter(|declared| *declared > 0))
+        else {
+            return MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS;
+        };
+        let rows = declared
+            .div_ceil(MARKDOWN_PREVIEW_IMAGE_ROW_HEIGHT_PX)
+            .max(1);
+        u8::try_from(rows)
+            .unwrap_or(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
+            .min(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct MarkdownInlineSpan {
     pub(super) byte_range: Range<usize>,
     pub(super) style: MarkdownInlineStyle,
+    /// Destination of the link this span sits inside.
+    ///
+    /// Carried on the span rather than in a parallel list so it survives the
+    /// byte remapping that whitespace normalisation and table alignment apply,
+    /// and independently of `style` because a bold or code span inside a link
+    /// resolves to that style while still being clickable.
+    pub(super) link_url: Option<SharedString>,
+}
+
+impl MarkdownInlineSpan {
+    fn restyled(&self, byte_range: Range<usize>) -> Self {
+        Self {
+            byte_range,
+            style: self.style,
+            link_url: self.link_url.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -109,6 +244,29 @@ struct MarkdownFootnoteContext {
     emitted_label: bool,
 }
 
+/// Parse state every row flush consults.
+///
+/// Both parts are answers to "what does the row being closed inherit?": the
+/// blockquote stack decides its alert, and `pending_images` holds the pictures
+/// read since the last flush, which belong to the line they were written on.
+#[derive(Default)]
+struct MarkdownRowContext {
+    blockquote_stack: Vec<MarkdownBlockQuoteContext>,
+    pending_images: Vec<MarkdownInlineImage>,
+}
+
+impl MarkdownRowContext {
+    /// True when a row has to be emitted even though its text is empty.
+    ///
+    /// Pictures only reach the document through the row that closes over them,
+    /// so a construct that would otherwise skip an empty row — a list item
+    /// holding nothing but a badge — has to emit one anyway or the picture is
+    /// carried onto an unrelated row later, or dropped at the end of the parse.
+    fn has_pending_images(&self) -> bool {
+        !self.pending_images.is_empty()
+    }
+}
+
 struct MarkdownPreviewRowInput<'a> {
     kind: MarkdownPreviewRowKind,
     text: &'a str,
@@ -118,6 +276,8 @@ struct MarkdownPreviewRowInput<'a> {
     source_line_range: Range<usize>,
     indent_level: u8,
     blockquote_level: u8,
+    image: Option<Arc<MarkdownImage>>,
+    inline_images: Arc<[MarkdownInlineImage]>,
 }
 
 impl<'a> MarkdownPreviewRowInput<'a> {
@@ -138,6 +298,8 @@ impl<'a> MarkdownPreviewRowInput<'a> {
             source_line_range,
             indent_level,
             blockquote_level,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
         }
     }
 
@@ -159,11 +321,42 @@ impl<'a> MarkdownPreviewRowInput<'a> {
             source_line_range,
             indent_level,
             blockquote_level,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
+        }
+    }
+
+    fn image(
+        slice_ix: u8,
+        slice_count: u8,
+        alt: &'a str,
+        image: Arc<MarkdownImage>,
+        source_line_range: Range<usize>,
+        indent_level: u8,
+        blockquote_level: u8,
+    ) -> Self {
+        Self {
+            kind: MarkdownPreviewRowKind::Image {
+                slice_ix,
+                slice_count,
+            },
+            // The alt text stays the row text so selection and copy still see
+            // something meaningful, and so a picture that cannot be loaded can
+            // fall back to describing itself.
+            text: alt,
+            inline_spans: &[],
+            code_language: None,
+            code_block_horizontal_scroll_hint: false,
+            source_line_range,
+            indent_level,
+            blockquote_level,
+            image: Some(image),
+            inline_images: Arc::from(Vec::new()),
         }
     }
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct MarkdownPreviewRowDecoration {
     footnote_label: Option<SharedString>,
     alert_kind: Option<MarkdownAlertKind>,
@@ -238,6 +431,323 @@ impl PartialEq for MarkdownPreviewRowStyledTextCache {
 
 impl Eq for MarkdownPreviewRowStyledTextCache {}
 
+// ── Flowing document blocks ─────────────────────────────────────────────
+
+/// A run of rows that renders as one element in the flowing preview.
+///
+/// The row model is shaped for the diff preview, which paints into a uniform
+/// (fixed row height) list and therefore needs one row per painted line. The
+/// single-document preview lays out naturally instead, so consecutive rows
+/// belonging to the same construct — the lines of a code block, the bands of
+/// an image, the rows of a table — are grouped back into the block they came
+/// from. Both previews stay on one parsed model this way.
+/// Blocks address rows by index rather than by reference: selection, copy, and
+/// hit testing are all keyed by row index, so the flowing renderer hands the
+/// same indices to the same machinery the row preview used.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum MarkdownBlock {
+    Heading {
+        level: u8,
+        row_ix: usize,
+    },
+    Paragraph(usize),
+    /// The bands of one image; only the first carries the source.
+    Image(Range<usize>),
+    ThematicBreak(usize),
+    List(Range<usize>),
+    Blockquote(Range<usize>),
+    Code(Range<usize>),
+    Table(Range<usize>),
+}
+
+impl MarkdownBlock {
+    /// Rows this block paints, in document order.
+    pub(super) fn row_range(&self) -> Range<usize> {
+        match self {
+            Self::Heading { row_ix, .. }
+            | Self::Paragraph(row_ix)
+            | Self::ThematicBreak(row_ix) => *row_ix..*row_ix + 1,
+            Self::Image(range)
+            | Self::List(range)
+            | Self::Blockquote(range)
+            | Self::Code(range)
+            | Self::Table(range) => range.clone(),
+        }
+    }
+}
+
+/// Group a document's rows into the blocks the flowing preview renders.
+///
+/// Spacer rows are dropped: they exist to open a gap in a fixed row grid, and
+/// the flowing layout expresses the same gap as a margin.
+pub(super) fn markdown_document_blocks(document: &MarkdownPreviewDocument) -> Vec<MarkdownBlock> {
+    let mut blocks: Vec<MarkdownBlock> = Vec::new();
+    let mut ix = 0usize;
+
+    while ix < document.rows.len() {
+        let row = &document.rows[ix];
+        match row.kind {
+            MarkdownPreviewRowKind::Spacer => ix += 1,
+            MarkdownPreviewRowKind::ThematicBreak => {
+                blocks.push(MarkdownBlock::ThematicBreak(ix));
+                ix += 1;
+            }
+            MarkdownPreviewRowKind::Heading { level } => {
+                blocks.push(MarkdownBlock::Heading { level, row_ix: ix });
+                ix += 1;
+            }
+            MarkdownPreviewRowKind::Image { .. } => {
+                // Every band of one image repeats the same source; the block
+                // needs it once.
+                let source = row.image.as_ref().map(|image| image.source.clone());
+                let start = ix;
+                ix += 1;
+                while ix < document.rows.len()
+                    && document.rows[ix].kind.is_image()
+                    && document.rows[ix]
+                        .image
+                        .as_ref()
+                        .map(|image| image.source.clone())
+                        == source
+                    && !matches!(
+                        document.rows[ix].kind,
+                        MarkdownPreviewRowKind::Image { slice_ix: 0, .. }
+                    )
+                {
+                    ix += 1;
+                }
+                blocks.push(MarkdownBlock::Image(start..ix));
+            }
+            MarkdownPreviewRowKind::ListItem { .. } => {
+                blocks.push(MarkdownBlock::List(take_run(
+                    document,
+                    &mut ix,
+                    |_, row| matches!(row.kind, MarkdownPreviewRowKind::ListItem { .. }),
+                )));
+            }
+            MarkdownPreviewRowKind::BlockquoteLine => {
+                // Two alerts that touch are two blocks: each carries its own
+                // bar and badge, and folding them together would label the
+                // second one with the first one's kind.
+                blocks.push(MarkdownBlock::Blockquote(take_run(
+                    document,
+                    &mut ix,
+                    |offset, row| {
+                        matches!(row.kind, MarkdownPreviewRowKind::BlockquoteLine)
+                            && (offset == 0 || !row.starts_alert)
+                    },
+                )));
+            }
+            MarkdownPreviewRowKind::CodeLine { .. } => {
+                blocks.push(MarkdownBlock::Code(take_run(
+                    document,
+                    &mut ix,
+                    |_, row| matches!(row.kind, MarkdownPreviewRowKind::CodeLine { .. }),
+                )));
+            }
+            MarkdownPreviewRowKind::TableRow { .. } => {
+                // A header row opens a table, so it ends the one before it for
+                // the same reason an alert's first row ends the quote above.
+                blocks.push(MarkdownBlock::Table(take_run(
+                    document,
+                    &mut ix,
+                    |offset, row| match row.kind {
+                        MarkdownPreviewRowKind::TableRow { is_header } => offset == 0 || !is_header,
+                        _ => false,
+                    },
+                )));
+            }
+            MarkdownPreviewRowKind::Paragraph
+            | MarkdownPreviewRowKind::DetailsSummary
+            | MarkdownPreviewRowKind::PlainFallback => {
+                blocks.push(MarkdownBlock::Paragraph(ix));
+                ix += 1;
+            }
+        }
+    }
+
+    blocks
+}
+
+/// Consume the run of consecutive rows `belongs` accepts, which sees each row
+/// together with its offset from the start of the run.
+fn take_run(
+    document: &MarkdownPreviewDocument,
+    ix: &mut usize,
+    belongs: impl Fn(usize, &MarkdownPreviewRow) -> bool,
+) -> Range<usize> {
+    let start = *ix;
+    while let Some(row) = document.rows.get(*ix) {
+        if !belongs(*ix - start, row) {
+            break;
+        }
+        *ix += 1;
+    }
+    start..*ix
+}
+
+// ── Word wrap ───────────────────────────────────────────────────────────
+
+/// One rendered row of a wrapped preview document.
+///
+/// Preview rows are painted into a uniform (fixed row height) list, so word
+/// wrap works the same way it does in the text diff: a source row that does
+/// not fit is split into several visual rows, each carrying the byte range of
+/// `MarkdownPreviewRow::text` it paints. `wrap_ix > 0` marks a continuation,
+/// which drops the list marker and alert badge so the text keeps its indent.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct MarkdownPreviewVisualRow {
+    pub(super) row_ix: usize,
+    pub(super) wrap_ix: u32,
+    pub(super) byte_range: Range<usize>,
+}
+
+impl MarkdownPreviewVisualRow {
+    pub(super) fn is_continuation(&self) -> bool {
+        self.wrap_ix > 0
+    }
+
+    /// The portion of `row.text` this visual row paints.
+    ///
+    /// Hit testing, selection, and copy index rows by visual position, so they
+    /// need the slice the row painted rather than the whole source row.
+    pub(super) fn text_slice(&self, row: &MarkdownPreviewRow) -> SharedString {
+        if self.byte_range == (0..row.text.len()) {
+            return row.text.clone();
+        }
+        row.text
+            .get(self.byte_range.clone())
+            .map(SharedString::new)
+            .unwrap_or_default()
+    }
+}
+
+/// Source-row to visual-row mapping for one wrapped preview document.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct MarkdownPreviewWrapPlan {
+    rows: Vec<MarkdownPreviewVisualRow>,
+}
+
+impl MarkdownPreviewWrapPlan {
+    pub(super) fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    pub(super) fn get(&self, visual_ix: usize) -> Option<&MarkdownPreviewVisualRow> {
+        self.rows.get(visual_ix)
+    }
+
+    /// First visual row painted for `row_ix`, for scroll and autoscroll targets.
+    pub(super) fn visual_ix_for_row(&self, row_ix: usize) -> usize {
+        self.rows.partition_point(|row| row.row_ix < row_ix)
+    }
+}
+
+/// Build the visual-row mapping for `document`.
+///
+/// `wrap_row` returns the byte ranges a row's painted text splits into at the
+/// current width; an empty result (or a row that fits) yields a single visual
+/// row covering the whole text, so every source row keeps at least one row.
+///
+/// Returns `None` when the wrapped document would exceed
+/// `MAX_PREVIEW_WRAPPED_ROWS`, which the caller must treat as "do not wrap".
+/// Truncating the plan instead would drop the tail of the document out of the
+/// list with no way to scroll to it.
+pub(super) fn build_markdown_preview_wrap_plan(
+    document: &MarkdownPreviewDocument,
+    mut wrap_row: impl FnMut(&MarkdownPreviewRow) -> Vec<Range<usize>>,
+) -> Option<MarkdownPreviewWrapPlan> {
+    let mut rows = Vec::with_capacity(document.rows.len());
+    for (row_ix, row) in document.rows.iter().enumerate() {
+        push_wrapped_visual_rows(&mut rows, row_ix, wrap_row(row), row, 0)?;
+    }
+    rows.shrink_to_fit();
+    Some(MarkdownPreviewWrapPlan { rows })
+}
+
+/// Build the visual-row mappings for the two sides of a split diff preview.
+///
+/// `align_markdown_diff_rows` pads the two documents so source row `ix` is the
+/// same diff row on both sides; wrapping each side independently would break
+/// that, because a long paragraph on the left would push every later left row
+/// down relative to its right-hand counterpart while the synced scroll keeps
+/// the two lists at the same offset. Both sides therefore get the same number
+/// of visual rows per source row, the shorter side padded with empty
+/// continuations.
+pub(super) fn build_markdown_preview_split_wrap_plans(
+    old_doc: &MarkdownPreviewDocument,
+    new_doc: &MarkdownPreviewDocument,
+    mut wrap_row: impl FnMut(&MarkdownPreviewRow) -> Vec<Range<usize>>,
+) -> Option<(MarkdownPreviewWrapPlan, MarkdownPreviewWrapPlan)> {
+    // `align_markdown_diff_rows` pushes to both sides in lockstep, so the two
+    // documents are the same length by the time they reach a split preview.
+    debug_assert_eq!(old_doc.rows.len(), new_doc.rows.len());
+
+    let row_count = old_doc.rows.len().min(new_doc.rows.len());
+    let mut old_rows = Vec::with_capacity(row_count);
+    let mut new_rows = Vec::with_capacity(row_count);
+
+    for (row_ix, (old_row, new_row)) in old_doc.rows.iter().zip(new_doc.rows.iter()).enumerate() {
+        let old_ranges = wrap_row(old_row);
+        let new_ranges = wrap_row(new_row);
+        let visual_count = old_ranges.len().max(new_ranges.len()).max(1);
+
+        push_wrapped_visual_rows(&mut old_rows, row_ix, old_ranges, old_row, visual_count)?;
+        push_wrapped_visual_rows(&mut new_rows, row_ix, new_ranges, new_row, visual_count)?;
+    }
+
+    old_rows.shrink_to_fit();
+    new_rows.shrink_to_fit();
+    Some((
+        MarkdownPreviewWrapPlan { rows: old_rows },
+        MarkdownPreviewWrapPlan { rows: new_rows },
+    ))
+}
+
+/// Append the visual rows for one source row, padding up to `min_visual_rows`
+/// with empty continuations so a split counterpart stays row-aligned.
+fn push_wrapped_visual_rows(
+    out: &mut Vec<MarkdownPreviewVisualRow>,
+    row_ix: usize,
+    ranges: Vec<Range<usize>>,
+    row: &MarkdownPreviewRow,
+    min_visual_rows: usize,
+) -> Option<()> {
+    let text_len = row.text.len();
+    let push =
+        |out: &mut Vec<MarkdownPreviewVisualRow>, wrap_ix: usize, byte_range: Range<usize>| {
+            out.push(MarkdownPreviewVisualRow {
+                row_ix,
+                wrap_ix: u32::try_from(wrap_ix).unwrap_or(u32::MAX),
+                byte_range,
+            });
+            (out.len() <= MAX_PREVIEW_WRAPPED_ROWS).then_some(())
+        };
+
+    // A row that fits keeps one visual row covering all of its text; building
+    // a one-element Vec for that common case would allocate per source row.
+    let mut wrap_ix = 0usize;
+    if ranges.len() < 2 {
+        push(out, wrap_ix, 0..text_len)?;
+        wrap_ix += 1;
+    } else {
+        for byte_range in ranges {
+            push(out, wrap_ix, byte_range)?;
+            wrap_ix += 1;
+        }
+    }
+    while wrap_ix < min_visual_rows {
+        push(out, wrap_ix, text_len..text_len)?;
+        wrap_ix += 1;
+    }
+    Some(())
+}
+
+/// Upper bound on visual rows in a wrapped document. A pathological window
+/// width (a few pixels wide) would otherwise wrap every character onto its own
+/// row and blow up the uniform list.
+const MAX_PREVIEW_WRAPPED_ROWS: usize = MAX_PREVIEW_ROWS * 8;
+
 // ── Error messages ──────────────────────────────────────────────────────
 
 /// Return a user-facing reason why a single-document markdown preview is
@@ -247,6 +757,43 @@ pub(super) fn single_preview_unavailable_reason(source_len: usize) -> &'static s
         "Markdown preview unavailable: file exceeds the 1 MiB preview limit."
     } else {
         "Markdown preview unavailable: rendered row limit exceeded."
+    }
+}
+
+/// Why a single-document preview could not be produced.
+///
+/// The two cases read the same to a user — no preview — but they are not the
+/// same problem: one document cannot be parsed within the row cap at all, the
+/// other parses fine and is only too big for a renderer that lays every row
+/// out at once. Only the second has a good answer, which is to show the source.
+pub(super) const TOO_MANY_ROWS_TO_RENDER_MESSAGE: &str =
+    "Markdown preview unavailable: document is too large to render; showing source.";
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum MarkdownPreviewRefusal {
+    /// Unreadable, or past the source-size or parsed-row cap.
+    Unavailable(String),
+    /// Parsed, but past what the flowing renderer will lay out in a frame.
+    TooManyRowsToRender,
+}
+
+impl From<String> for MarkdownPreviewRefusal {
+    fn from(reason: String) -> Self {
+        Self::Unavailable(reason)
+    }
+}
+
+impl MarkdownPreviewRefusal {
+    pub(super) fn into_message(self) -> String {
+        match self {
+            Self::Unavailable(reason) => reason,
+            Self::TooManyRowsToRender => TOO_MANY_ROWS_TO_RENDER_MESSAGE.to_owned(),
+        }
+    }
+
+    /// True when the reader is better served by the source than by an error.
+    pub(super) fn prefers_source(&self) -> bool {
+        matches!(self, Self::TooManyRowsToRender)
     }
 }
 
@@ -473,6 +1020,8 @@ fn markdown_preview_spacer_row_with_range(source_line_range: Range<usize>) -> Ma
         footnote_label: None,
         alert_kind: None,
         starts_alert: false,
+        image: None,
+        inline_images: Arc::from(Vec::new()),
         styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
     }
@@ -676,7 +1225,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
 
     let mut rows = Vec::new();
     let mut text_buf = String::new();
+    struct PendingImage {
+        source: SharedString,
+        alt_start: usize,
+    }
+
     let mut span_stack: Vec<MarkdownInlineStyle> = Vec::new();
+    let mut link_stack: Vec<Option<SharedString>> = Vec::new();
+    let mut pending_image: Option<PendingImage> = None;
     let mut inline_spans: Vec<MarkdownInlineSpan> = Vec::new();
     let mut source_start_byte: usize = 0;
     let mut indent_level: u8 = 0;
@@ -685,7 +1241,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
     let mut in_heading = false;
     let mut in_paragraph = false;
     let mut in_blockquote: u8 = 0;
-    let mut blockquote_stack: Vec<MarkdownBlockQuoteContext> = Vec::new();
+    let mut row_ctx = MarkdownRowContext::default();
     let mut in_code_block = false;
     let mut in_table_row = false;
     let mut table_row_is_header = false;
@@ -695,6 +1251,9 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
     let mut footnote_context: Option<MarkdownFootnoteContext> = None;
 
     for (event, event_range) in Parser::new_ext(source, options).into_offset_iter() {
+        // Block-level HTML stands on its own line with no paragraph around it,
+        // so anything it produces has to close its own row.
+        let is_block_html = matches!(event, Event::Html(_));
         match event {
             Event::Start(Tag::Heading { .. }) => {
                 text_buf.clear();
@@ -714,7 +1273,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         in_blockquote,
                     ),
                     footnote_context.as_mut(),
-                    &mut blockquote_stack,
+                    &mut row_ctx,
                 )?;
                 in_heading = false;
                 text_buf.clear();
@@ -728,6 +1287,17 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                 in_paragraph = true;
             }
             Event::End(TagEnd::Paragraph) => {
+                // A paragraph whose only content was block-level HTML has
+                // already closed its own row; closing it again would add a
+                // blank row under it.
+                if text_buf.is_empty()
+                    && row_ctx.pending_images.is_empty()
+                    && rows.last().is_some_and(|row| row.kind.is_image())
+                {
+                    in_paragraph = false;
+                    inline_spans.clear();
+                    continue;
+                }
                 let kind = current_row_kind(&list_item_stack, in_blockquote);
 
                 push_row_with_context(
@@ -741,7 +1311,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         in_blockquote,
                     ),
                     footnote_context.as_mut(),
-                    &mut blockquote_stack,
+                    &mut row_ctx,
                 )?;
                 in_paragraph = false;
                 text_buf.clear();
@@ -749,9 +1319,12 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
             }
 
             Event::Start(Tag::List(first_number)) => {
-                // Flush any accumulated item text before entering the sub-list,
-                // so the parent item gets its own row at the current indent level.
-                if !text_buf.is_empty() && !list_item_stack.is_empty() {
+                // Flush any accumulated item text — or picture — before entering
+                // the sub-list, so the parent item gets its own row at the
+                // current indent level.
+                if (!text_buf.is_empty() || row_ctx.has_pending_images())
+                    && !list_item_stack.is_empty()
+                {
                     let kind = list_item_stack
                         .last()
                         .copied()
@@ -767,7 +1340,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                             in_blockquote,
                         ),
                         footnote_context.as_mut(),
-                        &mut blockquote_stack,
+                        &mut row_ctx,
                     )?;
                     text_buf.clear();
                     inline_spans.clear();
@@ -793,8 +1366,10 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
             }
             Event::End(TagEnd::Item) => {
                 // Only emit a row if there is text that hasn't already been
-                // emitted by a nested paragraph or sub-list.
-                if !text_buf.is_empty() {
+                // emitted by a nested paragraph or sub-list — or a picture,
+                // which a tight list item like `- ![badge](b.svg)` leaves as
+                // the item's only content.
+                if !text_buf.is_empty() || row_ctx.has_pending_images() {
                     let kind = list_item_stack
                         .last()
                         .copied()
@@ -810,7 +1385,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                             in_blockquote,
                         ),
                         footnote_context.as_mut(),
-                        &mut blockquote_stack,
+                        &mut row_ctx,
                     )?;
                     text_buf.clear();
                     inline_spans.clear();
@@ -819,14 +1394,14 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
             }
 
             Event::Start(Tag::BlockQuote(kind)) => {
-                blockquote_stack.push(MarkdownBlockQuoteContext {
+                row_ctx.blockquote_stack.push(MarkdownBlockQuoteContext {
                     alert_kind: kind.and_then(markdown_alert_kind_from_blockquote_kind),
                     emitted_row: false,
                 });
                 in_blockquote = in_blockquote.saturating_add(1);
             }
             Event::End(TagEnd::BlockQuote(_)) => {
-                blockquote_stack.pop();
+                row_ctx.blockquote_stack.pop();
                 in_blockquote = in_blockquote.saturating_sub(1);
             }
 
@@ -890,7 +1465,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                             in_blockquote,
                         ),
                         footnote_context.as_mut(),
-                        &mut blockquote_stack,
+                        &mut row_ctx,
                     )?;
                 }
                 in_code_block = false;
@@ -928,7 +1503,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         in_blockquote,
                     ),
                     footnote_context.as_mut(),
-                    &mut blockquote_stack,
+                    &mut row_ctx,
                 )?;
                 in_table_row = false;
                 table_row_is_header = false;
@@ -950,24 +1525,71 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
             Event::Start(Tag::Strikethrough) => {
                 span_stack.push(MarkdownInlineStyle::Strikethrough);
             }
-            Event::Start(Tag::Link { .. }) => {
+            Event::Start(Tag::Link { dest_url, .. }) => {
                 span_stack.push(MarkdownInlineStyle::Link);
+                link_stack.push(web_link_url(dest_url.as_ref()));
             }
-            Event::End(
-                TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link,
-            ) => {
+            Event::End(TagEnd::Link) => {
                 span_stack.pop();
+                link_stack.pop();
+            }
+            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
+                span_stack.pop();
+            }
+
+            // Pulldown reports an image's alt text as ordinary text between
+            // Start and End, so the alt is taken back out of the buffer and the
+            // picture is recorded at the offset it occupies. Whether it ends up
+            // inline or as a block of its own is decided when the row closes.
+            Event::Start(Tag::Image { dest_url, .. }) => {
+                pending_image = Some(PendingImage {
+                    source: SharedString::from(dest_url.as_ref().to_owned()),
+                    alt_start: text_buf.len(),
+                });
+            }
+            Event::End(TagEnd::Image) => {
+                let Some(pending) = pending_image.take() else {
+                    continue;
+                };
+                let alt = text_buf.split_off(pending.alt_start.min(text_buf.len()));
+                if in_table_row {
+                    // A table row is painted as one string whose columns are
+                    // aligned by padding, so a picture cannot sit in a cell
+                    // without breaking that alignment. Its description stays in
+                    // the cell instead, which keeps the column readable and in
+                    // the right place.
+                    text_buf.push_str(&alt);
+                    continue;
+                }
+                // The alt text is not painted, so anything styled inside it —
+                // an image inside a link records the link on its alt — would
+                // leave a span pointing past the end of the row.
+                clamp_inline_spans_to_len(&mut inline_spans, text_buf.len());
+                row_ctx.pending_images.push(MarkdownInlineImage {
+                    byte_offset: text_buf.len(),
+                    source_byte: event_range.start,
+                    // Markdown image syntax cannot declare a size.
+                    image: Arc::new(MarkdownImage {
+                        source: pending.source,
+                        width_px: None,
+                        height_px: None,
+                    }),
+                    alt: SharedString::from(alt),
+                    link_url: current_link_url(&link_stack),
+                });
             }
 
             Event::Text(cow) => {
                 let style = resolve_style_stack(&span_stack);
+                let link_url = current_link_url(&link_stack);
                 let start = text_buf.len();
                 text_buf.push_str(&cow);
                 let end = text_buf.len();
-                if style != MarkdownInlineStyle::Normal && !in_code_block {
+                if (style != MarkdownInlineStyle::Normal || link_url.is_some()) && !in_code_block {
                     inline_spans.push(MarkdownInlineSpan {
                         byte_range: start..end,
                         style,
+                        link_url,
                     });
                 }
             }
@@ -980,6 +1602,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                     inline_spans.push(MarkdownInlineSpan {
                         byte_range: start..end,
                         style: MarkdownInlineStyle::Code,
+                        link_url: current_link_url(&link_stack),
                     });
                 }
             }
@@ -994,6 +1617,9 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                     inline_spans.push(MarkdownInlineSpan {
                         byte_range: start..end,
                         style: MarkdownInlineStyle::Link,
+                        // A footnote reference points inside the document, not
+                        // at the web.
+                        link_url: None,
                     });
                 }
             }
@@ -1016,7 +1642,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                                 in_blockquote,
                             ),
                             footnote_context.as_mut(),
-                            &mut blockquote_stack,
+                            &mut row_ctx,
                         )?;
                         text_buf.clear();
                         inline_spans.clear();
@@ -1044,7 +1670,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                                 in_blockquote,
                             ),
                             footnote_context.as_mut(),
-                            &mut blockquote_stack,
+                            &mut row_ctx,
                         )?;
                         text_buf.clear();
                         inline_spans.clear();
@@ -1062,7 +1688,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                             in_blockquote,
                         ),
                         footnote_context.as_mut(),
-                        &mut blockquote_stack,
+                        &mut row_ctx,
                     )?;
                     text_buf.clear();
                     inline_spans.clear();
@@ -1084,7 +1710,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         in_blockquote,
                     ),
                     footnote_context.as_mut(),
-                    &mut blockquote_stack,
+                    &mut row_ctx,
                 )?;
             }
 
@@ -1120,7 +1746,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                                         in_blockquote,
                                     ),
                                     footnote_context.as_mut(),
-                                    &mut blockquote_stack,
+                                    &mut row_ctx,
                                 )?;
                                 text_buf.clear();
                                 inline_spans.clear();
@@ -1144,7 +1770,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                                     in_blockquote,
                                 ),
                                 footnote_context.as_mut(),
-                                &mut blockquote_stack,
+                                &mut row_ctx,
                             )?;
                             text_buf.clear();
                             inline_spans.clear();
@@ -1169,7 +1795,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                                     in_blockquote,
                                 ),
                                 footnote_context.as_mut(),
-                                &mut blockquote_stack,
+                                &mut row_ctx,
                             )?;
                             text_buf.clear();
                             inline_spans.clear();
@@ -1193,7 +1819,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                                     in_blockquote,
                                 ),
                                 footnote_context.as_mut(),
-                                &mut blockquote_stack,
+                                &mut row_ctx,
                             )?;
                         }
                         source_start_byte = event_range.end;
@@ -1205,6 +1831,56 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                     }
                     HtmlHandling::EndInlineStyle(style) => {
                         pop_matching_inline_style(&mut span_stack, style);
+                        continue;
+                    }
+                    HtmlHandling::Images(images) => {
+                        if in_table_row {
+                            // As with a markdown image: a table cell keeps the
+                            // description rather than a picture that cannot be
+                            // placed in its column.
+                            for (_, _, alt) in &images {
+                                text_buf.push_str(alt);
+                            }
+                            continue;
+                        }
+                        // An `<img>` records itself the way a markdown image
+                        // does; the row it closes decides whether it is inline
+                        // or a block.
+                        for (tag_offset, image, alt) in images {
+                            row_ctx.pending_images.push(MarkdownInlineImage {
+                                byte_offset: text_buf.len(),
+                                // Several tags can share one event, so the id
+                                // is the tag's own position, not the event's.
+                                source_byte: event_range.start.saturating_add(tag_offset),
+                                image: Arc::new(image),
+                                alt: SharedString::from(alt),
+                                link_url: current_link_url(&link_stack),
+                            });
+                        }
+                        // A block-level tag has no paragraph to close it, so it
+                        // flushes its own row.
+                        if is_block_html {
+                            push_row_with_context(
+                                &mut rows,
+                                MarkdownPreviewRowInput::plain(
+                                    current_row_kind(&list_item_stack, in_blockquote),
+                                    &text_buf,
+                                    &inline_spans,
+                                    source_line_range(
+                                        source_start_byte,
+                                        event_range.end,
+                                        line_starts,
+                                    ),
+                                    indent_level,
+                                    in_blockquote,
+                                ),
+                                footnote_context.as_mut(),
+                                &mut row_ctx,
+                            )?;
+                            text_buf.clear();
+                            inline_spans.clear();
+                            source_start_byte = event_range.end;
+                        }
                         continue;
                     }
                     HtmlHandling::AppendText(text) => {
@@ -1234,7 +1910,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                                     in_blockquote,
                                 ),
                                 footnote_context.as_mut(),
-                                &mut blockquote_stack,
+                                &mut row_ctx,
                             )?;
                         }
                         continue;
@@ -1261,6 +1937,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
                         line_starts,
                         indent_level,
                         in_blockquote,
+                        &mut row_ctx,
                     )?;
                 }
             }
@@ -1287,6 +1964,7 @@ fn insert_top_level_heading_spacer_rows(rows: &mut Vec<MarkdownPreviewRow>) {
         let is_top_level_heading = markdown_row_is_top_level_heading(&row);
         if let Some(source_line_range) = pending_gap_after_heading.take()
             && !is_top_level_heading
+            && !matches!(row.kind, MarkdownPreviewRowKind::Spacer)
         {
             spaced_rows.push(markdown_preview_spacer_row_with_range(source_line_range));
         }
@@ -1301,6 +1979,10 @@ fn insert_top_level_heading_spacer_rows(rows: &mut Vec<MarkdownPreviewRow>) {
                     )
             );
 
+            // One spacer row is the section break. Adding a second one under
+            // the heading doubles it to two blank rows, which reads as a hole
+            // in the document; the heading's own vertical insets carry the
+            // smaller gap beneath it instead.
             if has_content_before_heading {
                 spaced_rows.push(markdown_preview_spacer_row_with_range(
                     row.source_line_range.clone(),
@@ -1330,6 +2012,9 @@ enum HtmlHandling {
     StartInlineStyle(MarkdownInlineStyle),
     EndInlineStyle(MarkdownInlineStyle),
     AppendText(String),
+    /// The `<img>` tags a fragment holds, each with the byte offset of its tag
+    /// inside that fragment and the `alt` describing it if it cannot be drawn.
+    Images(Vec<(usize, MarkdownImage, String)>),
     AppendLiteral,
 }
 
@@ -1389,6 +2074,10 @@ fn classify_supported_html(html: &str) -> HtmlHandling {
     }
     if let Some(summary_source) = extract_html_summary_content(trimmed) {
         return HtmlHandling::DetailsSummary(summary_source);
+    }
+    let images = extract_html_images(trimmed);
+    if !images.is_empty() {
+        return HtmlHandling::Images(images);
     }
     if let Some(alt_text) = extract_html_image_alt(trimmed) {
         return HtmlHandling::AppendText(alt_text);
@@ -1472,6 +2161,56 @@ fn extract_html_image_alt(html: &str) -> Option<String> {
     extract_html_attribute(&html[img_ix..], "alt")
 }
 
+/// The image an `<img>` tag describes, for the tags markdown documents use in
+/// place of `![alt](src)` — typically a logo sized with `width`.
+/// One fragment often holds several — a row of badges is written as a single
+/// block of HTML — so every tag is collected, and each is bounded to its own
+/// `>` before its attributes are read so it cannot borrow the next tag's.
+fn extract_html_images(html: &str) -> Vec<(usize, MarkdownImage, String)> {
+    let lower = html.to_ascii_lowercase();
+    let mut images = Vec::new();
+    let mut search_start = 0usize;
+
+    while let Some(offset) = lower[search_start..].find("<img") {
+        let tag_start = search_start + offset;
+        let tag_end = lower[tag_start..]
+            .find('>')
+            .map_or(html.len(), |end| tag_start + end + 1);
+        search_start = tag_end;
+
+        let tag = &html[tag_start..tag_end];
+        let Some(source) = extract_html_attribute(tag, "src") else {
+            continue;
+        };
+        if source.trim().is_empty() {
+            continue;
+        }
+        images.push((
+            tag_start,
+            MarkdownImage {
+                source: source.into(),
+                width_px: extract_html_pixel_attribute(tag, "width"),
+                height_px: extract_html_pixel_attribute(tag, "height"),
+            },
+            extract_html_attribute(tag, "alt").unwrap_or_default(),
+        ));
+    }
+
+    images
+}
+
+/// A `width`/`height` attribute in CSS pixels.
+///
+/// Percentages and other units describe a size relative to something the
+/// preview's fixed row grid does not have, so they are ignored and the image
+/// falls back to the default block.
+fn extract_html_pixel_attribute(html: &str, name: &str) -> Option<u32> {
+    let value = extract_html_attribute(html, name)?;
+    let value = value.trim();
+    let digits = value.strip_suffix("px").unwrap_or(value).trim();
+    digits.parse::<u32>().ok().filter(|px| *px > 0)
+}
+
 fn extract_html_attribute(html: &str, name: &str) -> Option<String> {
     let lower = html.to_ascii_lowercase();
     let needle = format!("{name}=");
@@ -1507,6 +2246,24 @@ fn extract_html_attribute(html: &str, name: &str) -> Option<String> {
     }
 
     None
+}
+
+/// Destination of the innermost link currently open, if it is a web URL.
+fn current_link_url(link_stack: &[Option<SharedString>]) -> Option<SharedString> {
+    link_stack.last().cloned().flatten()
+}
+
+/// Keep only destinations that open in a browser.
+///
+/// Relative links, in-document anchors, and `mailto:`/`javascript:` targets
+/// have no meaning for a preview of a file at some commit, so they render as
+/// links but are not offered as something to open.
+fn web_link_url(dest_url: &str) -> Option<SharedString> {
+    let trimmed = dest_url.trim();
+    let scheme_end = trimmed.find("://")?;
+    let scheme = &trimmed[..scheme_end];
+    (scheme.eq_ignore_ascii_case("http") || scheme.eq_ignore_ascii_case("https"))
+        .then(|| SharedString::from(trimmed.to_owned()))
 }
 
 fn pop_matching_inline_style(stack: &mut Vec<MarkdownInlineStyle>, style: MarkdownInlineStyle) {
@@ -1548,6 +2305,7 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
 
     let mut text_buf = String::new();
     let mut span_stack = Vec::new();
+    let mut link_stack: Vec<Option<SharedString>> = Vec::new();
     let mut inline_spans = Vec::new();
 
     for event in Parser::new_ext(source, markdown_parser_options()) {
@@ -1557,21 +2315,28 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
             Event::Start(Tag::Strikethrough) => {
                 span_stack.push(MarkdownInlineStyle::Strikethrough);
             }
-            Event::Start(Tag::Link { .. }) => span_stack.push(MarkdownInlineStyle::Link),
-            Event::End(
-                TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough | TagEnd::Link,
-            ) => {
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                span_stack.push(MarkdownInlineStyle::Link);
+                link_stack.push(web_link_url(dest_url.as_ref()));
+            }
+            Event::End(TagEnd::Link) => {
+                span_stack.pop();
+                link_stack.pop();
+            }
+            Event::End(TagEnd::Strong | TagEnd::Emphasis | TagEnd::Strikethrough) => {
                 span_stack.pop();
             }
             Event::Text(cow) => {
                 let style = resolve_style_stack(&span_stack);
+                let link_url = current_link_url(&link_stack);
                 let start = text_buf.len();
                 text_buf.push_str(&cow);
                 let end = text_buf.len();
-                if style != MarkdownInlineStyle::Normal {
+                if style != MarkdownInlineStyle::Normal || link_url.is_some() {
                     inline_spans.push(MarkdownInlineSpan {
                         byte_range: start..end,
                         style,
+                        link_url,
                     });
                 }
             }
@@ -1582,6 +2347,7 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
                 inline_spans.push(MarkdownInlineSpan {
                     byte_range: start..end,
                     style: MarkdownInlineStyle::Code,
+                    link_url: current_link_url(&link_stack),
                 });
             }
             Event::FootnoteReference(label) => {
@@ -1593,6 +2359,7 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
                 inline_spans.push(MarkdownInlineSpan {
                     byte_range: start..end,
                     style: MarkdownInlineStyle::Link,
+                    link_url: None,
                 });
             }
             Event::SoftBreak | Event::HardBreak if !text_buf.is_empty() => {
@@ -1619,6 +2386,13 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
                     HtmlHandling::EndInlineStyle(style) => {
                         pop_matching_inline_style(&mut span_stack, style);
                     }
+                    // An inline fragment (a `<summary>` label) has nowhere to
+                    // put a block, so an image there keeps describing itself.
+                    HtmlHandling::Images(images) => {
+                        for (_, _, alt) in images {
+                            text_buf.push_str(&alt);
+                        }
+                    }
                     HtmlHandling::AppendText(text) => {
                         text_buf.push_str(&text);
                     }
@@ -1636,10 +2410,11 @@ fn parse_inline_markdown_fragment(source: &str) -> (String, Vec<MarkdownInlineSp
 
 fn push_row_with_context(
     rows: &mut Vec<MarkdownPreviewRow>,
-    row: MarkdownPreviewRowInput<'_>,
+    mut row: MarkdownPreviewRowInput<'_>,
     footnote_context: Option<&mut MarkdownFootnoteContext>,
-    blockquote_stack: &mut [MarkdownBlockQuoteContext],
+    row_ctx: &mut MarkdownRowContext,
 ) -> Option<()> {
+    let pending_images = std::mem::take(&mut row_ctx.pending_images);
     let footnote_label = footnote_context.and_then(|ctx| {
         if ctx.emitted_label {
             None
@@ -1653,11 +2428,12 @@ fn push_row_with_context(
         footnote_label,
         ..MarkdownPreviewRowDecoration::default()
     };
-    if let Some(alert_ix) = blockquote_stack
+    if let Some(alert_ix) = row_ctx
+        .blockquote_stack
         .iter()
         .rposition(|ctx| ctx.alert_kind.is_some())
     {
-        let ctx = &mut blockquote_stack[alert_ix];
+        let ctx = &mut row_ctx.blockquote_stack[alert_ix];
         decoration.alert_kind = ctx.alert_kind;
         if !ctx.emitted_row {
             ctx.emitted_row = true;
@@ -1665,7 +2441,60 @@ fn push_row_with_context(
         }
     }
 
+    // A picture alone in a plain paragraph reads as a block — it gets the width
+    // of the document and a band of rows to itself. Everywhere else it stays
+    // inline: sharing its line with text or other pictures keeps a row of
+    // badges on one line and a logo beside its heading, and a row that carries
+    // a bullet, a quote bar, or an indent has to keep drawing them, which a
+    // block row does not.
+    if let [only] = pending_images.as_slice()
+        && row.text.trim().is_empty()
+        && row.image.is_none()
+        && row.kind == MarkdownPreviewRowKind::Paragraph
+        && row.indent_level == 0
+        && row.blockquote_level == 0
+    {
+        return push_image_block_rows(rows, only, &row, decoration);
+    }
+
+    row.inline_images = Arc::from(pending_images);
     push_row(rows, row, decoration)
+}
+
+/// Emit the band rows one block image occupies.
+///
+/// The preview paints into a uniform (fixed row height) list, so a picture that
+/// stands on its own covers several rows and each one draws its own band.
+fn push_image_block_rows(
+    rows: &mut Vec<MarkdownPreviewRow>,
+    inline: &MarkdownInlineImage,
+    row: &MarkdownPreviewRowInput<'_>,
+    decoration: MarkdownPreviewRowDecoration,
+) -> Option<()> {
+    let slice_count = inline.image.block_rows();
+    // The alert badge and the footnote label belong to the first band only; the
+    // rest continue the same picture, and only inherit its alert.
+    let continuation = MarkdownPreviewRowDecoration {
+        alert_kind: decoration.alert_kind,
+        ..MarkdownPreviewRowDecoration::default()
+    };
+    let mut decoration = Some(decoration);
+    for slice_ix in 0..slice_count {
+        push_row(
+            rows,
+            MarkdownPreviewRowInput::image(
+                slice_ix,
+                slice_count,
+                inline.alt.as_ref(),
+                Arc::clone(&inline.image),
+                row.source_line_range.clone(),
+                row.indent_level,
+                row.blockquote_level,
+            ),
+            decoration.take().unwrap_or_else(|| continuation.clone()),
+        )?;
+    }
+    Some(())
 }
 
 fn push_row(
@@ -1682,6 +2511,11 @@ fn push_row(
             normalize_whitespace_with_spans(row.text, row.inline_spans)
         }
         _ => (row.text.to_owned(), row.inline_spans.to_vec()),
+    };
+    let (row_text, row_spans, inline_images) = if row.inline_images.is_empty() {
+        (row_text, row_spans, row.inline_images)
+    } else {
+        trim_around_inline_images(row_text, row_spans, &row.inline_images)
     };
     let spans = if row_spans.len() > MAX_INLINE_SPANS_PER_ROW {
         Arc::new(Vec::new())
@@ -1702,6 +2536,8 @@ fn push_row(
         footnote_label: decoration.footnote_label,
         alert_kind: decoration.alert_kind,
         starts_alert: decoration.starts_alert,
+        image: row.image,
+        inline_images,
         styled_text_cache: MarkdownPreviewRowStyledTextCache::default(),
         measured_width_px: MarkdownPreviewRowWidthCache::default(),
     });
@@ -1709,6 +2545,53 @@ fn push_row(
     (rows.len() <= MAX_PREVIEW_ROWS).then_some(())
 }
 
+/// Trim the whitespace a picture leaves behind when it is lifted out of the
+/// line, keeping spans and picture offsets on the characters they described.
+///
+/// `## <img/> GitComet` puts a space between the tag and the word; without this
+/// the heading would start with that gap.
+fn trim_around_inline_images(
+    text: String,
+    spans: Vec<MarkdownInlineSpan>,
+    images: &[MarkdownInlineImage],
+) -> (String, Vec<MarkdownInlineSpan>, Arc<[MarkdownInlineImage]>) {
+    let start = text.len() - text.trim_start().len();
+    let trimmed = text.trim().to_owned();
+    let end = start + trimmed.len();
+    let shift = |offset: usize| offset.clamp(start, end) - start;
+
+    let spans = spans
+        .into_iter()
+        .filter_map(|span| {
+            let range = shift(span.byte_range.start)..shift(span.byte_range.end);
+            (range.start < range.end).then(|| span.restyled(range))
+        })
+        .collect();
+    let images = images
+        .iter()
+        .map(|inline| MarkdownInlineImage {
+            byte_offset: shift(inline.byte_offset),
+            ..inline.clone()
+        })
+        .collect::<Vec<_>>();
+
+    (trimmed, spans, Arc::from(images))
+}
+
+/// Drop or shorten spans that reach past `len`, and keep the rest.
+fn clamp_inline_spans_to_len(spans: &mut Vec<MarkdownInlineSpan>, len: usize) {
+    spans.retain_mut(|span| {
+        span.byte_range.end = span.byte_range.end.min(len);
+        span.byte_range.start < span.byte_range.end
+    });
+}
+
+/// Emit unparseable content verbatim, one row per line.
+///
+/// This is the one row producer that does not go through
+/// `push_row_with_context`, because a fallback row inherits no footnote label
+/// and no alert. It still has to take the pending pictures, or they would be
+/// carried past it and land on an unrelated row.
 fn push_plain_fallback_rows(
     rows: &mut Vec<MarkdownPreviewRow>,
     text: &str,
@@ -1717,6 +2600,7 @@ fn push_plain_fallback_rows(
     line_starts: &[usize],
     indent_level: u8,
     blockquote_level: u8,
+    row_ctx: &mut MarkdownRowContext,
 ) -> Option<()> {
     let range = source_line_range(start_byte, end_byte, line_starts);
     let segments = if text.is_empty() {
@@ -1725,24 +2609,37 @@ fn push_plain_fallback_rows(
         text.lines().collect::<Vec<_>>()
     };
     let end_line = range.end.saturating_sub(1);
+    let mut pending_images = std::mem::take(&mut row_ctx.pending_images);
+    let segment_count = segments.len();
 
     for (ix, segment) in segments.into_iter().enumerate() {
         let line_ix = (range.start + ix).min(end_line);
-        push_row(
-            rows,
-            MarkdownPreviewRowInput::plain(
-                MarkdownPreviewRowKind::PlainFallback,
-                segment,
-                &[],
-                line_ix..line_ix.saturating_add(1),
-                indent_level,
-                blockquote_level,
-            ),
-            MarkdownPreviewRowDecoration::default(),
-        )?;
+        let mut row = MarkdownPreviewRowInput::plain(
+            MarkdownPreviewRowKind::PlainFallback,
+            segment,
+            &[],
+            line_ix..line_ix.saturating_add(1),
+            indent_level,
+            blockquote_level,
+        );
+        // Each picture goes on the line it was written on, which is what its
+        // source offset says. The last row sweeps up anything that did not
+        // resolve, so nothing is dropped.
+        let is_last = ix + 1 == segment_count;
+        let (mine, rest) = pending_images.into_iter().partition(|inline| {
+            is_last || source_line_for_byte(inline.source_byte, line_starts) == line_ix
+        });
+        pending_images = rest;
+        row.inline_images = Arc::from(mine);
+        push_row(rows, row, MarkdownPreviewRowDecoration::default())?;
     }
 
     Some(())
+}
+
+/// Zero-based source line containing `byte`.
+fn source_line_for_byte(byte: usize, line_starts: &[usize]) -> usize {
+    line_starts.partition_point(|start| *start <= byte).max(1) - 1
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1759,8 +2656,15 @@ fn align_table_columns(rows: &mut [MarkdownPreviewRow]) {
             continue;
         }
 
+        // A header row opens a table, so it also closes the one before it —
+        // two tables that touch must not have their columns padded to each
+        // other's widths.
         let mut end = start + 1;
-        while end < rows.len() && matches!(rows[end].kind, MarkdownPreviewRowKind::TableRow { .. })
+        while end < rows.len()
+            && matches!(
+                rows[end].kind,
+                MarkdownPreviewRowKind::TableRow { is_header: false }
+            )
         {
             end += 1;
         }
@@ -1896,10 +2800,7 @@ fn split_markdown_table_cells(
                     let start = span.byte_range.start.max(range.start);
                     let end = span.byte_range.end.min(range.end);
                     if start < end {
-                        Some(MarkdownInlineSpan {
-                            byte_range: (start - range.start)..(end - range.start),
-                            style: span.style,
-                        })
+                        Some(span.restyled((start - range.start)..(end - range.start)))
                     } else {
                         None
                     }
@@ -1932,10 +2833,10 @@ fn build_aligned_table_row_text(
         let cell_start = text.len();
         if let Some(cell) = cell {
             text.push_str(&cell.text);
-            spans.extend(cell.spans.into_iter().map(|span| MarkdownInlineSpan {
-                byte_range: (cell_start + span.byte_range.start)
-                    ..(cell_start + span.byte_range.end),
-                style: span.style,
+            spans.extend(cell.spans.into_iter().map(|span| {
+                span.restyled(
+                    (cell_start + span.byte_range.start)..(cell_start + span.byte_range.end),
+                )
             }));
         }
 
@@ -2040,10 +2941,7 @@ fn normalize_whitespace_with_spans(
             debug_assert!(text.is_char_boundary(span.byte_range.end));
             let start = *byte_map.get(span.byte_range.start)?;
             let end = *byte_map.get(span.byte_range.end)?;
-            (start < end).then_some(MarkdownInlineSpan {
-                byte_range: start..end,
-                style: span.style,
-            })
+            (start < end).then(|| span.restyled(start..end))
         })
         .collect();
 
@@ -2189,7 +3087,10 @@ mod tests {
     }
 
     #[test]
-    fn middle_heading_uses_a_single_section_spacer_before_the_heading() {
+    fn middle_heading_uses_one_section_spacer_not_two() {
+        // The break above a section is a full blank row; the gap below the
+        // heading comes from its own insets, so a second blank row here would
+        // read as a hole in the document.
         let doc = parse("Intro\n\n# Title\n\nBody\n");
 
         assert_eq!(
@@ -2199,6 +3100,31 @@ mod tests {
                 &MarkdownPreviewRowKind::Spacer,
                 &MarkdownPreviewRowKind::Heading { level: 1 },
                 &MarkdownPreviewRowKind::Paragraph,
+            ]
+        );
+    }
+
+    #[test]
+    fn heading_section_spacers_are_not_doubled_or_trailing() {
+        // Consecutive headings share one break, and a heading that ends the
+        // document gets no dangling spacer under it.
+        assert_eq!(
+            row_kinds(&parse("Intro\n\n# Title\n## Subtitle\n\nBody\n")),
+            vec![
+                &MarkdownPreviewRowKind::Paragraph,
+                &MarkdownPreviewRowKind::Spacer,
+                &MarkdownPreviewRowKind::Heading { level: 1 },
+                &MarkdownPreviewRowKind::Heading { level: 2 },
+                &MarkdownPreviewRowKind::Spacer,
+                &MarkdownPreviewRowKind::Paragraph,
+            ]
+        );
+        assert_eq!(
+            row_kinds(&parse("Body\n\n# Title\n")),
+            vec![
+                &MarkdownPreviewRowKind::Paragraph,
+                &MarkdownPreviewRowKind::Spacer,
+                &MarkdownPreviewRowKind::Heading { level: 1 },
             ]
         );
     }
@@ -3512,29 +4438,68 @@ code line
 
     #[test]
     fn markdown_images_preserve_alt_text() {
+        // A remote image is still laid out as a block; it just cannot be
+        // fetched, so every band keeps the alt text to describe itself.
         let doc = parse("![Octocat smiling](https://example.com/octocat.svg)\n");
-        assert_eq!(doc.rows.len(), 1);
-        assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::Paragraph);
-        assert_eq!(doc.rows[0].text.as_ref(), "Octocat smiling");
+        assert_eq!(
+            doc.rows.len(),
+            usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
+        );
+        assert!(doc.rows.iter().all(|row| row.kind.is_image()));
+        assert!(
+            doc.rows
+                .iter()
+                .all(|row| row.text.as_ref() == "Octocat smiling")
+        );
+        assert_eq!(
+            doc.rows[0]
+                .image
+                .as_ref()
+                .map(|image| image.source.as_ref()),
+            Some("https://example.com/octocat.svg")
+        );
     }
 
     #[test]
     fn html_img_tags_preserve_alt_text() {
         let doc =
             parse("<img alt=\"Octocat smiling\" src=\"https://example.com/octocat.svg\" />\n");
+        assert_eq!(
+            doc.rows.len(),
+            usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS)
+        );
+        assert!(doc.rows.iter().all(|row| row.kind.is_image()));
+        assert!(
+            doc.rows
+                .iter()
+                .all(|row| row.text.as_ref() == "Octocat smiling")
+        );
+    }
+
+    #[test]
+    fn html_img_tags_without_a_source_still_fall_back_to_alt_text() {
+        let doc = parse("<img alt=\"Octocat smiling\" />\n");
         assert_eq!(doc.rows.len(), 1);
         assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::Paragraph);
         assert_eq!(doc.rows[0].text.as_ref(), "Octocat smiling");
     }
 
     #[test]
-    fn picture_elements_preserve_nested_img_alt_text() {
+    fn picture_elements_render_their_nested_img() {
+        // A `<picture>` carries themed `<source>` alternatives around a plain
+        // `<img>` fallback; the fallback is the one to draw, and its `src` must
+        // not be confused with a `<source srcset=…>` beside it.
         let doc = parse(
             "<picture>\n  <source media=\"(prefers-color-scheme: dark)\" srcset=\"dark.svg\" />\n  <img alt=\"Octocat smiling\" src=\"light.svg\" />\n</picture>\n",
         );
-        assert_eq!(doc.rows.len(), 1);
-        assert_eq!(doc.rows[0].kind, MarkdownPreviewRowKind::Paragraph);
-        assert_eq!(doc.rows[0].text.as_ref(), "Octocat smiling");
+
+        let images = image_rows(&doc);
+        assert_eq!(images.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
+        assert_eq!(
+            images[0].image.as_ref().map(|image| image.source.as_ref()),
+            Some("light.svg")
+        );
+        assert_eq!(images[0].text.as_ref(), "Octocat smiling");
     }
 
     // ── Modify-kind mask coverage ────────────────────────────────────────
@@ -3754,5 +4719,1031 @@ code line
             reason.contains("row limit"),
             "should mention row limit: {reason}"
         );
+    }
+
+    // ── Word wrap ───────────────────────────────────────────────────────
+
+    #[test]
+    fn wrap_plan_keeps_one_visual_row_per_unwrapped_source_row() {
+        let doc = parse("# Title\n\nParagraph one.\n\nParagraph two.\n");
+        let plan = build_markdown_preview_wrap_plan(&doc, |_| Vec::new()).expect("plan fits");
+
+        assert_eq!(plan.len(), doc.rows.len());
+        for (visual_ix, row) in doc.rows.iter().enumerate() {
+            let visual = plan.get(visual_ix).expect("visual row");
+            assert_eq!(visual.row_ix, visual_ix);
+            assert_eq!(visual.wrap_ix, 0);
+            assert_eq!(visual.byte_range, 0..row.text.len());
+            assert!(!visual.is_continuation());
+        }
+    }
+
+    #[test]
+    fn wrap_plan_expands_split_rows_and_maps_source_rows_to_their_first_visual_row() {
+        let doc = parse("First paragraph.\n\nSecond paragraph.\n");
+        // Split every row with text into two halves at a char boundary.
+        let plan = build_markdown_preview_wrap_plan(&doc, |row| {
+            let len = row.text.len();
+            if len < 4 {
+                return Vec::new();
+            }
+            let mut mid = len / 2;
+            while mid > 0 && !row.text.is_char_boundary(mid) {
+                mid -= 1;
+            }
+            vec![0..mid, mid..len]
+        })
+        .expect("plan fits");
+
+        let split_rows = doc.rows.iter().filter(|row| row.text.len() >= 4).count();
+        assert_eq!(plan.len(), doc.rows.len() + split_rows);
+
+        for row_ix in 0..doc.rows.len() {
+            let visual_ix = plan.visual_ix_for_row(row_ix);
+            let visual = plan.get(visual_ix).expect("first visual row");
+            assert_eq!(visual.row_ix, row_ix);
+            assert_eq!(visual.wrap_ix, 0);
+            assert!(!visual.is_continuation());
+        }
+
+        let continuations = (0..plan.len())
+            .filter_map(|ix| plan.get(ix))
+            .filter(|visual| visual.is_continuation())
+            .count();
+        assert_eq!(continuations, split_rows);
+    }
+
+    #[test]
+    fn wrap_plan_slices_cover_the_whole_row_text() {
+        let doc = parse("A paragraph with several words in it.\n");
+        let plan = build_markdown_preview_wrap_plan(&doc, |row| {
+            let len = row.text.len();
+            if len >= 8 {
+                vec![0..4, 4..len]
+            } else {
+                Vec::new()
+            }
+        })
+        .expect("plan fits");
+
+        let mut covered: Vec<(usize, Range<usize>)> = Vec::new();
+        for ix in 0..plan.len() {
+            let visual = plan.get(ix).expect("visual row");
+            covered.push((visual.row_ix, visual.byte_range.clone()));
+        }
+        for (row_ix, row) in doc.rows.iter().enumerate() {
+            let mut cursor = 0usize;
+            for (_, range) in covered.iter().filter(|(ix, _)| *ix == row_ix) {
+                assert_eq!(range.start, cursor, "slices must be contiguous");
+                cursor = range.end;
+            }
+            assert_eq!(cursor, row.text.len(), "slices must cover the row text");
+        }
+    }
+
+    #[test]
+    fn wrap_plan_reports_overflow_instead_of_truncating_the_document() {
+        // Wrapping every row into many visual rows blows past the cap. The
+        // builder must report that rather than hand back a plan whose tail
+        // rows are missing, which would make them unreachable in the list.
+        let paragraph = "w".repeat(900);
+        let source = format!("{paragraph}\n\n").repeat(200);
+        let doc = parse(&source);
+        // One visual row per byte overshoots MAX_PREVIEW_WRAPPED_ROWS, which
+        // a pane only a few pixels wide would do for real.
+        let plan = build_markdown_preview_wrap_plan(&doc, |row| {
+            let len = row.text.len();
+            (0..len).map(|ix| ix..ix + 1).collect()
+        });
+        assert!(
+            plan.is_none(),
+            "an oversized wrapped document must fall back to unwrapped rendering"
+        );
+    }
+
+    #[test]
+    fn split_wrap_plans_keep_both_columns_row_aligned() {
+        let old = "# Title\n\nlong old paragraph that wraps\n\nshared tail\n";
+        let new = "# Title\n\nshort\n\nshared tail\n";
+        let preview = build_markdown_diff_preview(old, new).expect("diff preview should build");
+
+        // Wrap only rows longer than 10 bytes, into two halves.
+        let (old_plan, new_plan) =
+            build_markdown_preview_split_wrap_plans(&preview.old, &preview.new, |row| {
+                let len = row.text.len();
+                if len <= 10 {
+                    return Vec::new();
+                }
+                let mut mid = len / 2;
+                while mid > 0 && !row.text.is_char_boundary(mid) {
+                    mid -= 1;
+                }
+                vec![0..mid, mid..len]
+            })
+            .expect("split plans should fit");
+
+        assert_eq!(
+            old_plan.len(),
+            new_plan.len(),
+            "split columns must render the same number of visual rows"
+        );
+        for visual_ix in 0..old_plan.len() {
+            let old_visual = old_plan.get(visual_ix).expect("old visual row");
+            let new_visual = new_plan.get(visual_ix).expect("new visual row");
+            assert_eq!(
+                (old_visual.row_ix, old_visual.wrap_ix),
+                (new_visual.row_ix, new_visual.wrap_ix),
+                "visual row {visual_ix} must show the same source row on both sides"
+            );
+        }
+    }
+
+    #[test]
+    fn split_wrap_plans_pad_the_short_side_with_empty_continuations() {
+        // The narrow column has to hold a blank row opposite each extra
+        // wrapped row on the wide side, or the two lists drift apart.
+        let old = "# Title\n\nlong paragraph on the old side\n";
+        let new = "# Title\n\nshort\n";
+        let preview = build_markdown_diff_preview(old, new).expect("diff preview should build");
+
+        let (old_plan, new_plan) =
+            build_markdown_preview_split_wrap_plans(&preview.old, &preview.new, |row| {
+                let len = row.text.len();
+                if len <= 10 {
+                    return Vec::new();
+                }
+                vec![0..5, 5..len]
+            })
+            .expect("split plans should fit");
+
+        assert_eq!(old_plan.len(), new_plan.len());
+        let padded: Vec<_> = (0..new_plan.len())
+            .filter_map(|ix| new_plan.get(ix))
+            .filter(|visual| visual.is_continuation())
+            .collect();
+        assert!(
+            !padded.is_empty(),
+            "the short column should gain padding rows"
+        );
+        for visual in padded {
+            assert!(
+                visual.byte_range.is_empty(),
+                "a padding row paints nothing: {visual:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn visual_row_text_slice_returns_the_painted_portion() {
+        let doc = parse("first second third\n");
+        let row = doc
+            .rows
+            .iter()
+            .find(|row| row.kind == MarkdownPreviewRowKind::Paragraph)
+            .expect("paragraph row");
+
+        let visual = |wrap_ix, byte_range| MarkdownPreviewVisualRow {
+            row_ix: 0,
+            wrap_ix,
+            byte_range,
+        };
+
+        assert_eq!(
+            visual(0, 0..row.text.len()).text_slice(row).as_ref(),
+            "first second third"
+        );
+        assert_eq!(visual(1, 6..12).text_slice(row).as_ref(), "second");
+        // A padding row and an out-of-range slice both paint nothing.
+        assert_eq!(
+            visual(2, row.text.len()..row.text.len())
+                .text_slice(row)
+                .as_ref(),
+            ""
+        );
+        assert_eq!(visual(3, 1..2).text_slice(row).as_ref(), "i");
+    }
+
+    // ── Flowing document blocks ─────────────────────────────────────────
+
+    #[test]
+    fn blocks_group_the_lines_of_one_construct_together() {
+        let doc = parse(
+            "# Title\n\nA paragraph.\n\n- one\n- two\n\n```rust\nlet a = 1;\nlet b = 2;\n```\n\n> quoted\n> lines\n\n| a | b |\n| --- | --- |\n| c | d |\n\n---\n",
+        );
+        let blocks = markdown_document_blocks(&doc);
+
+        let shapes: Vec<String> = blocks
+            .iter()
+            .map(|block| match block {
+                MarkdownBlock::Heading { level, .. } => format!("h{level}"),
+                MarkdownBlock::Paragraph(_) => "p".to_string(),
+                MarkdownBlock::List(rows) => format!("list({})", rows.len()),
+                MarkdownBlock::Blockquote(rows) => format!("quote({})", rows.len()),
+                MarkdownBlock::Code(rows) => format!("code({})", rows.len()),
+                MarkdownBlock::Table(rows) => format!("table({})", rows.len()),
+                MarkdownBlock::Image(_) => "img".to_string(),
+                MarkdownBlock::ThematicBreak(_) => "hr".to_string(),
+            })
+            .collect();
+
+        // The table is header + body: the `| --- |` line is alignment
+        // metadata and never becomes a row of its own.
+        assert_eq!(
+            shapes,
+            vec![
+                "h1", "p", "list(2)", "code(2)", "quote(2)", "table(2)", "hr"
+            ]
+        );
+    }
+
+    #[test]
+    fn spacer_rows_do_not_become_blocks() {
+        // Spacers open a gap in the fixed row grid; the flowing layout uses a
+        // margin instead, so carrying them through would double the gap.
+        let doc = parse("Intro\n\n# Title\n\nBody\n");
+        assert!(
+            doc.rows
+                .iter()
+                .any(|row| row.kind == MarkdownPreviewRowKind::Spacer)
+        );
+
+        let blocks = markdown_document_blocks(&doc);
+        assert_eq!(blocks.len(), 3, "paragraph, heading, paragraph: {blocks:?}");
+    }
+
+    #[test]
+    fn two_tables_that_touch_stay_separate() {
+        // Folding them together padded both to the widest table's columns and
+        // drew them as one grid.
+        let doc = parse(
+            "| a | b |\n| --- | --- |\n| c | d |\n\n| wiiiiiiiiiide | x |\n| --- | --- |\n| e | f |\n",
+        );
+
+        let tables: Vec<Range<usize>> = markdown_document_blocks(&doc)
+            .into_iter()
+            .filter_map(|block| match block {
+                MarkdownBlock::Table(rows) => Some(rows),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(tables.len(), 2, "rows: {:?}", row_texts(&doc));
+
+        let width_of = |rows: &Range<usize>| doc.rows[rows.start].text.chars().count();
+        assert_ne!(
+            width_of(&tables[0]),
+            width_of(&tables[1]),
+            "each table is padded to its own columns, not the other's: {:?}",
+            row_texts(&doc)
+        );
+    }
+
+    #[test]
+    fn two_alerts_that_touch_stay_separate_blocks() {
+        // Folding them together labelled the second alert with the first one's
+        // kind and drew a single bar down both.
+        let doc = parse("> [!NOTE]\n> first\n\n> [!WARNING]\n> second\n");
+        let quotes: Vec<Range<usize>> = markdown_document_blocks(&doc)
+            .into_iter()
+            .filter_map(|block| match block {
+                MarkdownBlock::Blockquote(rows) => Some(rows),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            quotes.len(),
+            2,
+            "blocks: {:?}",
+            markdown_document_blocks(&doc)
+        );
+        let kinds: Vec<Option<MarkdownAlertKind>> = quotes
+            .iter()
+            .map(|rows| doc.rows[rows.start].alert_kind)
+            .collect();
+        assert_eq!(
+            kinds,
+            vec![
+                Some(MarkdownAlertKind::Note),
+                Some(MarkdownAlertKind::Warning)
+            ]
+        );
+        assert!(
+            quotes.iter().all(|rows| doc.rows[rows.start].starts_alert),
+            "each block must begin at the row that opens its alert"
+        );
+    }
+
+    #[test]
+    fn an_image_block_collapses_its_bands_into_one() {
+        let doc = parse("![shot](a.png)\n");
+        assert_eq!(
+            doc.rows.len(),
+            usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS),
+            "the row model still carries one row per band"
+        );
+
+        let blocks = markdown_document_blocks(&doc);
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(blocks[0], MarkdownBlock::Image(_)));
+    }
+
+    #[test]
+    fn adjacent_images_share_one_line() {
+        // Two pictures written on consecutive lines are one paragraph, so they
+        // belong on one line — the shape a row of badges takes.
+        let doc = parse("![one](a.png)\n![two](b.png)\n");
+
+        let sources: Vec<&str> = doc
+            .rows
+            .iter()
+            .flat_map(|row| row.inline_images.iter())
+            .map(|inline| inline.image.source.as_ref())
+            .collect();
+        assert_eq!(sources, vec!["a.png", "b.png"]);
+        assert!(
+            image_rows(&doc).is_empty(),
+            "neither picture is alone on its line, so neither becomes a block"
+        );
+    }
+
+    #[test]
+    fn a_list_item_holding_only_a_picture_keeps_it_on_that_item() {
+        // A tight list item emits no paragraph, so the item closes with an
+        // empty text buffer. Skipping the row there carried the badge onto the
+        // next item, or dropped it when the list ended the document.
+        let doc = parse("- ![one](a.png)\n- second item\n");
+
+        let items: Vec<(&str, Vec<&str>)> = doc
+            .rows
+            .iter()
+            .filter(|row| matches!(row.kind, MarkdownPreviewRowKind::ListItem { .. }))
+            .map(|row| {
+                (
+                    row.text.as_ref(),
+                    row.inline_images
+                        .iter()
+                        .map(|inline| inline.image.source.as_ref())
+                        .collect(),
+                )
+            })
+            .collect();
+
+        assert_eq!(
+            items,
+            vec![("", vec!["a.png"]), ("second item", vec![])],
+            "rows: {:?}",
+            row_texts(&doc)
+        );
+    }
+
+    #[test]
+    fn a_picture_in_the_last_list_item_is_not_dropped() {
+        let doc = parse("- text item\n- ![only](b.png)\n");
+
+        let sources: Vec<&str> = doc
+            .rows
+            .iter()
+            .flat_map(|row| row.inline_images.iter())
+            .map(|inline| inline.image.source.as_ref())
+            .collect();
+        assert_eq!(sources, vec!["b.png"], "rows: {:?}", row_texts(&doc));
+    }
+
+    #[test]
+    fn a_picture_before_a_nested_list_stays_with_its_parent_item() {
+        let doc = parse("- ![parent](a.png)\n  - nested\n");
+
+        let parent = doc
+            .rows
+            .iter()
+            .find(|row| !row.inline_images.is_empty())
+            .expect("the parent item keeps its picture");
+        assert_eq!(parent.image, None);
+        assert_eq!(parent.indent_level, 1, "rows: {:?}", row_texts(&doc));
+        assert!(
+            doc.rows
+                .iter()
+                .any(|row| row.text.as_ref() == "nested" && row.indent_level == 2),
+            "the nested item is still its own row: {:?}",
+            row_texts(&doc)
+        );
+    }
+
+    #[test]
+    fn a_picture_in_a_table_cell_stays_in_its_column_as_text() {
+        // A table row paints as one string whose columns are aligned by
+        // padding, so a picture recorded against the row would draw at its
+        // leading or trailing edge — out of its column.
+        let doc = parse("| ![icon](i.png) | Enabled |\n| --- | --- |\n| b | c |\n");
+
+        let header = doc
+            .rows
+            .iter()
+            .find(|row| {
+                matches!(
+                    row.kind,
+                    MarkdownPreviewRowKind::TableRow { is_header: true }
+                )
+            })
+            .expect("the header row survives");
+        assert!(
+            header.text.contains("icon"),
+            "the picture's description holds its cell: {:?}",
+            header.text
+        );
+        assert!(
+            doc.rows.iter().all(|row| row.inline_images.is_empty()),
+            "no picture escapes the table to render beside it"
+        );
+        assert!(
+            image_rows(&doc).is_empty(),
+            "and none becomes a block either"
+        );
+    }
+
+    #[test]
+    fn an_html_picture_in_a_table_cell_also_stays_in_its_column() {
+        // The `<img>` producer records pictures separately from the markdown
+        // one, so it needs the same guard.
+        let doc =
+            parse("| <img alt=\"icon\" src=\"i.png\" /> | Enabled |\n| --- | --- |\n| b | c |\n");
+
+        let header = doc
+            .rows
+            .iter()
+            .find(|row| {
+                matches!(
+                    row.kind,
+                    MarkdownPreviewRowKind::TableRow { is_header: true }
+                )
+            })
+            .expect("the header row survives");
+        assert!(
+            header.text.contains("icon"),
+            "the tag's description holds its cell: {:?}",
+            header.text
+        );
+        assert!(
+            doc.rows.iter().all(|row| row.inline_images.is_empty()),
+            "no picture escapes the table to render beside it"
+        );
+    }
+
+    #[test]
+    fn source_lines_are_found_for_byte_offsets() {
+        // "a\nbb\n\nc" — line starts at 0, 2, 5, 6.
+        let line_starts = [0usize, 2, 5, 6];
+
+        assert_eq!(source_line_for_byte(0, &line_starts), 0);
+        assert_eq!(source_line_for_byte(1, &line_starts), 0);
+        assert_eq!(source_line_for_byte(2, &line_starts), 1);
+        assert_eq!(source_line_for_byte(4, &line_starts), 1);
+        assert_eq!(source_line_for_byte(5, &line_starts), 2);
+        assert_eq!(source_line_for_byte(6, &line_starts), 3);
+        // Past the end still resolves to the last line rather than panicking.
+        assert_eq!(source_line_for_byte(9_999, &line_starts), 3);
+        // And an empty table cannot underflow.
+        assert_eq!(source_line_for_byte(3, &[]), 0);
+    }
+
+    #[test]
+    fn a_picture_alone_on_its_line_becomes_a_block() {
+        let doc = parse("![only](a.png)\n");
+
+        assert_eq!(
+            image_rows(&doc).len(),
+            usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS),
+            "rows: {:?}",
+            row_texts(&doc)
+        );
+        assert!(
+            doc.rows.iter().all(|row| row.inline_images.is_empty()),
+            "a block picture is not also inline"
+        );
+    }
+
+    #[test]
+    fn every_row_that_paints_reaches_a_block() {
+        // Nothing but spacers may be dropped, or the flowing preview would
+        // silently lose content the diff preview still shows.
+        let doc = parse(
+            "# T\n\ntext\n\n- a\n\n```\ncode\n```\n\n> q\n\n| x |\n| --- |\n\n![i](a.png)\n\n---\n",
+        );
+        let painted = doc
+            .rows
+            .iter()
+            .filter(|row| row.kind != MarkdownPreviewRowKind::Spacer)
+            .count();
+        let covered: usize = markdown_document_blocks(&doc)
+            .iter()
+            .map(|block| block.row_range().len())
+            .sum();
+
+        assert_eq!(
+            covered,
+            painted,
+            "blocks: {:?}",
+            markdown_document_blocks(&doc)
+        );
+    }
+
+    // ── Images ──────────────────────────────────────────────────────────
+
+    fn image_rows(doc: &MarkdownPreviewDocument) -> Vec<&MarkdownPreviewRow> {
+        doc.rows.iter().filter(|row| row.kind.is_image()).collect()
+    }
+
+    #[test]
+    fn an_image_becomes_a_block_of_rows_carrying_its_source_and_alt() {
+        let doc = parse("![A screenshot](docs/shot.png)\n");
+        let rows = image_rows(&doc);
+
+        assert_eq!(rows.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
+        for (expected_ix, row) in rows.iter().enumerate() {
+            assert_eq!(
+                row.kind,
+                MarkdownPreviewRowKind::Image {
+                    slice_ix: expected_ix as u8,
+                    slice_count: MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS,
+                }
+            );
+            assert_eq!(
+                row.image.as_ref().map(|image| image.source.as_ref()),
+                Some("docs/shot.png")
+            );
+            // The alt stays as row text so copy and the unavailable-image
+            // fallback have something to show.
+            assert_eq!(row.text.as_ref(), "A screenshot");
+        }
+    }
+
+    #[test]
+    fn a_picture_written_mid_sentence_stays_on_the_sentence_row() {
+        let doc = parse("Before ![shot](a.png) after\n");
+        let kinds = row_kinds(&doc);
+
+        assert_eq!(kinds.first(), Some(&&MarkdownPreviewRowKind::Paragraph));
+        assert_eq!(
+            doc.rows[0].text.as_ref(),
+            "Before after",
+            "the sentence stays one row: {:?}",
+            row_texts(&doc)
+        );
+        assert!(
+            image_rows(&doc).is_empty(),
+            "a picture sharing its line with text is not a block"
+        );
+
+        let inline = &doc.rows[0].inline_images;
+        assert_eq!(inline.len(), 1);
+        assert_eq!(inline[0].image.source.as_ref(), "a.png");
+        assert_eq!(inline[0].alt.as_ref(), "shot");
+        assert_eq!(
+            inline[0].byte_offset,
+            "Before ".len(),
+            "the picture records where in the text it was written"
+        );
+    }
+
+    #[test]
+    fn image_alt_text_is_not_also_rendered_as_paragraph_text() {
+        let doc = parse("![only alt](a.png)\n");
+        assert!(
+            !doc.rows
+                .iter()
+                .any(|row| !row.kind.is_image() && row.text.contains("only alt")),
+            "alt text belongs to the image block only: {:?}",
+            row_texts(&doc)
+        );
+    }
+
+    #[test]
+    fn a_logo_in_a_heading_shares_the_heading_line() {
+        // A logo in a heading, written as HTML because markdown cannot size an
+        // image — the shape GitComet's own README uses. Putting it on a line of
+        // its own left the heading text stranded underneath.
+        let doc = parse(
+            "## <img alt=\"GitComet logo\" src=\"assets/gitcomet_logo.svg\" width=\"26\" /> GitComet\n",
+        );
+
+        let heading = doc
+            .rows
+            .iter()
+            .find(|row| matches!(row.kind, MarkdownPreviewRowKind::Heading { .. }))
+            .expect("the heading survives");
+        assert_eq!(heading.text.as_ref(), "GitComet");
+        assert_eq!(heading.inline_images.len(), 1);
+
+        let inline = &heading.inline_images[0];
+        assert_eq!(inline.image.source.as_ref(), "assets/gitcomet_logo.svg");
+        assert_eq!(inline.alt.as_ref(), "GitComet logo");
+        assert_eq!(
+            inline.byte_offset, 0,
+            "the logo is written before the heading text"
+        );
+        // The tag declares `width="26"`, which is the size it is drawn at.
+        assert_eq!(inline.image.width_px, Some(26));
+        assert_eq!(inline.image.height_px, None);
+        assert!(
+            image_rows(&doc).is_empty(),
+            "a logo beside a heading is not a block of its own"
+        );
+    }
+
+    #[test]
+    fn a_block_html_image_stands_on_its_own_line() {
+        // `<img>` at the top level has no paragraph around it, so it has to
+        // close its own row — and being alone there, it is a block.
+        let doc = parse("<img alt=\"demo\" src=\"assets/demo.gif\" />\n");
+
+        let images = image_rows(&doc);
+        assert_eq!(
+            images.len(),
+            usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS),
+            "rows: {:?}",
+            row_texts(&doc)
+        );
+        assert_eq!(
+            images[0].image.as_ref().map(|image| image.source.as_ref()),
+            Some("assets/demo.gif")
+        );
+        assert_eq!(images[0].text.as_ref(), "demo");
+    }
+
+    #[test]
+    fn image_block_rows_follow_the_declared_size() {
+        let sized = |width_px, height_px| {
+            MarkdownImage {
+                source: "a.png".into(),
+                width_px,
+                height_px,
+            }
+            .block_rows()
+        };
+
+        // Undeclared falls back to the default block.
+        assert_eq!(sized(None, None), MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS);
+        // A declared height is authoritative, even against a wide width.
+        assert_eq!(sized(Some(400), Some(20)), 1);
+        assert_eq!(sized(Some(400), Some(60)), 3);
+        // Width alone bounds the height, so a small logo stays small.
+        assert_eq!(sized(Some(26), None), 1);
+        assert_eq!(sized(Some(28), None), 1);
+        assert_eq!(sized(Some(29), None), 2);
+        // Anything large is capped at the default block.
+        assert_eq!(sized(Some(4000), None), MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS);
+        // A zero or unparseable size is treated as undeclared.
+        assert_eq!(sized(Some(0), None), MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS);
+    }
+
+    #[test]
+    fn non_pixel_size_attributes_are_ignored() {
+        // A percentage is relative to a container the fixed row grid does not
+        // have, so it falls back to the default block rather than guessing.
+        let doc = parse("<img alt=\"wide\" src=\"a.png\" width=\"100%\" />\n");
+        let images = image_rows(&doc);
+        assert_eq!(images.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
+        assert_eq!(images[0].image.as_ref().expect("image").width_px, None);
+
+        // An explicit `px` suffix is accepted.
+        let doc = parse("<img alt=\"logo\" src=\"a.png\" width=\"26px\" />\n");
+        assert_eq!(
+            image_rows(&doc)[0].image.as_ref().expect("image").width_px,
+            Some(26)
+        );
+    }
+
+    #[test]
+    fn linked_badge_images_keep_both_the_picture_and_the_link() {
+        // `[![alt](badge)](target)` — the standard badge shape. The image is a
+        // block; the link it sits in is still recorded.
+        let doc = parse(
+            "[![Build Status](https://github.com/o/r/badge.svg?branch=main)](https://github.com/o/r/actions)\n",
+        );
+
+        let images = image_rows(&doc);
+        assert_eq!(images.len(), usize::from(MARKDOWN_PREVIEW_IMAGE_BLOCK_ROWS));
+        assert_eq!(
+            images[0].image.as_ref().map(|image| image.source.as_ref()),
+            Some("https://github.com/o/r/badge.svg?branch=main")
+        );
+        assert_eq!(images[0].text.as_ref(), "Build Status");
+    }
+
+    #[test]
+    fn a_row_of_badges_stays_on_one_line_and_keeps_its_links() {
+        // Badges are written one per source line but form a single paragraph,
+        // and each is a picture wrapped in a link.
+        let doc = parse(
+            "[![One](https://img.shields.io/badge/one.svg)](https://a.example)\n[![Two](https://img.shields.io/badge/two.svg)](https://b.example)\n",
+        );
+
+        let badges: Vec<&MarkdownInlineImage> = doc
+            .rows
+            .iter()
+            .flat_map(|row| row.inline_images.iter())
+            .collect();
+
+        assert_eq!(
+            badges
+                .iter()
+                .map(|badge| badge.image.source.as_ref())
+                .collect::<Vec<_>>(),
+            vec![
+                "https://img.shields.io/badge/one.svg",
+                "https://img.shields.io/badge/two.svg"
+            ]
+        );
+        assert_eq!(
+            badges
+                .iter()
+                .map(|badge| badge.link_url.as_deref())
+                .collect::<Vec<_>>(),
+            vec![Some("https://a.example"), Some("https://b.example")],
+            "clicking a badge has to reach the link it stands for"
+        );
+        assert_eq!(
+            doc.rows
+                .iter()
+                .filter(|row| !row.inline_images.is_empty())
+                .count(),
+            1,
+            "both badges belong to the same line: {:?}",
+            row_texts(&doc)
+        );
+    }
+
+    // ── Links ───────────────────────────────────────────────────────────
+
+    fn link_spans(row: &MarkdownPreviewRow) -> Vec<(&str, &str)> {
+        row.inline_spans
+            .iter()
+            .filter_map(|span| {
+                let url = span.link_url.as_ref()?;
+                let text = row.text.get(span.byte_range.clone())?;
+                Some((text, url.as_ref()))
+            })
+            .collect()
+    }
+
+    #[test]
+    fn inline_links_keep_their_destination() {
+        let doc = parse("See [the docs](https://example.com/docs) for details.\n");
+        let row = &doc.rows[0];
+
+        assert_eq!(row.text.as_ref(), "See the docs for details.");
+        assert_eq!(
+            link_spans(row),
+            vec![("the docs", "https://example.com/docs")]
+        );
+    }
+
+    #[test]
+    fn autolinks_and_styled_link_text_stay_clickable() {
+        // A bold span inside a link resolves to Bold, but it is still part of
+        // the link and must carry the destination.
+        let doc = parse("<https://example.com/bare> and [**bold**](https://example.com/b)\n");
+        let row = &doc.rows[0];
+
+        let spans = link_spans(row);
+        assert!(
+            spans
+                .iter()
+                .any(|(text, url)| *text == "https://example.com/bare"
+                    && *url == "https://example.com/bare"),
+            "autolink should be clickable: {spans:?}"
+        );
+        assert!(
+            spans
+                .iter()
+                .any(|(text, url)| *text == "bold" && *url == "https://example.com/b"),
+            "bold link text should be clickable: {spans:?}"
+        );
+    }
+
+    #[test]
+    fn only_web_destinations_are_offered() {
+        // Relative paths, anchors, and non-web schemes still render as links
+        // but have nothing to open in a browser.
+        let doc = parse(
+            "[rel](./other.md) [anchor](#section) [mail](mailto:a@b.c) [js](javascript:alert(1)) [ok](https://example.com)\n",
+        );
+        let row = &doc.rows[0];
+
+        assert_eq!(link_spans(row), vec![("ok", "https://example.com")]);
+    }
+
+    #[test]
+    fn footnote_references_are_not_web_links() {
+        let doc = parse("text[^1]\n\n[^1]: note\n");
+        for row in &doc.rows {
+            assert!(
+                link_spans(row).is_empty(),
+                "footnotes point inside the document: {:?}",
+                row.text
+            );
+        }
+    }
+
+    #[test]
+    fn link_destinations_survive_whitespace_normalisation_and_table_alignment() {
+        // Both rewrite row text and remap span offsets; the URL has to ride
+        // along or the remapped span becomes unclickable.
+        let doc = parse("a   [spaced   link](https://example.com/x)   b\n");
+        let paragraph = &doc.rows[0];
+        assert_eq!(paragraph.text.as_ref(), "a spaced link b");
+        assert_eq!(
+            link_spans(paragraph),
+            vec![("spaced link", "https://example.com/x")]
+        );
+
+        let table = parse("| a | b |\n| --- | --- |\n| [x](https://example.com/y) | wide cell |\n");
+        let body = table
+            .rows
+            .iter()
+            .find(|row| row.text.contains('x'))
+            .expect("table body row");
+        assert_eq!(link_spans(body), vec![("x", "https://example.com/y")]);
+    }
+
+    // ── Inline span integrity ───────────────────────────────────────────
+
+    /// Inline spans become `gpui` text runs, and `gpui` shapes a line by
+    /// splitting the text at each run boundary. A span that lands inside a
+    /// multi-byte character aborts the process in `str::split_at`, so the
+    /// parser must never emit one — see [`crate::text_runs`] for the guard on
+    /// the render side.
+    fn assert_rows_span_aligned(source: &str, doc: &MarkdownPreviewDocument) {
+        for (row_ix, row) in doc.rows.iter().enumerate() {
+            let text = row.text.as_ref();
+            let mut prev_end = 0usize;
+            for span in row.inline_spans.iter() {
+                assert!(
+                    span.byte_range.start <= span.byte_range.end,
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} inverted"
+                );
+                assert!(
+                    span.byte_range.end <= text.len(),
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} out of bounds"
+                );
+                assert!(
+                    text.is_char_boundary(span.byte_range.start),
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} start not boundary"
+                );
+                assert!(
+                    text.is_char_boundary(span.byte_range.end),
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} end not boundary"
+                );
+                assert!(
+                    span.byte_range.start >= prev_end,
+                    "src {source:?} row {row_ix} text {text:?} span {span:?} overlaps previous"
+                );
+                prev_end = span.byte_range.end;
+            }
+        }
+    }
+
+    #[test]
+    fn inline_spans_stay_on_char_boundaries_for_multibyte_markdown() {
+        const FRAGMENTS: &[&str] = &[
+            "plain — text",
+            "**bold — run**",
+            "*em — run*",
+            "~~strike —~~",
+            "`code — span`",
+            "[link — text](https://example.com)",
+            "text with é中😀 mix",
+            "# Heading — one",
+            "## Heading **—** two",
+            "- list — item",
+            "- [ ] task — item",
+            "- [x] done **—** item",
+            "1. ordered — item",
+            "> quote — line",
+            "> [!NOTE]\n> alert — body",
+            "| a — | b |\n| --- | --- |\n| **c—** | d |",
+            "| ——— | short |\n| --- | --- |\n| x | *y—z* |",
+            "```rust\nlet x = \"—\";\n```",
+            "---",
+            "<b>html — bold</b>",
+            "<details><summary>sum — **mary**</summary></details>",
+            "<img alt=\"alt — text\" src=\"x.png\">",
+            "text[^1] — ref\n\n[^1]: note — body",
+            "line one —  \nline two —",
+            "a—b   c—d",
+            "  —indented — paragraph",
+            "—",
+            "**—**",
+            "*—*text—",
+            "| — |\n| --- |\n| **—** |",
+        ];
+
+        let mut state = 0x2545_F491_4F6C_DD1Du64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        for _ in 0..20_000 {
+            let count = 1 + (next() % 5) as usize;
+            let mut source = String::new();
+            for _ in 0..count {
+                let fragment = FRAGMENTS[(next() % FRAGMENTS.len() as u64) as usize];
+                source.push_str(fragment);
+                source.push_str(if next() % 2 == 0 { "\n\n" } else { "\n" });
+            }
+            let Some(doc) = parse_markdown(&source) else {
+                continue;
+            };
+            assert_rows_span_aligned(&source, &doc);
+        }
+    }
+
+    #[test]
+    fn inline_spans_stay_on_char_boundaries_for_random_markdown_soup() {
+        const ALPHABET: &[&str] = &[
+            "—",
+            "é",
+            "中",
+            "😀",
+            "…",
+            "\u{a0}",
+            "a",
+            "b",
+            "x",
+            " ",
+            "  ",
+            "\t",
+            "\n",
+            "\n\n",
+            "#",
+            "##",
+            "*",
+            "**",
+            "_",
+            "__",
+            "~~",
+            "`",
+            "```",
+            "[",
+            "]",
+            "(",
+            ")",
+            "<",
+            ">",
+            "|",
+            "-",
+            "- ",
+            "1. ",
+            "!",
+            "\\",
+            "&amp;",
+            "<b>",
+            "</b>",
+            "<i>",
+            "</i>",
+            "<br>",
+            "<summary>",
+            "</summary>",
+            "<details>",
+            "</details>",
+            "[^1]",
+            "[^1]: ",
+            "---",
+            "> ",
+            "[!NOTE]",
+            "[ ] ",
+            "[x] ",
+            ":",
+            "\"",
+            "'",
+            "/",
+            "=",
+            "img ",
+            "alt=",
+            "http://x",
+        ];
+
+        let mut state = 0x9E37_79B9_7F4A_7C15u64;
+        let mut next = move || {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            state
+        };
+
+        for _ in 0..60_000 {
+            let token_count = 4 + (next() % 60) as usize;
+            let mut source = String::with_capacity(token_count * 3);
+            for _ in 0..token_count {
+                source.push_str(ALPHABET[(next() % ALPHABET.len() as u64) as usize]);
+            }
+            let Some(doc) = parse_markdown(&source) else {
+                continue;
+            };
+            assert_rows_span_aligned(&source, &doc);
+        }
     }
 }

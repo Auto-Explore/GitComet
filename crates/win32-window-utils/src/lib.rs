@@ -3,7 +3,8 @@ use std::sync::OnceLock;
 
 use windows_sys::Win32::Foundation::{FALSE, HWND, LPARAM, POINT, TRUE, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
-use windows_sys::Win32::System::Console::SetConsoleCtrlHandler;
+use windows_sys::Win32::System::Console::{GenerateConsoleCtrlEvent, SetConsoleCtrlHandler};
+use windows_sys::Win32::System::Threading::{ExitProcess, GetCurrentProcess, TerminateProcess};
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::ReleaseCapture;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     EnableMenuItem, GWL_STYLE, GetSystemMenu, GetWindowLongPtrW, HMENU, HTCAPTION, IsIconic,
@@ -18,6 +19,10 @@ use windows_sys::core::BOOL;
 pub use windows_sys::Win32::System::Console::{
     CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT, CTRL_SHUTDOWN_EVENT,
 };
+
+/// `STATUS_CONTROL_C_EXIT`, the exit status a Windows console reports for a
+/// program stopped by Ctrl+C.
+pub const CONTROL_C_EXIT_CODE: u32 = 0xC000_013A;
 
 type ConsoleCtrlCallback = fn(event: u32) -> bool;
 
@@ -43,6 +48,37 @@ pub fn install_console_ctrl_handler(callback: ConsoleCtrlCallback) -> bool {
         return false;
     }
     unsafe { SetConsoleCtrlHandler(Some(console_ctrl_handler), TRUE) != 0 }
+}
+
+/// Send `CTRL_BREAK_EVENT` to a console process group, the one control event a
+/// caller can direct at a single group rather than the whole console. Lets a
+/// test drive another process through its installed console control handler.
+pub fn send_console_ctrl_break(process_group_id: u32) -> bool {
+    unsafe { GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, process_group_id) != 0 }
+}
+
+/// End the current process immediately, skipping module teardown.
+///
+/// This exists because the console's default control handler — the one that
+/// runs once every installed handler declines an event — ends the process with
+/// `ExitProcess`. `ExitProcess` takes the loader lock *before* it stops the
+/// other threads and then runs `DLL_PROCESS_DETACH` for every loaded module,
+/// so a process still running renderer, executor and allocator threads can
+/// deadlock there and never terminate at all. `TerminateProcess` asks the
+/// kernel to tear the process down instead, which needs neither the loader
+/// lock nor any module detach routine.
+pub fn terminate_current_process(exit_code: u32) -> ! {
+    // A hooked or otherwise refused `TerminateProcess` must not leave this
+    // thread parked forever with the process still alive: fall back to the
+    // teardown that can deadlock rather than to no teardown at all.
+    if unsafe { TerminateProcess(GetCurrentProcess(), exit_code) } == 0 {
+        unsafe { ExitProcess(exit_code) }
+    }
+    // Termination is asynchronous for the calling thread, so wait here rather
+    // than returning into code that assumed this call never comes back.
+    loop {
+        std::thread::park();
+    }
 }
 
 /// Restore a Win32 window from the maximized state.

@@ -292,7 +292,6 @@ fn render_conflict_markdown_preview_rows(
     this.update_markdown_preview_horizontal_min_width(
         document.as_ref(),
         range.clone(),
-        None,
         editor_font_family.as_str(),
         window,
         cx,
@@ -302,12 +301,13 @@ fn render_conflict_markdown_preview_rows(
         range,
         &super::history::MarkdownPreviewRenderContext {
             theme,
-            bar_color: None,
             min_width: this.diff_horizontal_content_width().max(viewport_width),
             editor_font_family: editor_font_family.into(),
             ui_scale_percent: crate::ui_scale::current(cx).percent,
             view: None,
             text_region: DiffTextRegion::Inline,
+            wrap_plan: None,
+            image_base_dir: None,
         },
     )
 }

@@ -1026,24 +1026,7 @@ fn compute_runs(
     default_style: &TextStyle,
     highlights: &[(Range<usize>, HighlightStyle)],
 ) -> Vec<TextRun> {
-    let mut runs = Vec::with_capacity(highlights.len() * 2 + 1);
-    let mut ix = 0usize;
-    for (range, highlight) in highlights {
-        if ix < range.start {
-            runs.push(default_style.clone().to_run(range.start - ix));
-        }
-        runs.push(
-            default_style
-                .clone()
-                .highlight(*highlight)
-                .to_run(range.len()),
-        );
-        ix = range.end;
-    }
-    if ix < text.len() {
-        runs.push(default_style.clone().to_run(text.len() - ix));
-    }
-    runs
+    crate::text_runs::text_runs_for_highlights(text, default_style, highlights)
 }
 
 fn empty_highlights() -> HighlightSpans {

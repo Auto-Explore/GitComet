@@ -2536,6 +2536,7 @@ impl MainPaneView {
                     }
                     Loadable::Ready(_) => {
                         self.ensure_single_markdown_preview_cache(cx);
+                        self.watch_pending_markdown_preview_images(cx);
                         match &self.worktree_markdown_preview {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, "Preview", "Loading")
@@ -2555,16 +2556,38 @@ impl MainPaneView {
                                     components::empty_state(theme, "Preview", message)
                                         .into_any_element()
                                 } else {
-                                    let list = uniform_list(
-                                        "worktree_markdown_preview_list",
-                                        document.rows.len(),
-                                        cx.processor(Self::render_markdown_preview_rows),
-                                    )
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .track_scroll(&self.worktree_preview_scroll)
-                                    .with_horizontal_sizing_behavior(
-                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                    // A single document lays out as one flowing
+                                    // element tree rather than a uniform row
+                                    // list: text wraps by itself, images sit at
+                                    // their own size, and the gaps around
+                                    // headings are margins.
+                                    self.markdown_preview_wrap
+                                        .clear_list(MarkdownPreviewList::Worktree);
+                                    let document = std::sync::Arc::clone(document);
+                                    let image_base_dir = self
+                                        .markdown_preview_image_base_dir()
+                                        .map(|dir| std::sync::Arc::from(dir.as_path()));
+                                    let body = rows::render_markdown_document(
+                                        &document,
+                                        &rows::MarkdownDocumentContext {
+                                            theme,
+                                            ui_scale_percent,
+                                            editor_font_family: editor_font_family.clone().into(),
+                                            image_base_dir,
+                                            picture_sizes: std::sync::Arc::clone(
+                                                &self.worktree_markdown_preview_picture_sizes,
+                                            ),
+                                            block_scrolls: self
+                                                .worktree_markdown_preview_block_scrolls
+                                                .clone(),
+                                            blocks: self.worktree_markdown_preview_blocks.clone(),
+                                            view: Some(cx.entity()),
+                                            text_region: DiffTextRegion::Inline,
+                                            change_bar_color:
+                                                rows::worktree_markdown_preview_bar_color(
+                                                    self, theme,
+                                                ),
+                                        },
                                     );
 
                                     let scroll_handle =
@@ -2572,6 +2595,10 @@ impl MainPaneView {
                                     let scrollbar_gutter = components::Scrollbar::visible_gutter(
                                         scroll_handle.clone(),
                                         components::ScrollbarAxis::Vertical,
+                                    );
+                                    let edge_gap = crate::ui_scale::design_px_from_percent(
+                                        super::diff::MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX,
+                                        ui_scale_percent,
                                     );
                                     div()
                                         .id("worktree_markdown_preview_scroll_container")
@@ -2584,24 +2611,24 @@ impl MainPaneView {
                                         .bg(theme.colors.window_bg)
                                         .child(
                                             div()
-                                                .h_full()
+                                                .id("worktree_markdown_preview_document")
+                                                .debug_selector(|| {
+                                                    "worktree_markdown_preview_document".to_string()
+                                                })
+                                                .size_full()
                                                 .min_h(px(0.0))
+                                                .overflow_y_scroll()
+                                                .track_scroll(&scroll_handle)
+                                                .pt(edge_gap)
+                                                .pb(edge_gap)
                                                 .pr(scrollbar_gutter)
-                                                .child(list),
+                                                .child(body),
                                         )
                                         .child(
                                             components::Scrollbar::new(
                                                 "worktree_markdown_preview_scrollbar",
-                                                scroll_handle.clone(),
-                                            )
-                                            .render(theme),
-                                        )
-                                        .child(
-                                            components::Scrollbar::horizontal(
-                                                "worktree_markdown_preview_hscrollbar",
                                                 scroll_handle,
                                             )
-                                            .always_visible()
                                             .render(theme),
                                         )
                                         .into_any_element()
@@ -2634,12 +2661,22 @@ impl MainPaneView {
                             .into_any_element()
                     }
                     Loadable::Ready(line_count) => {
-                        if *line_count == 0 {
+                        let line_count = *line_count;
+                        if line_count == 0 {
                             components::empty_state(theme, "File", "Empty file.").into_any_element()
                         } else {
+                            // Word wrap turns one line into several rows, so the
+                            // projection has to be built before the list is
+                            // asked how long it is.
+                            self.ensure_diff_wrap_visible_rows(window, cx);
+                            let row_count = self
+                                .worktree_preview_visible_len()
+                                .unwrap_or(line_count)
+                                .max(1);
+                            let wrapped = self.worktree_preview_wrap_active();
                             let list = uniform_list(
                                 "worktree_preview_list",
-                                *line_count,
+                                row_count,
                                 cx.processor(Self::render_worktree_preview_rows),
                             )
                             .h_full()
@@ -2677,14 +2714,18 @@ impl MainPaneView {
                                     )
                                     .render(theme),
                                 )
-                                .child(
-                                    components::Scrollbar::horizontal(
-                                        "worktree_preview_hscrollbar",
-                                        scroll_handle,
+                                // Wrapped rows end at the pane, so there is
+                                // nothing left of the line to scroll to.
+                                .when(!wrapped, |container| {
+                                    container.child(
+                                        components::Scrollbar::horizontal(
+                                            "worktree_preview_hscrollbar",
+                                            scroll_handle,
+                                        )
+                                        .always_visible()
+                                        .render(theme),
                                     )
-                                    .always_visible()
-                                    .render(theme),
-                                )
+                                })
                                 .into_any_element()
                         }
                     }

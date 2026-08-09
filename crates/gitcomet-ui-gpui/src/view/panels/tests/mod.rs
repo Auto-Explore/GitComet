@@ -48,7 +48,7 @@ fn diff_text_click_position_for_offset_range(
     (0..2048usize)
         .find_map(|step| {
             let position = point(hitbox.bounds.left() + px(step as f32), y);
-            pane.diff_text_offset_for_position_for_tests(visible_ix, region, position)
+            pane.diff_text_offset_for_position(visible_ix, region, position)
                 .filter(|offset| target.contains(offset))
                 .map(|_| position)
         })

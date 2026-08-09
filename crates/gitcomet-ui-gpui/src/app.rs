@@ -424,7 +424,11 @@ fn run_windowed_app(
     on_shutdown: Option<ShutdownCallback>,
 ) {
     let quit_when_all_windows_closed = should_quit_when_all_windows_closed(&launch);
-    let application = application().with_assets(GitCometAssets);
+    // Without this, `gpui` keeps its null client and every request — the
+    // update check, and images a markdown preview points at — fails silently.
+    let application = application()
+        .with_assets(GitCometAssets)
+        .with_http_client(crate::http::client());
 
     #[cfg(target_os = "macos")]
     let open_urls_rx = if launch.view_config.view_mode == GitCometViewMode::Normal {
