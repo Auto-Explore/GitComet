@@ -120,6 +120,11 @@ pub(super) fn panel(
         .map(|r| &r.virtual_branches)
         .cloned()
         .unwrap_or_default();
+    let stale_ids = repo
+        .map(|r| gitcomet_state::model::stale_virtual_branch_ids(r))
+        .unwrap_or_default();
+    let has_stale = !stale_ids.is_empty();
+    let stale_ids_for_click = stale_ids.clone();
 
     let header = div()
         .px(scaled_px(8.0))
@@ -147,9 +152,38 @@ pub(super) fn panel(
                 ),
         )
         .child(
-            components::Button::new("vb_close", "Close")
-                .style(components::ButtonStyle::Outlined)
-                .on_click(theme, cx, |this, _e, _w, cx| this.close_popover(cx)),
+            div()
+                .flex()
+                .items_center()
+                .gap(scaled_px(6.0))
+                .child(
+                    components::Button::new("vb_prune_stale", "Clean up")
+                        .style(components::ButtonStyle::Outlined)
+                        .disabled(!has_stale)
+                        .on_click(theme, cx, move |this, _e, window, cx| {
+                            this.open_popover_centered(
+                                PopoverKind::PruneVirtualBranchesConfirm {
+                                    repo_id,
+                                    branch_ids: stale_ids_for_click.clone(),
+                                },
+                                window,
+                                cx,
+                            );
+                        })
+                        .gitcomet_tooltip(
+                            theme,
+                            if has_stale {
+                                "Remove branches whose assigned paths no longer have worktree changes".into()
+                            } else {
+                                "No stale branches".into()
+                            },
+                        ),
+                )
+                .child(
+                    components::Button::new("vb_close", "Close")
+                        .style(components::ButtonStyle::Outlined)
+                        .on_click(theme, cx, |this, _e, _w, cx| this.close_popover(cx)),
+                ),
         );
 
     let list = if branches.is_empty() {

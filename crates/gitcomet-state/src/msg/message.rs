@@ -781,6 +781,12 @@ pub enum Msg {
         patch: String,
         path: std::path::PathBuf,
     },
+    /// Removes the given virtual branches (computed stale by the UI via
+    /// `stale_virtual_branch_ids` and confirmed by the user).
+    PruneVirtualBranches {
+        repo_id: RepoId,
+        branch_ids: Vec<u64>,
+    },
     /// Builds the squash message preview for the current multi-selection so
     /// the squash prompt can prefill its message input.
     PrepareSquash {

@@ -2109,6 +2109,33 @@ impl<T> Loadable<T> {
     }
 }
 
+/// Virtual branches whose assigned paths no longer have any changes in the
+/// worktree (unstaged or staged) and that hold no parked patch. Such a branch
+/// is purely leftover accounting: its changes were committed, discarded, or
+/// reverted outside the virtual-branch flow. Branches with a parked
+/// `stored_patch` are never stale (their hunks are recoverable by applying).
+pub fn stale_virtual_branch_ids(repo: &RepoState) -> Vec<u64> {
+    let mut changed_paths: HashSet<&std::path::Path> = HashSet::default();
+    for loaded in [&repo.worktree_status, &repo.staged_status] {
+        if let Loadable::Ready(entries) = loaded {
+            for entry in entries.iter() {
+                changed_paths.insert(entry.path.as_path());
+            }
+        }
+    }
+    repo.virtual_branches
+        .iter()
+        .filter(|branch| {
+            branch.stored_patch.is_none()
+                && branch
+                    .paths
+                    .iter()
+                    .all(|path| !changed_paths.contains(path.as_path()))
+        })
+        .map(|branch| branch.id)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

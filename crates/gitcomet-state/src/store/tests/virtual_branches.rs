@@ -1,7 +1,7 @@
 use super::*;
 
 fn fixture_repo() -> (HashMap<RepoId, Arc<dyn GitRepository>>, AtomicU64, AppState, RepoId) {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = AppState::default();
@@ -706,4 +706,118 @@ fn unapply_after_move_appends_captured_diff_to_parked_patch() {
         branch.stored_patch.as_deref(),
         Some(format!("{}\n{captured}", parked.trim_end()).as_str())
     );
+}
+
+fn set_status(state: &mut AppState, paths: &[&str]) {
+    use gitcomet_core::domain::{FileStatus, FileStatusKind};
+    state.repos[0].worktree_status = Loadable::Ready(Arc::new(
+        paths
+            .iter()
+            .map(|p| FileStatus {
+                path: PathBuf::from(p),
+                kind: FileStatusKind::Modified,
+                conflict: None,
+            })
+            .collect(),
+    ));
+}
+
+#[test]
+fn stale_virtual_branch_ids_ignores_branches_with_changes_or_parked_patches() {
+    let (mut repos, id_alloc, mut state, repo_id) = fixture_repo();
+    for name in ["changed", "stale", "parked"] {
+        let _ = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::CreateVirtualBranch {
+                repo_id,
+                name: name.into(),
+            },
+        );
+    }
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AssignPathToVirtualBranch {
+            repo_id,
+            branch_id: 1,
+            path: PathBuf::from("src/active.rs"),
+        },
+    );
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AssignPathToVirtualBranch {
+            repo_id,
+            branch_id: 2,
+            path: PathBuf::from("src/gone.rs"),
+        },
+    );
+    // Branch 3 has a parked patch: it must never be pruned.
+    state.repos[0].virtual_branches[2].stored_patch = Some("parked diff".into());
+    state.repos[0].virtual_branches[2].applied = false;
+    set_status(&mut state, &["src/active.rs"]);
+
+    let stale = crate::model::stale_virtual_branch_ids(&state.repos[0]);
+    assert_eq!(stale, vec![2]);
+}
+
+#[test]
+fn stale_virtual_branch_ids_treats_empty_branches_as_stale() {
+    let (mut repos, id_alloc, mut state, repo_id) = fixture_repo();
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateVirtualBranch {
+            repo_id,
+            name: "empty".into(),
+        },
+    );
+    set_status(&mut state, &[]);
+    let stale = crate::model::stale_virtual_branch_ids(&state.repos[0]);
+    assert_eq!(stale, vec![1]);
+}
+
+#[test]
+fn prune_virtual_branches_removes_only_given_ids_and_persists() {
+    let (mut repos, id_alloc, mut state, repo_id) = fixture_repo();
+    for _ in 0..3 {
+        let _ = reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::CreateVirtualBranch {
+                repo_id,
+                name: String::new(),
+            },
+        );
+    }
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PruneVirtualBranches {
+            repo_id,
+            branch_ids: vec![1, 3],
+        },
+    );
+    assert!(has_persist_effect(&effects));
+    assert_eq!(branch_ids(&state), vec![2]);
+
+    // Pruning nothing is a no-op.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::PruneVirtualBranches {
+            repo_id,
+            branch_ids: vec![999],
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(branch_ids(&state), vec![2]);
 }

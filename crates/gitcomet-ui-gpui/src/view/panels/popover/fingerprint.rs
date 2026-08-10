@@ -175,6 +175,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
         | PopoverKind::AddToGitignorePrompt { repo_id, .. }
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
+        | PopoverKind::PruneVirtualBranchesConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::RebaseOntoConfirm { repo_id, .. }
         | PopoverKind::CommitOptionsMenu { repo_id }
@@ -406,7 +407,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
 
         PopoverKind::VirtualBranchesPrompt { .. }
         | PopoverKind::VirtualBranchPicker { .. }
-        | PopoverKind::VirtualBranchMovePicker { .. } => {
+        | PopoverKind::VirtualBranchMovePicker { .. }
+        | PopoverKind::PruneVirtualBranchesConfirm { .. } => {
             repo.virtual_branches.len().hash(hasher);
             for branch in repo.virtual_branches.iter() {
                 branch.id.hash(hasher);
@@ -567,6 +569,14 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ForcePushConfirm { repo_id } => {
             31u8.hash(hasher);
             repo_id.hash(hasher);
+        }
+        PopoverKind::PruneVirtualBranchesConfirm {
+            repo_id,
+            branch_ids,
+        } => {
+            102u8.hash(hasher);
+            repo_id.hash(hasher);
+            branch_ids.hash(hasher);
         }
         PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
             76u8.hash(hasher);

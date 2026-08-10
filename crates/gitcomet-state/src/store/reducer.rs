@@ -1058,6 +1058,10 @@ fn reduce_inner(
             patch,
             path,
         } => virtual_branches::move_hunk_to_virtual_branch(state, repo_id, branch_id, patch, path),
+        Msg::PruneVirtualBranches {
+            repo_id,
+            branch_ids,
+        } => virtual_branches::prune_virtual_branches(state, repo_id, branch_ids),
         Msg::LoadRecentCommitMessages { repo_id, limit } => {
             effects::load_recent_commit_messages(state, repo_id, limit)
         }

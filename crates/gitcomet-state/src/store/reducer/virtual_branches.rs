@@ -63,6 +63,29 @@ pub(super) fn delete_virtual_branch(
     Vec::new()
 }
 
+/// Bulk-removes virtual branches (used by the stale-branch cleanup after
+/// user confirmation).
+pub(super) fn prune_virtual_branches(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_ids: Vec<u64>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if branch_ids.is_empty() {
+        return Vec::new();
+    }
+    let before = repo.virtual_branches.len();
+    repo.virtual_branches
+        .retain(|branch| !branch_ids.contains(&branch.id));
+    if repo.virtual_branches.len() == before {
+        return Vec::new();
+    }
+    repo.virtual_branches_rev += 1;
+    vec![persist_effect(repo, "pruning stale virtual branches")]
+}
+
 /// Assigns `path` to the branch: the path is removed from every other branch
 /// first (a path belongs to at most one virtual branch).
 pub(super) fn assign_path_to_virtual_branch(

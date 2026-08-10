@@ -4388,6 +4388,12 @@ pub(super) enum PopoverKind {
         patch: String,
         path: std::path::PathBuf,
     },
+    /// Confirms bulk removal of stale virtual branches (assigned paths with no
+    /// remaining worktree changes).
+    PruneVirtualBranchesConfirm {
+        repo_id: RepoId,
+        branch_ids: Vec<u64>,
+    },
     PushSetUpstreamPrompt {
         repo_id: RepoId,
         remote: String,
