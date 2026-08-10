@@ -271,6 +271,23 @@ pub enum Effect {
         mainline: Option<usize>,
         summary: String,
     },
+<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
+    CherryPickRangeOntoNewBranch {
+        repo_id: RepoId,
+        base: String,
+        range: String,
+        source: String,
+        new_branch: String,
+    },
+||||||| Common ancestor
+=======
+    CherryPickRangeOntoNewBranch {
+        repo_id: RepoId,
+        base: String,
+        source: String,
+        new_branch: String,
+    },
+>>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,

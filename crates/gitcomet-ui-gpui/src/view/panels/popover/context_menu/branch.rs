@@ -103,6 +103,31 @@ pub(super) fn model(
             }),
         });
     }
+    // Cherry-pick this branch (A) onto the current branch (D) as a new
+    // branch (C). The range ref (B) defaults to A's upstream when it has one,
+    // so the copied set is "what this branch adds".
+    let clicked_upstream = repo.and_then(|r| match &r.branches {
+        Loadable::Ready(branches) => branches
+            .iter()
+            .find(|branch| branch.name == *name)
+            .and_then(|branch| branch.upstream.as_ref())
+            .map(|upstream| format!("{}/{}", upstream.remote, upstream.branch)),
+        _ => None,
+    });
+    items.push(ContextMenuItem::Entry {
+        label: "Cherry-pick onto new branch…".into(),
+        icon: Some("icons/copy.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::CherryPickRangePrompt {
+                repo_id,
+                prefill_source: Some(name.clone()),
+                prefill_range: clicked_upstream,
+                prefill_base: active_branch_name.clone(),
+            },
+        }),
+    });
 
     // Comparison: mark this branch's tip, or compare it against a mark.
     let branch_commit_id: Option<CommitId> = match section {

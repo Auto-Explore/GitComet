@@ -1792,3 +1792,105 @@ fn local_branch_menu_excludes_pull_merge_and_squash_for_current_branch(
         assert!(delete_disabled, "expected delete entry to be disabled");
     });
 }
+
+#[gpui::test]
+fn local_branch_menu_cherry_pick_prefills_source_range_and_base(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(240);
+    let branch_name = "feature/awesome".to_string();
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_branch_menu_cherry_pick",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::Branch {
+                    name: "main".to_string(),
+                    target: CommitId("aaaaaaaa".into()),
+                    upstream: Some(gitcomet_core::domain::Upstream {
+                        remote: "origin".to_string(),
+                        branch: "main".to_string(),
+                    }),
+                    divergence: None,
+                },
+                gitcomet_core::domain::Branch {
+                    name: branch_name.clone(),
+                    target: CommitId("bbbbbbbb".into()),
+                    upstream: Some(gitcomet_core::domain::Upstream {
+                        remote: "origin".to_string(),
+                        branch: "awesome".to_string(),
+                    }),
+                    divergence: None,
+                },
+            ]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::BranchMenu {
+                            repo_id,
+                            section: BranchSection::Local,
+                            name: branch_name.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected branch context menu model");
+
+        let entry = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. }
+                if label.as_ref() == "Cherry-pick onto new branch…" =>
+            {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+
+        match entry {
+            Some(ContextMenuAction::OpenPopover {
+                kind:
+                    PopoverKind::CherryPickRangePrompt {
+                        repo_id: rid,
+                        prefill_source,
+                        prefill_range,
+                        prefill_base,
+                    },
+            }) => {
+                assert_eq!(rid, repo_id);
+                assert_eq!(prefill_source.as_deref(), Some("feature/awesome"));
+                assert_eq!(prefill_range.as_deref(), Some("origin/awesome"));
+                assert_eq!(prefill_base.as_deref(), Some("main"));
+            }
+            _ => panic!(
+                "expected Cherry-pick onto new branch entry with prefilled CherryPickRangePrompt"
+            ),
+        }
+    });
+}

@@ -83,6 +83,26 @@ pub enum RepoCommandKind {
         mainline: Option<usize>,
         summary: String,
     },
+<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
+    /// Creates a new branch `new_branch` from `base`, checks it out, and
+    /// cherry-picks `range..source`'s commits (oldest first, merges skipped,
+    /// `range` must be an ancestor of `source`) onto it.
+    CherryPickRangeOntoNewBranch {
+        base: String,
+        range: String,
+        source: String,
+        new_branch: String,
+    },
+||||||| Common ancestor
+=======
+    /// Creates a new branch from `base`, checks it out, and cherry-picks
+    /// `source..base`'s commits (oldest first, merges skipped) onto it.
+    CherryPickRangeOntoNewBranch {
+        base: String,
+        source: String,
+        new_branch: String,
+    },
+>>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
     MergeAbort,
     CreateTag {
         name: String,

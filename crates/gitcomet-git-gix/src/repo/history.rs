@@ -1069,6 +1069,160 @@ impl GixRepo {
         self.run_planned_rebase(entries, "HEAD", &label)
     }
 
+<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
+    /// Creates `new_branch` at `base`'s tip, checks it out, and cherry-picks
+    /// every commit reachable from `source` but not from `range` (oldest
+    /// first, merge commits skipped) onto it. Nothing is created when the
+    /// range is empty, `range` is not an ancestor of `source`, or
+    /// `new_branch` already exists (`create_branch_impl` rejects it).
+    pub(super) fn cherry_pick_range_onto_new_branch_impl(
+        &self,
+        base: &str,
+        range: &str,
+        source: &str,
+        new_branch: &str,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(base, "base branch name")?;
+        validate_ref_like_arg(range, "range reference")?;
+        validate_ref_like_arg(source, "source reference")?;
+        validate_ref_like_arg(new_branch, "new branch name")?;
+
+        // `range` must be an ancestor of `source` for `range..source` to be a
+        // meaningful commit set; git's --is-ancestor exits 1 when it is not.
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("merge-base").arg("--is-ancestor").arg(range).arg(source);
+        let ancestor_label = format!("git merge-base --is-ancestor {range} {source}");
+        match run_git_raw_output(cmd, &ancestor_label) {
+            Ok(output) if output.status.success() => {}
+            Ok(output) if output.status.code() == Some(1) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "{range} is not an ancestor of {source}; the range {range}..{source} would \
+                     include unrelated history — pick a range reference that is an ancestor"
+                ))));
+            }
+            Ok(output) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "failed to check whether {range} is an ancestor of {source}: {}",
+                    bytes_to_text_preserving_utf8(&output.stderr).trim()
+                ))));
+            }
+            Err(e) => {
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "failed to check whether {range} is an ancestor of {source}: {e}"
+                ))));
+            }
+        }
+
+        // Oldest-first, merge commits skipped: the same set `git cherry-pick
+        // range..source` would apply, enumerated explicitly so an empty range
+        // is rejected before any branch or checkout is created.
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("rev-list")
+            .arg("--reverse")
+            .arg("--no-merges")
+            .arg(format!("{range}..{source}"));
+        let rev_list_label = format!("git rev-list --reverse --no-merges {range}..{source}");
+        let output = run_git_raw_output(cmd, &rev_list_label).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "failed to list commits in {range}..{source}: {e}"
+            )))
+        })?;
+        let shas: Vec<String> = bytes_to_text_preserving_utf8(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+        if shas.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "no commits to cherry-pick: {source} has no commits that are not already in \
+                 {range}"
+            ))));
+        }
+
+        // Create the branch from `base` (errors if it already exists) and
+        // move onto it before the picks, mirroring create-branch-and-checkout.
+        self.create_branch_impl(new_branch, &CommitId(base.into()))?;
+        self.checkout_branch_impl(new_branch)?;
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("cherry-pick")
+            .arg("--no-edit")
+            .arg("--allow-empty")
+            .arg("--");
+        for sha in &shas {
+            cmd.arg(sha);
+        }
+        let label = format!("git cherry-pick {} commits onto {new_branch}", shas.len());
+        // An already-applied commit stops the whole sequence with an "empty"
+        // error that only `--skip` moves past, and the UI exposes no skip
+        // control — advance automatically so the remaining picks land.
+        self.run_cherry_pick_step_output(cmd, &label)
+    }
+
+||||||| Common ancestor
+=======
+    /// Creates `new_branch` at `base`'s tip, checks it out, and cherry-picks
+    /// every commit reachable from `source` but not from `base` (oldest first,
+    /// merge commits skipped) onto it. Nothing is created when the range is
+    /// empty, and `create_branch_impl` already rejects an existing branch.
+    pub(super) fn cherry_pick_range_onto_new_branch_impl(
+        &self,
+        base: &str,
+        source: &str,
+        new_branch: &str,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(base, "base branch name")?;
+        validate_ref_like_arg(source, "source branch name")?;
+        validate_ref_like_arg(new_branch, "new branch name")?;
+
+        // Oldest-first, merge commits skipped: the same set `git cherry-pick
+        // base..source` would apply, enumerated explicitly so an empty range
+        // is rejected before any branch or checkout is created.
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("rev-list")
+            .arg("--reverse")
+            .arg("--no-merges")
+            .arg(format!("{base}..{source}"));
+        let rev_list_label = format!("git rev-list --reverse --no-merges {base}..{source}");
+        let output = run_git_raw_output(cmd, &rev_list_label).map_err(|e| {
+            Error::new(ErrorKind::Backend(format!(
+                "failed to list commits in {base}..{source}: {e}"
+            )))
+        })?;
+        let shas: Vec<String> = bytes_to_text_preserving_utf8(&output.stdout)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_string)
+            .collect();
+        if shas.is_empty() {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "no commits to cherry-pick: {source} has no commits that are not already in {base}"
+            ))));
+        }
+
+        // Create the branch from `base` (errors if it already exists) and
+        // move onto it before the picks, mirroring create-branch-and-checkout.
+        self.create_branch_impl(new_branch, &CommitId(base.into()))?;
+        self.checkout_branch_impl(new_branch)?;
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("cherry-pick")
+            .arg("--no-edit")
+            .arg("--allow-empty")
+            .arg("--");
+        for sha in &shas {
+            cmd.arg(sha);
+        }
+        let label = format!("git cherry-pick {} commits onto {new_branch}", shas.len());
+        // An already-applied commit stops the whole sequence with an "empty"
+        // error that only `--skip` moves past, and the UI exposes no skip
+        // control — advance automatically so the remaining picks land.
+        self.run_cherry_pick_step_output(cmd, &label)
+    }
+
+>>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
     pub(super) fn merge_commit_message_impl(&self) -> Result<Option<String>> {
         let repo = self._repo.to_thread_local();
         if repo.state() != Some(gix::state::InProgress::Merge) {

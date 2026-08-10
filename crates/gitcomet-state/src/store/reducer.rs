@@ -418,6 +418,7 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // rejected as already in progress (and its effect has no auth slot).
         // Continue the paused sequencer with the staged auth instead.
         RepoCommandKind::InteractiveCherryPick { .. } => Msg::RebaseContinue { repo_id },
+        RepoCommandKind::CherryPickRangeOntoNewBranch { .. } => Msg::RebaseContinue { repo_id },
         RepoCommandKind::CherryPick {
             commit_id,
             commit,
@@ -1167,6 +1168,37 @@ fn reduce_inner(
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::cherry_pick_commit(repo_id, commit_id, commit, mainline, summary)
         }
+<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
+        Msg::CherryPickRangeOntoNewBranch {
+            repo_id,
+            base,
+            range,
+            source,
+            new_branch,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.set_detached_head_commit(None);
+            }
+            begin_head_changing_local_action(state, repo_id);
+            actions_emit_effects::cherry_pick_range_onto_new_branch(
+                repo_id, base, range, source, new_branch,
+            )
+        }
+||||||| Common ancestor
+=======
+        Msg::CherryPickRangeOntoNewBranch {
+            repo_id,
+            base,
+            source,
+            new_branch,
+        } => {
+            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+                repo_state.set_detached_head_commit(None);
+            }
+            begin_head_changing_local_action(state, repo_id);
+            actions_emit_effects::cherry_pick_range_onto_new_branch(repo_id, base, source, new_branch)
+        }
+>>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
         Msg::RevertCommit { repo_id, commit_id } => {
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id)

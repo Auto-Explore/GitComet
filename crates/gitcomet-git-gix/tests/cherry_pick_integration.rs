@@ -1355,3 +1355,217 @@ fn abort_returns_active_cherry_pick_lock_error() {
         SequencerState::CherryPick
     );
 }
+<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
+
+#[test]
+fn cherry_pick_range_onto_new_branch_creates_branch_and_applies_source_commits_in_order() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    // D: the base branch C starts from (has its own commit).
+    run_git(&repo, &["checkout", "-b", "branch_d", &base]);
+    commit_file(&repo, "d.txt", "d\n", "d work");
+    // A: the source branch whose commits are copied; B (range) = the base
+    // commit, an ancestor of A.
+    run_git(&repo, &["checkout", "-b", "branch_a", &base]);
+    commit_file(&repo, "a1.txt", "a1\n", "a one");
+    commit_file(&repo, "a2.txt", "a2\n", "a two");
+    // The caller sits on some other branch; the command must move to branch_c.
+    run_git(&repo, &["checkout", "branch_d"]);
+
+    open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_d", &base, "branch_a", "branch_c")
+        .expect("cherry-pick range onto new branch");
+
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_c");
+    assert_eq!(
+        git_stdout(&repo, &["log", "--format=%s"]),
+        "a two\na one\nd work\nbase"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("a1.txt")).unwrap(),
+        "a1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("a2.txt")).unwrap(),
+        "a2\n"
+    );
+}
+
+#[test]
+fn cherry_pick_range_onto_new_branch_skips_merge_commits() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    // D: the base branch C starts from.
+    run_git(&repo, &["checkout", "-b", "branch_d", &base]);
+    commit_file(&repo, "d.txt", "d\n", "d work");
+    // A: the source branch merged into main below.
+    run_git(&repo, &["checkout", "-b", "branch_a", &base]);
+    commit_file(&repo, "a1.txt", "a1\n", "a one");
+    commit_file(&repo, "a2.txt", "a2\n", "a two");
+    // main grows a commit and then merges branch_a in, producing a merge
+    // commit inside the range (B = the base commit, an ancestor of main)
+    // that must be skipped.
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "main.txt", "main\n", "main change");
+    run_git(&repo, &["merge", "--no-edit", "branch_a"]);
+
+    open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_d", &base, "main", "branch_c")
+        .expect("cherry-pick range onto new branch");
+
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_c");
+    assert_eq!(
+        git_stdout(&repo, &["log", "--format=%s"]),
+        "main change\na two\na one\nd work\nbase"
+    );
+}
+
+#[test]
+fn cherry_pick_range_onto_new_branch_rejects_existing_branch_and_empty_range() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "branch_d", &base]);
+    commit_file(&repo, "d.txt", "d\n", "d work");
+    run_git(&repo, &["checkout", "-b", "branch_a", &base]);
+    commit_file(&repo, "a1.txt", "a1\n", "a one");
+    run_git(&repo, &["checkout", "-b", "branch_c", "branch_d"]);
+
+    // Branch C already exists: nothing may change.
+    let error = open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_d", &base, "branch_a", "branch_c")
+        .expect_err("existing branch must be rejected");
+    assert!(error.to_string().contains("already exists"), "{error}");
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_c");
+
+    // Empty range (source == range): nothing created.
+    run_git(&repo, &["checkout", "branch_d"]);
+    let error = open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_d", "branch_a", "branch_a", "branch_e")
+        .expect_err("empty range must be rejected");
+    assert!(error.to_string().contains("no commits"), "{error}");
+    assert_eq!(git_stdout(&repo, &["branch", "--list", "branch_e"]), "");
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_d");
+}
+
+#[test]
+fn cherry_pick_range_onto_new_branch_rejects_non_ancestor_range() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "branch_d", &base]);
+    commit_file(&repo, "d.txt", "d\n", "d work");
+    run_git(&repo, &["checkout", "-b", "branch_a", &base]);
+    commit_file(&repo, "a1.txt", "a1\n", "a one");
+
+    // B = branch_d is not an ancestor of A = branch_a (they diverge from
+    // base): rejected before anything is created.
+    let error = open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_d", "branch_d", "branch_a", "branch_c")
+        .expect_err("non-ancestor range must be rejected");
+    assert!(error.to_string().contains("ancestor"), "{error}");
+    assert_eq!(git_stdout(&repo, &["branch", "--list", "branch_c"]), "");
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_a");
+}
+||||||| Common ancestor
+=======
+
+#[test]
+fn cherry_pick_range_onto_new_branch_creates_branch_and_applies_source_commits_in_order() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "branch_b", &base]);
+    commit_file(&repo, "b.txt", "b\n", "b work");
+    run_git(&repo, &["checkout", "-b", "branch_a", &base]);
+    commit_file(&repo, "a1.txt", "a1\n", "a one");
+    commit_file(&repo, "a2.txt", "a2\n", "a two");
+    // The caller sits on some other branch; the command must move to branch_c.
+    run_git(&repo, &["checkout", "branch_b"]);
+
+    open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_b", "branch_a", "branch_c")
+        .expect("cherry-pick range onto new branch");
+
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_c");
+    assert_eq!(
+        git_stdout(&repo, &["log", "--format=%s"]),
+        "a two\na one\nb work\nbase"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("a1.txt")).unwrap(),
+        "a1\n"
+    );
+    assert_eq!(
+        fs::read_to_string(repo.join("a2.txt")).unwrap(),
+        "a2\n"
+    );
+}
+
+#[test]
+fn cherry_pick_range_onto_new_branch_skips_merge_commits() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "branch_b", &base]);
+    commit_file(&repo, "b.txt", "b\n", "b work");
+    run_git(&repo, &["checkout", "-b", "branch_a", &base]);
+    commit_file(&repo, "a1.txt", "a1\n", "a one");
+    commit_file(&repo, "a2.txt", "a2\n", "a two");
+    // main grows a commit and then merges branch_a in, producing a merge
+    // commit inside the branch_b..main range that must be skipped.
+    run_git(&repo, &["checkout", "main"]);
+    commit_file(&repo, "main.txt", "main\n", "main change");
+    run_git(&repo, &["merge", "--no-edit", "branch_a"]);
+
+    open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_b", "main", "branch_c")
+        .expect("cherry-pick range onto new branch");
+
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_c");
+    assert_eq!(
+        git_stdout(&repo, &["log", "--format=%s"]),
+        "main change\na two\na one\nb work\nbase"
+    );
+}
+
+#[test]
+fn cherry_pick_range_onto_new_branch_rejects_existing_branch_and_empty_range() {
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let repo = dir.path().join("repo");
+    init_repo(&repo);
+    let base = commit_file(&repo, "base.txt", "base\n", "base");
+    run_git(&repo, &["checkout", "-b", "branch_b", &base]);
+    commit_file(&repo, "b.txt", "b\n", "b work");
+    run_git(&repo, &["checkout", "-b", "branch_a", &base]);
+    commit_file(&repo, "a1.txt", "a1\n", "a one");
+    run_git(&repo, &["checkout", "-b", "branch_c", "branch_b"]);
+
+    // Branch C already exists: nothing may change.
+    let error = open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_b", "branch_a", "branch_c")
+        .expect_err("existing branch must be rejected");
+    assert!(error.to_string().contains("already exists"), "{error}");
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_c");
+
+    // Empty range (branch_a is fully contained in branch_b): nothing created.
+    run_git(&repo, &["checkout", "branch_b"]);
+    let error = open_backend(&repo)
+        .cherry_pick_range_onto_new_branch("branch_b", "branch_b", "branch_d")
+        .expect_err("empty range must be rejected");
+    assert!(error.to_string().contains("no commits"), "{error}");
+    assert_eq!(
+        git_stdout(&repo, &["branch", "--list", "branch_d"]),
+        ""
+    );
+    assert_eq!(git_stdout(&repo, &["branch", "--show-current"]), "branch_b");
+}
+>>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar

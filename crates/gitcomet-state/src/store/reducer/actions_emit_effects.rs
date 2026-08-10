@@ -63,6 +63,40 @@ pub(super) fn cherry_pick_commit(
     }]
 }
 
+<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
+pub(super) fn cherry_pick_range_onto_new_branch(
+    repo_id: RepoId,
+    base: String,
+    range: String,
+    source: String,
+    new_branch: String,
+) -> Vec<Effect> {
+    vec![Effect::CherryPickRangeOntoNewBranch {
+        repo_id,
+        base,
+        range,
+        source,
+        new_branch,
+    }]
+}
+
+||||||| Common ancestor
+=======
+pub(super) fn cherry_pick_range_onto_new_branch(
+    repo_id: RepoId,
+    base: String,
+    source: String,
+    new_branch: String,
+) -> Vec<Effect> {
+    vec![Effect::CherryPickRangeOntoNewBranch {
+        repo_id,
+        base,
+        source,
+        new_branch,
+    }]
+}
+
+>>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
 pub(super) fn revert_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -985,6 +1019,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::CherryPickRangeOntoNewBranch { .. }
             | RepoCommandKind::MergeAbort
             | RepoCommandKind::CreateTag { .. }
             | RepoCommandKind::DeleteTag { .. }
@@ -1031,6 +1066,7 @@ fn command_clears_pending_force_push_lease(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::InteractiveRebase { .. }
             | RepoCommandKind::InteractiveCherryPick { .. }
             | RepoCommandKind::CherryPick { .. }
+            | RepoCommandKind::CherryPickRangeOntoNewBranch { .. }
             | RepoCommandKind::MergeAbort
     )
 }
@@ -1075,7 +1111,11 @@ pub(super) fn repo_command_finished(
         RepoCommandKind::AddWorktree { .. }
             | RepoCommandKind::RemoveWorktree { .. }
             | RepoCommandKind::ForceRemoveWorktree { .. }
+            | RepoCommandKind::CherryPickRangeOntoNewBranch { .. }
     ) && result.is_ok();
+    // The command creates a branch and moves HEAD onto it.
+    let refresh_branches = matches!(&command, RepoCommandKind::CherryPickRangeOntoNewBranch { .. })
+        && result.is_ok();
     let refresh_submodules = matches!(
         &command,
         RepoCommandKind::AddSubmodule { .. }
@@ -1155,6 +1195,7 @@ pub(super) fn repo_command_finished(
                     | RepoCommandKind::InteractiveRebase { .. }
                     | RepoCommandKind::InteractiveCherryPick { .. }
                     | RepoCommandKind::CherryPick { .. }
+                    | RepoCommandKind::CherryPickRangeOntoNewBranch { .. }
                     | RepoCommandKind::MergeAbort
             ) {
                 repo_state.set_diff_target(None);
@@ -1202,6 +1243,10 @@ pub(super) fn repo_command_finished(
     if refresh_worktrees {
         repo_state.set_worktrees(Loadable::Loading);
         extra_effects.push(Effect::LoadWorktrees { repo_id });
+    }
+    if refresh_branches && repo_state.loads_in_flight.request(RepoLoadsInFlight::BRANCHES) {
+        repo_state.set_branches(Loadable::NotLoaded);
+        extra_effects.push(Effect::LoadBranches { repo_id });
     }
     if command_succeeded
         && let Some(target) = selected_submodule_target_changed_by_command(repo_state, &command)

@@ -4321,6 +4321,20 @@ pub(super) enum PopoverKind {
         /// a value would make them compare equal.
         name_prefix: String,
     },
+    /// Pick a source ref A, a range ref B, a base branch D, and a name for a
+    /// new branch C: C is created from D, checked out, and every commit
+    /// unique to A relative to B (B..A, oldest first, merges skipped) is
+    /// cherry-picked onto it. B must be an ancestor of A.
+    ///
+    /// The `prefill_*` fields seed the pickers when opened from a branch's
+    /// context menu: source = the clicked branch, range = its upstream (when
+    /// it has one), base = the current branch.
+    CherryPickRangePrompt {
+        repo_id: RepoId,
+        prefill_source: Option<String>,
+        prefill_range: Option<String>,
+        prefill_base: Option<String>,
+    },
     RenameBranchPrompt {
         repo_id: RepoId,
         name: String,
