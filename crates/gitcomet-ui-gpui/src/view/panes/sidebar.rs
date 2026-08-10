@@ -253,6 +253,10 @@ pub(in super::super) struct SidebarPaneView {
     /// When the request was made. Bounded so an unresolvable reveal expires
     /// instead of firing at some unrelated later moment.
     pending_file_browser_reveal_at: Option<std::time::Instant>,
+    /// Virtual branch row currently highlighted as a drop target while a worktree
+    /// file is dragged from the Changes panel. `None` when no drag hovers a
+    /// branch row.
+    pub(in super::super) virtual_branch_drop_hover: Option<u64>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -449,6 +453,7 @@ impl SidebarPaneView {
             collapsed_popover_section: None,
             pending_file_browser_reveal: None,
             pending_file_browser_reveal_at: None,
+            virtual_branch_drop_hover: None,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.

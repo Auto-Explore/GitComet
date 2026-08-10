@@ -978,6 +978,10 @@ impl SidebarPaneView {
                     } else {
                         theme.colors.text_muted
                     };
+                    // Drop target for files dragged from the Changes panel:
+                    // assigning the file to this virtual branch. Highlight while
+                    // a file drag hovers the row.
+                    let drop_hover = this.virtual_branch_drop_hover == Some(branch_id);
                     div()
                         .id(("virtual_branch_item", branch_id))
                         .debug_selector(move || format!("virtual_branch_item_{branch_id}"))
@@ -989,6 +993,12 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
+                        .when(drop_hover, |d| {
+                            d.bg(with_alpha(
+                                theme.colors.accent,
+                                if theme.is_dark { 0.28 } else { 0.20 },
+                            ))
+                        })
                         .child(tree_icon_slot("icons/git_branch.svg", icon_muted, 12.0))
                         .child(
                             div()
@@ -1010,6 +1020,36 @@ impl SidebarPaneView {
                             theme,
                             format!("{name} — click to open the Virtual Branches workspace").into(),
                         )
+                        .can_drop(move |dragged, _window, _cx| {
+                            dragged.downcast_ref::<crate::view::dnd::StatusFileDrag>().is_some()
+                        })
+                        .on_drag_move(cx.listener(move |this, _e: &gpui::DragMoveEvent<
+                            crate::view::dnd::StatusFileDrag,
+                        >, _w, cx| {
+                            if this.virtual_branch_drop_hover != Some(branch_id) {
+                                this.virtual_branch_drop_hover = Some(branch_id);
+                                cx.notify();
+                            }
+                        }))
+                        .on_drop(cx.listener(
+                            move |this, drag: &crate::view::dnd::StatusFileDrag, _w, cx| {
+                                this.virtual_branch_drop_hover = None;
+                                if drag.repo_id == repo_id {
+                                    this.store.dispatch(Msg::AssignPathToVirtualBranch {
+                                        repo_id,
+                                        branch_id,
+                                        path: drag.path.clone(),
+                                    });
+                                }
+                                cx.notify();
+                            },
+                        ))
+                        .on_hover(cx.listener(move |this, hovering: &bool, _w, cx| {
+                            if !*hovering && this.virtual_branch_drop_hover == Some(branch_id) {
+                                this.virtual_branch_drop_hover = None;
+                                cx.notify();
+                            }
+                        }))
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                             this.open_popover_at(
                                 PopoverKind::VirtualBranchesPrompt { repo_id },
