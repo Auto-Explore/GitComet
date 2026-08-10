@@ -1,5 +1,6 @@
 use super::branch::create_tracking_store;
 use super::*;
+use gitcomet_core::domain::{Branch, CommitId};
 
 #[gpui::test]
 fn repo_picker_escape_closes(cx: &mut gpui::TestAppContext) {
@@ -462,4 +463,73 @@ fn popover_feeds_pointer_positions_to_the_tooltip_host(cx: &mut gpui::TestAppCon
         anchor, row_center,
         "expected the tooltip anchor to follow the pointer inside the popover"
     );
+}
+
+#[gpui::test]
+fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::TestAppContext) {
+    let (store, events, _repo, _workdir) = create_tracking_store("rebase-onto-picker");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    store.dispatch(Msg::Internal(gitcomet_state::msg::InternalMsg::BranchesLoaded {
+        repo_id,
+        result: Ok(vec![
+            Branch {
+                name: "main".to_string(),
+                target: CommitId("HEAD".into()),
+                upstream: None,
+                divergence: None,
+            },
+            Branch {
+                name: "feature".to_string(),
+                target: CommitId("HEAD".into()),
+                upstream: None,
+                divergence: None,
+            },
+        ]),
+    }));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::RebaseOnto,
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                let search = host
+                    .branch_picker_search_input
+                    .as_ref()
+                    .expect("branch picker search input");
+                let focus = search.read_with(cx, |input, _| input.focus_handle());
+                window.focus(&focus, cx);
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    // The current branch (main) must not be offered as a rebase target, so
+    // the first picker item is "feature"; selecting it asks for confirmation
+    // instead of checking it out.
+    cx.simulate_keystrokes("down enter");
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        match &host.popover {
+            Some(PopoverKind::RebaseOntoConfirm { repo_id: rid, onto }) => {
+                assert_eq!(*rid, repo_id);
+                assert_eq!(onto, "feature");
+            }
+            other => panic!("expected RebaseOntoConfirm popover, got {other:?}"),
+        }
+    });
 }
