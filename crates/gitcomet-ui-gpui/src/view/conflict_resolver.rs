@@ -250,7 +250,7 @@ pub(in crate::view) struct ConflictNavAnchor {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(in crate::view) enum ConflictNavTargetFilter {
     Delta,
-    OriginalConflict,
+    Conflict,
     Unresolved,
 }
 
@@ -258,10 +258,29 @@ impl ConflictNavTargetFilter {
     fn matches(self, target: &ConflictNavTarget) -> bool {
         match self {
             Self::Delta => target.is_delta,
-            Self::OriginalConflict => target.original_conflict,
+            Self::Conflict => conflict_nav_target_is_conflict(target),
             Self::Unresolved => target.unresolved,
         }
     }
+}
+
+/// Whether "next/previous conflict" should stop here.
+///
+/// The plan's `original_conflict` flag alone is too narrow. It answers "did the
+/// merge algorithm call this a conflict", and the resolved output can draw a
+/// `<Merge Conflict>` row for a block the plan did not — a region the worktree
+/// carries markers for, a block left open after an unresolve, a block whose plan
+/// identity was lost to a split or an edit. Skipping those made conflict
+/// navigation step over rows that are visibly awaiting a decision, while the
+/// unresolved-only navigation reached them.
+///
+/// So a target counts as a conflict when *any* of the three agree: the plan
+/// called it one, the output renders it as a decision block, or it is still
+/// unresolved. The last clause is what makes this a superset of
+/// [`ConflictNavTargetFilter::Unresolved`] — conflict navigation can never skip
+/// a row that "next unresolved" would land on.
+fn conflict_nav_target_is_conflict(target: &ConflictNavTarget) -> bool {
+    target.original_conflict || target.display_conflict_index.is_some() || target.unresolved
 }
 
 pub(in crate::view) fn fresh_conflict_nav_target_index(

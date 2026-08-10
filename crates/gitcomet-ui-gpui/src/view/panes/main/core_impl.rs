@@ -657,7 +657,7 @@ impl SyncedScrollAxis {
     }
 }
 
-fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> ScrollHandle {
+pub(super) fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> ScrollHandle {
     handle.0.borrow().base_handle.clone()
 }
 
@@ -1766,6 +1766,7 @@ impl MainPaneView {
             conflict_resolved_output_live_syntax_reparse: None,
             conflict_resolved_output_live_syntax_source: None,
             conflict_resolved_output_provider_theme_epoch: 1,
+            conflict_resolved_output_highlighted_conflict: None,
             conflict_resolved_output_live_syntax_building: None,
             conflict_resolved_output_live_syntax_build: None,
             conflict_resolved_output_measure_row: 0,
@@ -2154,6 +2155,7 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.sync_conflict_resolved_output_active_conflict_highlight(cx);
         let scroll = self.conflict_resolved_output_editor_scroll.clone();
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
@@ -2166,6 +2168,46 @@ impl MainPaneView {
             // on the horizontal axis too.
             input.set_content_width_layout(true);
         });
+    }
+
+    /// Rebuild the output highlights when conflict navigation lands on another
+    /// conflict, so the yellow wash follows the selection.
+    ///
+    /// Every other refresh path hangs off the text or the tree, and navigation
+    /// moves neither — it only reassigns `active_conflict`, from a dozen call
+    /// sites on a state struct that cannot reach the input. Comparing against the
+    /// conflict the installed provider was built for catches all of them in one
+    /// place, and makes the common render (nothing moved) a single comparison.
+    fn sync_conflict_resolved_output_active_conflict_highlight(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolved_output_highlighted_conflict
+            == self.conflict_resolver.active_conflict
+        {
+            return;
+        }
+        self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
+        // Streamed output is drawn row by row from the projection, which reads
+        // the active conflict as it renders; only the editable buffer carries
+        // highlights that have to be reinstalled.
+        if self.conflict_resolved_output_is_streamed() {
+            return;
+        }
+        // With a tree in hand, rebinding the provider is the whole job:
+        // navigation moves no text, so the tree, the placeholder mask and the
+        // protected spans all still stand. Going through the full syntax refresh
+        // would redo them on every jump — and on the tree-less arm it would
+        // re-tokenize the entire document, which is exactly the kind of
+        // per-keypress cost the live engine exists to avoid.
+        if self.conflict_resolved_output_live_syntax.is_some() {
+            self.rebind_conflict_resolved_output_highlight_provider(cx);
+            return;
+        }
+        let output_snapshot = self
+            .conflict_resolver_input
+            .read_with(cx, |input, _| input.text_snapshot());
+        self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
     }
 
     pub(in crate::view) fn current_conflict_resolved_output_text(
@@ -2429,19 +2471,21 @@ impl MainPaneView {
         let output_snapshot = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
-        let unresolved_ranges = resolved_output_unresolved_byte_ranges(
+        self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
+        let unresolved_spans = resolved_output_unresolved_byte_ranges(
             &self.conflict_resolver.marker_segments,
             output_snapshot.as_str(),
             output_snapshot.shared_line_starts().as_ref(),
             &self.conflict_resolved_output_block_map,
+            self.conflict_resolver.active_conflict,
         );
         let binding_key = resolved_output_live_provider_binding_key(
             version,
             self.conflict_resolved_output_provider_theme_epoch,
-            unresolved_ranges.as_ref(),
+            &unresolved_spans,
         );
         let provider =
-            resolved_output_live_highlight_provider(self.theme, snapshot, unresolved_ranges);
+            resolved_output_live_highlight_provider(self.theme, snapshot, unresolved_spans);
         let source_len = output_snapshot.len();
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_highlight_provider_with_key(binding_key, provider, source_len, cx);
@@ -2466,11 +2510,13 @@ impl MainPaneView {
     ) {
         let text: Arc<str> = output_snapshot.as_shared_string().into();
         let line_starts = output_snapshot.shared_line_starts();
-        let unresolved_ranges = resolved_output_unresolved_byte_ranges(
+        self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
+        let unresolved_spans = resolved_output_unresolved_byte_ranges(
             &self.conflict_resolver.marker_segments,
             text.as_ref(),
             line_starts.as_ref(),
             &self.conflict_resolved_output_block_map,
+            self.conflict_resolver.active_conflict,
         );
         // The placeholder rows are a rendering of open decisions, so hand them
         // to the buffer as uneditable spans — and hide the same spans from the
@@ -2584,7 +2630,7 @@ impl MainPaneView {
                     let provider = resolved_output_live_highlight_provider(
                         self.theme,
                         snapshot,
-                        Arc::clone(&unresolved_ranges),
+                        unresolved_spans.clone(),
                     );
                     // Rebinding under a fresh key whenever the text moved is
                     // load-bearing: it resets the interpolation that would
@@ -2593,7 +2639,7 @@ impl MainPaneView {
                     let binding_key = resolved_output_live_provider_binding_key(
                         version,
                         self.conflict_resolved_output_provider_theme_epoch,
-                        unresolved_ranges.as_ref(),
+                        &unresolved_spans,
                     );
                     input.set_highlight_provider_with_key(binding_key, provider, text.len(), cx);
                 }
@@ -2622,9 +2668,10 @@ impl MainPaneView {
                     input.set_highlights(
                         apply_resolved_output_unresolved_highlights(
                             highlights,
-                            unresolved_ranges.as_ref(),
+                            &unresolved_spans,
                             0..text.len(),
                             resolved_output_unresolved_highlight_style(self.theme),
+                            resolved_output_active_unresolved_highlight_style(self.theme),
                         ),
                         cx,
                     );

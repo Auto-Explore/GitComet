@@ -16,6 +16,11 @@ pub(super) struct PrepaintState {
     wrap_cache: Option<WrapCache>,
     scroll_x: Pixels,
     visible_line_range: Range<usize>,
+    /// Whether any resolved highlight asks for a background. `ShapedLine::paint`
+    /// draws glyphs only — run backgrounds need the separate `paint_background`
+    /// pass — and walking every visible line for it is wasted work on the
+    /// overwhelmingly common input that has no background highlight at all.
+    has_background_runs: bool,
 }
 
 impl IntoElement for TextElement {
@@ -154,6 +159,11 @@ impl Element for TextElement {
                 Some(resolved.highlights)
             };
             let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
+            let has_background_runs = highlight_slice.is_some_and(|highlights| {
+                highlights
+                    .iter()
+                    .any(|(_, style)| style.background_color.is_some())
+            });
             let shape_style = TextShapeStyle {
                 base_font: &base_font,
                 text_color,
@@ -230,6 +240,7 @@ impl Element for TextElement {
                         wrap_cache: None,
                         scroll_x: px(0.0),
                         visible_line_range: 0..1,
+                        has_background_runs,
                     };
                 }
 
@@ -404,6 +415,7 @@ impl Element for TextElement {
                     wrap_cache: None,
                     scroll_x,
                     visible_line_range,
+                    has_background_runs,
                 };
             }
 
@@ -718,6 +730,7 @@ impl Element for TextElement {
                 wrap_cache,
                 scroll_x: px(0.0),
                 visible_line_range,
+                has_background_runs,
             }
         })
     }
@@ -771,17 +784,22 @@ impl Element for TextElement {
                         let Some(line) = lines.get(ix) else {
                             continue;
                         };
-                        let painted = line.paint(
-                            point(
-                                bounds.origin.x - prepaint.scroll_x,
-                                bounds.origin.y + line_height * ix as f32,
-                            ),
-                            line_height,
-                            TextAlign::Left,
-                            None,
-                            window,
-                            cx,
+                        let origin = point(
+                            bounds.origin.x - prepaint.scroll_x,
+                            bounds.origin.y + line_height * ix as f32,
                         );
+                        if prepaint.has_background_runs {
+                            let _ = line.paint_background(
+                                origin,
+                                line_height,
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        }
+                        let painted =
+                            line.paint(origin, line_height, TextAlign::Left, None, window, cx);
                         debug_assert!(
                             painted.is_ok(),
                             "TextInput plain line paint failed at line index {ix}"
@@ -816,8 +834,19 @@ impl Element for TextElement {
                             continue;
                         };
                         let y = y_offsets.get(ix).copied().unwrap_or(Pixels::ZERO);
+                        let origin = point(bounds.origin.x, bounds.origin.y + y);
+                        if prepaint.has_background_runs {
+                            let _ = line.paint_background(
+                                origin,
+                                line_height,
+                                TextAlign::Left,
+                                Some(bounds),
+                                window,
+                                cx,
+                            );
+                        }
                         let _ = line.paint(
-                            point(bounds.origin.x, bounds.origin.y + y),
+                            origin,
                             line_height,
                             TextAlign::Left,
                             Some(bounds),

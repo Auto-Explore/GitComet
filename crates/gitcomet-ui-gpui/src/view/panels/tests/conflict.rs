@@ -6790,6 +6790,146 @@ fn conflict_navigation_settles_without_a_second_jump(cx: &mut gpui::TestAppConte
     std::fs::remove_dir_all(&workdir).expect("cleanup resolver nav-center fixture");
 }
 
+/// The resolved output washes the conflict being resolved in yellow, and the
+/// wash has to follow conflict navigation.
+///
+/// Navigating moves no text and touches no tree, so none of the paths that
+/// normally reinstall the output's highlights fire — the pane only reassigns
+/// `active_conflict`. Without the render pass noticing that, the wash stays
+/// parked on whichever conflict the file opened on, which is worse than no wash
+/// at all: it points at the wrong row.
+#[gpui::test]
+fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(197);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_active_conflict_wash",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/active_conflict_wash.txt");
+    let abs_path = workdir.join(&file_rel);
+    let base = "head\nbase one\nmiddle\nbase two\ntail\n";
+    let ours = "head\nours one\nmiddle\nours two\ntail\n";
+    let theirs = "head\ntheirs one\nmiddle\ntheirs two\ntail\n";
+    let current = "head\n\
+                   <<<<<<< ours\nours one\n=======\ntheirs one\n>>>>>>> theirs\n\
+                   middle\n\
+                   <<<<<<< ours\nours two\n=======\ntheirs two\n>>>>>>> theirs\n\
+                   tail\n";
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create active-conflict wash fixture dir");
+    std::fs::write(&abs_path, current).expect("write active-conflict wash fixture");
+
+    seed_unresolved_conflict_state(
+        cx, &view, repo_id, &workdir, &file_rel, base, ours, theirs, current,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "two-conflict wash fixture initialized",
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && crate::view::conflict_resolver::conflict_count(
+                    &pane.conflict_resolver.marker_segments,
+                ) == 2
+                && !pane.conflict_resolved_output_is_streamed()
+        },
+        |pane| {
+            format!(
+                "path={:?} blocks={} streamed={}",
+                pane.conflict_resolver.path.clone(),
+                crate::view::conflict_resolver::conflict_count(
+                    &pane.conflict_resolver.marker_segments,
+                ),
+                pane.conflict_resolved_output_is_streamed(),
+            )
+        },
+    );
+
+    // Both placeholder rows read `<Merge Conflict>`, so only their offsets can
+    // say which one is washed.
+    let placeholder = crate::view::conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER;
+    let output = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .conflict_resolver_input
+            .read(app)
+            .text()
+            .to_string()
+    });
+    let first = output.find(placeholder).expect("first placeholder row");
+    let second = output[first + placeholder.len()..]
+        .find(placeholder)
+        .expect("second placeholder row")
+        + first
+        + placeholder.len();
+
+    let washed_ranges = |cx: &mut gpui::VisualTestContext| -> Vec<std::ops::Range<usize>> {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    let wash = crate::view::panes::main::resolved_output_active_conflict_background(
+                        pane.theme,
+                    );
+                    let len = pane.conflict_resolver_input.read(cx).text().len();
+                    pane.conflict_resolver_input
+                        .update(cx, |input, _| {
+                            input.debug_effective_highlights_for_range(0..len)
+                        })
+                        .into_iter()
+                        .filter(|(_, style)| style.background_color == Some(wash.into()))
+                        .map(|(range, _)| range)
+                        .collect()
+                })
+            })
+        })
+    };
+
+    for (conflict_ix, expected_start) in [(0usize, first), (1, second), (0, first)] {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_resolver_select_conflict(conflict_ix, cx);
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+
+        assert_eq!(
+            washed_ranges(cx),
+            vec![expected_start..expected_start + placeholder.len()],
+            "selecting conflict {conflict_ix} must wash its row and only its row"
+        );
+    }
+
+    // A pick can settle on a block that renders no marker, leaving nothing
+    // selected. The wash has to come off then too, rather than staying on the
+    // row the last selection put it on.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_resolver.active_conflict = None;
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        washed_ranges(cx).is_empty(),
+        "with no conflict selected there is nothing for the wash to point at"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup active-conflict wash fixture");
+}
+
 /// An HTML-shaped fixture with the structure that exposed the bug: a repeated
 /// card, most of which the planner settles on its own, and a handful of real
 /// conflicts spread through the file.
@@ -7354,4 +7494,107 @@ fn resolved_output_placeholder_protected_ranges_for_test(
         offset += line.len();
     }
     mask.into()
+}
+
+/// Conflict navigation must move the editable output in the frame it happens,
+/// not leave it parked until some unrelated event repaints the pane.
+///
+/// The columns and the gutter are lists with their own deferred scroll; the
+/// output is a `TextInput` that used to be dragged along only by a prepaint
+/// mirror. The assertion is made *inside* the update that navigates — before
+/// any draw — so it can only pass if navigation placed the editor itself.
+#[gpui::test]
+fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(953);
+    let fixture = SyntheticLargeConflictFixture::new(
+        "resolver_nav_places_output",
+        "fixtures/resolver_nav_places_output.rs",
+        900,
+        12,
+    );
+    fixture.write();
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &fixture.workdir,
+        &fixture.file_rel,
+        &fixture.base_text,
+        &fixture.ours_text,
+        &fixture.theirs_text,
+        &fixture.current_text,
+    );
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "nav placement fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
+                && !pane.conflict_resolver.nav_targets.is_empty()
+                && !pane.conflict_resolved_output_is_streamed()
+        },
+        |pane| {
+            format!(
+                "targets={} streamed={}",
+                pane.conflict_resolver.nav_targets.len(),
+                pane.conflict_resolved_output_is_streamed(),
+            )
+        },
+    );
+    // Two draws: the first gives the gutter and the editor their bounds, which
+    // is what the offset arithmetic reads.
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let before = cx.update(|_window, app| {
+        main_pane
+            .read(app)
+            .conflict_resolved_output_editor_scroll
+            .offset()
+            .y
+    });
+
+    // Jump far enough down that the target cannot already be on screen.
+    let after = cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            for _ in 0..6 {
+                pane.conflict_jump_next(cx);
+            }
+            pane.conflict_resolved_output_editor_scroll.offset().y
+        })
+    });
+
+    assert!(
+        after < before,
+        "navigating six conflicts down must scroll the editable output immediately \
+         (before={before:?} after={after:?})"
+    );
+
+    // And the placement has to be the one the gutter lands on, or the mirror
+    // that runs on the next prepaint would jerk the view a second time.
+    draw_and_drain_test_window(cx);
+    let settled = cx.update(|_window, app| {
+        main_pane
+            .read(app)
+            .conflict_resolved_output_editor_scroll
+            .offset()
+            .y
+    });
+    assert_eq!(
+        settled, after,
+        "the drawn frame must agree with the offset navigation placed"
+    );
+
+    fixture.cleanup();
 }

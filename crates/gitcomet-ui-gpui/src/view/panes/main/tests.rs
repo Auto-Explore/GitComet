@@ -1,10 +1,10 @@
 use super::{
     ClearDiffSelectionAction, FocusedMergetoolOutput, RenderableConflictFile,
-    ResolvedOutputConflictMarker, ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
-    apply_conflict_choice_provenance_hints, apply_focused_mergetool_output,
-    apply_resolved_output_unresolved_highlights, apply_three_way_empty_base_provenance_hints,
-    build_focused_mergetool_save_payload, build_line_starts,
-    build_resolved_output_conflict_markers,
+    ResolvedOutputConflictMarker, ResolvedOutputSourceRevision, ResolvedOutputUnresolvedSpans,
+    VersionedCachedDiffStyledText, apply_conflict_choice_provenance_hints,
+    apply_focused_mergetool_output, apply_resolved_output_unresolved_highlights,
+    apply_three_way_empty_base_provenance_hints, build_focused_mergetool_save_payload,
+    build_line_starts, build_resolved_output_conflict_markers,
     build_resolved_output_conflict_markers_from_block_ranges, clear_diff_selection_action,
     coalesce_resolved_output_edit_deltas, conflict_file_is_binary,
     conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
@@ -13,13 +13,14 @@ use super::{
     output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
     parse_conflict_canvas_rows_env, remap_resolved_output_conflict_block_ranges_for_delta,
     renderable_conflict_file, resolved_outline_delta_between_texts,
-    resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
-    resolved_output_live_highlight_provider, resolved_output_live_provider_binding_key,
-    resolved_output_live_syntax_mask, resolved_output_marker_for_line,
-    resolved_output_markers_for_text, resolved_output_placeholder_protected_ranges,
-    resolved_output_snapshot_is_modified, resolved_output_unresolved_byte_ranges,
-    resolved_output_unresolved_highlight_style, split_target_conflict_block_into_subchunks,
-    versioned_cached_diff_styled_text_is_current,
+    resolved_outline_delta_for_snapshot_transition, resolved_output_active_conflict_background,
+    resolved_output_active_unresolved_highlight_style,
+    resolved_output_conflict_block_ranges_in_text, resolved_output_live_highlight_provider,
+    resolved_output_live_provider_binding_key, resolved_output_live_syntax_mask,
+    resolved_output_marker_for_line, resolved_output_markers_for_text,
+    resolved_output_placeholder_protected_ranges, resolved_output_snapshot_is_modified,
+    resolved_output_unresolved_byte_ranges, resolved_output_unresolved_highlight_style,
+    split_target_conflict_block_into_subchunks, versioned_cached_diff_styled_text_is_current,
     versioned_query_cached_diff_styled_text_is_current, worktree_output_requires_protection,
 };
 use crate::kit::text_model::TextModel;
@@ -2079,15 +2080,89 @@ fn unresolved_output_ranges_cover_placeholders_and_selected_unresolved_rows() {
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
     let line_starts = build_line_starts(&output);
-    let ranges = resolved_output_unresolved_byte_ranges(
+    let spans = resolved_output_unresolved_byte_ranges(
         &segments,
         &output,
         line_starts.as_slice(),
         &block_map_for(&segments),
+        None,
     );
-    let highlighted_text: Vec<&str> = ranges.iter().map(|range| &output[range.clone()]).collect();
+    let highlighted_text: Vec<&str> = spans
+        .all
+        .iter()
+        .map(|range| &output[range.clone()])
+        .collect();
 
     assert_eq!(highlighted_text, ["<Merge Conflict>", "selected"]);
+    assert!(
+        spans.active.is_empty(),
+        "no conflict is selected, so no row is the active one"
+    );
+}
+
+/// The active half is what the yellow wash is painted from, so it must name the
+/// selected conflict's rows and nobody else's — with two conflicts open, the one
+/// the resolver is parked on is the only one that qualifies.
+#[test]
+fn unresolved_output_ranges_single_out_the_active_conflict() {
+    let segments = vec![
+        ConflictSegment::Text("head\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "ours\n".into(),
+            theirs: "theirs\n".into(),
+            choice: ConflictChoice::empty(),
+            resolved: false,
+            whitespace_only: false,
+        }),
+        ConflictSegment::Text("middle\n".into()),
+        ConflictSegment::Block(ConflictBlock {
+            base: None,
+            ours: "second\n".into(),
+            theirs: "alternate\n".into(),
+            choice: ConflictChoice::empty(),
+            resolved: false,
+            whitespace_only: false,
+        }),
+        ConflictSegment::Text("tail\n".into()),
+    ];
+    let output = conflict_resolver::generate_resolved_text(&segments);
+    let line_starts = build_line_starts(&output);
+    let block_map = block_map_for(&segments);
+
+    let second_active = resolved_output_unresolved_byte_ranges(
+        &segments,
+        &output,
+        line_starts.as_slice(),
+        &block_map,
+        Some(1),
+    );
+    assert_eq!(second_active.all.len(), 2, "both conflicts are still open");
+    assert_eq!(
+        second_active.active.as_ref(),
+        std::slice::from_ref(&second_active.all[1]),
+        "only the second conflict's row is active"
+    );
+
+    let first_active = resolved_output_unresolved_byte_ranges(
+        &segments,
+        &output,
+        line_starts.as_slice(),
+        &block_map,
+        Some(0),
+    );
+    assert_eq!(
+        first_active.active.as_ref(),
+        std::slice::from_ref(&first_active.all[0])
+    );
+
+    // Selecting a conflict does not change *which* rows are unresolved, but the
+    // provider must still be rebound — otherwise the wash stays on the row the
+    // previous selection put it on.
+    assert_ne!(
+        resolved_output_live_provider_binding_key(1, 1, &first_active),
+        resolved_output_live_provider_binding_key(1, 1, &second_active),
+    );
 }
 
 #[test]
@@ -2156,14 +2231,24 @@ fn conflict_markers_survive_a_manual_edit_outside_the_blocks() {
     assert!(markers[0].is_none() && markers[2].is_none());
 
     let line_starts = build_line_starts(edited);
-    let ranges = resolved_output_unresolved_byte_ranges(
+    let spans = resolved_output_unresolved_byte_ranges(
         &segments,
         edited,
         line_starts.as_slice(),
         &block_map,
+        Some(0),
     );
-    let highlighted: Vec<&str> = ranges.iter().map(|range| &edited[range.clone()]).collect();
+    let highlighted: Vec<&str> = spans
+        .all
+        .iter()
+        .map(|range| &edited[range.clone()])
+        .collect();
     assert_eq!(highlighted, ["<Merge Conflict>"]);
+    assert_eq!(
+        spans.active.as_ref(),
+        spans.all.as_ref(),
+        "the one open conflict is the selected one, edit or no edit"
+    );
 }
 
 #[test]
@@ -2226,7 +2311,10 @@ fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
     let provider = resolved_output_live_highlight_provider(
         theme,
         document.snapshot(theme),
-        Arc::from([placeholder_range.clone()]),
+        ResolvedOutputUnresolvedSpans {
+            all: Arc::from([placeholder_range.clone()]),
+            active: Arc::default(),
+        },
     );
 
     let result = provider.resolve(0..output.len());
@@ -2247,6 +2335,10 @@ fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
     assert_eq!(
         placeholder_highlights[0].1.color,
         Some(theme.colors.danger.into())
+    );
+    assert_eq!(
+        placeholder_highlights[0].1.background_color, None,
+        "an unselected conflict is called out in red alone"
     );
 
     let tail_start = output.find("<span>").expect("tail element");
@@ -2270,14 +2362,63 @@ fn resolved_output_without_a_language_still_marks_unresolved_rows() {
 
     let highlights = apply_resolved_output_unresolved_highlights(
         Vec::new(),
-        std::slice::from_ref(&placeholder_range),
+        &ResolvedOutputUnresolvedSpans {
+            all: Arc::from([placeholder_range.clone()]),
+            active: Arc::default(),
+        },
         0..output.len(),
         resolved_output_unresolved_highlight_style(theme),
+        resolved_output_active_unresolved_highlight_style(theme),
     );
 
     assert_eq!(highlights.len(), 1);
     assert_eq!(highlights[0].0, placeholder_range);
     assert_eq!(highlights[0].1.color, Some(theme.colors.danger.into()));
+}
+
+/// The point of the wash: with several conflicts open, only the one being
+/// resolved is painted, and it keeps the danger text that marks it unresolved.
+#[test]
+fn the_active_conflicts_row_is_washed_yellow_and_the_others_are_not() {
+    let theme = AppTheme::gitcomet_dark();
+    let output = "head\n<Merge Conflict>\nmiddle\n<Merge Conflict>\ntail\n";
+    let first = output.find("<Merge Conflict>").expect("first placeholder");
+    let first_range = first..first + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
+    let second = output[first_range.end..]
+        .find("<Merge Conflict>")
+        .expect("second placeholder")
+        + first_range.end;
+    let second_range =
+        second..second + conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER.len();
+
+    let highlights = apply_resolved_output_unresolved_highlights(
+        Vec::new(),
+        &ResolvedOutputUnresolvedSpans {
+            all: Arc::from([first_range.clone(), second_range.clone()]),
+            active: Arc::from([second_range.clone()]),
+        },
+        0..output.len(),
+        resolved_output_unresolved_highlight_style(theme),
+        resolved_output_active_unresolved_highlight_style(theme),
+    );
+
+    let style_for = |range: &std::ops::Range<usize>| {
+        highlights
+            .iter()
+            .find(|(highlighted, _)| highlighted == range)
+            .map(|(_, style)| *style)
+            .expect("every unresolved row is styled")
+    };
+    assert_eq!(style_for(&first_range).background_color, None);
+    assert_eq!(
+        style_for(&second_range).background_color,
+        Some(resolved_output_active_conflict_background(theme).into())
+    );
+    assert_eq!(
+        style_for(&second_range).color,
+        Some(theme.colors.danger.into()),
+        "the wash marks the selection; the row is still an unresolved one"
+    );
 }
 
 #[test]
@@ -2328,30 +2469,52 @@ fn the_live_provider_binding_key_is_stable_for_unchanged_inputs() {
     // that re-entry would rebind, notify again, and spin forever — the observe
     // loop would never settle and the pane would hang. The key must therefore
     // be a function of what the provider closes over, not a counter.
-    let ranges: Arc<[std::ops::Range<usize>]> = Arc::from([5..21usize]);
+    let spans = ResolvedOutputUnresolvedSpans {
+        all: Arc::from([5..21usize]),
+        active: Arc::default(),
+    };
 
-    let key = resolved_output_live_provider_binding_key(7, 3, ranges.as_ref());
+    let key = resolved_output_live_provider_binding_key(7, 3, &spans);
     assert_eq!(
         key,
-        resolved_output_live_provider_binding_key(7, 3, ranges.as_ref()),
+        resolved_output_live_provider_binding_key(7, 3, &spans),
         "identical inputs must produce an identical key, or the observe cycle never settles"
     );
 
     assert_ne!(
         key,
-        resolved_output_live_provider_binding_key(8, 3, ranges.as_ref()),
+        resolved_output_live_provider_binding_key(8, 3, &spans),
         "a new document version must rebind so interpolation is reset"
     );
     assert_ne!(
         key,
-        resolved_output_live_provider_binding_key(7, 4, ranges.as_ref()),
+        resolved_output_live_provider_binding_key(7, 4, &spans),
         "the syntax palette is baked into the snapshot, so a theme change must rebind. \
          A theme epoch is used rather than sampled colours because two dark themes can \
          agree on any few colours you sample and still differ on the palette."
     );
     assert_ne!(
         key,
-        resolved_output_live_provider_binding_key(7, 3, &[5..21usize, 40..56]),
+        resolved_output_live_provider_binding_key(
+            7,
+            3,
+            &ResolvedOutputUnresolvedSpans {
+                all: Arc::from([5..21usize, 40..56]),
+                active: Arc::default(),
+            }
+        ),
         "the unresolved overlay is baked into the closure, so it must rebind"
+    );
+    assert_ne!(
+        key,
+        resolved_output_live_provider_binding_key(
+            7,
+            3,
+            &ResolvedOutputUnresolvedSpans {
+                all: Arc::clone(&spans.all),
+                active: Arc::clone(&spans.all),
+            }
+        ),
+        "selecting the conflict moves the wash onto its row, so it must rebind too"
     );
 }

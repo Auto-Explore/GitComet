@@ -6,6 +6,40 @@ use crate::view::conflict_resolver::ConflictSegment;
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
 const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
+/// Height of one resolved-output gutter row. The row space navigation scrolls
+/// through is measured in these, so anything computing an output scroll offset
+/// by hand has to agree with what the gutter actually lays out.
+pub(in crate::view) const RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
+
+/// The scroll offset a `uniform_list` would land on to reveal `row_ix`, or
+/// `None` when the row is already fully visible and the list would not move.
+///
+/// Mirrors `uniform_list`'s own non-strict `ScrollStrategy::Center` arithmetic —
+/// centre the row's midpoint in the viewport, clamp into the scrollable range,
+/// and leave an already-visible row alone. Kept here so the editable resolved
+/// output, which is a `TextInput` rather than a list, can be placed on exactly
+/// the offset its gutter list is about to compute.
+pub(in crate::view) fn centered_reveal_scroll_y(
+    row_ix: usize,
+    row_height: Pixels,
+    viewport_height: Pixels,
+    max_offset_y: Pixels,
+    current_y: Pixels,
+) -> Option<Pixels> {
+    if row_height <= px(0.0) || viewport_height <= px(0.0) {
+        return None;
+    }
+    let row_top = row_height * row_ix as f32;
+    let row_bottom = row_top + row_height;
+    let scroll_top = -current_y;
+    let above = row_top < scroll_top;
+    let below = row_bottom > scroll_top + viewport_height;
+    if !above && !below {
+        return None;
+    }
+    let target_top = (row_top + row_height / 2.0) - viewport_height / 2.0;
+    Some(-target_top.clamp(px(0.0), max_offset_y.max(px(0.0))))
+}
 
 #[inline]
 fn scaled_diff_px(value: f32, ui_scale_percent: u32) -> Pixels {
@@ -56,16 +90,59 @@ pub(super) fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpu
     }
 }
 
+/// The unresolved treatment for the conflict the resolver is parked on: the same
+/// danger text over a yellow wash, so the output says which of several open
+/// `<Merge Conflict>` rows the picks and the source columns are about.
+pub(super) fn resolved_output_active_unresolved_highlight_style(
+    theme: AppTheme,
+) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        background_color: Some(resolved_output_active_conflict_background(theme).into()),
+        ..resolved_output_unresolved_highlight_style(theme)
+    }
+}
+
+/// The yellow the active conflict's row is washed with, shared by the editable
+/// output's text highlight, its gutter row and the streamed read-only rows so
+/// one row reads as one band across all three.
+pub(in crate::view) fn resolved_output_active_conflict_background(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.warning,
+        if theme.is_dark { 0.30 } else { 0.34 },
+    )
+}
+
+/// The still-unresolved output rows, split into every one of them and the subset
+/// belonging to the conflict the resolver is parked on.
+///
+/// Both are derived in one pass because this runs on the keystroke path, and
+/// `active` is always a subset of `all` — the two can never disagree about where
+/// a row starts and ends.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct ResolvedOutputUnresolvedSpans {
+    pub(in crate::view) all: Arc<[Range<usize>]>,
+    pub(in crate::view) active: Arc<[Range<usize>]>,
+}
+
+impl ResolvedOutputUnresolvedSpans {
+    fn is_active(&self, range: &Range<usize>) -> bool {
+        self.active.iter().any(|active| active == range)
+    }
+}
+
 /// Replace syntax styles inside unresolved output ranges with one plain danger
-/// style. The returned ranges are non-overlapping with the unresolved spans, so
-/// the text input's later-highlight precedence cannot reveal syntax colours
-/// through the conflict treatment.
+/// style — the active conflict's rows with the washed variant of it. The
+/// returned ranges are non-overlapping with the unresolved spans, so the text
+/// input's later-highlight precedence cannot reveal syntax colours through the
+/// conflict treatment.
 pub(super) fn apply_resolved_output_unresolved_highlights(
     mut syntax_highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
-    unresolved_ranges: &[Range<usize>],
+    unresolved_spans: &ResolvedOutputUnresolvedSpans,
     requested_range: Range<usize>,
     unresolved_style: gpui::HighlightStyle,
+    active_unresolved_style: gpui::HighlightStyle,
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    let unresolved_ranges = unresolved_spans.all.as_ref();
     if unresolved_ranges.is_empty() || requested_range.is_empty() {
         return syntax_highlights;
     }
@@ -109,7 +186,12 @@ pub(super) fn apply_resolved_output_unresolved_highlights(
         let start = unresolved.start.max(requested_range.start);
         let end = unresolved.end.min(requested_range.end);
         if start < end {
-            highlights.push((start..end, unresolved_style));
+            let style = if unresolved_spans.is_active(unresolved) {
+                active_unresolved_style
+            } else {
+                unresolved_style
+            };
+            highlights.push((start..end, style));
         }
     }
     highlights.sort_by(|(left, _), (right, _)| {
@@ -1138,26 +1220,29 @@ pub(super) fn resolved_output_markers_for_text(
     )
 }
 
-/// Byte ranges whose output rows are still unresolved. Derive these from the
-/// current segments instead of the asynchronously refreshed outline so syntax
-/// styling never briefly wins while outline metadata catches up.
+/// Byte ranges whose output rows are still unresolved, and the subset of them
+/// owned by `active_conflict`. Derive these from the current segments instead of
+/// the asynchronously refreshed outline so syntax styling never briefly wins
+/// while outline metadata catches up.
 pub(super) fn resolved_output_unresolved_byte_ranges(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
     line_starts: &[usize],
     block_map: &conflict_resolver::ResolvedOutputBlockMap,
-) -> Arc<[Range<usize>]> {
+    active_conflict: Option<usize>,
+) -> ResolvedOutputUnresolvedSpans {
     if !marker_segments.iter().any(|segment| {
         matches!(segment, conflict_resolver::ConflictSegment::Block(block) if !block.resolved)
     }) {
-        return Arc::default();
+        return ResolvedOutputUnresolvedSpans::default();
     }
     let markers = resolved_output_markers_for_text(marker_segments, output_text, block_map);
     let mut ranges = Vec::new();
+    let mut active_ranges = Vec::new();
     for (line_ix, marker) in markers.iter().enumerate() {
-        if !marker.is_some_and(|marker| marker.unresolved) {
+        let Some(marker) = marker.filter(|marker| marker.unresolved) else {
             continue;
-        }
+        };
         let Some(mut range) = indexed_line_byte_range(line_starts, output_text.len(), line_ix)
         else {
             continue;
@@ -1165,11 +1250,18 @@ pub(super) fn resolved_output_unresolved_byte_ranges(
         while range.end > range.start && output_text.as_bytes().get(range.end - 1) == Some(&b'\r') {
             range.end -= 1;
         }
-        if !range.is_empty() {
-            ranges.push(range);
+        if range.is_empty() {
+            continue;
         }
+        if active_conflict == Some(marker.conflict_ix) {
+            active_ranges.push(range.clone());
+        }
+        ranges.push(range);
     }
-    ranges.into()
+    ResolvedOutputUnresolvedSpans {
+        all: ranges.into(),
+        active: active_ranges.into(),
+    }
 }
 
 /// Byte spans of the unresolved-conflict placeholder rows, terminator included.
@@ -1258,14 +1350,18 @@ pub(super) fn resolved_output_live_syntax_mask(
 pub(super) fn resolved_output_live_provider_binding_key(
     document_version: u64,
     theme_epoch: u64,
-    unresolved_ranges: &[Range<usize>],
+    unresolved_spans: &ResolvedOutputUnresolvedSpans,
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = rustc_hash::FxHasher::default();
     document_version.hash(&mut hasher);
     theme_epoch.hash(&mut hasher);
-    unresolved_ranges.hash(&mut hasher);
+    unresolved_spans.all.hash(&mut hasher);
+    // Navigating between conflicts moves only this half, and it is what decides
+    // which row wears the active wash — leave it out and the provider stays
+    // bound to the previous conflict's highlight.
+    unresolved_spans.active.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1279,16 +1375,18 @@ pub(super) fn resolved_output_live_provider_binding_key(
 pub(super) fn resolved_output_live_highlight_provider(
     theme: AppTheme,
     snapshot: rows::LiveSyntaxSnapshot,
-    unresolved_ranges: Arc<[Range<usize>]>,
+    unresolved_spans: ResolvedOutputUnresolvedSpans,
 ) -> HighlightProvider {
     let unresolved_style = resolved_output_unresolved_highlight_style(theme);
+    let active_unresolved_style = resolved_output_active_unresolved_highlight_style(theme);
     HighlightProvider::with_pending(
         move |byte_range: Range<usize>| HighlightProviderResult {
             highlights: apply_resolved_output_unresolved_highlights(
                 snapshot.highlights_for_byte_range(byte_range.clone()),
-                unresolved_ranges.as_ref(),
+                &unresolved_spans,
                 byte_range,
                 unresolved_style,
+                active_unresolved_style,
             ),
             pending: false,
         },
@@ -2890,6 +2988,11 @@ pub(crate) struct MainPaneView {
     /// themes can agree on the few colours sampled and still differ on the
     /// syntax palette, leaving stale colours installed.
     pub(in crate::view) conflict_resolved_output_provider_theme_epoch: u64,
+    /// Which conflict the installed output highlights wash yellow. Conflict
+    /// navigation moves no text and touches no tree, so none of the refresh
+    /// paths fire on it; this is what tells the render pass the active row moved
+    /// and the provider has to be rebuilt.
+    pub(in crate::view) conflict_resolved_output_highlighted_conflict: Option<usize>,
     /// Revision an off-thread first parse is currently running for, so repeated
     /// refreshes over the same text do not pile up duplicate builds.
     pub(in crate::view) conflict_resolved_output_live_syntax_building:

@@ -127,7 +127,7 @@ fn filtered_navigation_and_availability_share_the_semantic_anchor() {
         next_conflict_nav_target_index(
             &targets,
             conflict_anchor,
-            ConflictNavTargetFilter::OriginalConflict,
+            ConflictNavTargetFilter::Conflict,
         ),
         Some(3)
     );
@@ -138,7 +138,7 @@ fn filtered_navigation_and_availability_share_the_semantic_anchor() {
         next_conflict_nav_target_index(
             &targets,
             automatic_anchor,
-            ConflictNavTargetFilter::OriginalConflict,
+            ConflictNavTargetFilter::Conflict,
         ),
         Some(1)
     );
@@ -146,7 +146,7 @@ fn filtered_navigation_and_availability_share_the_semantic_anchor() {
         previous_conflict_nav_target_index(
             &targets,
             automatic_anchor,
-            ConflictNavTargetFilter::OriginalConflict,
+            ConflictNavTargetFilter::Conflict,
         ),
         None
     );
@@ -174,7 +174,7 @@ fn resolved_original_conflicts_remain_conflict_targets_but_not_unresolved_target
         next_conflict_nav_target_index(
             &targets,
             Some(targets[0].anchor()),
-            ConflictNavTargetFilter::OriginalConflict,
+            ConflictNavTargetFilter::Conflict,
         ),
         Some(1)
     );
@@ -205,7 +205,7 @@ fn materialized_original_conflict_retains_rows_and_semantic_navigation() {
         next_conflict_nav_target_index(
             &targets,
             Some(targets[0].anchor()),
-            ConflictNavTargetFilter::OriginalConflict,
+            ConflictNavTargetFilter::Conflict,
         ),
         Some(1)
     );
@@ -270,7 +270,7 @@ fn planless_sessions_use_all_regions_and_display_only_is_the_final_fallback() {
         next_conflict_nav_target_index(
             &materialized_targets,
             Some(materialized_targets[0].anchor()),
-            ConflictNavTargetFilter::OriginalConflict,
+            ConflictNavTargetFilter::Conflict,
         ),
         Some(1)
     );
@@ -412,4 +412,84 @@ fn fresh_target_priority_is_unresolved_then_original_then_delta() {
         })
         .collect();
     assert_eq!(fresh_conflict_nav_target_index(&deltas), Some(0));
+}
+
+/// Conflict navigation must never step over a row the output draws as an open
+/// decision. The plan's `original_conflict` flag alone does not cover them: a
+/// block can render a `<Merge Conflict>` marker while the plan considers it a
+/// settled delta, and F3 used to walk straight past it while "next unresolved"
+/// stopped there — the exact asymmetry this guards.
+#[test]
+fn conflict_navigation_reaches_rendered_blocks_the_plan_does_not_call_conflicts() {
+    let mut displayed_but_not_a_plan_conflict = target(
+        ConflictNavTargetId::PlanBlock(gitcomet_core::merge::MergeBlockId {
+            fingerprint: 7,
+            occurrence: 0,
+        }),
+        1,
+        Some(1..2),
+        Some(1),
+        true,
+        false,
+        true,
+    );
+    displayed_but_not_a_plan_conflict.display_conflict_index = Some(1);
+
+    let targets = vec![
+        target(
+            ConflictNavTargetId::PlanBlock(gitcomet_core::merge::MergeBlockId {
+                fingerprint: 1,
+                occurrence: 0,
+            }),
+            0,
+            Some(0..1),
+            Some(0),
+            true,
+            true,
+            true,
+        ),
+        displayed_but_not_a_plan_conflict,
+        // A plain automatic delta: no marker, no open decision. Conflict
+        // navigation still has no business stopping here.
+        target(
+            ConflictNavTargetId::PlanBlock(gitcomet_core::merge::MergeBlockId {
+                fingerprint: 9,
+                occurrence: 0,
+            }),
+            2,
+            Some(2..3),
+            Some(2),
+            true,
+            false,
+            false,
+        ),
+    ];
+
+    let first = Some(targets[0].anchor());
+    assert_eq!(
+        next_conflict_nav_target_index(&targets, first, ConflictNavTargetFilter::Conflict),
+        Some(1),
+        "the rendered block must be the next conflict, not skipped for the delta after it"
+    );
+    let last = Some(targets[2].anchor());
+    assert_eq!(
+        previous_conflict_nav_target_index(&targets, last, ConflictNavTargetFilter::Conflict),
+        Some(1),
+        "and it must be reachable going backwards too"
+    );
+
+    // The invariant behind the fix: whatever "next unresolved" can reach,
+    // "next conflict" can reach. Anything else is a row the user can see is
+    // open but cannot step onto with F3.
+    for target in &targets {
+        assert!(
+            !ConflictNavTargetFilter::Unresolved.matches(target)
+                || ConflictNavTargetFilter::Conflict.matches(target),
+            "unresolved targets must always be conflict targets: {target:?}"
+        );
+    }
+    assert!(
+        !ConflictNavTargetFilter::Conflict.matches(&targets[2]),
+        "a settled automatic delta is not a conflict"
+    );
 }

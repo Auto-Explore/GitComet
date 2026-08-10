@@ -4,6 +4,7 @@
 //! navigation, pick/choice application, output editing ops, session
 //! resolution sync, and autosolve dispatch. See UI_DESIGN.md section 30.
 
+use super::core_impl::uniform_list_base_handle;
 use super::helpers::*;
 use super::*;
 use crate::kit::text_model::TextModelSnapshot;
@@ -296,6 +297,46 @@ impl MainPaneView {
             .scroll_to_item(target, gpui::ScrollStrategy::Center);
         self.conflict_resolved_preview_gutter_scroll
             .scroll_to_item(target, gpui::ScrollStrategy::Center);
+        self.place_conflict_resolved_output_editor_at_row(target);
+    }
+
+    /// Put the editable output on the same row the gutter was just sent to,
+    /// now, rather than leaving it to the prepaint mirror.
+    ///
+    /// The columns and the gutter are `uniform_list`s: they own a deferred
+    /// scroll and consume it in their own prepaint, so they move in the frame
+    /// navigation triggers. The editable output is a `TextInput` with no such
+    /// mechanism — it can only be dragged along by the gutter afterwards, which
+    /// costs a frame at best, and at worst does not happen at all: the mirror is
+    /// only attached when a render pass observes the gutter's deferred scroll
+    /// still pending, and the fallback offset sync needs *another* render, which
+    /// nothing schedules. That is the navigation where the columns jump and the
+    /// output stays put until an unrelated event (a mouse move, a poll) repaints
+    /// the pane seconds later.
+    ///
+    /// Computed the way `uniform_list` computes it — same centring, same
+    /// clamping, same "already visible rows don't move" rule — so the mirror
+    /// that runs afterwards agrees and nothing jitters.
+    fn place_conflict_resolved_output_editor_at_row(&self, row_ix: usize) {
+        if self.conflict_resolved_output_is_streamed() {
+            return;
+        }
+        let gutter = uniform_list_base_handle(&self.conflict_resolved_preview_gutter_scroll);
+        let Some(gutter_y) = centered_reveal_scroll_y(
+            row_ix,
+            px(RESOLVED_OUTPUT_ROW_HEIGHT_PX),
+            gutter.bounds().size.height,
+            gutter.max_offset().y,
+            gutter.offset().y,
+        ) else {
+            return;
+        };
+        let editor = &self.conflict_resolved_output_editor_scroll;
+        let offset = editor.offset();
+        let editor_y = gutter_y.clamp(-editor.max_offset().y.max(px(0.0)), px(0.0));
+        if offset.y != editor_y {
+            editor.set_offset(point(offset.x, editor_y));
+        }
     }
 
     pub(super) fn conflict_resolver_visible_ix_for_conflict(
@@ -447,17 +488,23 @@ impl MainPaneView {
             self.conflict_resolver_reveal_all_columns(visible_index);
         }
 
-        let output_text = (!self.conflict_resolved_output_is_streamed()).then(|| {
+        // The snapshot shares the buffer's text and its line index, so this is
+        // an `Arc` clone rather than the full copy-and-rescan of the output this
+        // used to do on every jump.
+        let output_snapshot = (!self.conflict_resolved_output_is_streamed()).then(|| {
             self.conflict_resolver_input
-                .read_with(cx, |input, _| input.text().to_string())
+                .read_with(cx, |input, _| input.text_snapshot())
         });
-        let output_line_count = output_text
+        let output_line_count = output_snapshot
             .as_ref()
-            .map(|text| text.split('\n').count().max(1))
+            .map(|snapshot| snapshot.shared_line_starts().len().max(1))
             .unwrap_or_else(|| self.conflict_resolved_preview_line_count.max(1));
         if let Some(output_line) = self.conflict_resolver_output_line_for_nav_target(
             &target,
-            output_text.as_deref().unwrap_or(""),
+            output_snapshot
+                .as_ref()
+                .map(|snapshot| snapshot.as_str())
+                .unwrap_or(""),
         ) {
             self.conflict_resolver_reveal_resolved_output_line(output_line, output_line_count);
         }
@@ -468,7 +515,7 @@ impl MainPaneView {
         let target = conflict_resolver::previous_conflict_nav_target_index(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
-            conflict_resolver::ConflictNavTargetFilter::OriginalConflict,
+            conflict_resolver::ConflictNavTargetFilter::Conflict,
         );
         if let Some(target) = target {
             self.conflict_jump_to_nav_target(target, cx);
@@ -479,7 +526,7 @@ impl MainPaneView {
         let target = conflict_resolver::next_conflict_nav_target_index(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
-            conflict_resolver::ConflictNavTargetFilter::OriginalConflict,
+            conflict_resolver::ConflictNavTargetFilter::Conflict,
         );
         if let Some(target) = target {
             self.conflict_jump_to_nav_target(target, cx);
@@ -490,7 +537,7 @@ impl MainPaneView {
         conflict_resolver::previous_conflict_nav_target_index(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
-            conflict_resolver::ConflictNavTargetFilter::OriginalConflict,
+            conflict_resolver::ConflictNavTargetFilter::Conflict,
         )
         .is_some()
     }
@@ -499,7 +546,7 @@ impl MainPaneView {
         conflict_resolver::next_conflict_nav_target_index(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
-            conflict_resolver::ConflictNavTargetFilter::OriginalConflict,
+            conflict_resolver::ConflictNavTargetFilter::Conflict,
         )
         .is_some()
     }

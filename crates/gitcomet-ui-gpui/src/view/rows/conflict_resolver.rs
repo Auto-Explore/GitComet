@@ -1953,13 +1953,23 @@ impl MainPaneView {
                 let mut row = div()
                     .id(("conflict_resolved_preview_row", ix))
                     .relative()
-                    .h(px(20.0))
+                    .h(px(crate::view::panes::main::RESOLVED_OUTPUT_ROW_HEIGHT_PX))
                     .px_2()
                     .flex()
                     .items_center()
                     .text_xs()
                     .font_family(editor_font_family.clone())
                     .text_color(theme.colors.text)
+                    // The active conflict's open row wears the same yellow wash
+                    // the editor paints behind its `<Merge Conflict>` text, so
+                    // the gutter and the code read as one highlighted row.
+                    .when(conflict_active && conflict_unresolved, |d| {
+                        d.bg(
+                            crate::view::panes::main::resolved_output_active_conflict_background(
+                                theme,
+                            ),
+                        )
+                    })
                     .when(gutter_row.manual_without_marker(), |d| {
                         d.bg(with_alpha(
                             theme.colors.surface_bg_elevated,
@@ -2081,6 +2091,8 @@ impl MainPaneView {
         if let Some(projection) = this.conflict_resolved_output_projection.as_ref() {
             let unresolved_row_bg =
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
+            let active_unresolved_row_bg =
+                crate::view::panes::main::resolved_output_active_conflict_background(theme);
             let resolved_row_bg = with_alpha(
                 theme.colors.success,
                 if theme.is_dark { 0.12 } else { 0.08 },
@@ -2108,10 +2120,17 @@ impl MainPaneView {
                     .copied()
                     .flatten();
                 let row_bg = conflict_marker.map(|marker| {
-                    if marker.unresolved {
-                        unresolved_row_bg
-                    } else {
+                    if !marker.unresolved {
                         resolved_row_bg
+                    } else if this
+                        .conflict_resolver
+                        .conflict_is_active(Some(marker.conflict_ix))
+                    {
+                        // Same yellow the editable output washes its active row
+                        // with: which open conflict the picks apply to.
+                        active_unresolved_row_bg
+                    } else {
+                        unresolved_row_bg
                     }
                 });
                 let text_color = if conflict_marker.is_some_and(|marker| marker.unresolved) {
