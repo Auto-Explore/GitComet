@@ -878,6 +878,148 @@ impl SidebarPaneView {
                         .gitcomet_tooltip(theme, tooltip.clone())
                         .into_any_element()
                 }
+                BranchSidebarRow::VirtualBranchesHeader {
+                    top_border,
+                    collapsed,
+                    collapse_key,
+                } => {
+                    let context_menu_invoker: SharedString =
+                        format!("virtual_branches_section_menu_{}", repo_id.0).into();
+                    let context_menu_active =
+                        this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+                    let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let row_group: SharedString =
+                        format!("virtual_branches_section_row_{}", repo_id.0).into();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
+
+                    div()
+                        .id(("virtual_branches_section", ix))
+                        .debug_selector(move || format!("virtual_branches_section_{ix}"))
+                        .relative()
+                        .h(scaled_px(24.0))
+                        .w_full()
+                        .pl(indent_px(0))
+                        .pr_2()
+                        .group(row_group.clone())
+                        .flex()
+                        .items_center()
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
+                        .interactive_row(row_style, row_state)
+                        .when(top_border, |d| {
+                            d.child(top_divider(theme.colors.border_variant))
+                        })
+                        .child(tree_toggle_slot(Some(collapsed)))
+                        .child(tree_icon_slot("icons/git_branch.svg", icon_primary, 14.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .font_weight(FontWeight::BOLD)
+                                .text_color(theme.colors.text)
+                                .child("Virtual Branches"),
+                        )
+                        .gitcomet_tooltip(
+                            theme,
+                            "Virtual Branches (Right-click for actions)".into(),
+                        )
+                        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                            if !e.standard_click() || e.click_count() != 1 {
+                                return;
+                            }
+                            this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
+                        }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.activate_context_menu_invoker(
+                                    context_menu_invoker_for_right_click.clone(),
+                                    cx,
+                                );
+                                this.open_popover_at(
+                                    PopoverKind::VirtualBranchesPrompt { repo_id },
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "virtual_branches_section_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            PopoverKind::VirtualBranchesPrompt { repo_id },
+                            context_menu_active,
+                            cx,
+                        ))
+                        .into_any_element()
+                }
+                BranchSidebarRow::VirtualBranchItem {
+                    branch_id,
+                    name,
+                    path_count,
+                    applied,
+                    pending,
+                } => {
+                    let status = if pending {
+                        "…"
+                    } else if applied {
+                        "applied"
+                    } else {
+                        "unapplied"
+                    };
+                    let status_color = if applied {
+                        theme.colors.success
+                    } else {
+                        theme.colors.text_muted
+                    };
+                    div()
+                        .id(("virtual_branch_item", branch_id))
+                        .debug_selector(move || format!("virtual_branch_item_{branch_id}"))
+                        .relative()
+                        .h(scaled_px(22.0))
+                        .w_full()
+                        .pl(indent_px(1))
+                        .pr_2()
+                        .flex()
+                        .items_center()
+                        .gap(scaled_px(BRANCH_TREE_GAP_PX))
+                        .child(tree_icon_slot("icons/git_branch.svg", icon_muted, 12.0))
+                        .child(
+                            div()
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .text_sm()
+                                .line_clamp(1)
+                                .whitespace_nowrap()
+                                .text_color(theme.colors.text)
+                                .child(name.clone()),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .text_color(status_color)
+                                .child(format!("{status} · {path_count}")),
+                        )
+                        .gitcomet_tooltip(
+                            theme,
+                            format!("{name} — click to open the Virtual Branches workspace").into(),
+                        )
+                        .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                            this.open_popover_at(
+                                PopoverKind::VirtualBranchesPrompt { repo_id },
+                                e.position(),
+                                window,
+                                cx,
+                            );
+                        }))
+                        .into_any_element()
+                }
                 BranchSidebarRow::Placeholder {
                     section: _,
                     message,

@@ -1131,6 +1131,15 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Unified diff of the given paths (worktree + index) against HEAD, used by
+    /// the virtual-branch workspace to capture a branch's changes before
+    /// unapplying them. Empty when the paths have no changes.
+    fn diff_paths_vs_head(&self, _paths: &[std::path::PathBuf]) -> Result<String> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "path diff is not implemented for this backend",
+        )))
+    }
+
     fn list_worktrees(&self) -> Result<Vec<Worktree>> {
         Err(Error::new(ErrorKind::Unsupported(
             "worktree listing is not implemented for this backend",

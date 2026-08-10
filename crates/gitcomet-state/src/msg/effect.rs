@@ -94,6 +94,19 @@ pub enum Effect {
         repo_id: RepoId,
         limit: usize,
     },
+    /// Capture the branch's diff (worktree + index vs HEAD) and reverse-apply
+    /// it so the changes leave the worktree.
+    UnapplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        paths: Vec<std::path::PathBuf>,
+    },
+    /// Re-apply a previously captured branch diff to the worktree.
+    ApplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        patch: String,
+    },
     LoadRecentCommitMessages {
         repo_id: RepoId,
         limit: usize,

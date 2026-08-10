@@ -47,6 +47,8 @@ mod submodule_remove_confirm;
 mod submodule_trust_confirm;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
+mod virtual_branch_picker;
+mod virtual_branches_prompt;
 mod workspace_picker;
 mod worktree_add_prompt;
 mod worktree_picker;
@@ -270,6 +272,7 @@ pub(in super::super) struct PopoverHost {
     clone_repo_parent_dir_input: Entity<components::TextInput>,
     rebase_onto_input: Entity<components::TextInput>,
     create_tag_input: Entity<components::TextInput>,
+    virtual_branch_create_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,
     /// One `.gitignore` line per row. Multiline so a multi-file selection and a
@@ -902,7 +905,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
                 ),
             ..
         }
-        | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
+        | PopoverKind::FileHistory { .. }
+        | PopoverKind::VirtualBranchesPrompt { .. }
+        | PopoverKind::VirtualBranchPicker { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::TerminalShutdownConfirm(_) | PopoverKind::UnsavedFileEditsConfirm(_) => {
@@ -1187,6 +1192,17 @@ impl PopoverHost {
             components::TextInput::new(
                 components::TextInputOptions {
                     placeholder: "v1.0.0".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let virtual_branch_create_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "New virtual branch name".into(),
                     ..Default::default()
                 },
                 window,
@@ -1498,6 +1514,13 @@ impl PopoverHost {
             |this, _window, cx| this.submit_create_tag(cx),
         ));
         prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+            &virtual_branch_create_input,
+            window,
+            cx,
+            |this| matches!(this.popover, Some(PopoverKind::VirtualBranchesPrompt { .. })),
+            |this, _window, cx| this.submit_create_virtual_branch(cx),
+        ));
+        prompt_input_subscriptions.push(Self::prompt_enter_subscription(
             &create_branch_input,
             window,
             cx,
@@ -1736,6 +1759,7 @@ impl PopoverHost {
             clone_repo_parent_dir_input,
             rebase_onto_input,
             create_tag_input,
+            virtual_branch_create_input,
             create_tag_message_input,
             create_tag_message_scroll,
             gitignore_patterns_input,
@@ -2231,6 +2255,22 @@ impl PopoverHost {
     fn clear_truncated_tooltip(&self, cx: &mut gpui::Context<Self>) {
         let _ = self.tooltip_host.update(cx, |host, cx| {
             host.clear_tooltip(cx);
+        });
+    }
+
+    fn submit_create_virtual_branch(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::VirtualBranchesPrompt { repo_id }) = self.popover.clone() else {
+            return;
+        };
+        let name = self
+            .virtual_branch_create_input
+            .read_with(cx, |input, _| input.text().trim().to_string());
+        if name.is_empty() {
+            return;
+        }
+        self.store.dispatch(Msg::CreateVirtualBranch { repo_id, name });
+        self.virtual_branch_create_input.update(cx, |input, cx| {
+            input.set_text("", cx);
         });
     }
 
@@ -3164,6 +3204,20 @@ impl PopoverHost {
                     let _ = self.ensure_stash_picker_search_input(window, cx);
                     self.stash_picker_prompt_selected_index = Some(0);
                 }
+                PopoverKind::VirtualBranchesPrompt { .. } => {
+                    let theme = self.theme;
+                    self.virtual_branch_create_input.update(cx, |input, cx| {
+                        input.clear_transient_key_presses();
+                        input.set_theme(theme, cx);
+                        input.set_text("", cx);
+                        cx.notify();
+                    });
+                    let focus = self
+                        .virtual_branch_create_input
+                        .read_with(cx, |input, _| input.focus_handle());
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::VirtualBranchPicker { .. } => {}
                 PopoverKind::CloneRepo => {
                     let theme = self.theme;
                     let url_text = self
@@ -4089,6 +4143,12 @@ impl PopoverHost {
             },
             PopoverKind::FileHistory { repo_id, path } => {
                 file_history::panel(self, repo_id, path, cx)
+            }
+            PopoverKind::VirtualBranchesPrompt { repo_id } => {
+                virtual_branches_prompt::panel(self, repo_id, cx)
+            }
+            PopoverKind::VirtualBranchPicker { repo_id, path } => {
+                virtual_branch_picker::panel(self, repo_id, path, cx)
             }
             PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
                 push_set_upstream_prompt::panel(self, repo_id, remote, cx)

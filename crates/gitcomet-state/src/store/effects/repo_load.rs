@@ -849,6 +849,91 @@ pub(super) fn schedule_load_reflog(
     );
 }
 
+pub(super) fn schedule_unapply_virtual_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    branch_id: u64,
+    paths: Vec<std::path::PathBuf>,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo.diff_paths_vs_head(&paths).and_then(|patch| {
+                if patch.trim().is_empty() {
+                    return Ok(patch);
+                }
+                repo.apply_unified_patch_to_worktree_with_output(&patch, true)
+                    .map(|_| patch)
+            });
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::VirtualBranchUnapplied {
+                    repo_id,
+                    branch_id,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::VirtualBranchUnapplied {
+                    repo_id,
+                    branch_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+pub(super) fn schedule_apply_virtual_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    branch_id: u64,
+    patch: String,
+) {
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = if patch.trim().is_empty() {
+                Ok(())
+            } else {
+                repo.apply_unified_patch_to_worktree_with_output(&patch, false)
+                    .map(|_| ())
+            };
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::VirtualBranchApplied {
+                    repo_id,
+                    branch_id,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::VirtualBranchApplied {
+                    repo_id,
+                    branch_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_file_history(
     executor: &TaskExecutor,
     repos: &RepoMap,

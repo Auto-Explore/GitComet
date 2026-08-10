@@ -937,6 +937,10 @@ impl GitRepository for GixRepo {
         self.apply_unified_patch_to_worktree_with_output_impl(patch, reverse)
     }
 
+    fn diff_paths_vs_head(&self, paths: &[std::path::PathBuf]) -> Result<String> {
+        self.diff_paths_vs_head_impl(paths)
+    }
+
     fn list_worktrees(&self) -> Result<Vec<Worktree>> {
         self.list_worktrees_impl()
     }

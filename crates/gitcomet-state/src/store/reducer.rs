@@ -5,6 +5,7 @@ mod effects;
 mod external_and_history;
 mod repo_management;
 mod util;
+mod virtual_branches;
 
 use crate::model::{
     AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
@@ -1024,6 +1025,33 @@ fn reduce_inner(
         Msg::LoadHoverCommitMessage { repo_id, commit_id } => {
             effects::load_hover_commit_message(state, repo_id, commit_id)
         }
+        Msg::CreateVirtualBranch { repo_id, name } => {
+            virtual_branches::create_virtual_branch(state, repo_id, name)
+        }
+        Msg::RenameVirtualBranch {
+            repo_id,
+            branch_id,
+            name,
+        } => virtual_branches::rename_virtual_branch(state, repo_id, branch_id, name),
+        Msg::DeleteVirtualBranch { repo_id, branch_id } => {
+            virtual_branches::delete_virtual_branch(state, repo_id, branch_id)
+        }
+        Msg::AssignPathToVirtualBranch {
+            repo_id,
+            branch_id,
+            path,
+        } => virtual_branches::assign_path_to_virtual_branch(state, repo_id, branch_id, path),
+        Msg::UnassignPathFromVirtualBranch {
+            repo_id,
+            branch_id,
+            path,
+        } => virtual_branches::unassign_path_from_virtual_branch(state, repo_id, branch_id, path),
+        Msg::UnapplyVirtualBranch { repo_id, branch_id } => {
+            virtual_branches::unapply_virtual_branch(state, repo_id, branch_id)
+        }
+        Msg::ApplyVirtualBranch { repo_id, branch_id } => {
+            virtual_branches::apply_virtual_branch(state, repo_id, branch_id)
+        }
         Msg::LoadRecentCommitMessages { repo_id, limit } => {
             effects::load_recent_commit_messages(state, repo_id, limit)
         }
@@ -1936,6 +1964,16 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::ReflogLoaded { repo_id, result }) => {
             effects::reflog_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchUnapplied {
+            repo_id,
+            branch_id,
+            result,
+        }) => virtual_branches::virtual_branch_unapplied(state, repo_id, branch_id, result),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchApplied {
+            repo_id,
+            branch_id,
+            result,
+        }) => virtual_branches::virtual_branch_applied(state, repo_id, branch_id, result),
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded { repo_id, result }) => {
             external_and_history::rebase_state_loaded(state, repo_id, result)
         }

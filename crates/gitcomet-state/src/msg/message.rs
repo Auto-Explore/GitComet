@@ -738,6 +738,39 @@ pub enum Msg {
         target: String,
         mode: ResetMode,
     },
+    CreateVirtualBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    RenameVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        name: String,
+    },
+    DeleteVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+    },
+    /// Moves `path` into the branch: it is removed from every other virtual
+    /// branch first, since a path belongs to at most one.
+    AssignPathToVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        path: std::path::PathBuf,
+    },
+    UnassignPathFromVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        path: std::path::PathBuf,
+    },
+    UnapplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+    },
+    ApplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+    },
     /// Builds the squash message preview for the current multi-selection so
     /// the squash prompt can prefill its message input.
     PrepareSquash {
@@ -1066,6 +1099,17 @@ pub enum InternalMsg {
     ReflogLoaded {
         repo_id: RepoId,
         result: Result<Vec<ReflogEntry>, Error>,
+    },
+    VirtualBranchUnapplied {
+        repo_id: RepoId,
+        branch_id: u64,
+        /// Ok(patch) is the captured unified diff, stored for re-apply.
+        result: Result<String, Error>,
+    },
+    VirtualBranchApplied {
+        repo_id: RepoId,
+        branch_id: u64,
+        result: Result<(), Error>,
     },
     RecentCommitMessagesLoaded {
         repo_id: RepoId,

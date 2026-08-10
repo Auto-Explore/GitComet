@@ -1175,6 +1175,12 @@ pub struct RepoState {
     pub stashes: Loadable<Arc<Vec<StashEntry>>>,
     pub stashes_rev: u64,
     pub reflog: Loadable<Vec<ReflogEntry>>,
+    /// Prototype virtual-branch workspace: in-app groupings of worktree paths.
+    /// Transient (not persisted to session yet).
+    pub virtual_branches: Vec<VirtualBranch>,
+    pub next_virtual_branch_id: u64,
+    /// Bumped on every virtual-branch mutation; drives sidebar row caching.
+    pub virtual_branches_rev: u64,
     pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
     pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
@@ -1293,6 +1299,9 @@ impl RepoState {
             stashes: Loadable::NotLoaded,
             stashes_rev: 0,
             reflog: Loadable::NotLoaded,
+            virtual_branches: Vec::new(),
+            next_virtual_branch_id: 1,
+            virtual_branches_rev: 0,
             recent_commit_messages: Loadable::NotLoaded,
             recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,

@@ -1,0 +1,217 @@
+use super::util::push_diagnostic;
+use crate::model::{AppState, DiagnosticKind, RepoId};
+use crate::msg::Effect;
+use gitcomet_core::domain::VirtualBranch;
+use gitcomet_core::error::Error;
+
+pub(super) fn create_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    name: String,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let id = repo.next_virtual_branch_id;
+    repo.next_virtual_branch_id += 1;
+    let name = if name.trim().is_empty() {
+        format!("Branch {id}")
+    } else {
+        name
+    };
+    repo.virtual_branches.push(VirtualBranch {
+        id,
+        name: name.into(),
+        paths: Vec::new(),
+        applied: true,
+        stored_patch: None,
+        pending: false,
+    });
+    repo.virtual_branches_rev += 1;
+    Vec::new()
+}
+
+pub(super) fn rename_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+    name: String,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+        return Vec::new();
+    };
+    if !name.trim().is_empty() {
+        branch.name = name.into();
+        repo.virtual_branches_rev += 1;
+    }
+    Vec::new()
+}
+
+pub(super) fn delete_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    repo.virtual_branches.retain(|b| b.id != branch_id);
+    repo.virtual_branches_rev += 1;
+    Vec::new()
+}
+
+/// Assigns `path` to the branch: the path is removed from every other branch
+/// first (a path belongs to at most one virtual branch).
+pub(super) fn assign_path_to_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !repo.virtual_branches.iter().any(|b| b.id == branch_id) {
+        return Vec::new();
+    }
+    for other in repo.virtual_branches.iter_mut() {
+        other.paths.retain(|p| p != &path);
+    }
+    if let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id)
+        && !branch.paths.contains(&path)
+    {
+        branch.paths.push(path);
+        repo.virtual_branches_rev += 1;
+    }
+    Vec::new()
+}
+
+pub(super) fn unassign_path_from_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+        return Vec::new();
+    };
+    let old_len = branch.paths.len();
+    branch.paths.retain(|p| p != &path);
+    if branch.paths.len() != old_len {
+        repo.virtual_branches_rev += 1;
+    }
+    Vec::new()
+}
+
+pub(super) fn unapply_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+        return Vec::new();
+    };
+    if !branch.applied || branch.pending || branch.paths.is_empty() {
+        return Vec::new();
+    }
+    branch.pending = true;
+    vec![Effect::UnapplyVirtualBranch {
+        repo_id,
+        branch_id,
+        paths: branch.paths.clone(),
+    }]
+}
+
+pub(super) fn apply_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+        return Vec::new();
+    };
+    if branch.applied || branch.pending {
+        return Vec::new();
+    }
+    let Some(patch) = branch.stored_patch.clone() else {
+        return Vec::new();
+    };
+    branch.pending = true;
+    vec![Effect::ApplyVirtualBranch {
+        repo_id,
+        branch_id,
+        patch: patch.to_string(),
+    }]
+}
+
+pub(super) fn virtual_branch_unapplied(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+    result: Result<String, Error>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+        return Vec::new();
+    };
+    branch.pending = false;
+    match result {
+        Ok(patch) => {
+            branch.stored_patch = Some(patch.into());
+            branch.applied = false;
+            repo.virtual_branches_rev += 1;
+        }
+        Err(e) => {
+            push_diagnostic(
+                repo,
+                DiagnosticKind::Error,
+                format!("Unapply virtual branch: {e}"),
+            );
+        }
+    }
+    Vec::new()
+}
+
+pub(super) fn virtual_branch_applied(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+    result: Result<(), Error>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+        return Vec::new();
+    };
+    branch.pending = false;
+    match result {
+        Ok(()) => {
+            branch.applied = true;
+            branch.stored_patch = None;
+            repo.virtual_branches_rev += 1;
+        }
+        Err(e) => {
+            push_diagnostic(
+                repo,
+                DiagnosticKind::Error,
+                format!("Apply virtual branch: {e}"),
+            );
+        }
+    }
+    Vec::new()
+}

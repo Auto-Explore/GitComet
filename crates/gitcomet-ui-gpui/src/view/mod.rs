@@ -1064,6 +1064,17 @@ impl GitCometView {
             "delete-tag" => {
                 // TODO: Implement delete tag
             }
+            "virtual-branches" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::VirtualBranchesPrompt { repo_id },
+                        window,
+                        cx,
+                    );
+                }
+            }
             "add-remote" => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window

@@ -423,6 +423,18 @@ pub(super) fn model(
         path,
         Some(secondary_shortcut("Shift+C").into()),
     );
+    items.push(ContextMenuItem::Entry {
+        label: "Assign to virtual branch…".into(),
+        icon: Some("icons/git_branch.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::VirtualBranchPicker {
+                repo_id,
+                path: path.to_path_buf(),
+            },
+        }),
+    });
 
     ContextMenuModel::new(items)
 }

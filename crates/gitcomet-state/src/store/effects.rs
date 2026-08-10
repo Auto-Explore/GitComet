@@ -346,6 +346,26 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::UnapplyVirtualBranch {
+            repo_id,
+            branch_id,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchUnapplied {
+                repo_id,
+                branch_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ApplyVirtualBranch {
+            repo_id,
+            branch_id,
+            ..
+        } => send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchApplied {
+            repo_id,
+            branch_id,
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::LoadRecentCommitMessages {
             repo_id,
             request_rev,
@@ -1681,6 +1701,42 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_reflog(executor, repos, msg_tx, repo_id, limit);
+            }
+        }
+        Effect::UnapplyVirtualBranch {
+            repo_id,
+            branch_id,
+            paths,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_unapply_virtual_branch(
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    branch_id,
+                    paths,
+                );
+            }
+        }
+        Effect::ApplyVirtualBranch {
+            repo_id,
+            branch_id,
+            patch,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_apply_virtual_branch(
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    branch_id,
+                    patch,
+                );
             }
         }
         Effect::SaveWorktreeFile {

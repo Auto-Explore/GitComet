@@ -916,6 +916,30 @@ pub struct StashEntry {
     pub created_at: Option<SystemTime>,
 }
 
+/// A virtual branch in the prototype workspace: an in-app grouping of working
+/// tree changes (by path) that can be committed together or moved in/out of the
+/// worktree without touching the real git branch.
+///
+/// `stored_patch` holds the unified diff (worktree + index vs HEAD) captured
+/// when the branch was unapplied, so `apply` can put the changes back. It is
+/// in-memory only for now.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct VirtualBranch {
+    pub id: u64,
+    pub name: Arc<str>,
+    /// Paths whose worktree changes belong to this branch. A path can belong to
+    /// at most one virtual branch.
+    pub paths: Vec<std::path::PathBuf>,
+    /// Whether this branch's changes are currently present in the worktree.
+    pub applied: bool,
+    /// Unified diff captured on unapply, re-applied on `apply`. `None` while
+    /// applied.
+    pub stored_patch: Option<Arc<str>>,
+    /// An apply/unapply operation is in flight (drives the spinner and gates
+    /// re-entry).
+    pub pending: bool,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ReflogEntry {
     pub index: usize,
