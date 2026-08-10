@@ -37,6 +37,14 @@ pub enum Effect {
         author: Option<String>,
         action: &'static str,
     },
+    /// Persists the virtual branch workspace (path assignments + parked
+    /// patches) for a repo, keyed by workdir in the session file.
+    PersistVirtualBranches {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        data: crate::session::VirtualBranchesSessionFile,
+        action: &'static str,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,

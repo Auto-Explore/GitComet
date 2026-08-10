@@ -206,6 +206,7 @@ fn effect_requires_available_git(effect: &Effect) -> bool {
             | Effect::PersistRecentRepo { .. }
             | Effect::PersistRepoHistoryMode { .. }
             | Effect::PersistRepoHistoryModesBatch { .. }
+            | Effect::PersistVirtualBranches { .. }
             | Effect::CancelRepoLoads { .. }
             | Effect::AbortCloneRepo { .. }
     )
@@ -247,6 +248,7 @@ fn send_unavailable_git_effect_result(
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
         | Effect::PersistRepoHistoryAuthorFilter { .. }
+        | Effect::PersistVirtualBranches { .. }
         | Effect::CancelRepoLoads { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
@@ -1479,6 +1481,32 @@ pub(super) fn schedule_effect(
                 if let Err(error) =
                     session::persist_repo_history_modes_batch_to_path(&updates, &session_file_path)
                 {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
+        Effect::PersistVirtualBranches {
+            repo_id,
+            workdir,
+            data,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) = session::persist_virtual_branches_to_path(
+                    &workdir,
+                    &data,
+                    &session_file_path,
+                ) {
                     util::send_or_log(
                         &msg_tx,
                         Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {

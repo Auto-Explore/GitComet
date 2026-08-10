@@ -20,6 +20,22 @@ fn branch_ids(state: &AppState) -> Vec<u64> {
     state.repos[0].virtual_branches.iter().map(|b| b.id).collect()
 }
 
+fn has_persist_effect(effects: &[Effect]) -> bool {
+    effects
+        .iter()
+        .any(|e| matches!(e, Effect::PersistVirtualBranches { .. }))
+}
+
+fn persist_data(effects: &[Effect]) -> crate::session::VirtualBranchesSessionFile {
+    effects
+        .iter()
+        .find_map(|e| match e {
+            Effect::PersistVirtualBranches { data, .. } => Some(data.clone()),
+            _ => None,
+        })
+        .expect("expected a PersistVirtualBranches effect")
+}
+
 #[test]
 fn create_assigns_incrementing_ids_and_default_name() {
     let (mut repos, id_alloc, mut state, repo_id) = fixture_repo();
@@ -32,7 +48,7 @@ fn create_assigns_incrementing_ids_and_default_name() {
             name: String::new(),
         },
     );
-    assert!(effects.is_empty());
+    assert!(has_persist_effect(&effects));
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -42,7 +58,7 @@ fn create_assigns_incrementing_ids_and_default_name() {
             name: "feature".into(),
         },
     );
-    assert!(effects.is_empty());
+    assert!(has_persist_effect(&effects));
     let branches = &state.repos[0].virtual_branches;
     assert_eq!(branches.len(), 2);
     assert_eq!(branch_ids(&state), vec![1, 2]);
@@ -278,7 +294,7 @@ fn unapplied_result_stores_patch_and_marks_unapplied() {
             result: Ok("diff --git a/src/lib.rs b/src/lib.rs".to_string()),
         }),
     );
-    assert!(effects.is_empty());
+    assert!(has_persist_effect(&effects));
     let branch = &state.repos[0].virtual_branches[0];
     assert!(!branch.pending);
     assert!(!branch.applied);
@@ -415,6 +431,67 @@ fn apply_without_stored_patch_is_noop() {
     assert!(effects.is_empty());
 }
 
+#[test]
+fn persist_effect_carries_full_workspace_snapshot() {
+    let (mut repos, id_alloc, mut state, repo_id) = fixture_repo();
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateVirtualBranch {
+            repo_id,
+            name: "feature".into(),
+        },
+    );
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::AssignPathToVirtualBranch {
+            repo_id,
+            branch_id: 1,
+            path: PathBuf::from("src/lib.rs"),
+        },
+    );
+    let _ = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::UnapplyVirtualBranch {
+            repo_id,
+            branch_id: 1,
+        },
+    );
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchUnapplied {
+            repo_id,
+            branch_id: 1,
+            result: Ok("diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n".to_string()),
+        }),
+    );
+    let data = persist_data(&effects);
+    assert_eq!(data.next_id, 2);
+    assert_eq!(data.branches.len(), 1);
+    let branch = &data.branches[0];
+    assert_eq!(branch.id, 1);
+    assert_eq!(branch.name, "feature");
+    assert_eq!(branch.paths, vec!["src/lib.rs"]);
+    assert!(!branch.applied);
+    assert!(branch.stored_patch.as_deref().unwrap().starts_with("diff --git"));
+    // The persist effect targets the repo's workdir.
+    let Effect::PersistVirtualBranches {
+        workdir, repo_id: rid, ..
+    } = &effects[0]
+    else {
+        panic!("expected PersistVirtualBranches effect");
+    };
+    assert_eq!(*rid, Some(repo_id));
+    assert_eq!(workdir.as_path(), std::path::Path::new("/tmp/repo"));
+}
+
 fn move_hunk_patch() -> String {
     "@@ -1,3 +1,4 @@\n fn a() {\n+    let x = 1;\n-    let y = 2;\n }\n".to_string()
 }
@@ -543,7 +620,7 @@ fn move_hunk_success_parks_patch_and_assigns_path() {
             result: Ok(patch.clone()),
         }),
     );
-    assert!(effects.is_empty());
+    assert!(has_persist_effect(&effects));
     let branches = &state.repos[0].virtual_branches;
     let target = &branches[1];
     assert!(!target.pending);

@@ -218,7 +218,66 @@ struct UiSessionFile {
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
     repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
+    virtual_branches: Option<BTreeMap<String, VirtualBranchesSessionFile>>,
     survey_prompt: Option<SurveyPromptSession>,
+}
+
+/// One persisted virtual branch (prototype workspace): the accounting of which
+/// worktree paths belong to the branch plus any parked unified patch.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VirtualBranchSessionFile {
+    pub id: u64,
+    pub name: String,
+    /// Repo-relative paths assigned to the branch.
+    pub paths: Vec<String>,
+    /// Whether the branch's changes are present in the worktree. Persisted so
+    /// unapplied branches (parked patches) restore as unapplied.
+    pub applied: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stored_patch: Option<String>,
+}
+
+/// Per-repo persisted virtual branch workspace: the next id allocator plus the
+/// branch list.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct VirtualBranchesSessionFile {
+    pub next_id: u64,
+    pub branches: Vec<VirtualBranchSessionFile>,
+}
+
+impl From<&gitcomet_core::domain::VirtualBranch> for VirtualBranchSessionFile {
+    fn from(branch: &gitcomet_core::domain::VirtualBranch) -> Self {
+        Self {
+            id: branch.id,
+            name: branch.name.to_string(),
+            paths: branch
+                .paths
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect(),
+            applied: branch.applied,
+            stored_patch: branch.stored_patch.as_deref().map(ToOwned::to_owned),
+        }
+    }
+}
+
+impl From<&VirtualBranchSessionFile> for gitcomet_core::domain::VirtualBranch {
+    fn from(file: &VirtualBranchSessionFile) -> Self {
+        use gitcomet_core::domain::VirtualBranch;
+        VirtualBranch {
+            id: file.id,
+            name: file.name.clone().into(),
+            paths: file
+                .paths
+                .iter()
+                .map(std::path::PathBuf::from)
+                .collect(),
+            applied: file.applied,
+            stored_patch: file.stored_patch.clone().map(Into::into),
+            // Restored branches are never mid-operation.
+            pending: false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -349,6 +408,7 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
     pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
     pub(crate) repo_fetch_prune_deleted_remote_tracking_branches: BTreeMap<String, bool>,
+    pub(crate) virtual_branches: BTreeMap<String, VirtualBranchesSessionFile>,
 }
 
 pub(crate) fn load_repo_session_preferences() -> RepoSessionPreferences {
@@ -383,6 +443,7 @@ pub(crate) fn load_repo_session_preferences_from_path(
         repo_fetch_prune_deleted_remote_tracking_branches: file
             .repo_fetch_prune_deleted_remote_tracking_branches
             .unwrap_or_default(),
+        virtual_branches: file.virtual_branches.unwrap_or_default(),
     }
 }
 
@@ -1194,6 +1255,34 @@ pub fn persist_repo_history_author_filter_to_path(
             stored.insert(workdir_key, Some(author.to_owned()));
         } else {
             stored.remove(&workdir_key);
+        }
+        file.version = CURRENT_SESSION_FILE_VERSION;
+        persist_to_path(session_file_path, &file)
+    })
+}
+
+/// Persists the virtual branch workspace for `workdir`. An empty branch list
+/// removes the stored workspace for the repo (nothing to restore).
+pub fn persist_virtual_branches_to_path(
+    workdir: &Path,
+    data: &VirtualBranchesSessionFile,
+    session_file_path: &Path,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        let workdir_key = path_storage_key(workdir);
+        let stored = file.virtual_branches.get_or_insert_with(BTreeMap::new);
+        let unchanged = stored.get(&workdir_key) == Some(data);
+        if unchanged {
+            return Ok(());
+        }
+        if data.branches.is_empty() {
+            stored.remove(&workdir_key);
+            if stored.is_empty() {
+                file.virtual_branches = None;
+            }
+        } else {
+            stored.insert(workdir_key, data.clone());
         }
         file.version = CURRENT_SESSION_FILE_VERSION;
         persist_to_path(session_file_path, &file)
@@ -2061,6 +2150,76 @@ mod tests {
                 .get(&path_storage_key(&repo_fetch)),
             Some(&true)
         );
+    }
+
+    #[test]
+    fn persist_virtual_branches_round_trips_workspace() {
+        let dir = unique_session_test_dir("virtual-branches");
+        let session_file = dir.join("session.json");
+        let repo = dir.join("repo");
+        let _ = fs::create_dir_all(&repo);
+        let repo_key = path_storage_key(&repo);
+
+        let data = VirtualBranchesSessionFile {
+            next_id: 3,
+            branches: vec![
+                VirtualBranchSessionFile {
+                    id: 1,
+                    name: "feature".into(),
+                    paths: vec!["src/lib.rs".into()],
+                    applied: false,
+                    stored_patch: Some(
+                        "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n"
+                            .into(),
+                    ),
+                },
+                VirtualBranchSessionFile {
+                    id: 2,
+                    name: "fix".into(),
+                    paths: vec![],
+                    applied: true,
+                    stored_patch: None,
+                },
+            ],
+        };
+        persist_virtual_branches_to_path(&repo, &data, &session_file).expect("persist workspace");
+
+        let loaded = load_repo_session_preferences_from_path(&session_file);
+        assert_eq!(loaded.virtual_branches.get(&repo_key), Some(&data));
+
+        // An empty branch list removes the stored workspace for the repo.
+        persist_virtual_branches_to_path(
+            &repo,
+            &VirtualBranchesSessionFile::default(),
+            &session_file,
+        )
+        .expect("clear workspace");
+        let loaded = load_repo_session_preferences_from_path(&session_file);
+        assert!(loaded.virtual_branches.is_empty());
+    }
+
+    #[test]
+    fn virtual_branch_session_conversion_round_trips_domain() {
+        let file = VirtualBranchSessionFile {
+            id: 7,
+            name: "feature".into(),
+            paths: vec!["src/lib.rs".into(), "README.md".into()],
+            applied: false,
+            stored_patch: Some("patch text".into()),
+        };
+        let branch: gitcomet_core::domain::VirtualBranch = (&file).into();
+        assert_eq!(branch.id, 7);
+        assert_eq!(branch.name.as_ref(), "feature");
+        assert_eq!(
+            branch.paths,
+            vec![PathBuf::from("src/lib.rs"), PathBuf::from("README.md")]
+        );
+        assert!(!branch.applied);
+        assert_eq!(branch.stored_patch.as_deref(), Some("patch text"));
+        assert!(!branch.pending);
+
+        let back = VirtualBranchSessionFile::from(&branch);
+        assert_eq!(back, file);
     }
 
     #[test]

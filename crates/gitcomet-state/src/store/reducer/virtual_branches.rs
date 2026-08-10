@@ -4,6 +4,19 @@ use crate::msg::Effect;
 use gitcomet_core::domain::VirtualBranch;
 use gitcomet_core::error::Error;
 
+/// Builds the session persist effect for a repo's virtual branch workspace.
+fn persist_effect(repo: &crate::model::RepoState, action: &'static str) -> Effect {
+    Effect::PersistVirtualBranches {
+        repo_id: Some(repo.id),
+        workdir: repo.spec.workdir.clone(),
+        data: crate::session::VirtualBranchesSessionFile {
+            next_id: repo.next_virtual_branch_id,
+            branches: repo.virtual_branches.iter().map(Into::into).collect(),
+        },
+        action,
+    }
+}
+
 pub(super) fn create_virtual_branch(
     state: &mut AppState,
     repo_id: RepoId,
@@ -28,7 +41,7 @@ pub(super) fn create_virtual_branch(
         pending: false,
     });
     repo.virtual_branches_rev += 1;
-    Vec::new()
+    vec![persist_effect(repo, "creating a virtual branch")]
 }
 
 pub(super) fn rename_virtual_branch(
@@ -46,8 +59,10 @@ pub(super) fn rename_virtual_branch(
     if !name.trim().is_empty() {
         branch.name = name.into();
         repo.virtual_branches_rev += 1;
+        vec![persist_effect(repo, "renaming a virtual branch")]
+    } else {
+        Vec::new()
     }
-    Vec::new()
 }
 
 pub(super) fn delete_virtual_branch(
@@ -60,7 +75,7 @@ pub(super) fn delete_virtual_branch(
     };
     repo.virtual_branches.retain(|b| b.id != branch_id);
     repo.virtual_branches_rev += 1;
-    Vec::new()
+    vec![persist_effect(repo, "deleting a virtual branch")]
 }
 
 /// Bulk-removes virtual branches (used by the stale-branch cleanup after
@@ -103,13 +118,20 @@ pub(super) fn assign_path_to_virtual_branch(
     for other in repo.virtual_branches.iter_mut() {
         other.paths.retain(|p| p != &path);
     }
-    if let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id)
+    let changed = if let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id)
         && !branch.paths.contains(&path)
     {
         branch.paths.push(path);
         repo.virtual_branches_rev += 1;
+        true
+    } else {
+        false
+    };
+    if changed {
+        vec![persist_effect(repo, "assigning a path to a virtual branch")]
+    } else {
+        Vec::new()
     }
-    Vec::new()
 }
 
 pub(super) fn unassign_path_from_virtual_branch(
@@ -128,8 +150,10 @@ pub(super) fn unassign_path_from_virtual_branch(
     branch.paths.retain(|p| p != &path);
     if branch.paths.len() != old_len {
         repo.virtual_branches_rev += 1;
+        vec![persist_effect(repo, "unassigning a path from a virtual branch")]
+    } else {
+        Vec::new()
     }
-    Vec::new()
 }
 
 pub(super) fn unapply_virtual_branch(
@@ -205,6 +229,7 @@ pub(super) fn virtual_branch_unapplied(
             });
             branch.applied = false;
             repo.virtual_branches_rev += 1;
+            vec![persist_effect(repo, "unapplying a virtual branch")]
         }
         Err(e) => {
             push_diagnostic(
@@ -212,9 +237,9 @@ pub(super) fn virtual_branch_unapplied(
                 DiagnosticKind::Error,
                 format!("Unapply virtual branch: {e}"),
             );
+            Vec::new()
         }
     }
-    Vec::new()
 }
 
 pub(super) fn virtual_branch_applied(
@@ -235,6 +260,7 @@ pub(super) fn virtual_branch_applied(
             branch.applied = true;
             branch.stored_patch = None;
             repo.virtual_branches_rev += 1;
+            vec![persist_effect(repo, "applying a virtual branch")]
         }
         Err(e) => {
             push_diagnostic(
@@ -242,9 +268,9 @@ pub(super) fn virtual_branch_applied(
                 DiagnosticKind::Error,
                 format!("Apply virtual branch: {e}"),
             );
+            Vec::new()
         }
     }
-    Vec::new()
 }
 
 /// Parks a single hunk (already reverse-applied to the worktree by the
@@ -316,6 +342,7 @@ pub(super) fn virtual_branch_hunk_moved(
                 branch.paths.push(path);
             }
             repo.virtual_branches_rev += 1;
+            vec![persist_effect(repo, "moving a hunk to a virtual branch")]
         }
         Err(e) => {
             push_diagnostic(
@@ -323,7 +350,7 @@ pub(super) fn virtual_branch_hunk_moved(
                 DiagnosticKind::Error,
                 format!("Move hunk to virtual branch: {e}"),
             );
+            Vec::new()
         }
     }
-    Vec::new()
 }
