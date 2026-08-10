@@ -657,6 +657,31 @@ impl MergePlan {
     }
 
     pub fn replace_selection(&mut self, block_index: usize, selection: OrderedSelection) -> bool {
+        let changed = self.replace_selection_deferred(block_index, selection);
+        if changed {
+            self.refresh_unresolved_blocks();
+        }
+        changed
+    }
+
+    pub fn set_manual_content(&mut self, block_index: usize, content: String) -> bool {
+        let changed = self.set_manual_content_deferred(block_index, content);
+        if changed {
+            self.refresh_unresolved_blocks();
+        }
+        changed
+    }
+
+    /// As [`Self::replace_selection`], but leaves the unresolved index stale.
+    ///
+    /// `refresh_unresolved_blocks` walks every block, so doing it per call
+    /// makes a bulk decision quadratic in the block count. Callers that touch
+    /// many blocks use this and refresh once at the end.
+    pub(crate) fn replace_selection_deferred(
+        &mut self,
+        block_index: usize,
+        selection: OrderedSelection,
+    ) -> bool {
         if selection
             .iter()
             .any(|source| self.source_text(source).is_none())
@@ -667,16 +692,20 @@ impl MergePlan {
             return false;
         };
         block.replace_selection(selection);
-        self.refresh_unresolved_blocks();
         true
     }
 
-    pub fn set_manual_content(&mut self, block_index: usize, content: String) -> bool {
+    /// As [`Self::set_manual_content`], but leaves the unresolved index stale.
+    /// See [`Self::replace_selection_deferred`].
+    pub(crate) fn set_manual_content_deferred(
+        &mut self,
+        block_index: usize,
+        content: String,
+    ) -> bool {
         let Some(block) = self.blocks.get_mut(block_index) else {
             return false;
         };
         block.set_manual_content(content);
-        self.refresh_unresolved_blocks();
         true
     }
 
@@ -1709,7 +1738,6 @@ fn trim_rows(
 struct RowDecision {
     classification: MergeBlockClassification,
     conflict: bool,
-    removed: bool,
     selection: OrderedSelection,
 }
 
@@ -1718,19 +1746,16 @@ fn classify_two_input(row: &AlignedRow) -> RowDecision {
         (Some(_), Some(_)) if row.equal_ab => RowDecision {
             classification: MergeBlockClassification::NoChange,
             conflict: false,
-            removed: false,
             selection: MergeSource::A.into(),
         },
         (Some(_), Some(_)) => RowDecision {
             classification: MergeBlockClassification::BChanged,
             conflict: true,
-            removed: false,
             selection: OrderedSelection::new(),
         },
         _ => RowDecision {
             classification: MergeBlockClassification::BDeleted,
             conflict: true,
-            removed: false,
             selection: OrderedSelection::new(),
         },
     }
@@ -1744,91 +1769,76 @@ fn classify_three_way(row: &AlignedRow) -> RowDecision {
         (Some(_), Some(_), Some(_)) if row.equal_ab && row.equal_ac => RowDecision {
             classification: Kind::NoChange,
             conflict: false,
-            removed: false,
             selection: A.into(),
         },
         (Some(_), Some(_), Some(_)) if row.equal_ab => RowDecision {
             classification: Kind::CChanged,
             conflict: false,
-            removed: false,
             selection: C.into(),
         },
         (Some(_), Some(_), Some(_)) if row.equal_ac => RowDecision {
             classification: Kind::BChanged,
             conflict: false,
-            removed: false,
             selection: B.into(),
         },
         (Some(_), Some(_), Some(_)) if row.equal_bc => RowDecision {
             classification: Kind::BCChangedAndEqual,
             conflict: false,
-            removed: false,
             selection: C.into(),
         },
         (Some(_), Some(_), Some(_)) => RowDecision {
             classification: Kind::BCChanged,
             conflict: true,
-            removed: false,
             selection: OrderedSelection::new(),
         },
         (Some(_), Some(_), None) if !row.equal_ab => RowDecision {
             classification: Kind::BChangedCDeleted,
             conflict: true,
-            removed: false,
             selection: OrderedSelection::new(),
         },
         (Some(_), Some(_), None) => RowDecision {
             classification: Kind::CDeleted,
             conflict: false,
-            removed: true,
             selection: C.into(),
         },
         (Some(_), None, Some(_)) if !row.equal_ac => RowDecision {
             classification: Kind::CChangedBDeleted,
             conflict: true,
-            removed: false,
             selection: OrderedSelection::new(),
         },
         (Some(_), None, Some(_)) => RowDecision {
             classification: Kind::BDeleted,
             conflict: false,
-            removed: true,
             selection: B.into(),
         },
         (None, Some(_), Some(_)) if !row.equal_bc => RowDecision {
             classification: Kind::BCAdded,
             conflict: true,
-            removed: false,
             selection: OrderedSelection::new(),
         },
         (None, Some(_), Some(_)) => RowDecision {
             classification: Kind::BCAddedAndEqual,
             conflict: false,
-            removed: false,
             selection: C.into(),
         },
         (None, None, Some(_)) => RowDecision {
             classification: Kind::CAdded,
             conflict: false,
-            removed: false,
             selection: C.into(),
         },
         (None, Some(_), None) => RowDecision {
             classification: Kind::BAdded,
             conflict: false,
-            removed: false,
             selection: B.into(),
         },
         (Some(_), None, None) => RowDecision {
             classification: Kind::BCDeleted,
             conflict: false,
-            removed: true,
             selection: C.into(),
         },
         (None, None, None) => RowDecision {
             classification: Kind::Default,
             conflict: false,
-            removed: true,
             selection: OrderedSelection::new(),
         },
     }
@@ -1959,7 +1969,6 @@ fn build_blocks(
                     .all(|row| row_whitespace_conflict(row, three_way));
             let is_delta = decision.selection.as_slice() != [MergeSource::A];
             let automatic_selection = decision.selection;
-            let _removed = decision.removed;
             MergeBlock {
                 id,
                 rows: range,
@@ -2028,6 +2037,52 @@ fn contributor_alignment_preserves_base_anchors(
             .is_subset(&exact_base_anchor_pairs(candidate, MergeSource::B))
         && exact_base_anchor_pairs(baseline, MergeSource::C)
             .is_subset(&exact_base_anchor_pairs(candidate, MergeSource::C))
+}
+
+/// Whether every manual pin still holds: the first line each entry pins shares
+/// one row across all the sources that entry names.
+///
+/// The contributor pass relocates B and C cells between rows that the
+/// base-anchored passes placed, so a match that is legal within one B↔C
+/// segment can still drag a line across a pin — and `trim_rows` only ever
+/// pulls lines *earlier*, so it cannot put one back afterwards. KDiff3 repairs
+/// this by re-running `correctManualDiffAlignment` after each automatic pass;
+/// we instead keep the pass's result only when it left the pins intact, which
+/// can never be worse than the pre-pass alignment it falls back to.
+///
+/// Matches KDiff3's own notion of a satisfied pin: `correctManualDiffAlignment`
+/// aligns each entry's `firstLine(wi)`, not the whole pinned range.
+fn alignment_preserves_manual_pins(
+    rows: &[AlignedRow],
+    entries: &[ManualAlignment],
+    three_way: bool,
+) -> bool {
+    entries.iter().all(|entry| {
+        let mut anchor: Option<usize> = None;
+        for source in [MergeSource::A, MergeSource::B, MergeSource::C] {
+            let range = entry.source_range(source, three_way);
+            // An empty pinned range pins the other sources against nothing, so
+            // it has no line of its own to co-locate.
+            if range.is_empty() {
+                continue;
+            }
+            let Some(row_index) = rows
+                .iter()
+                .position(|row| row.line(source) == Some(range.start))
+            else {
+                return false;
+            };
+            match anchor {
+                None => anchor = Some(row_index),
+                Some(anchor) => {
+                    if anchor != row_index {
+                        return false;
+                    }
+                }
+            }
+        }
+        true
+    })
 }
 
 /// Build a shared merge plan for an optional base.
@@ -2105,7 +2160,8 @@ pub fn build_merge_plan_with_alignments(
                 a_lines.len(),
                 b_lines.len(),
                 c_lines.len(),
-            ) {
+            ) && alignment_preserves_manual_pins(&candidate, entries, three_way)
+            {
                 candidate
             } else {
                 baseline
@@ -2358,6 +2414,39 @@ mod tests {
             ],
             "the pinned lines share a row and the displaced remote line stands alone"
         );
+    }
+
+    #[test]
+    fn a_pin_survives_the_contributor_alignment_pass() {
+        // The contributor pass hoists B lines toward the head of the list, which
+        // used to rip a pinned local line off its pinned row. The pass is kept
+        // only when the pins survive it, so the pin wins either way.
+        let base = "base one\nbase two\nmiddle\nbase three\n";
+        let local = "ours one\nours two\nmiddle\nours three\n";
+        let remote = "theirs one\ntheirs two\nmiddle\ntheirs three\n";
+
+        let mut alignments = ManualAlignmentList::new();
+        assert!(alignments.insert(ManualAlignment::new(0..1, 0..1, 1..2)));
+
+        for align_contributors in [false, true] {
+            let options = MergeOptions {
+                align_contributors,
+                ..MergeOptions::default()
+            };
+            let plan =
+                build_merge_plan_with_alignments(Some(base), local, remote, &options, &alignments);
+            assert!(
+                plan.rows
+                    .iter()
+                    .any(|row| row.a == Some(0) && row.b == Some(0) && row.c == Some(1)),
+                "pinned base/local/remote lines must share a row \
+                 (align_contributors={align_contributors}): {:?}",
+                plan.rows
+                    .iter()
+                    .map(|row| (row.a, row.b, row.c))
+                    .collect::<Vec<_>>()
+            );
+        }
     }
 
     #[test]

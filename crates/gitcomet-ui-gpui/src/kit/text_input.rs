@@ -94,6 +94,7 @@ mod shaping;
 mod state;
 mod wrap;
 
+pub(crate) use editing::utf8_edit_delta_between_texts;
 pub use state::{HighlightProvider, HighlightProviderResult, TextInput, TextInputOptions};
 
 #[cfg(feature = "benchmarks")]

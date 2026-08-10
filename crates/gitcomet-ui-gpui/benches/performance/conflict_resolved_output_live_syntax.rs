@@ -12,10 +12,14 @@ pub(crate) fn bench_conflict_resolved_output_live_syntax(c: &mut Criterion) {
     // The headline number. Typing in the resolved output used to invalidate the
     // whole prepared document; this is `tree.edit` plus an incremental reparse.
     // It should stay well under the 1ms foreground budget at this size.
-    group.bench_with_input(BenchmarkId::new("keystroke_reparse", lines), &lines, |b, _| {
-        let mut fixture = ConflictResolvedOutputLiveSyntaxFixture::new(lines, conflicts);
-        b.iter(|| fixture.run_keystroke_step())
-    });
+    group.bench_with_input(
+        BenchmarkId::new("keystroke_reparse", lines),
+        &lines,
+        |b, _| {
+            let mut fixture = ConflictResolvedOutputLiveSyntaxFixture::new(lines, conflicts);
+            b.iter(|| fixture.run_keystroke_step())
+        },
+    );
 
     let fixture = ConflictResolvedOutputLiveSyntaxFixture::new(lines, conflicts);
     group.bench_with_input(

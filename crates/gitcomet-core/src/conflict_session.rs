@@ -347,6 +347,14 @@ pub enum AutosolveRule {
     /// Only "theirs" changed from base; "ours" equals base.
     OnlyTheirsChanged,
     /// Whitespace-only difference between sides (optional Pass 1 toggle).
+    ///
+    /// "Whitespace-only" here means KDiff3's whitespace-*insensitive* compare:
+    /// every whitespace character is deleted before comparing, so this also
+    /// covers a change in whether whitespace is present at all. In an
+    /// indentation-sensitive language that includes a re-indent that moves a
+    /// statement between blocks, which is a semantic change. That is why the
+    /// rule is Medium confidence, is never applied by the on-open pass, and
+    /// only runs behind the explicit Auto-solve action.
     WhitespaceOnly,
     /// Regex-assisted mode: sides differ textually but normalize to equal.
     RegexEquivalentSides,
@@ -366,7 +374,7 @@ impl AutosolveRule {
             AutosolveRule::IdenticalSides => "both sides identical",
             AutosolveRule::OnlyOursChanged => "only ours changed from base",
             AutosolveRule::OnlyTheirsChanged => "only theirs changed from base",
-            AutosolveRule::WhitespaceOnly => "whitespace-only difference",
+            AutosolveRule::WhitespaceOnly => "whitespace-only difference (ignoring indentation)",
             AutosolveRule::RegexEquivalentSides => "regex-normalized sides equivalent",
             AutosolveRule::RegexOnlyTheirsChanged => {
                 "regex-normalized: only theirs changed from base"
@@ -877,13 +885,21 @@ impl ConflictSession {
         line: usize,
         options: &MergeOptions,
     ) -> bool {
-        let three_way = self.merge_plan.as_ref().is_some_and(MergePlan::has_base);
         let mut alignments = self.manual_alignments.clone();
-        if !alignments.remove_at(source, three_way, line) {
+        if !alignments.remove_at(source, self.plan_is_three_way(), line) {
             return false;
         }
         self.replan_with_manual_alignments(alignments, options);
         true
+    }
+
+    /// Whether pinned ranges address A/B/C or the two-input A/B space.
+    ///
+    /// Read from the stage payload rather than the plan: the plan is absent on
+    /// the budget-exceeded fallback, and answering "two-input" there would make
+    /// [`ManualAlignment::source_range`] read the wrong field for every source.
+    fn plan_is_three_way(&self) -> bool {
+        matches!(self.base, ConflictPayload::Text(_))
     }
 
     fn replan_with_manual_alignments(
@@ -1209,8 +1225,9 @@ impl ConflictSession {
             return 0;
         };
         for block_index in &changed_blocks {
-            plan.replace_selection(*block_index, selection.clone());
+            plan.replace_selection_deferred(*block_index, selection.clone());
         }
+        plan.refresh_unresolved_blocks();
         for block_index in changed_blocks.iter().copied() {
             self.sync_region_from_plan_block(block_index);
         }
@@ -1255,8 +1272,9 @@ impl ConflictSession {
             return 0;
         };
         for block_index in &changed_blocks {
-            plan.replace_selection(*block_index, selection.clone());
+            plan.replace_selection_deferred(*block_index, selection.clone());
         }
+        plan.refresh_unresolved_blocks();
         for block_index in changed_blocks.iter().copied() {
             self.sync_region_from_plan_block(block_index);
         }
@@ -1306,22 +1324,27 @@ impl ConflictSession {
             .copied()
             .zip(self.regions.iter().map(|region| region.resolution.clone()))
             .collect();
+        let mut touched = false;
         for (block_index, resolution) in decisions {
             let selection = self.ordered_selection_for_resolution(&resolution);
             let Some(plan) = self.merge_plan.as_mut() else {
                 break;
             };
-            match resolution {
+            touched |= match resolution {
                 ConflictRegionResolution::ManualEdit(content)
                 | ConflictRegionResolution::AutoResolved { content, .. } => {
-                    plan.set_manual_content(block_index, content);
+                    plan.set_manual_content_deferred(block_index, content)
                 }
-                _ => {
-                    if let Some(selection) = selection {
-                        plan.replace_selection(block_index, selection);
-                    }
-                }
-            }
+                _ => match selection {
+                    Some(selection) => plan.replace_selection_deferred(block_index, selection),
+                    None => false,
+                },
+            };
+        }
+        // One refresh for the whole sweep; this runs on every inline region
+        // choice, so a per-block refresh would scan the plan once per region.
+        if touched && let Some(plan) = self.merge_plan.as_mut() {
+            plan.refresh_unresolved_blocks();
         }
     }
 

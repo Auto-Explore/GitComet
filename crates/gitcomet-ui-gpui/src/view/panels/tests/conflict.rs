@@ -4997,7 +4997,10 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
         "a theme change must rebind the provider so the new syntax palette is used"
     );
     assert!(
-        dark_runs.iter().zip(light_runs.iter()).any(|((_, a), (_, b))| a.color != b.color),
+        dark_runs
+            .iter()
+            .zip(light_runs.iter())
+            .any(|((_, a), (_, b))| a.color != b.color),
         "the difference must be in the colours themselves, not just run boundaries"
     );
 

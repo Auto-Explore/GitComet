@@ -161,7 +161,15 @@ pub fn try_autosolve_merge_plan(plan: &MergePlan, options: &MergeOptions) -> Opt
 /// Returns `true` if `a` and `b` differ only in whitespace.
 ///
 /// This deliberately removes every whitespace character with the same
-/// normalizer used for whole-line equivalence by the alignment planner.
+/// normalizer used for whole-line equivalence by the alignment planner, so
+/// that a block the planner classified as a whitespace conflict and a block
+/// this predicate accepts are the same set.
+///
+/// Note this is *wider* than "the same tokens, spaced differently": deleting
+/// whitespace also makes `"    return x"` and `"return x"` equal, so in an
+/// indentation-sensitive language it accepts a re-indent that changes which
+/// block a statement belongs to. Callers must keep it behind an explicit user
+/// action — see [`AutosolveRule::WhitespaceOnly`].
 pub fn is_whitespace_only_diff(a: &str, b: &str) -> bool {
     a != b && normalized_without_whitespace(a) == normalized_without_whitespace(b)
 }

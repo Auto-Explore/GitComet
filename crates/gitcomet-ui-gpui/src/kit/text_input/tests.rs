@@ -134,7 +134,10 @@ fn highlight_interpolation_clamps_to_the_live_text_length() {
 
     // The source described a longer buffer; nothing may point past the end of
     // the one being rendered.
-    assert_eq!(mapped_ranges(&interpolation, &[styled(6..20)], 8), vec![2..8]);
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(6..20)], 8),
+        vec![2..8]
+    );
 }
 
 #[test]
@@ -157,7 +160,10 @@ fn highlight_interpolation_coalesces_a_run_of_single_character_inserts() {
     );
     assert_eq!(patch.new_len, 10);
     // Highlights past the caret are shifted by the whole run at once.
-    assert_eq!(mapped_ranges(&interpolation, &[styled(4..8)], 64), vec![14..18]);
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(4..8)], 64),
+        vec![14..18]
+    );
 }
 
 #[test]
@@ -170,7 +176,10 @@ fn highlight_interpolation_collapses_when_typing_is_backspaced_away() {
         interpolation.is_exact(),
         "an insert and the backspace undoing it leave the source describing the buffer verbatim"
     );
-    assert_eq!(mapped_ranges(&interpolation, &[styled(2..8)], 32), vec![2..8]);
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(2..8)], 32),
+        vec![2..8]
+    );
 }
 
 #[test]
@@ -189,7 +198,11 @@ fn highlight_interpolation_widens_to_the_union_across_disjoint_edits() {
     assert_eq!(patch.old_len, 15);
     assert_eq!(patch.new_len, 17);
     assert_eq!(
-        mapped_ranges(&interpolation, &[styled(0..2), styled(8..12), styled(24..28)], 64),
+        mapped_ranges(
+            &interpolation,
+            &[styled(0..2), styled(8..12), styled(24..28)],
+            64
+        ),
         vec![0..2, 26..30]
     );
 }
@@ -203,7 +216,10 @@ fn highlight_interpolation_reset_restores_the_identity_map() {
     interpolation.reset();
 
     assert!(interpolation.is_exact());
-    assert_eq!(mapped_ranges(&interpolation, &[styled(8..12)], 32), vec![8..12]);
+    assert_eq!(
+        mapped_ranges(&interpolation, &[styled(8..12)], 32),
+        vec![8..12]
+    );
     assert!(
         interpolation.generation() > generation,
         "a reset changes the coordinates callers cached against"
@@ -2086,7 +2102,9 @@ fn changed_highlight_provider_binding_key_rebinds_and_clears_cached_range(
     });
 }
 
-fn multiline_input(cx: &mut gpui::TestAppContext) -> (Entity<TextInput>, &mut gpui::VisualTestContext) {
+fn multiline_input(
+    cx: &mut gpui::TestAppContext,
+) -> (Entity<TextInput>, &mut gpui::VisualTestContext) {
     cx.add_window_view(|window, cx| {
         TextInput::new(
             TextInputOptions {
@@ -2122,7 +2140,10 @@ fn typing_keeps_provider_highlights_aligned(cx: &mut gpui::TestAppContext) {
             // Type inside the first line, ahead of both tokens, without letting
             // the owner's debounced provider rebuild run.
             input.replace_utf8_range(4..4, "X", cx);
-            assert_eq!(input.text(), "let Xvalue = incoming;\n// keep incoming aligned\n");
+            assert_eq!(
+                input.text(),
+                "let Xvalue = incoming;\n// keep incoming aligned\n"
+            );
 
             assert_eq!(
                 highlighted_slices(input, 0..input.text().len()),
@@ -2168,9 +2189,7 @@ fn typing_a_newline_keeps_provider_highlights_aligned(cx: &mut gpui::TestAppCont
 }
 
 #[gpui::test]
-fn typing_multibyte_text_keeps_highlights_on_character_boundaries(
-    cx: &mut gpui::TestAppContext,
-) {
+fn typing_multibyte_text_keeps_highlights_on_character_boundaries(cx: &mut gpui::TestAppContext) {
     let (input, cx) = multiline_input(cx);
 
     cx.update(|_window, app| {
@@ -2219,7 +2238,10 @@ fn typing_interpolates_statically_published_highlights(cx: &mut gpui::TestAppCon
                 cx,
             );
 
-            assert_eq!(highlighted_slices(input, 0..input.text().len()), vec!["incoming"]);
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["incoming"]
+            );
 
             // Highlights published through `set_highlights` were never
             // invalidated on edit at all, so they smeared silently.
@@ -2301,7 +2323,10 @@ fn set_highlights_resets_the_highlight_interpolation(cx: &mut gpui::TestAppConte
             );
 
             assert!(input.highlight.interpolation.is_exact());
-            assert_eq!(highlighted_slices(input, 0..input.text().len()), vec!["AAlpha"]);
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["AAlpha"]
+            );
         });
     });
 }
@@ -2345,9 +2370,7 @@ fn rebinding_under_a_new_key_resets_the_highlight_interpolation(cx: &mut gpui::T
 }
 
 #[gpui::test]
-fn a_never_pending_provider_does_not_accumulate_superseded_sources(
-    cx: &mut gpui::TestAppContext,
-) {
+fn a_never_pending_provider_does_not_accumulate_superseded_sources(cx: &mut gpui::TestAppContext) {
     // The live engine rebinds on every keystroke. Each rebind sets the outgoing
     // source aside to cover for a replacement that cannot answer yet; a
     // provider that always answers must clear that reserve instead of piling up

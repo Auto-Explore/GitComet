@@ -91,14 +91,13 @@ struct FixtureDirectives {
 
 impl Default for FixtureDirectives {
     fn default() -> Self {
-        let mut merge_options = MergeOptions::default();
-        // This corpus is specifically a KDiff3-compatibility reference. Keep
-        // its optional contributor-alignment pass explicit rather than
-        // inheriting the safer application default.
-        merge_options.align_contributors = true;
+        // Deliberately the application's own defaults. This corpus is the
+        // KDiff3-compatibility reference, so it is only worth anything while it
+        // exercises the configuration the app actually merges with; a fixture
+        // that needs another one says so with an `#@ opts.*` directive.
         Self {
             api: MergeApi::Text,
-            merge_options,
+            merge_options: MergeOptions::default(),
             expected_clean: None,
             expected_conflict_count: None,
             expected_error: None,
@@ -422,6 +421,8 @@ fn serialize_alignment_rows(rows: &[AlignmentRow]) -> String {
     out
 }
 
+/// Split exactly the way `gitcomet_core`'s planner does, so a row index means
+/// the same line here as it does in the plan being checked.
 fn split_visual_lines(text: &str) -> Vec<&str> {
     if text.is_empty() {
         Vec::new()
@@ -430,15 +431,94 @@ fn split_visual_lines(text: &str) -> Vec<&str> {
     }
 }
 
+fn without_whitespace(text: &str) -> String {
+    text.chars().filter(|c| !c.is_whitespace()).collect()
+}
+
+/// Every aligned row's equality metadata must describe its own text.
+///
+/// Aligned rows are positional merge candidates, so a populated pair is *not*
+/// required to hold equal lines — that is why the old content assertions had to
+/// go. But every merge decision downstream (`classify_three_way`,
+/// `row_whitespace_conflict`, block grouping) reads these flags instead of the
+/// lines, so a row that mislabels its own content mis-resolves silently. This
+/// pins the flags to the text without over-constraining the alignment.
+fn validate_aligned_row_metadata(
+    base: &str,
+    contrib1: &str,
+    contrib2: &str,
+    rows: &[gitcomet_core::merge::AlignedRow],
+    fixture_name: &str,
+) {
+    let base_lines = split_visual_lines(base);
+    let contrib1_lines = split_visual_lines(contrib1);
+    let contrib2_lines = split_visual_lines(contrib2);
+
+    let pair =
+        |left: Option<usize>, left_lines: &[&str], right: Option<usize>, right_lines: &[&str]| {
+            let (Some(left), Some(right)) = (left, right) else {
+                return (false, false);
+            };
+            let (Some(left), Some(right)) = (left_lines.get(left), right_lines.get(right)) else {
+                return (false, false);
+            };
+            (
+                left == right,
+                without_whitespace(left) == without_whitespace(right),
+            )
+        };
+
+    for (row_ix, row) in rows.iter().enumerate() {
+        for (label, (exact, whitespace), flagged_exact, flagged_whitespace) in [
+            (
+                "a/b",
+                pair(row.a, &base_lines, row.b, &contrib1_lines),
+                row.equal_ab,
+                row.whitespace_equal_ab,
+            ),
+            (
+                "a/c",
+                pair(row.a, &base_lines, row.c, &contrib2_lines),
+                row.equal_ac,
+                row.whitespace_equal_ac,
+            ),
+            (
+                "b/c",
+                pair(row.b, &contrib1_lines, row.c, &contrib2_lines),
+                row.equal_bc,
+                row.whitespace_equal_bc,
+            ),
+        ] {
+            assert_eq!(
+                flagged_exact,
+                exact,
+                "[{}] alignment row {}: {} exact-equality flag disagrees with the lines",
+                fixture_name,
+                row_ix + 1,
+                label
+            );
+            assert_eq!(
+                flagged_whitespace,
+                whitespace,
+                "[{}] alignment row {}: {} whitespace-equality flag disagrees with the lines",
+                fixture_name,
+                row_ix + 1,
+                label
+            );
+        }
+    }
+}
+
 fn build_three_way_alignment(
     base: &str,
     contrib1: &str,
     contrib2: &str,
     options: &MergeOptions,
+    fixture_name: &str,
 ) -> Vec<AlignmentRow> {
-    build_merge_plan(base, contrib1, contrib2, options)
-        .rows
-        .into_iter()
+    let rows = build_merge_plan(base, contrib1, contrib2, options).rows;
+    validate_aligned_row_metadata(base, contrib1, contrib2, &rows, fixture_name);
+    rows.into_iter()
         .map(|row| AlignmentRow {
             base: row.a,
             contrib1: row.b,
@@ -949,8 +1029,13 @@ fn run_fixture(fixture: &MergeFixture) -> Result<(), String> {
             }
         }
         ExpectedFixture::Alignment(expected_rows) => {
-            let actual_rows =
-                build_three_way_alignment(&base, &contrib1, &contrib2, &directives.merge_options);
+            let actual_rows = build_three_way_alignment(
+                &base,
+                &contrib1,
+                &contrib2,
+                &directives.merge_options,
+                &fixture.name,
+            );
             let actual_path = actual_result_path(fixture);
             let actual_text = serialize_alignment_rows(&actual_rows);
             run_validation_with_artifact(

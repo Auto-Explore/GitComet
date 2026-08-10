@@ -3220,7 +3220,9 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
                 // An unresolved block renders as one placeholder row, which the
                 // parser must not see as code.
                 let start = text.len();
-                text.push_str(crate::view::conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER);
+                text.push_str(
+                    crate::view::conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER,
+                );
                 mask.push(start..text.len());
                 text.push('\n');
                 continue;

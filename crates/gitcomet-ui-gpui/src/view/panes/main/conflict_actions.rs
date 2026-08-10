@@ -32,11 +32,13 @@ fn conflict_session_plan_projection(
         projection.replace_selection(*block_index, gitcomet_core::merge::OrderedSelection::new());
     }
     let projected_plan_blocks = projection.unresolved_blocks.clone();
-    let mut options = gitcomet_core::merge::MergeOptions::default();
-    options.style = if projection.has_base() {
-        gitcomet_core::merge::ConflictStyle::Diff3
-    } else {
-        gitcomet_core::merge::ConflictStyle::Merge
+    let options = gitcomet_core::merge::MergeOptions {
+        style: if projection.has_base() {
+            gitcomet_core::merge::ConflictStyle::Diff3
+        } else {
+            gitcomet_core::merge::ConflictStyle::Merge
+        },
+        ..Default::default()
     };
     Some((
         Arc::from(gitcomet_core::merge::render_merge_plan(&projection, &options).output),
@@ -1364,14 +1366,8 @@ impl MainPaneView {
             );
         } else if let Some(resolved) = resolved_output_text {
             self.conflict_resolved_output_projection = None;
-            let line_ending = crate::kit::TextInput::detect_line_ending(resolved.as_str());
-            let theme = self.theme;
             let input_set_text_started = Instant::now();
-            self.conflict_resolver_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
-                input.set_line_ending(line_ending);
-                input.set_text(resolved.into_shared_string(), cx);
-            });
+            self.fill_conflict_resolved_output_buffer(resolved.into_shared_string(), cx);
             mergetool_trace::record_with(|| {
                 trace_ctx
                     .bootstrap_event(
@@ -1419,8 +1415,7 @@ impl MainPaneView {
         // is available (the fast first paint may be CurrentOnly).
         if !self.conflict_resolver.open_summary_announced
             && let Some(counts) = self.conflict_resolver.open_summary_counts
-        {
-            if let Some(message) = conflict_resolver::format_open_summary_toast(counts) {
+            && let Some(message) = conflict_resolver::format_open_summary_toast(counts) {
                 self.conflict_resolver.open_summary_announced = true;
                 if let (Some(repo_id), Some(path)) = (
                     self.conflict_resolver.repo_id,
@@ -1439,7 +1434,6 @@ impl MainPaneView {
                     });
                 });
             }
-        }
         // section 30 aligned row space: whole-file column rows (three-way and
         // two-way full mode) need the side texts, which the fast CurrentOnly
         // first paint does not include. Upgrade fresh opens of reasonably
@@ -1783,13 +1777,7 @@ impl MainPaneView {
             && let Some(resolved) = resolved
         {
             self.conflict_resolved_output_projection = None;
-            let line_ending = crate::kit::TextInput::detect_line_ending(resolved.as_str());
-            let theme = self.theme;
-            self.conflict_resolver_input.update(cx, |input, cx| {
-                input.set_theme(theme, cx);
-                input.set_line_ending(line_ending);
-                input.set_text(resolved.into_shared_string(), cx);
-            });
+            self.fill_conflict_resolved_output_buffer(resolved.into_shared_string(), cx);
             self.conflict_resolved_preview_path = output_path.clone();
             let source_revision = self.conflict_resolver_input.read_with(cx, |input, _| {
                 ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
@@ -2498,45 +2486,15 @@ impl MainPaneView {
         let next_text = text;
         self.conflict_resolver_input.update(cx, |input, cx| {
             input.set_theme(theme, cx);
-            if input.text() == next_text {
-                return;
-            }
             let current = input.text();
-            let old = current.as_bytes();
-            let new = next_text.as_bytes();
-            let old_len = old.len();
-            let new_len = new.len();
-
-            let mut prefix = 0usize;
-            let prefix_max = old_len.min(new_len);
-            while prefix < prefix_max && old[prefix] == new[prefix] {
-                prefix = prefix.saturating_add(1);
-            }
-            while prefix > 0
-                && (!current.is_char_boundary(prefix) || !next_text.is_char_boundary(prefix))
-            {
-                prefix = prefix.saturating_sub(1);
-            }
-
-            let mut suffix = 0usize;
-            while suffix < old_len.saturating_sub(prefix)
-                && suffix < new_len.saturating_sub(prefix)
-                && old[old_len.saturating_sub(1 + suffix)]
-                    == new[new_len.saturating_sub(1 + suffix)]
-            {
-                suffix = suffix.saturating_add(1);
-            }
-            while suffix > 0
-                && (!current.is_char_boundary(old_len.saturating_sub(suffix))
-                    || !next_text.is_char_boundary(new_len.saturating_sub(suffix)))
-            {
-                suffix = suffix.saturating_sub(1);
-            }
-
-            let old_range = prefix..old_len.saturating_sub(suffix);
-            let replacement = next_text
-                .get(prefix..new_len.saturating_sub(suffix))
-                .unwrap_or("");
+            // The same minimal-edit the buffer computes for its own `set_text`,
+            // so its edit accounting and ours cannot disagree about the span.
+            let Some((old_range, new_range)) =
+                crate::kit::utf8_edit_delta_between_texts(current, &next_text)
+            else {
+                return;
+            };
+            let replacement = next_text.get(new_range).unwrap_or("");
             // Regenerating the output from the session is not an edit the user
             // typed here, so it must not steal their scroll position. Every
             // caller below decides for itself whether to reveal the changed

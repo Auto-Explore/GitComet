@@ -907,7 +907,6 @@ fn blame_path_rev_for_target(
     }
 }
 
-
 impl MainPaneView {
     pub(in crate::view) fn sync_interactive_commit_editor_states(&mut self) {
         let repos_with_setup: Vec<RepoId> = self
@@ -1419,11 +1418,7 @@ impl MainPaneView {
                     output_snapshot.as_ref(),
                 );
                 if !this.conflict_resolved_output_is_streamed() {
-                    this.refresh_conflict_resolved_output_syntax(
-                        &output_snapshot,
-                        syntax_edit,
-                        cx,
-                    );
+                    this.refresh_conflict_resolved_output_syntax(&output_snapshot, syntax_edit, cx);
                 }
                 let source_revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
                 let output_modified = resolved_output_snapshot_is_modified(
@@ -2113,28 +2108,40 @@ impl MainPaneView {
 
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
-        let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
-        let theme = self.theme;
         let path = self.conflict_resolver.path.clone();
         self.conflict_resolved_output_projection = None;
         self.conflict_resolved_preview_path = path.clone();
-        self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_line_ending(line_ending);
-            input.set_text(resolved.clone(), cx);
-            // `set_text` leaves the caret at end-of-document. The pane opens
-            // scrolled to the top, so a caret parked at the far end means the
-            // first arrow key (or undo) autoscrolls to the bottom of a file the
-            // user was reading from the top. Park it where the view actually
-            // is; the user has not placed a caret yet.
-            input.set_selected_range(0..0, false, cx);
-        });
+        self.fill_conflict_resolved_output_buffer(resolved, cx);
         self.conflict_resolved_preview_source_revision =
             Some(self.conflict_resolver_input.read_with(cx, |input, _| {
                 ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
             }));
         self.rebuild_conflict_resolved_output_block_map(cx);
         self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
+    }
+
+    /// Load merged text into the resolved-output editor.
+    ///
+    /// Every path that fills this buffer goes through here, because filling it
+    /// has one non-obvious obligation: `set_text` leaves the caret at
+    /// end-of-document, and the pane opens scrolled to the top, so a caret
+    /// parked at the far end sends the first arrow key (or undo) autoscrolling
+    /// to the bottom of a file the user was reading from the top. Park it where
+    /// the view actually is; the user has not placed a caret yet.
+    pub(in crate::view) fn fill_conflict_resolved_output_buffer(
+        &mut self,
+        text: impl Into<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let text = text.into();
+        let line_ending = crate::kit::TextInput::detect_line_ending(text.as_ref());
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_line_ending(line_ending);
+            input.set_text(text, cx);
+            input.set_selected_range(0..0, false, cx);
+        });
     }
 
     /// Configure the resolved-output `TextInput` for rendering as the editable
@@ -2311,12 +2318,9 @@ impl MainPaneView {
                     // the buffer has moved past is useless, but so is waiting --
                     // nothing else is guaranteed to come along and ask again, so
                     // re-issue from where the buffer is now.
-                    let still_current = this
-                        .conflict_resolver_input
-                        .read_with(cx, |input, _| {
-                            ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
-                        })
-                        == revision;
+                    let still_current = this.conflict_resolver_input.read_with(cx, |input, _| {
+                        ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
+                    }) == revision;
                     if !still_current {
                         this.reissue_conflict_resolved_output_live_syntax_build(cx);
                         return;
@@ -2502,15 +2506,24 @@ impl MainPaneView {
             // re-triggering the observe that called it.
             Some(_) if current => {}
             Some(document) => {
-                document.sync(
+                let outcome = document.sync(
                     Arc::clone(&text),
                     Arc::clone(&line_starts),
                     Arc::clone(&mask),
                     edit,
                     budget,
                 );
-                self.conflict_resolved_output_live_syntax_source =
-                    Some((revision, Arc::clone(&mask)));
+                if outcome == rows::LiveSyntaxSyncOutcome::Abandoned {
+                    // The edit took the buffer past the size ceiling, so the
+                    // document now describes text that no longer exists. Drop it
+                    // and take the heuristic arm below, which is the same answer
+                    // a buffer that started out this large would have got.
+                    self.conflict_resolved_output_live_syntax = None;
+                    self.conflict_resolved_output_live_syntax_source = None;
+                } else {
+                    self.conflict_resolved_output_live_syntax_source =
+                        Some((revision, Arc::clone(&mask)));
+                }
             }
             None => {
                 // Zed's fast path (`Buffer::reparse` under `sync_parse_timeout`):
@@ -2543,8 +2556,8 @@ impl MainPaneView {
                 // live budget is 1ms and a cold parse of a ~10KB file is
                 // already over it, so without this the resolved output would
                 // sit on heuristic tokens for the whole session.
-                if let Some(language) = language
-                    .filter(|_| self.conflict_resolved_output_live_syntax.is_none())
+                if let Some(language) =
+                    language.filter(|_| self.conflict_resolved_output_live_syntax.is_none())
                 {
                     self.ensure_conflict_resolved_output_live_syntax_build(
                         language,
@@ -5143,7 +5156,6 @@ impl MainPaneView {
             },
         );
     }
-
 
     pub(in crate::view) fn is_file_diff_view_active(&self) -> bool {
         self.effective_diff_content_mode() == DiffContentMode::Full

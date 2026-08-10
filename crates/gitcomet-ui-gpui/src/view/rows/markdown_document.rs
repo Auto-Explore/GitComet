@@ -69,16 +69,18 @@ const MARKDOWN_DOCUMENT_CHANGE_BAR_WIDTH_PX: f32 = 3.0;
 /// its blocks is what makes the identity check sound: while the cache keeps
 /// that `Arc` alive, no later document can occupy the same address.
 #[derive(Clone, Default)]
-pub(in crate::view) struct MarkdownDocumentBlockCache(
-    std::rc::Rc<
-        std::cell::RefCell<
-            Option<(
-                Arc<MarkdownPreviewDocument>,
-                std::rc::Rc<Vec<MarkdownBlock>>,
-            )>,
-        >,
+pub(in crate::view) struct MarkdownDocumentBlockCache(MarkdownDocumentBlockCacheSlot);
+
+/// The cached document and its blocks, shared between the clones of a
+/// [`MarkdownDocumentBlockCache`].
+type MarkdownDocumentBlockCacheSlot = std::rc::Rc<
+    std::cell::RefCell<
+        Option<(
+            Arc<MarkdownPreviewDocument>,
+            std::rc::Rc<Vec<MarkdownBlock>>,
+        )>,
     >,
-);
+>;
 
 impl MarkdownDocumentBlockCache {
     fn blocks(&self, document: &Arc<MarkdownPreviewDocument>) -> std::rc::Rc<Vec<MarkdownBlock>> {

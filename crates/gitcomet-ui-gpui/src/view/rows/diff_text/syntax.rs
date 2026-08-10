@@ -351,18 +351,17 @@ pub(super) use language::syntax_tokens_for_line_shared;
 pub(in crate::view) use language::{
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
 };
+pub(in crate::view) use live::{
+    LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_reparse,
+};
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
-pub(in crate::view) use live::{
-    LiveSyntaxDocument, LiveSyntaxSnapshot, live_syntax_reparse,
-};
 #[cfg(test)]
 pub(super) use prepared::syntax_tokens_for_prepared_document_line;
 pub(super) use prepared::{
     PreparedSyntaxLineTokensRequest, drain_completed_prepared_syntax_chunk_builds,
     drain_completed_prepared_syntax_chunk_builds_for_document,
-    has_pending_prepared_syntax_chunk_builds,
-    inject_prepared_document_data,
+    has_pending_prepared_syntax_chunk_builds, inject_prepared_document_data,
     prepare_treesitter_document_in_background_text_with_reparse_seed,
     prepare_treesitter_document_with_budget_reuse_text, prepared_document_reparse_seed,
     request_syntax_tokens_for_prepared_document_line,

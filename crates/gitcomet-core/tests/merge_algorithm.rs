@@ -817,6 +817,76 @@ fn t6427_zdiff3_evil() {
     );
 }
 
+/// Contributor alignment is not a nicety, it is what keeps the planner from
+/// emitting a line twice, so it has to hold under the *default* options.
+///
+/// Base `aaa` matches ours' `    aaa` whitespace-insensitively and theirs'
+/// `aaa` exactly, so the two base-relative diffs claim different contributor
+/// lines for the same base line. With nothing to reconcile them, theirs'
+/// leftover `    aaa` becomes a one-sided add and lands in the output on top of
+/// ours' copy — a duplicated line in a merge reported as clean.
+#[test]
+fn merge_contributor_alignment_does_not_duplicate_shared_lines() {
+    let result = merge_file("aaa\n", "bbb\n    aaa\n", "aaa\n    aaa\n", &default_opts());
+
+    assert!(result.is_clean(), "output: {:?}", result.output);
+    assert_eq!(result.output, "bbb\n    aaa\n");
+    assert_eq!(
+        result.output.matches("    aaa").count(),
+        1,
+        "the shared indented line must be emitted once: {:?}",
+        result.output
+    );
+}
+
+/// The same hazard with a whole added block: both sides add `same in b and c`
+/// and `again same in b and c`, and only ours adds `only in b` between them.
+#[test]
+fn merge_contributor_alignment_pairs_shared_added_lines() {
+    let result = merge_file(
+        "same everywhere\n",
+        "same in b and c\nonly in b\nagain same in b and c\nsame everywhere\n",
+        "same in b and c\nagain same in b and c\nsame everywhere\n",
+        &default_opts(),
+    );
+
+    assert!(result.is_clean(), "output: {:?}", result.output);
+    assert_eq!(
+        result.output,
+        "same in b and c\nonly in b\nagain same in b and c\nsame everywhere\n"
+    );
+}
+
+/// A one-sided change must merge identically however the flag is set: the pass
+/// is skipped whenever any two inputs are equal, so it cannot reach these.
+#[test]
+fn merge_contributor_alignment_leaves_one_sided_merges_alone() {
+    let base = "1\n2\n3\n4\n";
+    let cases = [
+        // Only ours changed.
+        (base, "1\nX\n3\n4\n", base),
+        // Only theirs changed.
+        (base, base, "1\n2\nY\n4\n"),
+        // Both sides made the identical change.
+        (base, "1\nZ\n3\n4\n", "1\nZ\n3\n4\n"),
+    ];
+
+    for (base, ours, theirs) in cases {
+        let mut aligned = default_opts();
+        aligned.align_contributors = true;
+        let mut unaligned = default_opts();
+        unaligned.align_contributors = false;
+
+        let with_pass = merge_file(base, ours, theirs, &aligned);
+        let without_pass = merge_file(base, ours, theirs, &unaligned);
+        assert_eq!(
+            with_pass.output, without_pass.output,
+            "one-sided merge of {ours:?} / {theirs:?} must not depend on the pass"
+        );
+        assert!(with_pass.is_clean(), "output: {:?}", with_pass.output);
+    }
+}
+
 // ===========================================================================
 // Additional edge cases from design doc
 // ===========================================================================

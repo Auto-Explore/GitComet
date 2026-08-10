@@ -31,9 +31,7 @@ pub(crate) fn bench_text_input_prepaint_windowed(c: &mut Criterion) {
     group.bench_with_input(
         BenchmarkId::new("steady_typing", window_rows),
         &window_rows,
-        |b, &window_rows| {
-            b.iter(|| typing_fixture.run_steady_typing_step(0, window_rows.max(1)))
-        },
+        |b, &window_rows| b.iter(|| typing_fixture.run_steady_typing_step(0, window_rows.max(1))),
     );
     group.bench_function(BenchmarkId::from_parameter("full_document_control"), |b| {
         b.iter(|| full_fixture.run_full_document_step())

@@ -3,24 +3,22 @@ use super::{
     ResolvedOutputConflictMarker, ResolvedOutputSourceRevision, VersionedCachedDiffStyledText,
     apply_conflict_choice_provenance_hints, apply_focused_mergetool_output,
     apply_resolved_output_unresolved_highlights, apply_three_way_empty_base_provenance_hints,
-    build_focused_mergetool_save_payload,
-    build_line_starts, build_resolved_output_conflict_markers,
-    build_resolved_output_conflict_markers_from_block_ranges,
-    clear_diff_selection_action, coalesce_resolved_output_edit_deltas,
-    conflict_file_is_binary, conflict_marker_nav_entries_from_markers,
-    conflict_resolver_output_context_line, conflict_strategy_needs_full_side_payloads,
-    dirty_byte_range_to_line_range, first_output_marker_line_for_conflict,
-    focused_mergetool_save_exit_code, output_line_range_for_conflict_block_in_text,
-    pane_content_width_for_layout, parse_conflict_canvas_rows_env,
-    remap_resolved_output_conflict_block_ranges_for_delta,
+    build_focused_mergetool_save_payload, build_line_starts,
+    build_resolved_output_conflict_markers,
+    build_resolved_output_conflict_markers_from_block_ranges, clear_diff_selection_action,
+    coalesce_resolved_output_edit_deltas, conflict_file_is_binary,
+    conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
+    conflict_strategy_needs_full_side_payloads, dirty_byte_range_to_line_range,
+    first_output_marker_line_for_conflict, focused_mergetool_save_exit_code,
+    output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
+    parse_conflict_canvas_rows_env, remap_resolved_output_conflict_block_ranges_for_delta,
     renderable_conflict_file, resolved_outline_delta_between_texts,
     resolved_outline_delta_for_snapshot_transition, resolved_output_conflict_block_ranges_in_text,
     resolved_output_live_highlight_provider, resolved_output_live_provider_binding_key,
-    resolved_output_live_syntax_mask,
-    resolved_output_marker_for_line, resolved_output_markers_for_text,
-    resolved_output_placeholder_protected_ranges, resolved_output_snapshot_is_modified,
-    resolved_output_unresolved_byte_ranges, resolved_output_unresolved_highlight_style,
-    split_target_conflict_block_into_subchunks,
+    resolved_output_live_syntax_mask, resolved_output_marker_for_line,
+    resolved_output_markers_for_text, resolved_output_placeholder_protected_ranges,
+    resolved_output_snapshot_is_modified, resolved_output_unresolved_byte_ranges,
+    resolved_output_unresolved_highlight_style, split_target_conflict_block_into_subchunks,
     versioned_cached_diff_styled_text_is_current,
     versioned_query_cached_diff_styled_text_is_current, worktree_output_requires_protection,
 };
@@ -2305,8 +2303,9 @@ fn coalescing_edit_deltas_covers_every_edit_in_the_batch() {
 
     // Two edits far apart widen to their union rather than being dropped.
     // Reparsing more than strictly necessary is sound; missing an edit is not.
-    let (replaced, inserted) = coalesce_resolved_output_edit_deltas(&[(2..4, 2..2), (10..10, 10..13)])
-        .expect("a non-empty batch always coalesces");
+    let (replaced, inserted) =
+        coalesce_resolved_output_edit_deltas(&[(2..4, 2..2), (10..10, 10..13)])
+            .expect("a non-empty batch always coalesces");
     assert!(
         replaced.start <= 2 && inserted.start <= 2,
         "the union must start at or before the earliest edit: {replaced:?} {inserted:?}"

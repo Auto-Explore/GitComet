@@ -4,7 +4,13 @@ use super::state::*;
 use super::wrap::*;
 use super::*;
 
-fn utf8_edit_delta_between_texts(
+/// The single replaced span between two texts, as `(old_range, new_range)`.
+///
+/// Both ranges share a start and land on character boundaries, so the pair is
+/// directly usable as a `replace_utf8_range` edit. `None` means the texts are
+/// identical. Shared with callers that need to describe a wholesale rewrite as
+/// one minimal edit rather than a full-buffer replacement.
+pub(crate) fn utf8_edit_delta_between_texts(
     old_text: &str,
     new_text: &str,
 ) -> Option<(Range<usize>, Range<usize>)> {

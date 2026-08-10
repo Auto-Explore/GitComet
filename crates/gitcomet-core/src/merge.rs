@@ -83,10 +83,24 @@ pub struct MergeOptions {
     pub diff_algorithm: DiffAlgorithm,
     /// Run the additional local↔remote alignment pass.
     ///
-    /// KDiff3 exposes this pass as an option and disables it in its application
-    /// defaults. It can make identical contributor lines share an aligned row
-    /// even when neither line matches the base, but is intentionally opt-in
-    /// because it must not alter one-sided merge semantics.
+    /// On by default, and the planner is only correct that way. Each
+    /// contributor is first diffed against the base independently, so a base
+    /// line can be matched to one contributor's line and to a *different*
+    /// line of the other; without this pass nothing reconciles the two, and
+    /// the leftover contributor line is emitted a second time as a one-sided
+    /// add. That shows up as a duplicated line in a merge reported as clean
+    /// (see `merge_contributor_alignment_does_not_duplicate_shared_lines`).
+    ///
+    /// The pass cannot disturb a one-sided merge: it is skipped outright
+    /// unless all three inputs differ, and its result is discarded whenever it
+    /// would drop an exact base↔contributor anchor the base-only alignment had
+    /// established, or would break a manual alignment pin.
+    ///
+    /// This deliberately diverges from KDiff3, whose `m_bDiff3AlignBC` defaults
+    /// to false. KDiff3 can afford that: it is a GUI, the duplicate is visible
+    /// in the three columns, and a human resolves it. The same planner here
+    /// also backs headless `merge_file`, where the duplicate is written to a
+    /// file with `conflict_count == 0` and nobody ever sees it.
     pub align_contributors: bool,
 }
 
@@ -98,7 +112,7 @@ impl Default for MergeOptions {
             labels: MergeLabels::default(),
             marker_size: DEFAULT_MARKER_SIZE,
             diff_algorithm: DiffAlgorithm::default(),
-            align_contributors: false,
+            align_contributors: true,
         }
     }
 }

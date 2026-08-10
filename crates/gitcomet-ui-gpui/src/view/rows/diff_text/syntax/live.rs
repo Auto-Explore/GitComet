@@ -17,8 +17,8 @@
 //!
 //! Used by the merge tool's editable resolved output.
 
-use super::*;
 use super::super::{SyntaxHighlightPalette, syntax_highlight_palette};
+use super::*;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Served in place of the real bytes for masked spans. See [`masked_read`].
@@ -193,6 +193,12 @@ pub(in crate::view) enum LiveSyntaxSyncOutcome {
     /// The budget ran out. The edited tree is live and positionally correct, but
     /// semantically stale near the edit; the caller should reparse off-thread.
     Deferred,
+    /// The edit pushed the buffer past
+    /// [`PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES`], the same ceiling
+    /// [`LiveSyntaxDocument::new`] refuses to build over. The document is left
+    /// untouched and describes text that no longer exists; the caller must drop
+    /// it and fall back to heuristic tokens.
+    Abandoned,
 }
 
 impl LiveSyntaxDocument {
@@ -239,6 +245,10 @@ impl LiveSyntaxDocument {
     ///
     /// The version advances either way, so a caller keying a highlight provider
     /// on it always rebinds.
+    ///
+    /// Returns [`LiveSyntaxSyncOutcome::Abandoned`] without touching the
+    /// document when the edit takes the buffer past the size ceiling; the
+    /// caller drops it, exactly as it would never have been built at that size.
     pub(in crate::view) fn sync(
         &mut self,
         text: Arc<str>,
@@ -247,8 +257,16 @@ impl LiveSyntaxDocument {
         edit: Option<(Range<usize>, Range<usize>)>,
         budget: Option<Duration>,
     ) -> LiveSyntaxSyncOutcome {
+        // The ceiling bounds the *document*, not just the incremental step, so
+        // it has to be rechecked on every edit. Parsing past it here would let
+        // a single paste buy an unbounded background reparse for the rest of
+        // the session.
+        if text.len() > PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
+            return LiveSyntaxSyncOutcome::Abandoned;
+        }
+
         let seed = match edit {
-            Some((replaced, inserted)) if text.len() <= PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES => {
+            Some((replaced, inserted)) => {
                 let old_bytes = self.text.as_bytes();
                 let replaced = clamp_to_len(replaced, old_bytes.len());
                 let inserted = clamp_to_len(inserted, text.len());
@@ -274,7 +292,7 @@ impl LiveSyntaxDocument {
                 });
                 true
             }
-            _ => false,
+            None => false,
         };
 
         self.text = text;
@@ -509,7 +527,10 @@ mod tests {
         assert!(!highlights.is_empty(), "rust source should highlight");
         let mut previous_end = 0usize;
         for (range, _) in &highlights {
-            assert!(range.start >= previous_end, "runs must not overlap: {highlights:?}");
+            assert!(
+                range.start >= previous_end,
+                "runs must not overlap: {highlights:?}"
+            );
             assert!(range.start < range.end, "runs must be non-empty");
             assert!(range.end <= text.len(), "runs must stay inside the text");
             previous_end = range.end;
@@ -544,7 +565,10 @@ mod tests {
         assert_eq!(with_placeholder.len(), with_spaces.len());
 
         let placeholder_span = 10..26;
-        assert_eq!(&with_placeholder[placeholder_span.clone()], "<Merge Conflict>");
+        assert_eq!(
+            &with_placeholder[placeholder_span.clone()],
+            "<Merge Conflict>"
+        );
 
         let masked = document(with_placeholder, vec![placeholder_span]);
         let masked = masked.snapshot(AppTheme::gitcomet_dark());
@@ -554,8 +578,14 @@ mod tests {
         let tail = 27..with_placeholder.len();
         for offset in tail {
             assert_eq!(
-                styles_at(&masked.highlights_for_byte_range(0..with_placeholder.len()), offset),
-                styles_at(&spaced.highlights_for_byte_range(0..with_spaces.len()), offset),
+                styles_at(
+                    &masked.highlights_for_byte_range(0..with_placeholder.len()),
+                    offset
+                ),
+                styles_at(
+                    &spaced.highlights_for_byte_range(0..with_spaces.len()),
+                    offset
+                ),
                 "byte {offset} after a masked placeholder should match the spaces-only parse"
             );
         }
@@ -600,7 +630,11 @@ mod tests {
             doc.background_reparse_request().is_none(),
             "a document that finished its reparse has nothing to defer"
         );
-        assert_ne!(doc.version(), first_version, "version must advance per edit");
+        assert_ne!(
+            doc.version(),
+            first_version,
+            "version must advance per edit"
+        );
 
         let incremental = doc.snapshot(AppTheme::gitcomet_dark());
         let scratch = document(after, Vec::new()).snapshot(AppTheme::gitcomet_dark());
@@ -608,6 +642,52 @@ mod tests {
             incremental.highlights_for_byte_range(0..after.len()),
             scratch.highlights_for_byte_range(0..after.len()),
             "an incrementally reparsed tree must match a cold parse of the same text"
+        );
+    }
+
+    #[test]
+    fn an_edit_past_the_size_ceiling_abandons_the_document() {
+        // `new` refuses to build over the ceiling, so an edit that crosses it
+        // has to refuse too — otherwise one paste buys a full parse now and an
+        // unbounded background reparse for the rest of the session.
+        let before = "fn main() {}\n";
+        let mut doc = document(before, Vec::new());
+        let version_before = doc.version();
+
+        let at = before.len();
+        let padding =
+            "// ".to_string() + &"x".repeat(PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES) + "\n";
+        let after = format!("{before}{padding}");
+        assert!(after.len() > PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES);
+        assert!(
+            LiveSyntaxDocument::new(
+                DiffSyntaxLanguage::Rust,
+                Arc::from(after.as_str()),
+                line_starts_for(&after),
+                Vec::new().into(),
+                None,
+            )
+            .is_none(),
+            "the fixture must be past the ceiling for this test to mean anything"
+        );
+
+        let outcome = doc.sync(
+            Arc::from(after.as_str()),
+            line_starts_for(&after),
+            Vec::new().into(),
+            Some((at..at, at..at + padding.len())),
+            None,
+        );
+
+        assert_eq!(outcome, LiveSyntaxSyncOutcome::Abandoned);
+        assert_eq!(
+            doc.version(),
+            version_before,
+            "an abandoned sync must leave the document untouched"
+        );
+        assert!(
+            doc.background_reparse_request().is_none(),
+            "an abandoned document must not owe an unbounded background parse"
         );
     }
 
