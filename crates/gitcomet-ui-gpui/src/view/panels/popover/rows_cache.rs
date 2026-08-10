@@ -43,6 +43,7 @@ pub(super) enum RowsCacheOwner {
     FileHistory,
     Submodule,
     Worktree,
+    Reflog,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

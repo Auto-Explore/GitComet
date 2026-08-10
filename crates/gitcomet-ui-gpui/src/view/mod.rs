@@ -1064,6 +1064,14 @@ impl GitCometView {
             "delete-tag" => {
                 // TODO: Implement delete tag
             }
+            "show-reflog" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.store.dispatch(Msg::LoadReflog { repo_id });
+                    self.open_popover_centered(PopoverKind::ReflogPrompt { repo_id }, window, cx);
+                }
+            }
             "add-remote" => {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window

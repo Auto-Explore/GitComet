@@ -761,6 +761,79 @@ impl PopoverHost {
         self.reset_picker_search_input(&input, window, cx);
         input
     }
+
+    pub(super) fn ensure_reflog_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<components::TextInput> {
+        let input = Self::ensure_search_input_entity(
+            &mut self.reflog_search_input,
+            "Filter reflog entries",
+            window,
+            cx,
+        );
+        if self._reflog_search_input_subscription.is_none() {
+            self._reflog_search_input_subscription = Some(Self::picker_search_subscription(
+                &input,
+                window,
+                cx,
+                |this| matches!(this.popover, Some(PopoverKind::ReflogPrompt { .. })),
+                |this| &mut this.reflog_selected_index,
+                |this, query, _cx| {
+                    if !matches!(this.popover, Some(PopoverKind::ReflogPrompt { .. })) {
+                        return None;
+                    }
+                    Some(reflog_prompt::nav_targets(this, query))
+                },
+                |this, cx| this.close_popover(cx),
+                |this, sel, cx| {
+                    let query = this
+                        .reflog_search_input
+                        .as_ref()
+                        .map(|input| input.read(cx).text().trim().to_string())
+                        .unwrap_or_default();
+                    let rows = reflog_prompt::cached(this, &query);
+                    this.scroll_picker_prompt_to_row(
+                        &rows.items,
+                        &rows.layout,
+                        sel,
+                        reflog_prompt::REFLOG_LIST_MAX_HEIGHT_PX,
+                        cx,
+                    );
+                },
+                |this, payload, _query, _window, cx| {
+                    let Some(entry_index) = payload else {
+                        return;
+                    };
+                    let Some(PopoverKind::ReflogPrompt { repo_id }) = this.popover.clone() else {
+                        return;
+                    };
+                    let Some(entry) =
+                        this.state
+                            .repos
+                            .iter()
+                            .find(|r| r.id == repo_id)
+                            .and_then(|r| match &r.reflog {
+                                Loadable::Ready(entries) => {
+                                    entries.iter().find(|e| e.index == entry_index).cloned()
+                                }
+                                _ => None,
+                            })
+                    else {
+                        return;
+                    };
+                    this.store.dispatch(Msg::SelectCommit {
+                        repo_id,
+                        commit_id: entry.new_id,
+                    });
+                    this.close_popover(cx);
+                },
+            ));
+        }
+        self.reset_picker_search_input(&input, window, cx);
+        input
+    }
 }
 
 /// True when the branch picker should offer refs beyond branches (HEAD, tags)
