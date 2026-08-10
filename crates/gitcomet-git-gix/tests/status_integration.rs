@@ -3785,6 +3785,117 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
 
 #[cfg(unix)]
 #[test]
+fn launch_mergetool_builtin_tool_gets_merge_mode_arguments() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    // Stand-in for kdiff3: like the real tool it only merges when an output
+    // file is named with `-o`, and otherwise just shows a read-only 3-way diff.
+    let script_path = repo.join("fake-kdiff3.sh");
+    fs::write(
+        &script_path,
+        "#!/bin/sh\n\
+         : > \"$PWD/kdiff3-args\"\n\
+         output=\n\
+         prev=\n\
+         for arg in \"$@\"; do\n\
+         \tprintf '%s\\n' \"$arg\" >> \"$PWD/kdiff3-args\"\n\
+         \tif [ \"$prev\" = \"-o\" ]; then output=$arg; fi\n\
+         \tprev=$arg\n\
+         done\n\
+         [ -n \"$output\" ] || exit 1\n\
+         printf 'merged\\n' > \"$output\"\n",
+    )
+    .unwrap();
+    make_executable(&script_path);
+
+    run_git(repo, &["config", "merge.tool", "kdiff3"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.kdiff3.path",
+            git_path_arg(&script_path).as_str(),
+        ],
+    );
+    run_git(repo, &["config", "mergetool.kdiff3.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+
+    assert!(
+        result.success,
+        "kdiff3 should be launched in merge mode: {:?}",
+        result.output
+    );
+    assert_eq!(
+        result.merged_contents.as_deref(),
+        Some("merged\n".as_bytes())
+    );
+    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "merged\n");
+
+    let args: Vec<String> = fs::read_to_string(repo.join("kdiff3-args"))
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert!(args.iter().any(|arg| arg == "--auto"), "{args:?}");
+
+    let output_index = args
+        .iter()
+        .position(|arg| arg == "-o")
+        .expect("merge output flag should be passed");
+    let output_path = Path::new(&args[output_index + 1]);
+    assert!(output_path.is_absolute(), "{args:?}");
+    assert_eq!(output_path.file_name().unwrap(), "a.txt");
+
+    // git's kdiff3 recipe ends with BASE, LOCAL, REMOTE in that order.
+    let tail = &args[args.len() - 3..];
+    assert!(tail[0].contains("_BASE_"), "{args:?}");
+    assert!(tail[1].contains("_LOCAL_"), "{args:?}");
+    assert!(tail[2].contains("_REMOTE_"), "{args:?}");
+
+    let label_index = args
+        .iter()
+        .position(|arg| arg == "--L1")
+        .expect("window labels should be passed");
+    assert_eq!(args[label_index + 1], "a.txt (Base)", "{args:?}");
+}
+
+#[test]
+fn launch_mergetool_rejects_builtin_tool_that_cannot_merge() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "kompare"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened.launch_mergetool(Path::new("a.txt")).unwrap_err();
+
+    assert!(
+        format!("{err}").contains("cannot merge"),
+        "expected a clear diff-only tool error, got {err}"
+    );
+    assert!(
+        fs::read_to_string(repo.join("a.txt"))
+            .unwrap()
+            .contains("<<<<<<<"),
+        "the conflicted file should be left untouched"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
     if !require_git_shell_for_status_integration_tests() {
         return;

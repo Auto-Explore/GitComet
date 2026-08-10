@@ -46,6 +46,7 @@ mod git_ops;
 mod history;
 mod log;
 mod mergetool;
+mod mergetool_builtin;
 mod patch;
 mod porcelain;
 mod remotes;
