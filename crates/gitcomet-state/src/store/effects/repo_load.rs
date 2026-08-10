@@ -934,6 +934,54 @@ pub(super) fn schedule_apply_virtual_branch(
     );
 }
 
+pub(super) fn schedule_move_hunk_to_virtual_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    branch_id: u64,
+    patch: String,
+    path: PathBuf,
+) {
+    let path_for_missing_repo = path.clone();
+    spawn_with_repo_or_else(
+        executor,
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = if patch.trim().is_empty() {
+                Err(Error::new(ErrorKind::Backend(
+                    "Cannot move an empty hunk patch".to_string(),
+                )))
+            } else {
+                repo.apply_unified_patch_to_worktree_with_output(&patch, true)
+                    .map(|_| patch)
+            };
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::VirtualBranchHunkMoved {
+                    repo_id,
+                    branch_id,
+                    path,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::VirtualBranchHunkMoved {
+                    repo_id,
+                    branch_id,
+                    path: path_for_missing_repo,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_file_history(
     executor: &TaskExecutor,
     repos: &RepoMap,

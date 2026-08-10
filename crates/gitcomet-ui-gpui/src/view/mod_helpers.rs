@@ -4380,6 +4380,14 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    /// Pick the virtual branch to move a diff hunk into: the hunk's unified
+    /// patch is previewed and, on selection, reverse-applied to the worktree
+    /// and parked in the branch's stored patch collection.
+    VirtualBranchMovePicker {
+        repo_id: RepoId,
+        patch: String,
+        path: std::path::PathBuf,
+    },
     PushSetUpstreamPrompt {
         repo_id: RepoId,
         remote: String,

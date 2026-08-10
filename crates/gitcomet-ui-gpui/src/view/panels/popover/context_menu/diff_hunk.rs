@@ -74,6 +74,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
             )
         });
     let patch = this.build_unified_patch_for_hunk_src_ix(repo_id, src_ix);
+    let move_patch = patch.clone();
 
     items.push(ContextMenuItem::Entry {
         label: "Discard hunk".into(),
@@ -84,6 +85,33 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, src_ix: usize) -> Conte
             repo_id,
             patch: patch.unwrap_or_default(),
             reverse: true,
+        }),
+    });
+
+    // Move the hunk into a virtual branch: the hunk is removed from the
+    // worktree and parked in the branch's stored patch collection (recoverable
+    // by applying the branch). Only available for unstaged worktree hunks.
+    let repo = this.state.repos.iter().find(|r| r.id == repo_id);
+    let has_branches = repo
+        .map(|r| !r.virtual_branches.is_empty())
+        .unwrap_or(false);
+    let move_path = repo
+        .and_then(|r| r.diff_state.diff_target.as_ref())
+        .and_then(|target| match target {
+            DiffTarget::WorkingTree { path, .. } => Some(path.clone()),
+            _ => None,
+        });
+    items.push(ContextMenuItem::Entry {
+        label: "Move hunk to virtual branch…".into(),
+        icon: Some("icons/git_branch.svg".into()),
+        shortcut: None,
+        disabled: !is_unstaged || move_patch.is_none() || move_path.is_none() || !has_branches,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::VirtualBranchMovePicker {
+                repo_id,
+                patch: move_patch.unwrap_or_default(),
+                path: move_path.unwrap_or_default(),
+            },
         }),
     });
 

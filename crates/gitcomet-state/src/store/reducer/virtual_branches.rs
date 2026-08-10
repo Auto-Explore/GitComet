@@ -171,7 +171,15 @@ pub(super) fn virtual_branch_unapplied(
     branch.pending = false;
     match result {
         Ok(patch) => {
-            branch.stored_patch = Some(patch.into());
+            // A branch may already park hunks moved out of the worktree; the
+            // newly captured diff is appended rather than replacing them.
+            let patch = patch.trim_end().to_string();
+            branch.stored_patch = Some(match branch.stored_patch.take() {
+                Some(previous) if !previous.trim().is_empty() => {
+                    format!("{}\n{}", previous.trim_end(), patch).into()
+                }
+                _ => patch.clone().into(),
+            });
             branch.applied = false;
             repo.virtual_branches_rev += 1;
         }
@@ -210,6 +218,87 @@ pub(super) fn virtual_branch_applied(
                 repo,
                 DiagnosticKind::Error,
                 format!("Apply virtual branch: {e}"),
+            );
+        }
+    }
+    Vec::new()
+}
+
+/// Parks a single hunk (already reverse-applied to the worktree by the
+/// worker) into the branch's stored patch collection. The branch is marked
+/// unapplied so `Apply` restores the parked hunks (undo).
+pub(super) fn move_hunk_to_virtual_branch(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+    patch: String,
+    _path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+        return Vec::new();
+    };
+    if branch.pending || patch.trim().is_empty() {
+        return Vec::new();
+    }
+    branch.pending = true;
+    vec![Effect::MoveHunkToVirtualBranch {
+        repo_id,
+        branch_id,
+        patch,
+        path: _path,
+    }]
+}
+
+pub(super) fn virtual_branch_hunk_moved(
+    state: &mut AppState,
+    repo_id: RepoId,
+    branch_id: u64,
+    path: std::path::PathBuf,
+    result: Result<String, Error>,
+) -> Vec<Effect> {
+    let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    {
+        let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+            return Vec::new();
+        };
+        branch.pending = false;
+    }
+    match result {
+        Ok(patch) => {
+            let patch = patch.trim_end().to_string();
+            {
+                let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+                    return Vec::new();
+                };
+                branch.stored_patch = Some(match branch.stored_patch.take() {
+                    Some(previous) if !previous.trim().is_empty() => {
+                        format!("{}\n{}", previous.trim_end(), patch).into()
+                    }
+                    _ => patch.clone().into(),
+                });
+                branch.applied = false;
+            }
+            // The hunk's file now belongs to this branch.
+            for other in repo.virtual_branches.iter_mut() {
+                other.paths.retain(|p| p != &path);
+            }
+            if let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id)
+                && !branch.paths.contains(&path)
+            {
+                branch.paths.push(path);
+            }
+            repo.virtual_branches_rev += 1;
+        }
+        Err(e) => {
+            push_diagnostic(
+                repo,
+                DiagnosticKind::Error,
+                format!("Move hunk to virtual branch: {e}"),
             );
         }
     }

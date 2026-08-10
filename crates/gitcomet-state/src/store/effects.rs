@@ -366,6 +366,17 @@ fn send_unavailable_git_effect_result(
             branch_id,
             result: Err(git_unavailable_error(runtime)),
         })),
+        Effect::MoveHunkToVirtualBranch {
+            repo_id,
+            branch_id,
+            path,
+            ..
+        } => send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchHunkMoved {
+            repo_id,
+            branch_id,
+            path: path.clone(),
+            result: Err(git_unavailable_error(runtime)),
+        })),
         Effect::LoadRecentCommitMessages {
             repo_id,
             request_rev,
@@ -1736,6 +1747,26 @@ pub(super) fn schedule_effect(
                     repo_id,
                     branch_id,
                     patch,
+                );
+            }
+        }
+        Effect::MoveHunkToVirtualBranch {
+            repo_id,
+            branch_id,
+            patch,
+            path,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_move_hunk_to_virtual_branch(
+                    executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    branch_id,
+                    patch,
+                    path,
                 );
             }
         }

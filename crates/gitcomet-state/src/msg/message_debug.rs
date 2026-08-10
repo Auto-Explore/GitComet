@@ -156,6 +156,18 @@ impl std::fmt::Debug for InternalMsg {
                 .field("branch_id", branch_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::VirtualBranchHunkMoved {
+                repo_id,
+                branch_id,
+                path,
+                result,
+            } => f
+                .debug_struct("VirtualBranchHunkMoved")
+                .field("repo_id", repo_id)
+                .field("branch_id", branch_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
             InternalMsg::RecentCommitMessagesLoaded {
                 repo_id,
                 request_rev,

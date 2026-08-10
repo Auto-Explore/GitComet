@@ -771,6 +771,16 @@ pub enum Msg {
         repo_id: RepoId,
         branch_id: u64,
     },
+    /// Moves a single diff hunk out of the worktree into a virtual branch's
+    /// parked patch collection. The patch is built by the UI from the loaded
+    /// diff (`build_unified_patch_for_hunk_src_ix`) and reverse-applied to the
+    /// worktree by the worker; on success it is recorded in `stored_patch`.
+    MoveHunkToVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        patch: String,
+        path: std::path::PathBuf,
+    },
     /// Builds the squash message preview for the current multi-selection so
     /// the squash prompt can prefill its message input.
     PrepareSquash {
@@ -1110,6 +1120,15 @@ pub enum InternalMsg {
         repo_id: RepoId,
         branch_id: u64,
         result: Result<(), Error>,
+    },
+    /// Result of a hunk move. `Ok(patch)` is the patch that was successfully
+    /// reverse-applied; the reducer records it (and the hunk's path) in the
+    /// branch's parked patch collection.
+    VirtualBranchHunkMoved {
+        repo_id: RepoId,
+        branch_id: u64,
+        path: std::path::PathBuf,
+        result: Result<String, Error>,
     },
     RecentCommitMessagesLoaded {
         repo_id: RepoId,

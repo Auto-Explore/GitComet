@@ -1052,6 +1052,12 @@ fn reduce_inner(
         Msg::ApplyVirtualBranch { repo_id, branch_id } => {
             virtual_branches::apply_virtual_branch(state, repo_id, branch_id)
         }
+        Msg::MoveHunkToVirtualBranch {
+            repo_id,
+            branch_id,
+            patch,
+            path,
+        } => virtual_branches::move_hunk_to_virtual_branch(state, repo_id, branch_id, patch, path),
         Msg::LoadRecentCommitMessages { repo_id, limit } => {
             effects::load_recent_commit_messages(state, repo_id, limit)
         }
@@ -1974,6 +1980,12 @@ fn reduce_inner(
             branch_id,
             result,
         }) => virtual_branches::virtual_branch_applied(state, repo_id, branch_id, result),
+        Msg::Internal(crate::msg::InternalMsg::VirtualBranchHunkMoved {
+            repo_id,
+            branch_id,
+            path,
+            result,
+        }) => virtual_branches::virtual_branch_hunk_moved(state, repo_id, branch_id, path, result),
         Msg::Internal(crate::msg::InternalMsg::RebaseStateLoaded { repo_id, result }) => {
             external_and_history::rebase_state_loaded(state, repo_id, result)
         }
