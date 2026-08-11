@@ -109,17 +109,11 @@ pub(super) fn model(
                 FileSource::Commit(commit_id) => commit_id.as_ref().to_string(),
                 FileSource::Branch(name) => name.clone(),
                 FileSource::WorkingDirectory => match &repo.head_branch {
-                    Loadable::Ready(head) if !head.is_empty() && head != "HEAD" => {
-                        head.clone()
-                    }
+                    Loadable::Ready(head) if !head.is_empty() && head != "HEAD" => head.clone(),
                     _ => return None,
                 },
             };
-            crate::view::permalink::file_permalink(
-                remotes,
-                &reference,
-                &path.display().to_string(),
-            )
+            crate::view::permalink::file_permalink(remotes, &reference, &path.display().to_string())
         });
     if let Some(permalink) = file_permalink {
         items.push(ContextMenuItem::Entry {

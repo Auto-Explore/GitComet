@@ -313,11 +313,7 @@ pub(super) fn model(
             (Loadable::Ready(remotes), Loadable::Ready(head))
                 if !head.is_empty() && head != "HEAD" =>
             {
-                crate::view::permalink::file_permalink(
-                    remotes,
-                    head,
-                    &path.display().to_string(),
-                )
+                crate::view::permalink::file_permalink(remotes, head, &path.display().to_string())
             }
             _ => None,
         });
