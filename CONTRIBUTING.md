@@ -56,6 +56,11 @@ Clippy (CI mode):
 cargo clippy --workspace --no-default-features --features gix -- -D warnings
 ```
 
+Platform-specific manual validation:
+
+- Windows SSH commit/tag signing: `docs/windows-ssh-signing-testing.md`
+- Linux under WSLg: `docs/wslg-testing.md`
+
 Coverage (local + CI-compatible):
 
 ```bash

@@ -6,7 +6,9 @@ use crate::model::{
 use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats, Effect, RepoCommandKind};
 #[cfg(test)]
 use gitcomet_core::auth::stage_git_auth;
-use gitcomet_core::auth::{GitAuthKind, StagedGitAuth, clear_staged_git_auth};
+use gitcomet_core::auth::{
+    GitAuthKind, SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, clear_staged_git_auth,
+};
 use gitcomet_core::domain::{DiffArea, DiffTarget, FileStatusKind};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure};
 use gitcomet_core::services::CommandOutput;
@@ -1466,9 +1468,17 @@ pub(super) fn detect_auth_prompt_kind_from_message(message: &str) -> Option<Auth
     }
 
     let passphrase = lower.contains("could not read passphrase")
-        || lower.contains("enter passphrase for key")
+        // `ssh` prompts `Enter passphrase for key '<path>':` but `ssh-keygen`
+        // (commit/tag signing under `gpg.format = ssh`) prompts
+        // `Enter passphrase for "<path>":` — match both by dropping `key`.
+        || lower.contains("enter passphrase for")
         || lower.contains("read_passphrase")
         || lower.contains("passphrase for key")
+        // How `ssh-keygen -Y sign` reports a prompt that went unanswered.
+        || lower.contains("incorrect passphrase supplied to decrypt private key")
+        // Replayed by the git layer when the askpass helper logged a prompt;
+        // positive proof a passphrase was asked for, whatever git's wording.
+        || lower.contains(&SSH_PASSPHRASE_PROMPT_MARKER.to_ascii_lowercase())
         || (lower.contains("passphrase") && lower.contains("terminal prompts disabled"));
     let ssh_publickey = lower.contains("permission denied (publickey")
         || (lower.contains("could not read from remote repository") && lower.contains("publickey"));
@@ -2634,6 +2644,40 @@ mod tests {
             Some(crate::model::AuthPromptKind::HostVerification)
         );
         assert!(detect_auth_prompt_kind_from_message("git status failed").is_none());
+
+        // `gpg.format = ssh`: git signs via `ssh-keygen -Y sign`, which reports an
+        // unanswered passphrase prompt with wording that mentions neither a prompt
+        // nor a key. See https://github.com/Auto-Explore/GitComet issue on SSH
+        // signing passphrases.
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git commit failed: error: Load key \"C:\\Users\\dev/.ssh/id_ed25519_signing\": incorrect passphrase supplied to decrypt private key\n\nfatal: failed to write commit object"
+            ),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        // ssh-keygen's own prompt wording: `for "<path>"`, not `for key '<path>'`.
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(
+                "git tag -m <message> -- v1 HEAD failed: Enter passphrase for \"/home/dev/.ssh/id_ed25519\": \nerror: unable to sign the tag"
+            ),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        // The marker the git layer replays from the askpass prompt log.
+        assert_eq!(
+            detect_auth_prompt_kind_from_message(&format!(
+                "git commit failed: fatal: failed to write commit object\n{SSH_PASSPHRASE_PROMPT_MARKER}\nEnter passphrase for \"/home/dev/.ssh/key\": "
+            )),
+            Some(crate::model::AuthPromptKind::Passphrase)
+        );
+        // GPG signing has its own agent/pinentry; GitComet cannot answer it
+        // through askpass, so it must not raise a passphrase prompt that would
+        // silently do nothing.
+        assert!(
+            detect_auth_prompt_kind_from_message(
+                "git commit failed: error: gpg failed to sign the data\nfatal: failed to write commit object"
+            )
+            .is_none()
+        );
 
         let structured = Error::new(ErrorKind::Git(GitFailure::new(
             "git fetch origin",

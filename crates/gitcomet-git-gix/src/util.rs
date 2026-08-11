@@ -3,7 +3,8 @@ use gitcomet_core::auth::{
     GITCOMET_AUTH_CACHE_SECRET_ENV_PREFIX, GITCOMET_AUTH_CACHE_SIZE_ENV, GITCOMET_AUTH_KIND_ENV,
     GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
     GITCOMET_AUTH_KIND_PASSPHRASE_CACHED, GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
-    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
+    GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind,
+    SSH_PASSPHRASE_PROMPT_MARKER, StagedGitAuth, askpass_script_contents, askpass_script_name,
     load_session_passphrases, remember_passphrase_prompt_from_staged_git_auth,
     take_staged_git_auth,
 };
@@ -190,7 +191,11 @@ fn command_may_require_auth(cmd: &Command) -> bool {
                 let _ = args.next();
             }
             value if value.starts_with('-') => {}
-            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit" => {
+            // Network commands need credentials; the rest can all produce a
+            // signature, and with `gpg.format = ssh` git shells out to
+            // `ssh-keygen -Y sign`, which needs the key passphrase via askpass.
+            "clone" | "fetch" | "pull" | "push" | "submodule" | "ls-remote" | "commit"
+            | "commit-tree" | "tag" | "merge" | "rebase" | "cherry-pick" | "revert" | "am" => {
                 return true;
             }
             _ => return false,
@@ -208,112 +213,9 @@ fn take_pending_git_auth() -> Option<PromptAuth> {
         })
 }
 
-#[cfg(unix)]
-fn askpass_script_contents() -> &'static [u8] {
-    br#"#!/bin/sh
-prompt="$1"
-lower_prompt=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]')
-if [ -n "${GITCOMET_ASKPASS_PROMPT_LOG:-}" ]; then
-  case "$lower_prompt" in
-    *authenticity\ of\ host*|*continue\ connecting*|*yes/no*|*fingerprint*)
-      printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PROMPT_LOG}" ;;
-  esac
-fi
-if [ -n "${GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG:-}" ]; then
-  case "$lower_prompt" in
-    *passphrase*)
-      printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG}" ;;
-  esac
-fi
-kind="${GITCOMET_AUTH_KIND:-}"
-if [ "$kind" = "username_password" ]; then
-  case "$lower_prompt" in
-    *username*) printf '%s\n' "${GITCOMET_AUTH_USERNAME:-}" ;;
-    *) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
-  esac
-elif [ "$kind" = "passphrase_cached" ]; then
-  cache_size="${GITCOMET_AUTH_CACHE_SIZE:-0}"
-  i=0
-  while [ "$i" -lt "$cache_size" ]; do
-    cached_prompt=$(printenv "GITCOMET_AUTH_CACHE_PROMPT_$i")
-    if [ "$prompt" = "$cached_prompt" ]; then
-      printenv "GITCOMET_AUTH_CACHE_SECRET_$i"
-      exit 0
-    fi
-    i=$((i + 1))
-  done
-  printf '\n'
-elif [ "$kind" = "host_verification" ]; then
-  case "$lower_prompt" in
-    *continue\ connecting*|*yes/no*|*fingerprint*) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
-    *) printf '\n' ;;
-  esac
-else
-  printf '%s\n' "${GITCOMET_AUTH_SECRET:-}"
-fi
-"#
-}
-
-#[cfg(windows)]
-fn askpass_script_contents() -> &'static [u8] {
-    br#"@echo off
-setlocal EnableDelayedExpansion
-set "prompt=%~1"
-if not "%GITCOMET_ASKPASS_PROMPT_LOG%"=="" (
-  echo %prompt% | findstr /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
-  if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo %prompt%
-  )
-)
-if not "%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%"=="" (
-  echo %prompt% | findstr /I "passphrase" >nul
-  if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%" echo %prompt%
-  )
-)
-if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
-  echo %prompt% | findstr /I "username" >nul
-  if not errorlevel 1 (
-    echo %GITCOMET_AUTH_USERNAME%
-    exit /b 0
-  )
-  echo %GITCOMET_AUTH_SECRET%
-  exit /b 0
-)
-if /I "%GITCOMET_AUTH_KIND%"=="passphrase_cached" (
-  set "cache_size=%GITCOMET_AUTH_CACHE_SIZE%"
-  if "!cache_size!"=="" set "cache_size=0"
-  set /a cache_last=!cache_size!-1
-  if !cache_last! GEQ 0 (
-    for /L %%i in (0,1,!cache_last!) do (
-      call set "cached_prompt=%%GITCOMET_AUTH_CACHE_PROMPT_%%i%%"
-      if "!prompt!"=="!cached_prompt!" (
-        call set "cached_secret=%%GITCOMET_AUTH_CACHE_SECRET_%%i%%"
-        echo !cached_secret!
-        exit /b 0
-      )
-    )
-  )
-  exit /b 0
-)
-if /I "%GITCOMET_AUTH_KIND%"=="host_verification" (
-  echo %prompt% | findstr /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
-  if not errorlevel 1 (
-    echo %GITCOMET_AUTH_SECRET%
-  )
-  exit /b 0
-)
-echo %GITCOMET_AUTH_SECRET%
-"#
-}
-
 fn create_askpass_script() -> Result<AskPassScript> {
     let dir = tempfile::tempdir().map_err(io_err)?;
-    #[cfg(windows)]
-    let script_name = "gitcomet-askpass.cmd";
-    #[cfg(not(windows))]
-    let script_name = "gitcomet-askpass.sh";
-    let path = dir.path().join(script_name);
+    let path = dir.path().join(askpass_script_name());
     let host_prompt_log_path = dir.path().join("gitcomet-askpass-host-prompt.log");
     let passphrase_prompt_log_path = dir.path().join("gitcomet-askpass-passphrase-prompt.log");
 
@@ -406,6 +308,37 @@ fn remember_successful_prompt_auth(auth: Option<&PromptAuth>, askpass: &AskPassS
     if let Some(auth) = auth {
         auth.remember_on_success(last_logged_passphrase_prompt(askpass).as_deref());
     }
+}
+
+/// Replay the passphrase prompt the askpass helper logged into a failed
+/// command's stderr.
+///
+/// `ssh-keygen -Y sign` (commit and tag signing under `gpg.format = ssh`) reports
+/// an unanswered prompt only as `Load key "<path>": incorrect passphrase supplied
+/// to decrypt private key`, which never mentions that a prompt was made and never
+/// reaches stderr in a form the reducer can tell apart from a genuinely wrong
+/// key. The helper saw the real prompt, so hand it back: the presence of a logged
+/// prompt is positive proof that a passphrase was asked for.
+fn append_passphrase_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScript) {
+    let Some(prompt) = last_logged_passphrase_prompt(askpass) else {
+        return;
+    };
+    let prompt = prompt.trim();
+    if prompt.is_empty() {
+        return;
+    }
+
+    if String::from_utf8_lossy(stderr).contains(SSH_PASSPHRASE_PROMPT_MARKER) {
+        return;
+    }
+
+    if !stderr.is_empty() && !stderr.ends_with(b"\n") {
+        stderr.push(b'\n');
+    }
+    stderr.extend_from_slice(SSH_PASSPHRASE_PROMPT_MARKER.as_bytes());
+    stderr.push(b'\n');
+    stderr.extend_from_slice(prompt.as_bytes());
+    stderr.push(b'\n');
 }
 
 fn append_host_prompt_to_stderr(stderr: &mut Vec<u8>, askpass: &AskPassScript) {
@@ -583,6 +516,9 @@ fn run_command_with_timeout(
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+        if !status.success() {
+            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+        }
     }
 
     if cancelled {
@@ -763,6 +699,9 @@ where
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
+        if !status.success() {
+            append_passphrase_prompt_to_stderr(&mut stderr, askpass_script);
+        }
     }
 
     if cancelled {
@@ -1717,6 +1656,78 @@ mod tests {
         let mut log = Command::new("git");
         log.args(["log", "--oneline", "-n", "1"]);
         assert!(!command_may_require_auth(&log));
+    }
+
+    /// Under `gpg.format = ssh` every one of these shells out to `ssh-keygen -Y
+    /// sign`, which asks for the signing key's passphrase through askpass.
+    #[test]
+    fn command_may_require_auth_covers_signing_capable_commands() {
+        for args in [
+            vec!["-c", "alias.tag=", "tag", "-m", "msg", "--", "v1", "HEAD"],
+            vec!["commit-tree", "-S", "HEAD^{tree}", "-m", "msg"],
+            vec!["merge", "--no-ff", "topic"],
+            vec!["rebase", "--continue"],
+            vec!["cherry-pick", "abc123"],
+            vec!["revert", "--no-edit", "abc123"],
+            vec!["am", "--3way"],
+        ] {
+            let mut cmd = Command::new("git");
+            cmd.arg("-C").arg("/tmp/repo").args(&args);
+            assert!(
+                command_may_require_auth(&cmd),
+                "expected askpass wiring for `git {}`",
+                args.join(" ")
+            );
+        }
+    }
+
+    #[test]
+    fn append_passphrase_prompt_to_stderr_replays_ssh_keygen_prompt() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        std::fs::write(
+            &askpass.passphrase_prompt_log_path,
+            "Enter passphrase for \"C:\\Users\\dev/.ssh/id_ed25519_signing\": \n",
+        )
+        .expect("write passphrase prompt log");
+
+        let mut stderr =
+            b"error: Load key \"C:\\Users\\dev/.ssh/id_ed25519_signing\": incorrect passphrase supplied to decrypt private key\nfatal: failed to write commit object\n"
+                .to_vec();
+        append_passphrase_prompt_to_stderr(&mut stderr, &askpass);
+
+        let rendered = String::from_utf8(stderr).expect("stderr should be utf-8 for test");
+        assert!(rendered.contains(SSH_PASSPHRASE_PROMPT_MARKER));
+        assert!(
+            rendered.contains("Enter passphrase for \"C:\\Users\\dev/.ssh/id_ed25519_signing\"")
+        );
+    }
+
+    #[test]
+    fn append_passphrase_prompt_to_stderr_skips_when_nothing_was_prompted() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+
+        let mut stderr = b"error: pathspec 'nope' did not match any file(s)\n".to_vec();
+        append_passphrase_prompt_to_stderr(&mut stderr, &askpass);
+
+        let rendered = String::from_utf8(stderr).expect("stderr should be utf-8 for test");
+        assert!(!rendered.contains(SSH_PASSPHRASE_PROMPT_MARKER));
+    }
+
+    #[test]
+    fn append_passphrase_prompt_to_stderr_is_idempotent() {
+        let askpass = create_askpass_script().expect("askpass script creation");
+        std::fs::write(
+            &askpass.passphrase_prompt_log_path,
+            "Enter passphrase for \"/home/dev/.ssh/id_ed25519\": ",
+        )
+        .expect("write passphrase prompt log");
+
+        let mut stderr = b"Load key: incorrect passphrase\n".to_vec();
+        append_passphrase_prompt_to_stderr(&mut stderr, &askpass);
+        append_passphrase_prompt_to_stderr(&mut stderr, &askpass);
+
+        let rendered = String::from_utf8(stderr).expect("stderr should be utf-8 for test");
+        assert_eq!(rendered.matches(SSH_PASSPHRASE_PROMPT_MARKER).count(), 1);
     }
 
     #[test]

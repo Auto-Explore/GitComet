@@ -5,8 +5,8 @@ use gitcomet_core::auth::{
     GITCOMET_AUTH_KIND_HOST_VERIFICATION, GITCOMET_AUTH_KIND_PASSPHRASE,
     GITCOMET_AUTH_KIND_PASSPHRASE_CACHED, GITCOMET_AUTH_KIND_USERNAME_PASSWORD,
     GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
-    load_session_passphrases, remember_passphrase_prompt_from_staged_git_auth,
-    take_staged_git_auth,
+    askpass_script_contents, askpass_script_name, load_session_passphrases,
+    remember_passphrase_prompt_from_staged_git_auth, take_staged_git_auth,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::git_command;
@@ -300,112 +300,9 @@ fn resolve_git_auth(auth: Option<StagedGitAuth>) -> Option<PromptAuth> {
         .or_else(take_pending_git_auth)
 }
 
-#[cfg(unix)]
-fn askpass_script_contents() -> &'static [u8] {
-    br#"#!/bin/sh
-prompt="$1"
-lower_prompt=$(printf '%s' "$prompt" | tr '[:upper:]' '[:lower:]')
-if [ -n "${GITCOMET_ASKPASS_PROMPT_LOG:-}" ]; then
-  case "$lower_prompt" in
-    *authenticity\ of\ host*|*continue\ connecting*|*yes/no*|*fingerprint*)
-      printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PROMPT_LOG}" ;;
-  esac
-fi
-if [ -n "${GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG:-}" ]; then
-  case "$lower_prompt" in
-    *passphrase*)
-      printf '%s\n' "$prompt" >> "${GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG}" ;;
-  esac
-fi
-kind="${GITCOMET_AUTH_KIND:-}"
-if [ "$kind" = "username_password" ]; then
-  case "$lower_prompt" in
-    *username*) printf '%s\n' "${GITCOMET_AUTH_USERNAME:-}" ;;
-    *) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
-  esac
-elif [ "$kind" = "passphrase_cached" ]; then
-  cache_size="${GITCOMET_AUTH_CACHE_SIZE:-0}"
-  i=0
-  while [ "$i" -lt "$cache_size" ]; do
-    cached_prompt=$(printenv "GITCOMET_AUTH_CACHE_PROMPT_$i")
-    if [ "$prompt" = "$cached_prompt" ]; then
-      printenv "GITCOMET_AUTH_CACHE_SECRET_$i"
-      exit 0
-    fi
-    i=$((i + 1))
-  done
-  printf '\n'
-elif [ "$kind" = "host_verification" ]; then
-  case "$lower_prompt" in
-    *continue\ connecting*|*yes/no*|*fingerprint*) printf '%s\n' "${GITCOMET_AUTH_SECRET:-}" ;;
-    *) printf '\n' ;;
-  esac
-else
-  printf '%s\n' "${GITCOMET_AUTH_SECRET:-}"
-fi
-"#
-}
-
-#[cfg(windows)]
-fn askpass_script_contents() -> &'static [u8] {
-    br#"@echo off
-setlocal EnableDelayedExpansion
-set "prompt=%~1"
-if not "%GITCOMET_ASKPASS_PROMPT_LOG%"=="" (
-  echo %prompt% | findstr /I /C:"authenticity of host" /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
-  if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PROMPT_LOG%" echo %prompt%
-  )
-)
-if not "%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%"=="" (
-  echo %prompt% | findstr /I "passphrase" >nul
-  if not errorlevel 1 (
-    >>"%GITCOMET_ASKPASS_PASSPHRASE_PROMPT_LOG%" echo %prompt%
-  )
-)
-if /I "%GITCOMET_AUTH_KIND%"=="username_password" (
-  echo %prompt% | findstr /I "username" >nul
-  if not errorlevel 1 (
-    echo %GITCOMET_AUTH_USERNAME%
-    exit /b 0
-  )
-  echo %GITCOMET_AUTH_SECRET%
-  exit /b 0
-)
-if /I "%GITCOMET_AUTH_KIND%"=="passphrase_cached" (
-  set "cache_size=%GITCOMET_AUTH_CACHE_SIZE%"
-  if "!cache_size!"=="" set "cache_size=0"
-  set /a cache_last=!cache_size!-1
-  if !cache_last! GEQ 0 (
-    for /L %%i in (0,1,!cache_last!) do (
-      call set "cached_prompt=%%GITCOMET_AUTH_CACHE_PROMPT_%%i%%"
-      if "!prompt!"=="!cached_prompt!" (
-        call set "cached_secret=%%GITCOMET_AUTH_CACHE_SECRET_%%i%%"
-        echo !cached_secret!
-        exit /b 0
-      )
-    )
-  )
-  exit /b 0
-)
-if /I "%GITCOMET_AUTH_KIND%"=="host_verification" (
-  echo %prompt% | findstr /I /C:"continue connecting" /C:"yes/no" /C:"fingerprint" >nul
-  if not errorlevel 1 (
-    echo %GITCOMET_AUTH_SECRET%
-  )
-  exit /b 0
-)
-echo %GITCOMET_AUTH_SECRET%
-"#
-}
-
 fn create_askpass_script() -> Result<AskPassScript, Error> {
     let dir = tempfile::tempdir().map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
-    #[cfg(windows)]
-    let script_name = "gitcomet-askpass.cmd";
-    #[cfg(not(windows))]
-    let script_name = "gitcomet-askpass.sh";
-    let path = dir.path().join(script_name);
+    let path = dir.path().join(askpass_script_name());
     let host_prompt_log_path = dir.path().join("gitcomet-askpass-host-prompt.log");
     let passphrase_prompt_log_path = dir.path().join("gitcomet-askpass-passphrase-prompt.log");
 

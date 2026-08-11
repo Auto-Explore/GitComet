@@ -207,6 +207,79 @@ fn repo_command_finished_auth_error_does_not_prompt_for_non_replayable_commands(
     }
 }
 
+/// Signing a commit with `gpg.format = ssh` runs `ssh-keygen -Y sign`, whose
+/// failure text mentions neither a prompt nor a remote. It must still open the
+/// passphrase prompt so the commit can be replayed with the key passphrase.
+#[test]
+fn commit_finished_ssh_signing_passphrase_error_sets_passphrase_prompt() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    state.repos[0].pending_commit_retry = Some(PendingCommitRetry {
+        message: "signed work".to_string(),
+        amend: false,
+        push_after_commit: false,
+    });
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitFinished {
+            repo_id,
+            result: Err(auth_error(
+                "git commit failed: error: Load key \"C:\\Users\\dev/.ssh/id_ed25519_signing\": incorrect passphrase supplied to decrypt private key\n\nfatal: failed to write commit object",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::Commit {
+            repo_id,
+            message: "signed work".to_string(),
+            amend: false,
+            push_after_commit: false,
+        }
+    );
+}
+
+/// The same failure while creating an annotated tag, which the reporter hit too.
+#[test]
+fn create_tag_finished_ssh_signing_passphrase_error_sets_passphrase_prompt() {
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    let command = RepoCommandKind::CreateTag {
+        name: "v1.0.0".to_string(),
+        target: "HEAD".to_string(),
+        message: Some("release".to_string()),
+        annotated: true,
+    };
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+            repo_id,
+            command: command.clone(),
+            result: Err(auth_error(
+                "git tag -m <message> -- v1.0.0 HEAD failed: Load key \"/home/dev/.ssh/id_ed25519_signing\": incorrect passphrase supplied to decrypt private key\nerror: unable to sign the tag",
+            )),
+        }),
+    );
+
+    let prompt = state.auth_prompt.expect("expected auth prompt");
+    assert_eq!(prompt.kind, AuthPromptKind::Passphrase);
+    assert_eq!(
+        prompt.operation,
+        AuthRetryOperation::RepoCommand { repo_id, command }
+    );
+}
+
 #[test]
 fn commit_finished_auth_error_uses_pending_retry_and_clears_it() {
     let repo_id = RepoId(1);
