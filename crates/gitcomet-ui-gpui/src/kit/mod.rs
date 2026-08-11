@@ -1,4 +1,5 @@
 mod minimap;
+pub(crate) mod rope;
 mod scrollbar;
 mod text_input;
 pub(crate) mod text_model;

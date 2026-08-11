@@ -15,10 +15,17 @@
 //! walks a `QueryCursor` over the visible range. Nothing is materialized per
 //! line, so there is no cache to invalidate and no pending state to report.
 //!
+//! The document holds a [`Rope`] rather than a contiguous buffer: the parser
+//! reads it a chunk at a time, query predicates read node text the same way,
+//! and edit positions come off the rope's summaries. So neither parsing nor
+//! querying ever needs the buffer assembled into one string, and holding a
+//! snapshot across a background reparse costs an atomic increment.
+//!
 //! Used by the merge tool's editable resolved output.
 
 use super::super::{SyntaxHighlightPalette, syntax_highlight_palette};
 use super::*;
+use crate::kit::rope::Rope;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// Served in place of the real bytes for masked spans. See [`masked_read`].
@@ -60,11 +67,12 @@ fn clamp_to_len(range: Range<usize>, len: usize) -> Range<usize> {
 /// below it genuinely mis-coloured; that is inherent, not a limitation of
 /// masking. What it removes is the additional, spurious damage.
 fn masked_read<'a>(
-    text: &'a [u8],
+    rope: &'a Rope,
     mask: &'a [Range<usize>],
 ) -> impl FnMut(usize, tree_sitter::Point) -> &'a [u8] {
+    let len = rope.len();
     move |offset, _position| {
-        if offset >= text.len() {
+        if offset >= len {
             return &[];
         }
         // `mask` is sorted and disjoint, so the first span ending past `offset`
@@ -72,25 +80,59 @@ fn masked_read<'a>(
         let ix = mask.partition_point(|span| span.end <= offset);
         match mask.get(ix) {
             Some(span) if span.start <= offset => {
-                let masked_end = span.end.min(text.len());
+                let masked_end = span.end.min(len);
                 &BLANKS[..(masked_end - offset).min(BLANKS.len())]
             }
-            Some(span) => &text[offset..span.start.min(text.len())],
-            None => &text[offset..],
+            // The parser is happy with however many bytes it gets, so handing
+            // it one rope chunk at a time means a parse never needs the
+            // document as a single buffer.
+            Some(span) => rope.bytes_at(offset, span.start.min(len)),
+            None => rope.bytes_at(offset, len),
         }
+    }
+}
+
+/// A tree-sitter `Point` for a byte offset, read off the rope's summaries.
+///
+/// Replaces the line-starts array the document used to carry: the row and
+/// column are a single O(log n) descent, and there is no index to keep in step
+/// with the text across edits.
+fn rope_ts_point(rope: &Rope, offset: usize) -> tree_sitter::Point {
+    let point = rope.offset_to_point(offset);
+    tree_sitter::Point::new(point.row as usize, point.column as usize)
+}
+
+/// Lets tree-sitter query predicates (`#eq?` and friends) read node text
+/// straight from the rope, one chunk at a time.
+struct RopeTextProvider<'a>(&'a Rope);
+
+impl<'a> tree_sitter::TextProvider<&'a [u8]> for RopeTextProvider<'a> {
+    type I = RopeChunkBytes<'a>;
+
+    fn text(&mut self, node: tree_sitter::Node<'_>) -> Self::I {
+        RopeChunkBytes(self.0.chunks_in_range(node.byte_range()))
+    }
+}
+
+struct RopeChunkBytes<'a>(crate::kit::rope::Chunks<'a>);
+
+impl<'a> Iterator for RopeChunkBytes<'a> {
+    type Item = &'a [u8];
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.0.next().map(str::as_bytes)
     }
 }
 
 fn parse_masked_tree(
     spec: &TreesitterHighlightSpec,
-    text: &str,
+    rope: &Rope,
     mask: &[Range<usize>],
     old_tree: Option<&tree_sitter::Tree>,
     budget: Option<Duration>,
 ) -> Option<tree_sitter::Tree> {
-    let bytes = text.as_bytes();
     with_ts_parser_parse_result(&spec.ts_language, |parser| {
-        let mut read = masked_read(bytes, mask);
+        let mut read = masked_read(rope, mask);
         let Some(budget) = budget else {
             return parser.parse_with_options(&mut read, old_tree, None);
         };
@@ -173,14 +215,246 @@ fn sweep_runs(
     }
 }
 
+/// Captures from one layer's tree that intersect `pass`, tagged with `depth`.
+fn collect_layer_captures(
+    spec: &TreesitterHighlightSpec,
+    tree: &tree_sitter::Tree,
+    rope: &Rope,
+    pass: Range<usize>,
+    text_len: usize,
+    depth: u8,
+    out: &mut Vec<(Range<usize>, SyntaxTokenKind, u8)>,
+) {
+    catch_treesitter_query_panic(|| {
+        TS_CURSOR.with(|cursor| {
+            let mut cursor = cursor.borrow_mut();
+            cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+            cursor.set_byte_range(pass.clone());
+            cursor.set_containing_byte_range(0..usize::MAX);
+            // `set_byte_range` yields every capture *intersecting* the window,
+            // so a string or block comment opened far above it still arrives —
+            // no look-behind needed. Query predicates read node text through the
+            // rope, so this path never needs a contiguous buffer either.
+            let mut captures =
+                cursor.captures(&spec.query, tree.root_node(), RopeTextProvider(rope));
+            tree_sitter::StreamingIterator::advance(&mut captures);
+            let capture_kinds = spec.capture_kinds.as_slice();
+            while let Some((m, capture_ix)) = captures.get() {
+                if let Some(capture) = m.captures.get(*capture_ix)
+                    && let Some(kind) = capture_kinds.get(capture.index as usize).copied().flatten()
+                {
+                    let range = clamp_to_len(capture.node.byte_range(), text_len);
+                    if !range.is_empty() {
+                        out.push((range, kind, depth));
+                    }
+                }
+                tree_sitter::StreamingIterator::advance(&mut captures);
+            }
+        });
+    });
+}
+
+/// One injected sub-grammar region: a `<script>` body inside HTML, SQL inside a
+/// Rust string literal.
+///
+/// The tree is parsed with `included_ranges` set to the injected span, so its
+/// node offsets are already *document* coordinates and merging its captures with
+/// the root's needs no remapping.
+pub(in crate::view) struct LiveSyntaxLayer {
+    spec: &'static TreesitterHighlightSpec,
+    tree: tree_sitter::Tree,
+    range: Range<usize>,
+}
+
+/// Depth-1 only. An injection inside an injection is not pursued: it is rare,
+/// it multiplies parse cost on the keystroke path, and the read-only diff panes
+/// draw the same line at the same depth (`TS_MAX_INJECTION_DEPTH`).
+/// Parse the depth-1 injected grammars found in `tree`.
+///
+/// `budget` is a ceiling for *all* layers together, not per layer. Handing each
+/// one its own copy let a document with N injections spend N × budget on the
+/// keystroke path while the root parse it was protecting stayed capped at one —
+/// so a markdown file with many fenced blocks blocked the frame in proportion to
+/// how many it had.
+///
+/// Returns the layers plus whether any were dropped because the deadline ran
+/// out. A dropped layer leaves its region on the enclosing grammar, so the
+/// caller has to mark the document stale and let the background reparse — which
+/// runs unbudgeted — put it back. Silently keeping `stale = false` stranded the
+/// region until the user happened to type again.
+fn parse_injection_layers(
+    rope: &Rope,
+    spec: &TreesitterHighlightSpec,
+    tree: &tree_sitter::Tree,
+    mask: &[Range<usize>],
+    budget: Option<Duration>,
+) -> (Vec<LiveSyntaxLayer>, bool) {
+    let Some(query) = spec.injection_query.as_ref() else {
+        return (Vec::new(), false);
+    };
+    let Some(content_ix) = query.capture_index_for_name("injection.content") else {
+        return (Vec::new(), false);
+    };
+    let language_ix = query
+        .capture_index_for_name("injection.language")
+        .or_else(|| query.capture_index_for_name("language"));
+
+    // Collect first, parse second: the query cursor is a thread-local, so
+    // parsing a layer while still holding it would re-enter the borrow.
+    let mut found: Vec<(DiffSyntaxLanguage, Range<usize>)> = Vec::new();
+    catch_treesitter_query_panic(|| {
+        TS_CURSOR.with(|cursor| {
+            let mut cursor = cursor.borrow_mut();
+            cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+            cursor.set_byte_range(0..rope.len());
+            cursor.set_containing_byte_range(0..usize::MAX);
+            let mut matches = cursor.matches(query, tree.root_node(), RopeTextProvider(rope));
+            tree_sitter::StreamingIterator::advance(&mut matches);
+            while let Some(m) = matches.get() {
+                if let Some(language) = injection_language_for_match(rope, query, m, language_ix) {
+                    for capture in m.captures.iter().filter(|c| c.index == content_ix) {
+                        if let Some(range) =
+                            normalized_injection_content_byte_range(capture.node, rope.len())
+                            && !range.is_empty()
+                        {
+                            found.push((language, range));
+                        }
+                    }
+                }
+                tree_sitter::StreamingIterator::advance(&mut matches);
+            }
+        });
+    });
+
+    // Sort by the whole entry, language included: `dedup` only removes adjacent
+    // duplicates, so keying the sort on the range alone lets a different
+    // language at the same span sit between two identical entries and defeat it
+    // — leaving two layers for one region, parsed twice and merged twice.
+    found.sort_by(|(a_language, a_range), (b_language, b_range)| {
+        (a_range.start, a_range.end, *a_language).cmp(&(b_range.start, b_range.end, *b_language))
+    });
+    found.dedup();
+
+    // One deadline for the whole set, so the cost of injections is bounded by
+    // the budget rather than by how many there are.
+    let deadline = budget.map(|budget| Instant::now() + budget);
+    let mut layers = Vec::with_capacity(found.len());
+    let mut dropped = false;
+    for (language, range) in found {
+        let Some(layer_spec) = tree_sitter_highlight_spec(language) else {
+            continue;
+        };
+        // A layer that fails to parse is dropped: only its own span loses
+        // highlighting, the document around it is untouched. `dropped` carries
+        // that up so it can be repaired off-thread.
+        match parse_included_range(layer_spec, rope, mask, &range, deadline) {
+            Some(tree) => layers.push(LiveSyntaxLayer {
+                spec: layer_spec,
+                tree,
+                range,
+            }),
+            None => dropped = true,
+        }
+    }
+    (layers, dropped)
+}
+
+/// Resolve the language for an injection match, reading capture text from the
+/// rope. Language names are short, so materializing one is trivially bounded.
+fn injection_language_for_match(
+    rope: &Rope,
+    query: &tree_sitter::Query,
+    query_match: &tree_sitter::QueryMatch<'_, '_>,
+    language_ix: Option<u32>,
+) -> Option<DiffSyntaxLanguage> {
+    let capture_text = |capture_ix: u32| -> Option<String> {
+        query_match
+            .captures
+            .iter()
+            .find(|capture| capture.index == capture_ix)
+            .map(|capture| rope.text_for_range(capture.node.byte_range()))
+    };
+
+    query
+        .property_settings(query_match.pattern_index)
+        .iter()
+        .filter(|setting| matches!(setting.key.as_ref(), "injection.language" | "language"))
+        .find_map(|setting| {
+            setting
+                .value
+                .as_deref()
+                .and_then(injection_language_from_name)
+                .or_else(|| {
+                    setting
+                        .capture_id
+                        .and_then(|id| capture_text(id as u32))
+                        .as_deref()
+                        .and_then(injection_language_from_name)
+                })
+        })
+        .or_else(|| {
+            language_ix
+                .and_then(capture_text)
+                .as_deref()
+                .and_then(injection_language_from_name)
+        })
+}
+
+/// Parse `range` with `spec`'s grammar, leaving node offsets in document
+/// coordinates.
+///
+/// `set_included_ranges` is what buys that: the parser still reads the whole
+/// (masked) document, but only builds nodes inside the range. The ranges are
+/// cleared again before returning — the parser is pooled and its included
+/// ranges are sticky, so leaving them set would silently truncate the next
+/// root parse.
+fn parse_included_range(
+    spec: &TreesitterHighlightSpec,
+    rope: &Rope,
+    mask: &[Range<usize>],
+    range: &Range<usize>,
+    deadline: Option<Instant>,
+) -> Option<tree_sitter::Tree> {
+    with_ts_parser_parse_result(&spec.ts_language, |parser| {
+        let included = tree_sitter::Range {
+            start_byte: range.start,
+            end_byte: range.end,
+            start_point: rope_ts_point(rope, range.start),
+            end_point: rope_ts_point(rope, range.end),
+        };
+        if parser.set_included_ranges(&[included]).is_err() {
+            let _ = parser.set_included_ranges(&[]);
+            return None;
+        }
+        let mut read = masked_read(rope, mask);
+        let parsed = match deadline {
+            None => parser.parse_with_options(&mut read, None, None),
+            Some(deadline) => {
+                let mut progress = |_state: &tree_sitter::ParseState| {
+                    if Instant::now() >= deadline {
+                        std::ops::ControlFlow::Break(())
+                    } else {
+                        std::ops::ControlFlow::Continue(())
+                    }
+                };
+                let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
+                parser.parse_with_options(&mut read, None, Some(options))
+            }
+        };
+        let _ = parser.set_included_ranges(&[]);
+        parsed
+    })
+}
+
 /// A live tree-sitter document, owned by the view that edits it.
 pub(in crate::view) struct LiveSyntaxDocument {
     language: DiffSyntaxLanguage,
     spec: &'static TreesitterHighlightSpec,
-    text: Arc<str>,
-    line_starts: Arc<[usize]>,
+    rope: Rope,
     mask: Arc<[Range<usize>]>,
     tree: tree_sitter::Tree,
+    /// Depth-1 injected grammars, rebuilt whenever the root tree is reparsed.
+    injections: Vec<LiveSyntaxLayer>,
     stale: bool,
     version: u64,
 }
@@ -208,24 +482,28 @@ impl LiveSyntaxDocument {
     /// parses unbounded, for background threads and tests.
     pub(in crate::view) fn new(
         language: DiffSyntaxLanguage,
-        text: Arc<str>,
-        line_starts: Arc<[usize]>,
+        rope: Rope,
         mask: Arc<[Range<usize>]>,
         budget: Option<Duration>,
     ) -> Option<Self> {
-        if text.len() > PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
+        if rope.len() > PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
             return None;
         }
         let spec = tree_sitter_highlight_spec(language)?;
-        let tree = parse_masked_tree(spec, text.as_ref(), mask.as_ref(), None, budget)?;
+        let tree = parse_masked_tree(spec, &rope, mask.as_ref(), None, budget)?;
+        let (injections, dropped) =
+            parse_injection_layers(&rope, spec, &tree, mask.as_ref(), budget);
         Some(Self {
             language,
             spec,
-            text,
-            line_starts,
+            rope,
             mask,
             tree,
-            stale: false,
+            injections,
+            // A first parse that ran out of budget before finishing every layer
+            // is not finished. Reporting it as settled leaves those regions on
+            // the enclosing grammar for the rest of the session.
+            stale: dropped,
             version: next_live_syntax_version(),
         })
     }
@@ -236,7 +514,7 @@ impl LiveSyntaxDocument {
 
     /// Fold one coalesced edit into the tree and reparse.
     ///
-    /// `text` and `line_starts` must already reflect the edit. `edit` is
+    /// `rope` must already reflect the edit. `edit` is
     /// `(replaced, inserted)` — the replaced span in the *old* text's
     /// coordinates and the inserted span in the new text's, sharing a start.
     /// `None` means the text was replaced wholesale, which reparses from
@@ -251,8 +529,7 @@ impl LiveSyntaxDocument {
     /// caller drops it, exactly as it would never have been built at that size.
     pub(in crate::view) fn sync(
         &mut self,
-        text: Arc<str>,
-        line_starts: Arc<[usize]>,
+        rope: Rope,
         mask: Arc<[Range<usize>]>,
         edit: Option<(Range<usize>, Range<usize>)>,
         budget: Option<Duration>,
@@ -261,59 +538,59 @@ impl LiveSyntaxDocument {
         // it has to be rechecked on every edit. Parsing past it here would let
         // a single paste buy an unbounded background reparse for the rest of
         // the session.
-        if text.len() > PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
+        if rope.len() > PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
             return LiveSyntaxSyncOutcome::Abandoned;
         }
 
         let seed = match edit {
             Some((replaced, inserted)) => {
-                let old_bytes = self.text.as_bytes();
-                let replaced = clamp_to_len(replaced, old_bytes.len());
-                let inserted = clamp_to_len(inserted, text.len());
+                // Positions come straight off the summaries — an O(log n)
+                // descent each, with no line-start array to keep in step.
+                let replaced = clamp_to_len(replaced, self.rope.len());
+                let inserted = clamp_to_len(inserted, rope.len());
                 self.tree.edit(&tree_sitter::InputEdit {
                     start_byte: replaced.start,
                     old_end_byte: replaced.end,
                     new_end_byte: inserted.end,
-                    start_position: treesitter_point_for_byte(
-                        &self.line_starts,
-                        old_bytes,
-                        replaced.start,
-                    ),
-                    old_end_position: treesitter_point_for_byte(
-                        &self.line_starts,
-                        old_bytes,
-                        replaced.end,
-                    ),
-                    new_end_position: treesitter_point_for_byte(
-                        &line_starts,
-                        text.as_bytes(),
-                        inserted.end,
-                    ),
+                    start_position: rope_ts_point(&self.rope, replaced.start),
+                    old_end_position: rope_ts_point(&self.rope, replaced.end),
+                    new_end_position: rope_ts_point(&rope, inserted.end),
                 });
                 true
             }
             None => false,
         };
 
-        self.text = text;
-        self.line_starts = line_starts;
+        self.rope = rope;
         self.mask = mask;
         self.version = next_live_syntax_version();
 
         let old_tree = seed.then_some(&self.tree);
-        match parse_masked_tree(
-            self.spec,
-            self.text.as_ref(),
-            self.mask.as_ref(),
-            old_tree,
-            budget,
-        ) {
+        match parse_masked_tree(self.spec, &self.rope, self.mask.as_ref(), old_tree, budget) {
             Some(tree) => {
                 self.tree = tree;
-                self.stale = false;
+                let (injections, dropped) = parse_injection_layers(
+                    &self.rope,
+                    self.spec,
+                    &self.tree,
+                    self.mask.as_ref(),
+                    budget,
+                );
+                self.injections = injections;
+                // The root tree is current either way; `dropped` says only that
+                // some injected region did not fit in the budget, which the
+                // background reparse finishes.
+                self.stale = dropped;
                 LiveSyntaxSyncOutcome::Reparsed
             }
             None => {
+                // The root tree was edited into the new coordinates but not
+                // reparsed, so the injection *ranges* it reported are stale.
+                // Drop the layers rather than paint with spans that have moved:
+                // the enclosing grammar still highlights the region, which is a
+                // smaller error than an inner grammar in the wrong place. The
+                // background reparse restores them.
+                self.injections.clear();
                 // Keep the edited tree. Its node positions already moved with
                 // the edit, so it paints correctly everywhere the edit did not
                 // change the structure — which is the overwhelming majority of
@@ -333,7 +610,9 @@ impl LiveSyntaxDocument {
     pub(in crate::view) fn background_reparse_request(&self) -> Option<LiveSyntaxReparseRequest> {
         self.stale.then(|| LiveSyntaxReparseRequest {
             spec: self.spec,
-            text: Arc::clone(&self.text),
+            // O(1): the rope is persistent, so the background parse reads a
+            // snapshot that later edits cannot disturb.
+            rope: self.rope.clone(),
             mask: Arc::clone(&self.mask),
             // The edited tree, as a seed: the background parse is incremental
             // too, so it starts from what the keystrokes already shifted.
@@ -351,11 +630,19 @@ impl LiveSyntaxDocument {
         &mut self,
         for_version: u64,
         tree: tree_sitter::Tree,
+        injections: Vec<LiveSyntaxLayer>,
     ) -> bool {
         if self.version != for_version {
             return false;
         }
         self.tree = tree;
+        // The layers come with the tree, already parsed off-thread. A `Deferred`
+        // sync drops them (their ranges moved with the edit) on the promise that
+        // the background reparse restores them; without adopting them here the
+        // promise is not kept, and every injected region — a `<script>` body, a
+        // fenced code block — silently loses its inner grammar until the user
+        // happens to type again.
+        self.injections = injections;
         self.stale = false;
         self.version = next_live_syntax_version();
         true
@@ -364,8 +651,17 @@ impl LiveSyntaxDocument {
     pub(in crate::view) fn snapshot(&self, theme: AppTheme) -> LiveSyntaxSnapshot {
         LiveSyntaxSnapshot(Arc::new(LiveSyntaxSnapshotInner {
             spec: self.spec,
-            text: Arc::clone(&self.text),
+            rope: self.rope.clone(),
             tree: self.tree.clone(),
+            injections: self
+                .injections
+                .iter()
+                .map(|layer| LiveSyntaxLayer {
+                    spec: layer.spec,
+                    tree: layer.tree.clone(),
+                    range: layer.range.clone(),
+                })
+                .collect(),
             palette: syntax_highlight_palette(theme),
         }))
     }
@@ -374,7 +670,7 @@ impl LiveSyntaxDocument {
 /// A deferred reparse, detached from the document so it can run off-thread.
 pub(in crate::view) struct LiveSyntaxReparseRequest {
     spec: &'static TreesitterHighlightSpec,
-    text: Arc<str>,
+    rope: Rope,
     mask: Arc<[Range<usize>]>,
     old_tree: tree_sitter::Tree,
     version: u64,
@@ -384,22 +680,37 @@ pub(in crate::view) struct LiveSyntaxReparseRequest {
 ///
 /// Returns the version it was parsed for, so the caller can tell whether the
 /// document moved on in the meantime.
+/// Reparse off-thread, layers included.
+///
+/// The injected layers are built here rather than at adoption because adoption
+/// runs inside a `view.update`, i.e. on the main thread. Parsing every injected
+/// region there — unbudgeted, since a dropped layer would be lost until the next
+/// edit — would block a frame for exactly the work this job exists to move off
+/// it.
 pub(in crate::view) fn live_syntax_reparse(
     request: LiveSyntaxReparseRequest,
-) -> Option<(u64, tree_sitter::Tree)> {
-    parse_masked_tree(
+) -> Option<(u64, tree_sitter::Tree, Vec<LiveSyntaxLayer>)> {
+    let tree = parse_masked_tree(
         request.spec,
-        request.text.as_ref(),
+        &request.rope,
         request.mask.as_ref(),
         Some(&request.old_tree),
         None,
-    )
-    .map(|tree| (request.version, tree))
+    )?;
+    let (injections, _dropped) = parse_injection_layers(
+        &request.rope,
+        request.spec,
+        &tree,
+        request.mask.as_ref(),
+        None,
+    );
+    Some((request.version, tree, injections))
 }
 
 struct LiveSyntaxSnapshotInner {
     spec: &'static TreesitterHighlightSpec,
-    text: Arc<str>,
+    rope: Rope,
+    injections: Vec<LiveSyntaxLayer>,
     tree: tree_sitter::Tree,
     palette: SyntaxHighlightPalette,
 }
@@ -423,8 +734,8 @@ impl LiveSyntaxSnapshot {
         byte_range: Range<usize>,
     ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
         let inner = self.0.as_ref();
-        let text = inner.text.as_bytes();
-        let range = clamp_to_len(byte_range, text.len());
+        let text_len = inner.rope.len();
+        let range = clamp_to_len(byte_range, text_len);
         if range.is_empty() {
             return Vec::new();
         }
@@ -437,40 +748,49 @@ impl LiveSyntaxSnapshot {
                 .min(range.end);
             let pass = pass_start..pass_end;
 
-            catch_treesitter_query_panic(|| {
-                TS_CURSOR.with(|cursor| {
-                    let mut cursor = cursor.borrow_mut();
-                    cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
-                    cursor.set_byte_range(pass.clone());
-                    cursor.set_containing_byte_range(0..usize::MAX);
-                    // `set_byte_range` yields every capture *intersecting* the
-                    // window, so a string or block comment opened far above it
-                    // still arrives — no look-behind needed.
-                    let mut captures =
-                        cursor.captures(&inner.spec.query, inner.tree.root_node(), text);
-                    tree_sitter::StreamingIterator::advance(&mut captures);
+            // Gather the root's captures and those of every injected layer
+            // overlapping this pass, then sweep them as one ordered stream.
+            // Collected rather than merged lazily because the query cursor is a
+            // thread-local: querying a second layer inside the first's borrow
+            // would re-enter it.
+            let mut hits: Vec<(Range<usize>, SyntaxTokenKind, u8)> = Vec::new();
+            collect_layer_captures(
+                inner.spec,
+                &inner.tree,
+                &inner.rope,
+                pass.clone(),
+                text_len,
+                0,
+                &mut hits,
+            );
+            for layer in &inner.injections {
+                if layer.range.start < pass.end && layer.range.end > pass.start {
+                    collect_layer_captures(
+                        layer.spec,
+                        &layer.tree,
+                        &inner.rope,
+                        pass.clone(),
+                        text_len,
+                        1,
+                        &mut hits,
+                    );
+                }
+            }
 
-                    let text_len = text.len();
-                    let capture_kinds = inner.spec.capture_kinds.as_slice();
-                    let next_capture = || loop {
-                        let (m, capture_ix) = captures.get()?;
-                        let hit = m.captures.get(*capture_ix).and_then(|capture| {
-                            let kind = capture_kinds
-                                .get(capture.index as usize)
-                                .copied()
-                                .flatten()?;
-                            let range = clamp_to_len(capture.node.byte_range(), text_len);
-                            (!range.is_empty()).then_some((range, kind))
-                        });
-                        tree_sitter::StreamingIterator::advance(&mut captures);
-                        if hit.is_some() {
-                            return hit;
-                        }
-                    };
-
-                    sweep_runs(next_capture, &inner.palette, pass.clone(), &mut out);
-                });
+            // Start ascending, end descending, depth ascending — so for a span
+            // an injected grammar and its host both capture, the injected one
+            // is pushed last and `sweep_runs`' innermost-wins stack picks it.
+            hits.sort_by(|left, right| {
+                left.0
+                    .start
+                    .cmp(&right.0.start)
+                    .then(right.0.end.cmp(&left.0.end))
+                    .then(left.2.cmp(&right.2))
             });
+
+            let mut hits = hits.into_iter();
+            let next_capture = || hits.next().map(|(range, kind, _)| (range, kind));
+            sweep_runs(next_capture, &inner.palette, pass.clone(), &mut out);
 
             pass_start = pass_end;
         }
@@ -489,18 +809,16 @@ mod tests {
                 starts.push(ix + 1);
             }
         }
-        if starts.last() == Some(&text.len()) && text.len() > 0 {
+        if starts.last() == Some(&text.len()) && !text.is_empty() {
             starts.pop();
         }
         starts.into()
     }
 
     fn document(text: &str, mask: Vec<Range<usize>>) -> LiveSyntaxDocument {
-        let text: Arc<str> = Arc::from(text);
         LiveSyntaxDocument::new(
             DiffSyntaxLanguage::Rust,
-            Arc::clone(&text),
-            line_starts_for(text.as_ref()),
+            Rope::from_str(text),
             mask.into(),
             None,
         )
@@ -595,7 +913,8 @@ mod tests {
     fn unmasked_placeholder_is_what_masking_protects_against() {
         // Guards the premise: without the mask the tail really does change.
         let text = "fn a() {}\n<Merge Conflict>\nfn b() -> u32 { 7 }\n";
-        let masked = document(text, vec![10..26]).snapshot(AppTheme::gitcomet_dark());
+        let masked =
+            document(text, Vec::from([10..26usize; 1])).snapshot(AppTheme::gitcomet_dark());
         let unmasked = document(text, Vec::new()).snapshot(AppTheme::gitcomet_dark());
 
         let full = 0..text.len();
@@ -619,8 +938,7 @@ mod tests {
         assert_eq!(&after[at..at + inserted_text.len()], inserted_text);
 
         let outcome = doc.sync(
-            Arc::from(after),
-            line_starts_for(after),
+            Rope::from_str(after),
             Vec::new().into(),
             Some((at..at, at..at + inserted_text.len())),
             None,
@@ -662,8 +980,7 @@ mod tests {
         assert!(
             LiveSyntaxDocument::new(
                 DiffSyntaxLanguage::Rust,
-                Arc::from(after.as_str()),
-                line_starts_for(&after),
+                Rope::from_str(after.as_str()),
                 Vec::new().into(),
                 None,
             )
@@ -672,8 +989,7 @@ mod tests {
         );
 
         let outcome = doc.sync(
-            Arc::from(after.as_str()),
-            line_starts_for(&after),
+            Rope::from_str(after.as_str()),
             Vec::new().into(),
             Some((at..at, at..at + padding.len())),
             None,
@@ -702,8 +1018,7 @@ mod tests {
         after.insert_str(at, inserted);
 
         let outcome = doc.sync(
-            Arc::from(after.as_str()),
-            line_starts_for(&after),
+            Rope::from_str(after.as_str()),
             Vec::new().into(),
             Some((at..at, at..at + inserted.len())),
             Some(Duration::ZERO),
@@ -725,9 +1040,10 @@ mod tests {
         let request = doc
             .background_reparse_request()
             .expect("a deferred document owes a background reparse");
-        let (version, tree) = live_syntax_reparse(request).expect("unbudgeted reparse succeeds");
+        let (version, tree, injections) =
+            live_syntax_reparse(request).expect("unbudgeted reparse succeeds");
         assert!(
-            doc.adopt_background_tree(version, tree),
+            doc.adopt_background_tree(version, tree, injections),
             "the version has not moved, so the tree should be adopted"
         );
         assert!(doc.background_reparse_request().is_none());
@@ -749,16 +1065,10 @@ mod tests {
         let tree = doc.snapshot(AppTheme::gitcomet_dark()).0.tree.clone();
 
         let after = "fn main() { let x = 1; }\n";
-        doc.sync(
-            Arc::from(after),
-            line_starts_for(after),
-            Vec::new().into(),
-            None,
-            None,
-        );
+        doc.sync(Rope::from_str(after), Vec::new().into(), None, None);
 
         assert!(
-            !doc.adopt_background_tree(stale_version, tree),
+            !doc.adopt_background_tree(stale_version, tree, Vec::new()),
             "a tree parsed for text that has since changed must be discarded"
         );
     }
@@ -768,13 +1078,7 @@ mod tests {
         let mut doc = document("fn main() {}\n", Vec::new());
         let after = "struct Point { x: u32, y: u32 }\n";
 
-        let outcome = doc.sync(
-            Arc::from(after),
-            line_starts_for(after),
-            Vec::new().into(),
-            None,
-            None,
-        );
+        let outcome = doc.sync(Rope::from_str(after), Vec::new().into(), None, None);
         assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
 
         let replaced = doc.snapshot(AppTheme::gitcomet_dark());
@@ -787,9 +1091,9 @@ mod tests {
 
     #[test]
     fn masked_read_serves_blanks_then_real_text() {
-        let text = b"abcdefghij";
-        let mask = [2..5usize];
-        let mut read = masked_read(text, &mask);
+        let rope = Rope::from_str("abcdefghij");
+        let mask = [2..5usize; 1];
+        let mut read = masked_read(&rope, &mask);
 
         assert_eq!(read(0, tree_sitter::Point::new(0, 0)), b"ab");
         assert_eq!(read(2, tree_sitter::Point::new(0, 2)), b"   ");
@@ -799,9 +1103,9 @@ mod tests {
 
     #[test]
     fn masked_read_spans_longer_than_the_blank_buffer_are_served_in_pieces() {
-        let text = vec![b'x'; 200];
-        let mask = [0..200usize];
-        let mut read = masked_read(&text, &mask);
+        let rope = Rope::from_str(&"x".repeat(200));
+        let mask = [0..200usize; 1];
+        let mut read = masked_read(&rope, &mask);
 
         let mut served = 0usize;
         while served < 200 {
@@ -820,8 +1124,7 @@ mod tests {
         assert!(
             LiveSyntaxDocument::new(
                 DiffSyntaxLanguage::Rust,
-                Arc::clone(&huge),
-                line_starts_for(huge.as_ref()),
+                Rope::from_str(&huge),
                 Vec::new().into(),
                 None,
             )
@@ -836,8 +1139,7 @@ mod tests {
         assert!(
             LiveSyntaxDocument::new(
                 DiffSyntaxLanguage::VisualBasic,
-                Arc::clone(&text),
-                line_starts_for(text.as_ref()),
+                Rope::from_str(&text),
                 Vec::new().into(),
                 None,
             )
@@ -907,9 +1209,8 @@ mod tests {
                 let Some(style) = palette.style(token.kind) else {
                     continue;
                 };
-                for byte in (line_start + token.range.start)..(line_start + token.range.end) {
-                    prepared_by_byte[byte] = Some(style);
-                }
+                let span = (line_start + token.range.start)..(line_start + token.range.end);
+                prepared_by_byte[span].fill(Some(style));
             }
         }
 
@@ -952,6 +1253,290 @@ mod tests {
             "the resolved output and the diff panes must colour identical text \
              identically; diverging bytes:\n  {}",
             mismatched.join("\n  ")
+        );
+    }
+}
+
+/// Injected sub-grammars: a `<script>` body must be highlighted as JavaScript,
+/// not left as opaque HTML raw text.
+///
+/// This is what the editable resolved output was missing relative to the
+/// read-only diff panes above it, which have had depth-1 injections all along.
+#[cfg(test)]
+mod injection_tests {
+    use super::*;
+
+    fn html_document(text: &str) -> LiveSyntaxDocument {
+        LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::Html,
+            Rope::from_str(text),
+            Vec::new().into(),
+            None,
+        )
+        .expect("html live document should build")
+    }
+
+    /// Styles covering `needle`, if any.
+    fn styles_for<'a>(
+        highlights: &'a [(Range<usize>, gpui::HighlightStyle)],
+        text: &str,
+        needle: &str,
+    ) -> Vec<&'a gpui::HighlightStyle> {
+        let at = text
+            .find(needle)
+            .expect("fixture should contain the needle");
+        let span = at..at + needle.len();
+        highlights
+            .iter()
+            .filter(|(range, _)| range.start < span.end && range.end > span.start)
+            .map(|(_, style)| style)
+            .collect()
+    }
+
+    #[test]
+    fn script_bodies_are_highlighted_as_javascript() {
+        let text = "<html>\n<script>\nconst answer = 42;\n</script>\n</html>\n";
+        let document = html_document(text);
+        assert_eq!(
+            document.injections.len(),
+            1,
+            "the script body should produce exactly one injected layer"
+        );
+
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let highlights = snapshot.highlights_for_byte_range(0..text.len());
+
+        // `const` is a JavaScript keyword. The HTML grammar sees the whole
+        // script body as one `raw_text` node and has no keyword concept, so a
+        // keyword-coloured run here can only come from the injected layer.
+        let keyword = styles_for(&highlights, text, "const");
+        assert!(
+            !keyword.is_empty(),
+            "expected the injected JavaScript layer to highlight `const`: {highlights:?}"
+        );
+
+        // And the enclosing HTML is still highlighted by the root layer.
+        assert!(
+            !styles_for(&highlights, text, "script").is_empty(),
+            "the host grammar must keep highlighting its own tags"
+        );
+    }
+
+    #[test]
+    fn injected_layers_cover_only_their_own_span() {
+        let text = "<html>\n<script>\nconst answer = 42;\n</script>\n</html>\n";
+        let document = html_document(text);
+        let layer = document
+            .injections
+            .first()
+            .expect("expected one injected layer");
+
+        let body_start = text.find("\nconst").expect("script body") + 1;
+        assert!(
+            layer.range.start <= body_start && layer.range.end >= body_start + "const".len(),
+            "layer {:?} should cover the script body at {body_start}",
+            layer.range
+        );
+        assert!(
+            layer.range.start > text.find("<script>").expect("open tag"),
+            "the layer must not swallow the opening tag"
+        );
+        assert!(
+            layer.range.end <= text.find("</script>").expect("close tag"),
+            "the layer must not swallow the closing tag"
+        );
+    }
+
+    /// The layer's tree is parsed with `included_ranges`, so its node offsets
+    /// are already document coordinates. If that ever regressed to
+    /// injection-local offsets, highlights would land near the top of the file.
+    #[test]
+    fn injected_capture_offsets_are_document_coordinates() {
+        let prefix = "<html>\n<body>\n<p>filler</p>\n".repeat(20);
+        let text = format!("{prefix}<script>\nconst answer = 42;\n</script>\n</html>\n");
+        let document = html_document(&text);
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let highlights = snapshot.highlights_for_byte_range(0..text.len());
+
+        let keyword_at = text.find("const").expect("keyword");
+        assert!(
+            keyword_at > 200,
+            "fixture should place the injection well into the document"
+        );
+        let covering = styles_for(&highlights, &text, "const");
+        assert!(
+            !covering.is_empty(),
+            "the injected keyword should be highlighted at its real offset {keyword_at}"
+        );
+    }
+
+    /// A document whose language has no injection query must be unaffected.
+    #[test]
+    fn languages_without_injections_build_no_layers() {
+        let document = LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::Json,
+            Rope::from_str("{\"a\": 1}\n"),
+            Vec::new().into(),
+            None,
+        )
+        .expect("json live document should build");
+        assert!(document.injections.is_empty());
+    }
+
+    /// Editing inside the host must not leave the injected layer painting at
+    /// stale offsets — the failure mode that would look like highlighting
+    /// "sliding" away from the code.
+    #[test]
+    fn layers_are_rebuilt_after_an_edit_moves_them() {
+        let text = "<html>\n<script>\nconst answer = 42;\n</script>\n</html>\n";
+        let mut document = html_document(text);
+
+        let inserted = "<div>pushed down</div>\n";
+        let after = format!("<html>\n{inserted}<script>\nconst answer = 42;\n</script>\n</html>\n");
+        let at = "<html>\n".len();
+        document.sync(
+            Rope::from_str(&after),
+            Vec::new().into(),
+            Some((at..at, at..at + inserted.len())),
+            None,
+        );
+
+        let layer = document
+            .injections
+            .first()
+            .expect("expected the layer to survive the edit");
+        let body_start = after.find("\nconst").expect("script body") + 1;
+        assert!(
+            layer.range.start <= body_start && layer.range.end >= body_start,
+            "layer {:?} should have moved with the edit to cover {body_start}",
+            layer.range
+        );
+
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let highlights = snapshot.highlights_for_byte_range(0..after.len());
+        assert!(
+            !styles_for(&highlights, &after, "const").is_empty(),
+            "the injected keyword should still be highlighted after the edit"
+        );
+    }
+
+    /// A layer the budget could not finish has to be reported, not swallowed.
+    ///
+    /// The budget is now shared across all layers, so a document with many
+    /// injections can exhaust it partway through. Both callers assign
+    /// `stale = dropped`, so if this flag were dropped on the floor
+    /// `background_reparse_request` would return `None` and those regions would
+    /// keep only the enclosing grammar until the user happened to type again.
+    ///
+    /// Driven at the function rather than through `new`/`sync`: a budget small
+    /// enough to starve layers also starves the root parse, and one tuned to sit
+    /// between the two would be a timing race.
+    #[test]
+    fn layers_the_budget_could_not_finish_are_reported_as_dropped() {
+        // Script bodies large enough that their parse reaches a progress
+        // callback — tree-sitter polls periodically, so a handful of bytes
+        // finishes before any deadline is consulted.
+        let body = (0..4_000)
+            .map(|ix| format!("const answer{ix} = {ix} + compute{ix}(1, 2, 3);"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let mut text = String::from("<html>\n");
+        for _ in 0..4 {
+            text.push_str("<script>\n");
+            text.push_str(&body);
+            text.push_str("\n</script>\n");
+        }
+        text.push_str("</html>\n");
+
+        let document = html_document(&text);
+        let rope = Rope::from_str(&text);
+
+        let (complete, dropped) =
+            parse_injection_layers(&rope, document.spec, &document.tree, &[], None);
+        assert_eq!(
+            complete.len(),
+            4,
+            "an unbudgeted pass should find every script body"
+        );
+        assert!(!dropped, "nothing is dropped when there is no deadline");
+        assert!(
+            document.background_reparse_request().is_none(),
+            "a complete document owes no reparse"
+        );
+
+        // A deadline already in the past breaks every layer at its first
+        // progress callback.
+        let (starved, dropped) = parse_injection_layers(
+            &rope,
+            document.spec,
+            &document.tree,
+            &[],
+            Some(Duration::ZERO),
+        );
+        assert!(
+            starved.len() < complete.len(),
+            "an exhausted budget should not have finished every layer"
+        );
+        assert!(
+            dropped,
+            "layers skipped for want of budget must be reported so the caller \
+             can mark the document stale"
+        );
+    }
+
+    /// A background reparse must restore the layers a deferred sync dropped.
+    ///
+    /// `sync` clears `injections` when it cannot afford to reparse, on the
+    /// stated promise that the background parse brings them back. Adopting the
+    /// finished tree without rebuilding them leaves every injected region on the
+    /// enclosing grammar — `const` renders as plain HTML text — until the user
+    /// types again, which is both wrong and invisible to the reparse tests.
+    #[test]
+    fn adopting_a_background_tree_restores_the_injected_layers() {
+        let text = "<html>\n<script>\nconst answer = 42;\n</script>\n</html>\n";
+        let mut document = html_document(text);
+        assert!(
+            !document.injections.is_empty(),
+            "fixture should start with an injected script layer"
+        );
+
+        // Stand where a `Deferred` sync leaves the document: the root tree has
+        // been edited forward, but the layers whose ranges moved were dropped.
+        document.injections.clear();
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        assert!(
+            styles_for(
+                &snapshot.highlights_for_byte_range(0..text.len()),
+                text,
+                "const"
+            )
+            .is_empty(),
+            "with the layers dropped the injected keyword is unhighlighted — the \
+             state the background parse exists to repair"
+        );
+
+        // The background parse finishes and hands its tree back.
+        document.stale = true;
+        let request = document
+            .background_reparse_request()
+            .expect("a stale document owes a background reparse");
+        let (version, tree, injections) =
+            live_syntax_reparse(request).expect("an unbudgeted reparse should succeed");
+        assert!(document.adopt_background_tree(version, tree, injections));
+
+        assert!(
+            !document.injections.is_empty(),
+            "adopting the caught-up tree must rebuild the injected layers"
+        );
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        assert!(
+            !styles_for(
+                &snapshot.highlights_for_byte_range(0..text.len()),
+                text,
+                "const"
+            )
+            .is_empty(),
+            "the injected keyword must be highlighted again after the background parse"
         );
     }
 }

@@ -195,7 +195,7 @@ impl MainPaneView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_prev_unresolved(cx);
                         })
-                        .gitcomet_tooltip(theme, "Previous unresolved conflict (Ctrl+PgUp)".into()),
+                        .gitcomet_tooltip(theme, "Previous unresolved conflict (Shift+F2)".into()),
                 )
                 .child(
                     components::Button::new("conflict_next_unresolved", "")
@@ -210,7 +210,7 @@ impl MainPaneView {
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.conflict_jump_next_unresolved(cx);
                         })
-                        .gitcomet_tooltip(theme, "Next unresolved conflict (Ctrl+PgDn)".into()),
+                        .gitcomet_tooltip(theme, "Next unresolved conflict (Shift+F3)".into()),
                 )
             })
             .when(

@@ -1462,25 +1462,26 @@ impl MainPaneView {
         // is available (the fast first paint may be CurrentOnly).
         if !self.conflict_resolver.open_summary_announced
             && let Some(counts) = self.conflict_resolver.open_summary_counts
-            && let Some(message) = conflict_resolver::format_open_summary_toast(counts) {
-                self.conflict_resolver.open_summary_announced = true;
-                if let (Some(repo_id), Some(path)) = (
-                    self.conflict_resolver.repo_id,
-                    self.conflict_resolver.path.as_ref(),
-                ) {
-                    self.conflict_open_summary_toasted_files
-                        .insert((repo_id, path.clone()));
-                }
-                // The sync runs inside a GitCometView update; push the
-                // toast after the current update flush to avoid reentrant
-                // root-view updates.
-                let root_view = self.root_view.clone();
-                cx.defer(move |cx| {
-                    let _ = root_view.update(cx, |root, cx| {
-                        root.push_toast(crate::view::components::ToastKind::Success, message, cx);
-                    });
-                });
+            && let Some(message) = conflict_resolver::format_open_summary_toast(counts)
+        {
+            self.conflict_resolver.open_summary_announced = true;
+            if let (Some(repo_id), Some(path)) = (
+                self.conflict_resolver.repo_id,
+                self.conflict_resolver.path.as_ref(),
+            ) {
+                self.conflict_open_summary_toasted_files
+                    .insert((repo_id, path.clone()));
             }
+            // The sync runs inside a GitCometView update; push the
+            // toast after the current update flush to avoid reentrant
+            // root-view updates.
+            let root_view = self.root_view.clone();
+            cx.defer(move |cx| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.push_toast(crate::view::components::ToastKind::Success, message, cx);
+                });
+            });
+        }
         // section 30 aligned row space: whole-file column rows (three-way and
         // two-way full mode) need the side texts, which the fast CurrentOnly
         // first paint does not include. Upgrade fresh opens of reasonably
@@ -1574,7 +1575,7 @@ impl MainPaneView {
         });
         let previous_map_valid = live_materialized_output.as_ref().is_some_and(|output| {
             self.conflict_resolved_output_block_map
-                .is_valid_for(&self.conflict_resolver.marker_segments, output)
+                .is_valid_for(&self.conflict_resolver.marker_segments, output.as_str())
         });
         let previous_generated_output_matches_live =
             live_materialized_output.as_deref().is_some_and(|output| {
@@ -2557,7 +2558,7 @@ impl MainPaneView {
         let recent_edit_delta = (edit_deltas.len() == 1)
             .then(|| edit_deltas.first().cloned())
             .flatten();
-        self.apply_conflict_resolved_output_edit_deltas(edit_deltas, snapshot.as_ref());
+        self.apply_conflict_resolved_output_edit_deltas(edit_deltas, &snapshot.rope());
         if unchanged {
             // Choosing a chunk can flip resolved/unresolved state without changing output text.
             // Force marker/provenance refresh so conflict overlays disappear immediately.
@@ -2589,7 +2590,7 @@ impl MainPaneView {
         }
         let current_output = self
             .conflict_resolver_input
-            .read_with(cx, |input, _| input.text().to_string());
+            .read_with(cx, |input, _| input.text_snapshot().rope());
         if !self
             .conflict_resolved_output_block_map
             .is_valid_for(&self.conflict_resolver.marker_segments, &current_output)
@@ -2636,10 +2637,10 @@ impl MainPaneView {
         let recent_edit_delta = (edit_deltas.len() == 1)
             .then(|| edit_deltas.first().cloned())
             .flatten();
-        self.apply_conflict_resolved_output_edit_deltas(edit_deltas, snapshot.as_ref());
+        self.apply_conflict_resolved_output_edit_deltas(edit_deltas, &snapshot.rope());
         let map_is_valid = self
             .conflict_resolved_output_block_map
-            .is_valid_for(&self.conflict_resolver.marker_segments, snapshot.as_ref());
+            .is_valid_for(&self.conflict_resolver.marker_segments, &snapshot.rope());
         if map_is_valid {
             self.schedule_conflict_resolved_output_snapshot_refresh(
                 &snapshot,
@@ -2689,9 +2690,9 @@ impl MainPaneView {
         let next_projection = conflict_resolver::ResolvedOutputProjection::from_segments(
             &self.conflict_resolver.marker_segments,
         );
-        let should_stream = self.conflict_resolved_output_is_streamed()
-            || next_projection.len() > conflict_resolver::RESOLVED_OUTPUT_EDITABLE_MAX_LINES;
-        if should_stream {
+        // Streamed only while the buffer has not been materialized yet; size does
+        // not demote an already-editable output back to a read-only projection.
+        if self.conflict_resolved_output_is_streamed() {
             let output_path = self.conflict_resolver.path.clone();
             self.refresh_streamed_resolved_output_preview_from_projection(
                 next_projection,
@@ -3762,6 +3763,16 @@ impl MainPaneView {
     }
 
     /// Read a value off the conflict session currently loaded in the resolver.
+    /// Read the loaded conflict session, or `T::default()` if there is none.
+    ///
+    /// Reads the **store**, while the resolver around it was built from the UI
+    /// model. Production keeps the two in lockstep — `poller.rs` feeds the model
+    /// from `store.snapshot()` — so this is sound there, but it is an invariant
+    /// nothing enforces. It has already broken once: a test harness that
+    /// published state to the model alone left this returning `None`, and every
+    /// plan-block pick behind it became a silent no-op that still reported
+    /// success. `push_test_state` now publishes to both; anything else that
+    /// injects state must do the same.
     fn with_conflict_resolver_session<T: Default>(
         &self,
         read: impl FnOnce(&gitcomet_core::conflict_session::ConflictSession) -> T,

@@ -574,6 +574,55 @@ fn content_width_cache_updates_only_edited_lines(cx: &mut gpui::TestAppContext) 
     });
 }
 
+/// Maintaining the content-width cache must not flatten the document.
+///
+/// The cache needs the width of the rows an edit touched, which the rope answers
+/// in O(log n) per row. Reading it from a materialized `&str` plus a whole
+/// line-start array instead made every keystroke cost the document — the
+/// regression this guards, worth ~7ms per keystroke on a 100k-line buffer.
+#[gpui::test]
+fn maintaining_the_content_width_cache_does_not_flatten_the_document(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    let text = (0..500)
+        .map(|ix| format!("line {ix} with some content"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            input.set_text(&text, cx);
+            input.set_content_width_layout(true);
+
+            // The edit itself is what must stay windowed. `set_text` above is a
+            // wholesale replacement and is allowed to build whatever it likes,
+            // so measure only from here.
+            input.replace_utf8_range(3..3, "z", cx);
+
+            let snapshot = input.text_snapshot();
+            assert!(
+                !snapshot.is_materialized(),
+                "an edit must not flatten the rope into a contiguous string"
+            );
+            assert!(
+                !snapshot.is_line_index_built(),
+                "an edit must not build a document-sized line-start index"
+            );
+        });
+    });
+}
+
 #[gpui::test]
 fn content_width_cache_tracks_line_splits_joins_and_undo(cx: &mut gpui::TestAppContext) {
     let (input, cx) = cx.add_window_view(|window, cx| {
@@ -821,7 +870,10 @@ fn highlight_runs_skip_hidden_overlap_end_boundaries() {
     let streamed = build_streamed_highlight_runs_for_visible_window(
         &base_font,
         base_color,
-        text,
+        &LineTextSource::Whole {
+            text,
+            starts: line_starts.as_slice(),
+        },
         line_starts.as_slice(),
         0..1,
         highlights.as_slice(),
@@ -898,7 +950,10 @@ fn streamed_highlight_runs_match_legacy_visible_window() {
     let streamed = build_streamed_highlight_runs_for_visible_window(
         &base_font,
         base_color,
-        text.as_str(),
+        &LineTextSource::Whole {
+            text: text.as_str(),
+            starts: line_starts.as_slice(),
+        },
         line_starts.as_slice(),
         visible_range.clone(),
         highlights.as_slice(),
@@ -944,7 +999,10 @@ fn streamed_highlight_runs_preserve_latest_overlap_precedence() {
     let streamed = build_streamed_highlight_runs_for_visible_window(
         &base_font,
         base_color,
-        text,
+        &LineTextSource::Whole {
+            text,
+            starts: line_starts.as_slice(),
+        },
         line_starts.as_slice(),
         0..1,
         highlights.as_slice(),
@@ -981,7 +1039,10 @@ fn highlight_runs_single_carry_in_highlight_matches_streamed() {
     let streamed = build_streamed_highlight_runs_for_visible_window(
         &base_font,
         base_color,
-        text,
+        &LineTextSource::Whole {
+            text,
+            starts: line_starts.as_slice(),
+        },
         line_starts.as_slice(),
         0..2,
         highlights.as_slice(),
@@ -3152,4 +3213,137 @@ fn protected_ranges_ride_along_with_edits_around_them(cx: &mut gpui::TestAppCont
             assert_eq!(input.protected_ranges(), std::slice::from_ref(&moved));
         });
     });
+}
+
+/// Rendering a frame must not flatten the document into one string.
+///
+/// The plain arm reads row text through `LineTextSource::window`, which copies
+/// only the rows it is about to shape. If any path in prepaint reaches for
+/// `as_str()` instead, the model's materialization cache warms up and the frame
+/// silently starts costing the whole buffer — the exact regression that makes
+/// typing in a large file scale with the file. Nothing observable fails when
+/// that happens, so observing the cache is the only way to hold the line.
+#[gpui::test]
+fn drawing_a_plain_multiline_frame_does_not_materialize_the_document(
+    cx: &mut gpui::TestAppContext,
+) {
+    let line_count = 5_000;
+    let text = (0..line_count)
+        .map(|ix| format!("fn line_{ix:05}(value: usize) -> usize {{ value + {ix} }}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let (view, cx) = cx.add_window_view(ScrolledPlainInputView::new);
+    let input = cx.update(|_window, app| view.read(app).input.clone());
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.clone(), cx);
+            input.set_selected_range(0..0, false, cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    // An edit clears the cache, so this asserts the *frame* keeps it cold
+    // rather than merely observing a buffer that was never flattened.
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.replace_utf8_range(0..0, "// edited\n", cx);
+        });
+        assert!(
+            !input.read(app).content.snapshot().is_materialized(),
+            "an edit should have dropped the materialization cache"
+        );
+        let _ = window.draw(app);
+
+        assert!(
+            !input.read(app).content.snapshot().is_materialized(),
+            "drawing a frame must cost the viewport, not the document"
+        );
+
+        // KNOWN GAP: the companion assertion
+        //
+        //     assert!(!input.read(app).content.snapshot().is_line_index_built());
+        //
+        // does not hold yet, so it is deliberately absent rather than silently
+        // forgotten. Prepaint still calls `shared_line_starts()`, and the edit
+        // above cleared that `OnceLock`, so each post-edit frame rebuilds a
+        // row-per-entry index: measured at 1.6ms for 100k rows, roughly a sixth
+        // of the frame. Closing it means threading windowed row access through
+        // the ~10 places prepaint and paint read `line_starts`, at which point
+        // this assertion belongs here — see
+        // `maintaining_the_content_width_cache_does_not_flatten_the_document`,
+        // which does make it for the edit path.
+    });
+
+    // And the frame still renders the right rows.
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let TextInputLayout::Plain(lines) = input
+            .layout
+            .last
+            .as_ref()
+            .expect("expected plain text input layout")
+        else {
+            panic!("expected plain text input layout");
+        };
+        assert_eq!(lines.line_count(), line_count + 1);
+        assert!(lines.shaped_line_count() < line_count / 4);
+    });
+}
+
+/// The windowed and whole-document row sources must return identical text.
+///
+/// The plain arm shapes through `LineTextSource::Window` and the soft-wrap and
+/// masked arms through `Whole`; any disagreement makes the same row measure
+/// differently depending on which arm drew it. The awkward case is a final row
+/// with no trailing newline: `Window` used to invent a terminator for it, so a
+/// row ending in a bare `\r` lost that character in one arm only.
+#[test]
+fn windowed_and_whole_row_text_agree_including_an_unterminated_final_row() {
+    use crate::kit::text_model::TextModel;
+
+    for document in [
+        "alpha\nbeta\ngamma",
+        "alpha\r\nbeta\r\ngamma\r",
+        "alpha\r\nbeta\r\ngamma\r\n",
+        "only-one-row",
+        "trailing\n",
+        "",
+    ] {
+        let model = TextModel::from_large_text(document);
+        let snapshot = model.snapshot();
+        let starts = compute_line_starts(document);
+        let whole = LineTextSource::Whole {
+            text: document,
+            starts: starts.as_slice(),
+        };
+        let row_count = snapshot.line_count();
+        let window = LineTextSource::window(&snapshot, 0..row_count, None);
+
+        for row in 0..row_count {
+            assert_eq!(
+                window.line_text(row),
+                whole.line_text(row),
+                "row {row} of {document:?}"
+            );
+        }
+
+        // The caret's row is stored separately when it falls outside the
+        // window, and has to agree with the in-window rendering of the same
+        // row — otherwise scrolling the caret in and out changes its width.
+        for row in 0..row_count {
+            let elsewhere = if row == 0 {
+                row_count.saturating_sub(1)
+            } else {
+                0
+            };
+            let stray_window =
+                LineTextSource::window(&snapshot, elsewhere..elsewhere + 1, Some(row));
+            assert_eq!(
+                stray_window.line_text(row),
+                whole.line_text(row),
+                "stray row {row} of {document:?}"
+            );
+        }
+    }
 }

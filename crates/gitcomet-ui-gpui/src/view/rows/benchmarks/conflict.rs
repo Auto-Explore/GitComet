@@ -3198,8 +3198,10 @@ fn build_synthetic_whole_file_conflict_segments(total_lines: usize) -> Vec<Confl
 /// all 64-line token chunks discarded) and fell back to heuristic tokens until a
 /// worker thread caught up. Here it is `tree.edit` plus an incremental reparse.
 pub struct ConflictResolvedOutputLiveSyntaxFixture {
-    text: Arc<str>,
-    line_starts: Arc<[usize]>,
+    // The rope *is* the document, as in production: the benchmark edits it in
+    // place so a keystroke costs what a keystroke costs, rather than rebuilding
+    // a fresh buffer and line index each step and measuring that instead.
+    rope: crate::kit::rope::Rope,
     mask: Arc<[Range<usize>]>,
     document: Option<super::diff_text::LiveSyntaxDocument>,
     theme: AppTheme,
@@ -3232,21 +3234,18 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
             ));
         }
 
-        let text: Arc<str> = Arc::from(text.as_str());
-        let line_starts = live_syntax_line_starts(text.as_ref());
+        let rope = crate::kit::rope::Rope::from_str(&text);
         let mask: Arc<[Range<usize>]> = mask.into();
         let theme = AppTheme::gitcomet_dark();
         let document = super::diff_text::LiveSyntaxDocument::new(
             super::diff_text::DiffSyntaxLanguage::Rust,
-            Arc::clone(&text),
-            Arc::clone(&line_starts),
+            rope.clone(),
             Arc::clone(&mask),
             None,
         );
-        let caret = text.len() / 2;
+        let caret = rope.len() / 2;
         Self {
-            text,
-            line_starts,
+            rope,
             mask,
             document,
             theme,
@@ -3262,17 +3261,11 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
         // Land the insert on a character boundary near the middle of the
         // document, which is where an incremental reparse has the most tree to
         // preserve on either side.
-        let mut at = self.caret.min(self.text.len());
-        while at < self.text.len() && !self.text.is_char_boundary(at) {
-            at += 1;
-        }
-        let mut next = String::with_capacity(self.text.len() + 1);
-        next.push_str(&self.text[..at]);
-        next.push('x');
-        next.push_str(&self.text[at..]);
+        let at = self
+            .rope
+            .clip_offset(self.caret.min(self.rope.len()), gpui::sum_tree::Bias::Right);
+        self.rope.replace(at..at, "x");
 
-        let next: Arc<str> = Arc::from(next.as_str());
-        let line_starts = live_syntax_line_starts(next.as_ref());
         let mask: Arc<[Range<usize>]> = self
             .mask
             .iter()
@@ -3287,14 +3280,11 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
             .into();
 
         document.sync(
-            Arc::clone(&next),
-            Arc::clone(&line_starts),
+            self.rope.clone(),
             Arc::clone(&mask),
             Some((at..at, at..at + 1)),
             Some(Duration::from_millis(1)),
         );
-        self.text = next;
-        self.line_starts = line_starts;
         self.mask = mask;
         document.version()
     }
@@ -3304,16 +3294,16 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
         let Some(document) = self.document.as_ref() else {
             return 0;
         };
-        let start = self
-            .line_starts
-            .get(start_line)
-            .copied()
-            .unwrap_or(self.text.len());
-        let end = self
-            .line_starts
-            .get(start_line.saturating_add(rows))
-            .copied()
-            .unwrap_or(self.text.len());
+        // Row starts by descent, the way the renderer asks for them.
+        let row_start = |row: usize| -> usize {
+            u32::try_from(row)
+                .ok()
+                .filter(|row| *row < self.rope.line_count())
+                .map(|row| self.rope.line_range(row).start)
+                .unwrap_or(self.rope.len())
+        };
+        let start = row_start(start_line);
+        let end = row_start(start_line.saturating_add(rows));
         let highlights = document
             .snapshot(self.theme)
             .highlights_for_byte_range(start..end);
@@ -3324,22 +3314,11 @@ impl ConflictResolvedOutputLiveSyntaxFixture {
     pub fn run_cold_parse(&self) -> u64 {
         super::diff_text::LiveSyntaxDocument::new(
             super::diff_text::DiffSyntaxLanguage::Rust,
-            Arc::clone(&self.text),
-            Arc::clone(&self.line_starts),
+            self.rope.clone(),
             Arc::clone(&self.mask),
             None,
         )
         .map(|document| document.version())
         .unwrap_or(0)
     }
-}
-
-fn live_syntax_line_starts(text: &str) -> Arc<[usize]> {
-    let mut starts = vec![0usize];
-    for (ix, byte) in text.bytes().enumerate() {
-        if byte == b'\n' && ix + 1 < text.len() {
-            starts.push(ix + 1);
-        }
-    }
-    starts.into()
 }

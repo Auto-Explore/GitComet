@@ -848,13 +848,6 @@ pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
 ///
 /// Bootstrap should stay bounded instead of diffing the entire block eagerly.
 pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
-/// Above this merged-output line count the resolved output stays in read-only
-/// streamed mode instead of materializing the whole text into the editable
-/// `TextInput` buffer — the perf guard for whole-file conflicts. Sits above
-/// [`LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES`] (a large-but-editable output still
-/// materializes) and below the whole-file streamed fixtures at `+ 1_000`.
-pub(crate) const RESOLVED_OUTPUT_EDITABLE_MAX_LINES: usize =
-    LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 500;
 /// Head/tail preview rows kept for very large conflict blocks during bootstrap.
 #[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
@@ -1299,7 +1292,7 @@ impl ResolvedOutputBlockMap {
     pub(in crate::view) fn is_valid_for(
         &self,
         segments: &[ConflictSegment],
-        output_text: &str,
+        output_text: &(impl ResolvedOutputSource + ?Sized),
     ) -> bool {
         self.text_len == output_text.len()
             && self.ranges.len() == conflict_count(segments)
@@ -2277,14 +2270,10 @@ pub(in crate::view) fn line_is_unresolved_conflict_placeholder(line: &str) -> bo
         || line == UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER
 }
 
-/// Whether a placeholder row can occur anywhere in this text.
+/// Whether this block renders as a placeholder row rather than as text.
 ///
-/// Both spellings open the same way, so one substring search rules the whole
-/// buffer out before anything walks it line by line.
-pub(in crate::view) fn text_may_contain_unresolved_conflict_placeholder(text: &str) -> bool {
-    text.contains("<Merge Conflict")
-}
-
+/// An unresolved block with no side picked has nothing to show, so the output
+/// carries one `<Merge Conflict>` row in its place.
 fn uses_unresolved_merge_conflict_placeholder(block: &ConflictBlock) -> bool {
     !block.resolved && block.choice.is_empty()
 }
@@ -3543,27 +3532,11 @@ pub fn build_inline_rows(rows: &[gitcomet_core::file_diff::FileDiffRow]) -> Vec<
     out
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(super) fn block_max_line_count(block: &ConflictBlock) -> usize {
     text_line_count_usize(block.base.as_deref().unwrap_or_default())
         .max(text_line_count_usize(&block.ours))
         .max(text_line_count_usize(&block.theirs))
-}
-
-/// Conservative line budget for materializing an unresolved output.
-///
-/// An unresolved block draws one placeholder row, but any single A/B/C pick can
-/// expand it to its widest side's line count. Account for that before moving a
-/// streamed document into the editable buffer.
-/// Summing fragment line counts can over-count at fragment boundaries, which is
-/// intentional: this is a safety limit rather than an exact output projection.
-pub(super) fn single_source_output_line_upper_bound(segments: &[ConflictSegment]) -> usize {
-    segments.iter().fold(0usize, |total, segment| {
-        let fragment_lines = match segment {
-            ConflictSegment::Text(text) => text_line_count_usize(text),
-            ConflictSegment::Block(block) => block_max_line_count(block).max(1),
-        };
-        total.saturating_add(fragment_lines)
-    })
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -5902,8 +5875,190 @@ pub fn conflict_stage_safety_check(
     }
 }
 
-/// Count logical resolved-output rows while preserving a trailing empty row
-/// after a final newline.
+/// What the resolved-output analysis needs to read from the buffer.
+///
+/// Implemented for `str` and for [`Rope`], so the same code serves callers that
+/// already hold a materialized string (a freshly generated output, a test
+/// fixture) and the editable buffer, which must not be flattened just to be
+/// scanned. Implementing it on `str` rather than `&str` is what keeps every
+/// existing caller compiling unchanged.
+pub(in crate::view) trait ResolvedOutputSource {
+    fn len(&self) -> usize;
+    fn is_char_boundary(&self, offset: usize) -> bool;
+    /// Whether the text at `offset` begins with `needle`.
+    fn starts_with_at(&self, offset: usize, needle: &str) -> bool;
+    fn byte_at(&self, offset: usize) -> Option<u8>;
+    fn count_newlines_in(&self, range: Range<usize>) -> usize;
+    /// Rows, counting the empty one a trailing newline leaves behind.
+    fn row_count(&self) -> usize {
+        self.count_newlines_in(0..self.len()).saturating_add(1)
+    }
+
+    /// Visit every row as `(byte range including its terminator, text)`.
+    ///
+    /// One pass over the text, so a scan for marker rows costs the document
+    /// once rather than a seek per row.
+    fn for_each_row_with_terminator(&self, visit: &mut dyn FnMut(Range<usize>, &str));
+}
+
+impl ResolvedOutputSource for str {
+    fn len(&self) -> usize {
+        str::len(self)
+    }
+
+    fn is_char_boundary(&self, offset: usize) -> bool {
+        str::is_char_boundary(self, offset)
+    }
+
+    fn starts_with_at(&self, offset: usize, needle: &str) -> bool {
+        self.get(offset..)
+            .is_some_and(|tail| tail.starts_with(needle))
+    }
+
+    fn byte_at(&self, offset: usize) -> Option<u8> {
+        self.as_bytes().get(offset).copied()
+    }
+
+    fn count_newlines_in(&self, range: Range<usize>) -> usize {
+        // Clamped rather than `get(range)`, which answers `None` — and so 0 —
+        // for a span that runs past the end or starts inside a character. Zero
+        // is the dangerous answer: callers feed this into block line ranges, so
+        // "no newlines here" silently places conflict markers on the wrong
+        // rows. [`Rope`] clamps and counts what is really there; the two
+        // implementations are used against the same buffers and have to agree.
+        let len = str::len(self);
+        let mut start = range.start.min(len);
+        let mut end = range.end.min(len).max(start);
+        // Widening to character boundaries cannot change the count: a newline
+        // is ASCII, so it never sits inside a multi-byte character.
+        while start > 0 && !self.is_char_boundary(start) {
+            start -= 1;
+        }
+        while end < len && !self.is_char_boundary(end) {
+            end += 1;
+        }
+        memchr::memchr_iter(b'\n', &self.as_bytes()[start..end]).count()
+    }
+
+    fn for_each_row_with_terminator(&self, visit: &mut dyn FnMut(Range<usize>, &str)) {
+        let mut start = 0usize;
+        for newline in memchr::memchr_iter(b'\n', self.as_bytes()) {
+            let end = newline + 1;
+            visit(start..end, &self[start..end]);
+            start = end;
+        }
+        if start <= str::len(self) {
+            visit(start..str::len(self), &self[start..]);
+        }
+    }
+}
+
+impl ResolvedOutputSource for crate::kit::rope::Rope {
+    fn len(&self) -> usize {
+        crate::kit::rope::Rope::len(self)
+    }
+
+    fn is_char_boundary(&self, offset: usize) -> bool {
+        crate::kit::rope::Rope::is_char_boundary(self, offset)
+    }
+
+    fn starts_with_at(&self, offset: usize, needle: &str) -> bool {
+        let end = offset.saturating_add(needle.len());
+        if end > self.len() {
+            return false;
+        }
+        // Compared as bytes, and over a boundary-widened chunk range, because
+        // this is asked precisely when the buffer may have diverged from the
+        // segments: `offset` or `end` can land inside a multi-byte character
+        // the user typed. A `&str` comparison would panic there instead of
+        // reporting the mismatch this exists to find.
+        let mut rest = needle.as_bytes();
+        let mut skip = offset - self.clip_offset(offset, gpui::sum_tree::Bias::Left);
+        for chunk in self.chunks_in_range(offset..end) {
+            let bytes = chunk.as_bytes();
+            let bytes = if skip >= bytes.len() {
+                skip -= bytes.len();
+                continue;
+            } else {
+                let tail = &bytes[skip..];
+                skip = 0;
+                tail
+            };
+            let take = bytes.len().min(rest.len());
+            if rest[..take] != bytes[..take] {
+                return false;
+            }
+            rest = &rest[take..];
+            if rest.is_empty() {
+                return true;
+            }
+        }
+        rest.is_empty()
+    }
+
+    fn byte_at(&self, offset: usize) -> Option<u8> {
+        if offset >= self.len() {
+            return None;
+        }
+        // A byte read is well defined at every offset, including inside a
+        // multi-byte character — trimming a `\r` off a row end lands there
+        // whenever the row's last character is not ASCII. Widen to the
+        // enclosing character and index the bytes, rather than slicing a `&str`
+        // at `offset`, which would panic.
+        let start = self.clip_offset(offset, gpui::sum_tree::Bias::Left);
+        self.chunks_in_range(
+            start..self.clip_offset(offset.saturating_add(1), gpui::sum_tree::Bias::Right),
+        )
+        .next()
+        .and_then(|chunk| chunk.as_bytes().get(offset - start).copied())
+    }
+
+    fn count_newlines_in(&self, range: Range<usize>) -> usize {
+        // Two summary descents rather than a scan.
+        let start = self.offset_to_point(range.start).row;
+        let end = self.offset_to_point(range.end.max(range.start)).row;
+        end.saturating_sub(start) as usize
+    }
+
+    fn row_count(&self) -> usize {
+        crate::kit::rope::Rope::line_count(self) as usize
+    }
+
+    fn for_each_row_with_terminator(&self, visit: &mut dyn FnMut(Range<usize>, &str)) {
+        // One walk over the chunks. A row that straddles a chunk boundary is
+        // assembled into `carry` — at most one per chunk, so this allocates in
+        // proportion to the chunk count, not the row count.
+        let mut row_start = 0usize;
+        let mut base = 0usize;
+        let mut carry = String::new();
+        for chunk in self.chunks() {
+            let mut search = 0usize;
+            while let Some(found) = memchr::memchr(b'\n', &chunk.as_bytes()[search..]) {
+                let newline = search + found;
+                let row_end = base + newline + 1;
+                if carry.is_empty() {
+                    visit(row_start..row_end, &chunk[search..=newline]);
+                } else {
+                    carry.push_str(&chunk[search..=newline]);
+                    visit(row_start..row_end, &carry);
+                    carry.clear();
+                }
+                row_start = row_end;
+                search = newline + 1;
+            }
+            if search < chunk.len() {
+                carry.push_str(&chunk[search..]);
+            }
+            base += chunk.len();
+        }
+        visit(row_start..base, &carry);
+    }
+}
+
+/// Row count for a materialized output. Production reads this off
+/// [`ResolvedOutputSource::row_count`] instead, which the rope answers from its
+/// summary; this remains for tests and benchmarks that hold a `String`.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn resolved_output_outline_line_count(output: &str) -> usize {
     memchr::memchr_iter(b'\n', output.as_bytes())
         .count()

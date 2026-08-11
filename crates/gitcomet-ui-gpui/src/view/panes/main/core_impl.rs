@@ -516,18 +516,13 @@ fn update_line_sources_index_for_range(
     }
 }
 
-fn widest_resolved_output_line_ix(text: &str, line_starts: &[usize]) -> usize {
-    let mut best_ix = 0usize;
-    let mut best_len = 0usize;
-    let line_count = line_starts.len().max(1);
-    for line_ix in 0..line_count {
-        let width = rows::resolved_output_line_text(text, line_starts, line_ix).len();
-        if width > best_len {
-            best_len = width;
-            best_ix = line_ix;
-        }
-    }
-    best_ix
+/// The row the resolved-output column measures its width against.
+///
+/// O(1): the rope carries the widest row in its summary, so the measurement
+/// never scans the document. Ties keep the earliest row, matching the linear
+/// scan this replaced.
+fn resolved_output_measure_row(snapshot: &TextModelSnapshot) -> usize {
+    snapshot.rope().longest_row() as usize
 }
 
 fn preferred_scroll_master_index<const N: usize>(max_scrolls: [Pixels; N]) -> usize {
@@ -1415,7 +1410,7 @@ impl MainPaneView {
                 let syntax_edit = coalesce_resolved_output_edit_deltas(&edit_deltas);
                 this.apply_conflict_resolved_output_edit_deltas(
                     edit_deltas,
-                    output_snapshot.as_ref(),
+                    &output_snapshot.rope(),
                 );
                 if !this.conflict_resolved_output_is_streamed() {
                     this.refresh_conflict_resolved_output_syntax(&output_snapshot, syntax_edit, cx);
@@ -1767,6 +1762,9 @@ impl MainPaneView {
             conflict_resolved_output_live_syntax_source: None,
             conflict_resolved_output_provider_theme_epoch: 1,
             conflict_resolved_output_highlighted_conflict: None,
+            conflict_resolved_output_unresolved_rows: None,
+            #[cfg(test)]
+            conflict_resolved_output_full_scans: 0,
             conflict_resolved_output_live_syntax_building: None,
             conflict_resolved_output_live_syntax_build: None,
             conflict_resolved_output_measure_row: 0,
@@ -1857,12 +1855,9 @@ impl MainPaneView {
                 .conflict_resolver_input
                 .read_with(cx, |input, _| input.text_snapshot());
             self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
-            self.conflict_resolved_preview_line_count =
-                self.conflict_resolved_preview_line_starts.len().max(1);
-            self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
-                output_snapshot.as_str(),
-                self.conflict_resolved_preview_line_starts.as_ref(),
-            );
+            self.conflict_resolved_preview_line_count = output_snapshot.line_count().max(1);
+            self.conflict_resolved_output_measure_row =
+                resolved_output_measure_row(&output_snapshot);
             self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
         }
         self.history_view
@@ -1998,7 +1993,7 @@ impl MainPaneView {
     pub(super) fn apply_conflict_resolved_output_edit_deltas(
         &mut self,
         edit_deltas: Vec<(Range<usize>, Range<usize>)>,
-        output_text: &str,
+        output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
     ) {
         if edit_deltas.is_empty() {
             return;
@@ -2090,23 +2085,12 @@ impl MainPaneView {
             return;
         }
 
-        // Perf guard: a whole-file conflict can produce a merged output far too
-        // large to pull into the editable buffer. Above the threshold the output
-        // stays in read-only streamed mode (rendered from the projection); the
-        // edit affordances are gated on `!conflict_resolved_output_is_streamed`.
-        let exceeds_editable_budget = self
-            .conflict_resolved_output_projection
-            .as_ref()
-            .is_some_and(|projection| {
-                projection.len() > conflict_resolver::RESOLVED_OUTPUT_EDITABLE_MAX_LINES
-            })
-            || conflict_resolver::single_source_output_line_upper_bound(
-                &self.conflict_resolver.marker_segments,
-            ) > conflict_resolver::RESOLVED_OUTPUT_EDITABLE_MAX_LINES;
-        if exceeds_editable_budget {
-            return;
-        }
-
+        // No size ceiling here. The output pane is editable by definition, and a
+        // read-only fallback above some line count is a worse answer than a
+        // slower one: the user opened a merge to resolve it. The buffer is
+        // rope-backed and every hot path (syntax refresh, unresolved-row scan,
+        // shaping) reads windows rather than the whole document, so cost scales
+        // with the visible region plus the conflict count, not the file.
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
         let path = self.conflict_resolver.path.clone();
@@ -2168,6 +2152,38 @@ impl MainPaneView {
             // on the horizontal axis too.
             input.set_content_width_layout(true);
         });
+    }
+
+    /// Unresolved rows for `snapshot`, from the cache when it is still current.
+    ///
+    /// A miss only happens when navigation runs before any refresh has scanned
+    /// this revision; the scan is then done once and cached like any other.
+    fn conflict_resolved_output_unresolved_rows_for(
+        &mut self,
+        snapshot: &TextModelSnapshot,
+    ) -> UnresolvedRows {
+        let key = ResolvedOutputKey::new(
+            snapshot,
+            &self.conflict_resolver.marker_segments,
+            &self.conflict_resolved_output_block_map,
+        );
+        if let Some((cached_for, rows)) = self.conflict_resolved_output_unresolved_rows.as_ref()
+            && *cached_for == key
+        {
+            return Arc::clone(rows);
+        }
+
+        #[cfg(test)]
+        {
+            self.conflict_resolved_output_full_scans += 1;
+        }
+        let rows = resolved_output_unresolved_rows(
+            &self.conflict_resolver.marker_segments,
+            &snapshot.rope(),
+            &self.conflict_resolved_output_block_map,
+        );
+        self.conflict_resolved_output_unresolved_rows = Some((key, Arc::clone(&rows)));
+        rows
     }
 
     /// Rebuild the output highlights when conflict navigation lands on another
@@ -2318,8 +2334,7 @@ impl MainPaneView {
     fn ensure_conflict_resolved_output_live_syntax_build(
         &mut self,
         language: rows::DiffSyntaxLanguage,
-        text: Arc<str>,
-        line_starts: Arc<[usize]>,
+        rope: crate::kit::rope::Rope,
         mask: Arc<[Range<usize>]>,
         revision: ResolvedOutputSourceRevision,
         cx: &mut gpui::Context<Self>,
@@ -2332,9 +2347,7 @@ impl MainPaneView {
         let build_mask = Arc::clone(&mask);
         self.conflict_resolved_output_live_syntax_build =
             Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
-                let build = move || {
-                    rows::LiveSyntaxDocument::new(language, text, line_starts, build_mask, None)
-                };
+                let build = move || rows::LiveSyntaxDocument::new(language, rope, build_mask, None);
                 let built = if crate::ui_runtime::current().uses_background_compute() {
                     smol::unblock(build).await
                 } else {
@@ -2394,16 +2407,13 @@ impl MainPaneView {
         let output_snapshot = self
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
-        let text: Arc<str> = output_snapshot.as_shared_string().into();
-        let line_starts = output_snapshot.shared_line_starts();
-        let protected_ranges =
-            resolved_output_placeholder_protected_ranges(text.as_ref(), line_starts.as_ref());
-        let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), text.as_ref());
+        let rope = output_snapshot.rope();
+        let protected_ranges = resolved_output_placeholder_protected_ranges(&rope);
+        let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), &rope);
         let revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
         self.ensure_conflict_resolved_output_live_syntax_build(
             language,
-            text,
-            line_starts,
+            output_snapshot.rope(),
             mask,
             revision,
             cx,
@@ -2437,14 +2447,16 @@ impl MainPaneView {
                 } else {
                     reparse()
                 };
-                let Some((version, tree)) = parsed else {
+                let Some((version, tree, injections)) = parsed else {
                     return;
                 };
                 let _ = view.update(cx, |this, cx| {
                     let adopted = this
                         .conflict_resolved_output_live_syntax
                         .as_mut()
-                        .is_some_and(|document| document.adopt_background_tree(version, tree));
+                        .is_some_and(|document| {
+                            document.adopt_background_tree(version, tree, injections)
+                        });
                     if !adopted {
                         // The buffer moved while this was in flight, so the tree
                         // describes text that no longer exists. Re-issue from
@@ -2472,11 +2484,12 @@ impl MainPaneView {
             .conflict_resolver_input
             .read_with(cx, |input, _| input.text_snapshot());
         self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
-        let unresolved_spans = resolved_output_unresolved_byte_ranges(
-            &self.conflict_resolver.marker_segments,
-            output_snapshot.as_str(),
-            output_snapshot.shared_line_starts().as_ref(),
-            &self.conflict_resolved_output_block_map,
+        // Reuse the scan from the last refresh when the text has not moved.
+        // Rebinding happens on every conflict jump, and rescanning here is what
+        // made navigation scale with the file rather than with the conflict.
+        let rows = self.conflict_resolved_output_unresolved_rows_for(&output_snapshot);
+        let unresolved_spans = resolved_output_unresolved_spans_for_active(
+            rows.as_ref(),
             self.conflict_resolver.active_conflict,
         );
         let binding_key = resolved_output_live_provider_binding_key(
@@ -2500,30 +2513,88 @@ impl MainPaneView {
     /// one) — which reparses from scratch.
     ///
     /// Cheap enough to run on the keystroke: the tree is edited in place and the
-    /// reparse reuses it, so nothing here scales with document size the way the
-    /// prepared-document rebuild it replaced did.
+    /// reparse reuses it, rather than rebuilding the prepared document this
+    /// replaced.
+    ///
+    /// The root parse is incremental; the *injected* layers are not. A reparse
+    /// re-runs the injection query over the whole document and reparses every
+    /// injected region from scratch, each with its own copy of the foreground
+    /// budget. On a document with many injections (fenced blocks, `<script>`
+    /// bodies) that is the dominant per-keystroke cost and does scale with the
+    /// document — the outstanding gap against Zed's `SyntaxMap`, which keys
+    /// layers by (language, range) and reparses them incrementally.
     fn refresh_conflict_resolved_output_syntax(
         &mut self,
         output_snapshot: &TextModelSnapshot,
         edit: Option<(Range<usize>, Range<usize>)>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let text: Arc<str> = output_snapshot.as_shared_string().into();
-        let line_starts = output_snapshot.shared_line_starts();
+        // Everything below is derived from the *text*. When the text has not
+        // moved, all of it still stands and the only thing that can need
+        // updating is the provider binding — a theme change, or a different
+        // conflict wearing the wash.
+        //
+        // Only when the caller reports no edit. An `edit` is the caller stating
+        // that the text moved, and the tree must be folded forward even if the
+        // revision happens to look settled — skipping the sync there leaves the
+        // tree describing the pre-edit text, which shows up as the row you just
+        // typed into keeping its old colours.
+        let revision = ResolvedOutputSourceRevision::from_snapshot(output_snapshot);
+        let text_is_unchanged = self
+            .conflict_resolved_output_live_syntax_source
+            .as_ref()
+            .is_some_and(|(built_for, _)| *built_for == revision);
+        // The language has to match too, not just the text. The reuse check
+        // that would drop a document built by the wrong grammar lives *below*
+        // this return, so leaving it out lets a language change with unchanged
+        // text keep the previous grammar's tree — the state
+        // `conflict_resolver_invalidate_resolved_outline` leaves behind, which
+        // clears the language but not the live document.
+        let language_is_unchanged = self
+            .conflict_resolved_output_live_syntax
+            .as_ref()
+            .is_some_and(|document| {
+                Some(document.language()) == self.conflict_resolved_preview_syntax_language
+            });
+        if edit.is_none() && text_is_unchanged && language_is_unchanged {
+            self.conflict_resolved_output_highlighted_conflict =
+                self.conflict_resolver.active_conflict;
+            self.rebind_conflict_resolved_output_highlight_provider(cx);
+            return;
+        }
+
+        // Every read below goes through the rope, and nothing on this path
+        // builds either whole-document cache — not the flattened string, and
+        // not the line-start array, which is the quieter of the two and was the
+        // one that lingered here. `no_materialization_tests` asserts both.
+        let rope = output_snapshot.rope();
         self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
-        let unresolved_spans = resolved_output_unresolved_byte_ranges(
+        #[cfg(test)]
+        {
+            self.conflict_resolved_output_full_scans += 1;
+        }
+        let unresolved_rows = resolved_output_unresolved_rows(
             &self.conflict_resolver.marker_segments,
-            text.as_ref(),
-            line_starts.as_ref(),
+            &rope,
             &self.conflict_resolved_output_block_map,
+        );
+        self.conflict_resolved_output_unresolved_rows = Some((
+            ResolvedOutputKey::new(
+                output_snapshot,
+                &self.conflict_resolver.marker_segments,
+                &self.conflict_resolved_output_block_map,
+            ),
+            Arc::clone(&unresolved_rows),
+        ));
+        let unresolved_spans = resolved_output_unresolved_spans_for_active(
+            unresolved_rows.as_ref(),
             self.conflict_resolver.active_conflict,
         );
         // The placeholder rows are a rendering of open decisions, so hand them
         // to the buffer as uneditable spans — and hide the same spans from the
         // parser, which would otherwise read `<Merge Conflict>` as code.
-        let protected_ranges =
-            resolved_output_placeholder_protected_ranges(text.as_ref(), line_starts.as_ref());
-        let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), text.as_ref());
+        let protected_ranges = resolved_output_placeholder_protected_ranges(&rope);
+        let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), &rope);
         let budget = Some(self.full_document_syntax_budget().foreground_parse);
 
         let language = self.conflict_resolved_preview_syntax_language;
@@ -2552,13 +2623,7 @@ impl MainPaneView {
             // re-triggering the observe that called it.
             Some(_) if current => {}
             Some(document) => {
-                let outcome = document.sync(
-                    Arc::clone(&text),
-                    Arc::clone(&line_starts),
-                    Arc::clone(&mask),
-                    edit,
-                    budget,
-                );
+                let outcome = document.sync(rope.clone(), Arc::clone(&mask), edit, budget);
                 if outcome == rows::LiveSyntaxSyncOutcome::Abandoned {
                     // The edit took the buffer past the size ceiling, so the
                     // document now describes text that no longer exists. Drop it
@@ -2584,8 +2649,7 @@ impl MainPaneView {
                     language.filter(|_| !already_building).and_then(|language| {
                         rows::LiveSyntaxDocument::new(
                             language,
-                            Arc::clone(&text),
-                            Arc::clone(&line_starts),
+                            rope.clone(),
                             Arc::clone(&mask),
                             budget,
                         )
@@ -2607,8 +2671,7 @@ impl MainPaneView {
                 {
                     self.ensure_conflict_resolved_output_live_syntax_build(
                         language,
-                        Arc::clone(&text),
-                        Arc::clone(&line_starts),
+                        rope.clone(),
                         Arc::clone(&mask),
                         revision,
                         cx,
@@ -2641,7 +2704,7 @@ impl MainPaneView {
                         self.conflict_resolved_output_provider_theme_epoch,
                         &unresolved_spans,
                     );
-                    input.set_highlight_provider_with_key(binding_key, provider, text.len(), cx);
+                    input.set_highlight_provider_with_key(binding_key, provider, rope.len(), cx);
                 }
                 None => {
                     // Heuristic tokens, with the open conflicts still called out
@@ -2654,27 +2717,24 @@ impl MainPaneView {
                     // grammar exists is precisely the bug where the output stops
                     // matching the panes above it. A budget-exhausted first parse
                     // must go to `ensure_conflict_resolved_output_live_syntax_build`
-                    // instead, and this arm is the stopgap only until it lands.
-                    let highlights = language
-                        .map(|language| {
-                            build_resolved_output_syntax_fallback_highlights(
-                                self.theme,
-                                text.as_ref(),
-                                language,
-                                rows::DiffSyntaxMode::HeuristicOnly,
-                            )
-                        })
-                        .unwrap_or_default();
-                    input.set_highlights(
-                        apply_resolved_output_unresolved_highlights(
-                            highlights,
-                            &unresolved_spans,
-                            0..text.len(),
-                            resolved_output_unresolved_highlight_style(self.theme),
-                            resolved_output_active_unresolved_highlight_style(self.theme),
-                        ),
-                        cx,
+                    // instead.
+                    //
+                    // A provider rather than a whole-document `set_highlights`:
+                    // this arm is reached by the *largest* buffers, and the
+                    // tokenizer is line-local, so answering per window is both
+                    // exact and proportional to the viewport.
+                    let provider = resolved_output_heuristic_highlight_provider(
+                        self.theme,
+                        rope.clone(),
+                        language,
+                        unresolved_spans.clone(),
                     );
+                    let binding_key = resolved_output_heuristic_provider_binding_key(
+                        revision,
+                        self.conflict_resolved_output_provider_theme_epoch,
+                        &unresolved_spans,
+                    );
+                    input.set_highlight_provider_with_key(binding_key, provider, rope.len(), cx);
                 }
             }
         });
@@ -2867,6 +2927,20 @@ impl MainPaneView {
         }
     }
 
+    /// Snapshot everything the outline recompute needs, so it can run detached.
+    ///
+    /// This materializes the output, and unlike the syntax path it is not an
+    /// artifact worth removing: the outline assigns a
+    /// provenance to *every* row by comparing its text against the three source
+    /// sides, so the work is O(document) whatever it reads through, and the copy
+    /// is a small constant beside it.
+    ///
+    /// What keeps that off the keystroke path is *where* it is called from, not
+    /// its cost: both the production task and the synchronous test arm build the
+    /// request only once the debounce
+    /// (`CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS`) has settled and the recompute
+    /// is going to run. Hoisting this call above that check charges every
+    /// keystroke for a copy of the document that is then discarded.
     fn background_resolved_outline_recompute_request(
         &self,
         output_snapshot: &TextModelSnapshot,
@@ -2971,12 +3045,8 @@ impl MainPaneView {
         self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
-        self.conflict_resolved_preview_line_count =
-            self.conflict_resolved_preview_line_starts.len().max(1);
-        self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
-            output_snapshot.as_str(),
-            self.conflict_resolved_preview_line_starts.as_ref(),
-        );
+        self.conflict_resolved_preview_line_count = output_snapshot.line_count().max(1);
+        self.conflict_resolved_output_measure_row = resolved_output_measure_row(output_snapshot);
         // Syntax no longer *waits* on this debounce — it tracks the buffer on
         // the keystroke, in the `cx.observe` on `conflict_resolver_input`. The
         // call stays because this method is also how the language arrives
@@ -3334,10 +3404,7 @@ impl MainPaneView {
         );
         self.conflict_resolved_preview_line_count = new_line_count;
         self.conflict_resolved_preview_line_starts = new_line_starts;
-        self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
-            output_text,
-            self.conflict_resolved_preview_line_starts.as_ref(),
-        );
+        self.conflict_resolved_output_measure_row = resolved_output_measure_row(&output_snapshot);
         // The text already reached the live tree on the keystroke. This call is
         // here for what the outline recompute itself changed: the language (the
         // path may have only just resolved) and the unresolved-conflict overlay,
@@ -3427,7 +3494,6 @@ impl MainPaneView {
             let output_snapshot = self
                 .conflict_resolver_input
                 .read_with(cx, |input, _| input.text_snapshot());
-            let request = self.background_resolved_outline_recompute_request(&output_snapshot);
             let background_delay = self
                 .conflict_resolved_outline_background_delay_override
                 .unwrap_or_default();
@@ -3438,6 +3504,11 @@ impl MainPaneView {
                 && self.conflict_resolved_preview_source_revision == Some(source_revision)
                 && self.conflict_resolved_preview_path.as_ref() == path.as_ref()
             {
+                // Built here rather than above so this arm matches production,
+                // where the request is assembled inside the debounced task. It
+                // copies the document, so hoisting it would charge every
+                // keystroke for an outline that only runs once per burst.
+                let request = self.background_resolved_outline_recompute_request(&output_snapshot);
                 let computed = compute_resolved_outline_computation(
                     request.output_text.as_ref(),
                     request.output_line_count,

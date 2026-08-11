@@ -1424,7 +1424,9 @@ impl TextModelBulkLoadLargeFixture {
         let mut h = FxHasher::default();
         snapshot.len().hash(&mut h);
         snapshot.line_starts().len().hash(&mut h);
-        let suffix_start = snapshot.clamp_to_char_boundary(snapshot.len().saturating_sub(96));
+        // `slice` normalizes to character boundaries itself, so the raw offset
+        // is safe to hand over.
+        let suffix_start = snapshot.len().saturating_sub(96);
         let suffix = snapshot.slice_to_string(suffix_start..snapshot.len());
         suffix.len().hash(&mut h);
 
@@ -1454,7 +1456,7 @@ impl TextModelBulkLoadLargeFixture {
         let mut h = FxHasher::default();
         snapshot.len().hash(&mut h);
         snapshot.line_starts().len().hash(&mut h);
-        let prefix_end = snapshot.clamp_to_char_boundary(snapshot.len().min(96));
+        let prefix_end = snapshot.len().min(96);
         let prefix = snapshot.slice_to_string(0..prefix_end);
         prefix.len().hash(&mut h);
 

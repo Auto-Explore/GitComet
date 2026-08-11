@@ -265,12 +265,16 @@ impl MainPaneView {
         // belongs to that editor, not to the diff/conflict shortcut table.
         // Letting them through here staged the conflict file on the first space
         // typed (StagePath → the file leaves Conflicted → the resolver closes
-        // mid-edit). Two deliberate carve-outs:
+        // mid-edit). Three deliberate carve-outs:
         //   * Ctrl+1/2/3 pick aliases are chords with no text-input collision,
         //     so they stay live while editing (kdiff3 parity).
-        //   * GitComet's Ctrl+Home/End/PgUp/PgDn resolver bindings are
-        //     intentionally NOT handled here, so the editor keeps them for
-        //     cursor movement.
+        //   * Shift+F2/F3 (previous/next unresolved conflict) likewise: an
+        //     F-key produces no text and the editor binds only the unmodified
+        //     `f2`/`f3`, so the chord is free here — and jumping to the next
+        //     open conflict is exactly what you want *while* editing the
+        //     merged result, which is why it is not left outside.
+        //   * GitComet's Ctrl+Home/End resolver bindings are intentionally NOT
+        //     handled here, so the editor keeps them for cursor movement.
         if self
             .conflict_resolver_input
             .read(cx)
@@ -294,6 +298,22 @@ impl MainPaneView {
                     self.conflict_resolver_pick_active_conflict(choice, cx);
                     return true;
                 }
+            }
+            if self.is_conflict_resolver_active()
+                && matches!(key, "f2" | "f3")
+                && mods.shift
+                && !mods.control
+                && !mods.alt
+                && !mods.platform
+                && !mods.function
+                && !self.conflict_resolver.nav_targets.is_empty()
+            {
+                if key == "f2" {
+                    self.conflict_jump_prev_unresolved(cx);
+                } else {
+                    self.conflict_jump_next_unresolved(cx);
+                }
+                return true;
             }
             return false;
         }
@@ -333,6 +353,32 @@ impl MainPaneView {
 
         if !handled && mods.secondary() && mods.number_of_modifiers() == 1 && key == "f" {
             handled = self.open_search_for_active_view(window, cx);
+        }
+
+        // Shift+F2/F3 step between *unresolved* conflicts — the resolved ones
+        // are skipped, which is what separates this from plain F2/F3.
+        //
+        // It sits ahead of the diff-search block below deliberately: this is a
+        // distinct chord, so letting it become "previous/next search match"
+        // whenever the search box happens to be open would be surprising. The
+        // resolver guard keeps that scoped — outside the conflict resolver
+        // Shift+F2/F3 falls through and means exactly what it always did.
+        if !handled
+            && matches!(key, "f2" | "f3")
+            && mods.shift
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && self.is_conflict_resolver_active()
+            && !self.conflict_resolver.nav_targets.is_empty()
+        {
+            if key == "f2" {
+                self.conflict_jump_prev_unresolved(cx);
+            } else {
+                self.conflict_jump_next_unresolved(cx);
+            }
+            handled = true;
         }
 
         if !handled
@@ -962,7 +1008,8 @@ impl MainPaneView {
         }
 
         // GitComet resolver navigation: Ctrl+Home/End jump to the first/last
-        // delta, Ctrl+PgUp/PgDn to the previous/next unresolved conflict.
+        // delta. (Previous/next *unresolved* conflict is Shift+F2/F3, handled
+        // above — Ctrl+PgUp/PgDn belongs to the repository tabs.)
         if !handled
             && conflict_resolver_active
             && (mods.control || mods.platform)
@@ -978,14 +1025,6 @@ impl MainPaneView {
                 }
                 "end" => {
                     self.conflict_jump_last(cx);
-                    handled = true;
-                }
-                "pageup" => {
-                    self.conflict_jump_prev_unresolved(cx);
-                    handled = true;
-                }
-                "pagedown" => {
-                    self.conflict_jump_next_unresolved(cx);
                     handled = true;
                 }
                 _ => {}

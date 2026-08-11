@@ -755,41 +755,32 @@ impl TextInput {
         self.interaction.content_width_layout = enabled;
     }
 
-    fn content_width_line_units(text: &str, line_starts: &[usize], line_ix: usize) -> usize {
-        let start = line_starts.get(line_ix).copied().unwrap_or_default();
-        let end = line_starts
-            .get(line_ix.saturating_add(1))
-            .copied()
-            .unwrap_or(text.len())
-            .min(text.len());
-        let line = text.get(start.min(end)..end).unwrap_or_default();
-        line.len().max(line_display_columns(line))
+    /// Width of one row, in the max of byte length and display columns.
+    ///
+    /// Reads just that row out of the rope, so maintaining the cache after an
+    /// edit costs O(log n) per touched row rather than a whole-document scan.
+    fn content_width_line_units(content: &TextModelSnapshot, line_ix: usize) -> usize {
+        let line = content.slice(content.line_range_with_terminator(line_ix));
+        line.len().max(line_display_columns(&line))
     }
 
     fn content_width_affected_lines(
-        line_starts: &[usize],
-        text_len: usize,
+        content: &TextModelSnapshot,
         byte_range: Range<usize>,
     ) -> Range<usize> {
-        let line_count = line_starts.len().max(1);
-        let line_for_offset = |offset: usize| {
-            line_starts
-                .partition_point(|&start| start <= offset.min(text_len))
-                .saturating_sub(1)
-                .min(line_count.saturating_sub(1))
-        };
-        let start = line_for_offset(byte_range.start);
-        let end = line_for_offset(byte_range.end);
-        start..end.saturating_add(1).min(line_count)
+        let line_count = content.line_count().max(1);
+        let start = content.row_for_offset(byte_range.start);
+        let end = content.row_for_offset(byte_range.end);
+        start.min(line_count.saturating_sub(1))..end.saturating_add(1).min(line_count)
     }
 
     fn rebuild_content_width_cache(&mut self) {
-        let text = self.content.as_str();
-        let starts = self.content.line_starts();
+        let content = self.content.snapshot();
+        let line_count = content.line_count().max(1);
         let mut cache = ContentWidthCache::default();
-        cache.line_units.reserve(starts.len().max(1));
-        for line_ix in 0..starts.len().max(1) {
-            let units = Self::content_width_line_units(text, starts, line_ix);
+        cache.line_units.reserve(line_count);
+        for line_ix in 0..line_count {
+            let units = Self::content_width_line_units(&content, line_ix);
             cache.line_units.push(units);
             *cache.unit_counts.entry(units).or_default() += 1;
         }
@@ -803,28 +794,22 @@ impl TextInput {
     }
 
     fn replace_content_range(&mut self, range: Range<usize>, new_text: &str) -> Range<usize> {
-        let old_affected = self.content_width_cache.as_ref().map(|_| {
-            Self::content_width_affected_lines(
-                self.content.line_starts(),
-                self.content.len(),
-                range.clone(),
-            )
-        });
+        // Snapshotting is an `Arc` bump, and it is the only way to read the
+        // pre-edit row layout after `replace_range` has already moved on.
+        let old_affected = self
+            .content_width_cache
+            .as_ref()
+            .map(|_| Self::content_width_affected_lines(&self.content.snapshot(), range.clone()));
         let inserted = self.content.replace_range(range, new_text);
         let Some(old_affected) = old_affected else {
             return inserted;
         };
 
-        let new_affected = Self::content_width_affected_lines(
-            self.content.line_starts(),
-            self.content.len(),
-            inserted.clone(),
-        );
-        let text = self.content.as_str();
-        let starts = self.content.line_starts();
+        let content = self.content.snapshot();
+        let new_affected = Self::content_width_affected_lines(&content, inserted.clone());
         let replacement_units = new_affected
             .clone()
-            .map(|line_ix| Self::content_width_line_units(text, starts, line_ix))
+            .map(|line_ix| Self::content_width_line_units(&content, line_ix))
             .collect::<Vec<_>>();
         let cache = self
             .content_width_cache
@@ -848,7 +833,7 @@ impl TextInput {
         for units in replacement_units {
             *cache.unit_counts.entry(units).or_default() += 1;
         }
-        debug_assert_eq!(cache.line_units.len(), starts.len().max(1));
+        debug_assert_eq!(cache.line_units.len(), content.line_count().max(1));
         inserted
     }
 
@@ -954,7 +939,7 @@ impl TextInput {
 
     pub(super) fn streamed_highlight_runs_for_visible_window(
         &mut self,
-        display_text: &str,
+        display_text: &LineTextSource<'_>,
         line_starts: &[usize],
         visible_line_range: Range<usize>,
         shape_style: &TextShapeStyle<'_>,
@@ -3065,33 +3050,18 @@ impl TextInput {
         }
     }
 
+    /// The platform input handler addresses the buffer in UTF-16, so these two
+    /// run on essentially every caret query. They used to walk the document
+    /// char by char from offset zero — and reading `self.content` as a `&str`
+    /// materialized the whole buffer to do it, so a single arrow key in a large
+    /// document cost two full passes over it. The model answers from its own
+    /// structure instead.
     pub(super) fn offset_from_utf16(&self, offset: usize) -> usize {
-        let mut utf8_offset = 0;
-        let mut utf16_count = 0;
-
-        for ch in self.content.chars() {
-            if utf16_count >= offset {
-                break;
-            }
-            utf16_count += ch.len_utf16();
-            utf8_offset += ch.len_utf8();
-        }
-
-        utf8_offset
+        self.content.snapshot().offset_from_utf16(offset)
     }
 
     pub(super) fn offset_to_utf16(&self, offset: usize) -> usize {
-        let mut utf16_offset = 0;
-        let mut utf8_count = 0;
-
-        for ch in self.content.chars() {
-            if utf8_count >= offset {
-                break;
-            }
-            utf8_count += ch.len_utf8();
-            utf16_offset += ch.len_utf16();
-        }
-        utf16_offset
+        self.content.snapshot().offset_to_utf16(offset)
     }
 
     pub(super) fn range_to_utf16(&self, range: &Range<usize>) -> Range<usize> {

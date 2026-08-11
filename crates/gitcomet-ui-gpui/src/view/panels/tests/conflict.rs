@@ -2070,8 +2070,14 @@ fn assert_streamed_whole_file_three_way_state(pane: &MainPaneView, line_count: u
     );
 }
 
+/// The input columns stream a whole-file conflict, but the resolved output is
+/// editable at any size — the two gates are independent. `StreamedLargeFile`
+/// describes how the A/B/C columns render; it never demotes the output pane to
+/// a read-only projection.
 #[gpui::test]
-fn whole_file_conflict_bootstrap_uses_streamed_large_file_mode(cx: &mut gpui::TestAppContext) {
+fn whole_file_conflict_bootstrap_streams_input_but_keeps_output_editable(
+    cx: &mut gpui::TestAppContext,
+) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2099,7 +2105,7 @@ fn whole_file_conflict_bootstrap_uses_streamed_large_file_mode(cx: &mut gpui::Te
                     == crate::view::conflict_resolver::ConflictRenderingMode::StreamedLargeFile
                 && pane.conflict_resolver.split_row_index().is_some()
                 && pane.conflict_resolver.two_way_split_projection().is_some()
-                && pane.conflict_resolved_output_projection.is_some()
+                && pane.conflict_resolved_output_projection.is_none()
         },
         |pane| {
             format!(
@@ -2122,8 +2128,13 @@ fn whole_file_conflict_bootstrap_uses_streamed_large_file_mode(cx: &mut gpui::Te
             this.main_pane.update(_cx, |pane, _cx| {
                 assert_streamed_whole_file_two_way_state(pane, fixture.line_count);
                 assert!(
-                    pane.conflict_resolved_output_projection.is_some(),
-                    "streamed whole-file bootstrap should keep resolved output in projection mode",
+                    pane.conflict_resolved_output_projection.is_none(),
+                    "whole-file bootstrap should materialize the resolved output, not stream it",
+                );
+                assert!(
+                    !pane.conflict_resolved_output_is_streamed(),
+                    "a materialized output must report itself editable so the edit \
+                     affordances gated on this are enabled",
                 );
             });
         });
@@ -2131,18 +2142,130 @@ fn whole_file_conflict_bootstrap_uses_streamed_large_file_mode(cx: &mut gpui::Te
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
+        let expected = crate::view::conflict_resolver::generate_resolved_text(
+            &pane.conflict_resolver.marker_segments,
+        );
         assert_eq!(
             pane.conflict_resolver_input.read(app).text(),
-            "",
-            "streamed whole-file bootstrap should not materialize the resolved output buffer",
+            expected.as_str(),
+            "the editable buffer should hold the full merged text of a whole-file conflict",
         );
     });
 
     fixture.cleanup();
 }
 
+/// There is no line-count ceiling on editing the resolved output.
+///
+/// An unresolved whole-file conflict collapses to a one-line placeholder, so the
+/// size only materializes once a side is picked — which is precisely what the
+/// old upper-bound guard refused to do. Pick a side to expand the output past
+/// the old limit, then type into it. If a size gate is reintroduced anywhere on
+/// the materialize path, the expanded output stays read-only and this fails.
 #[gpui::test]
-fn whole_file_conflict_stage_anyway_uses_streamed_output_without_materializing(
+fn a_resolved_output_past_the_old_editable_ceiling_still_accepts_edits(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(173);
+    let fixture = SyntheticWholeFileConflictFixture::new(
+        "whole_file_conflict_editable_no_ceiling",
+        "fixtures/whole_file_conflict_editable.html",
+        crate::view::conflict_resolver::LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 1_000,
+    );
+    load_synthetic_whole_file_conflict(cx, &view, repo_id, &fixture);
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "large resolved output materialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
+                && !pane.conflict_resolved_output_is_streamed()
+                && pane.conflict_resolved_preview_line_count > 1
+        },
+        |pane| {
+            format!(
+                "path={:?} streamed={} preview_lines={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolved_output_is_streamed(),
+                pane.conflict_resolved_preview_line_count,
+            )
+        },
+    );
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+
+    // Take "ours" for the single whole-file conflict. This is the step the old
+    // ceiling refused: it expands a one-line placeholder into the full file.
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_at(
+                0,
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    let before = cx.update(|_window, app| {
+        main_pane
+            .read(app)
+            .conflict_resolver_input
+            .read(app)
+            .text()
+            .to_string()
+    });
+    assert!(
+        before.lines().count()
+            > crate::view::conflict_resolver::LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES,
+        "picking a side should expand the output past the old ceiling, got {} lines",
+        before.lines().count()
+    );
+    assert!(
+        cx.update(|_window, app| !main_pane.read(app).conflict_resolved_output_is_streamed()),
+        "an output expanded past the old ceiling must stay editable, not fall back to streamed",
+    );
+
+    // Append at the very end, which is never inside a protected marker range.
+    let at = before.len();
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_input.update(cx, |input, cx| {
+                input.replace_utf8_range(at..at, "edited", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    let after = cx.update(|_window, app| {
+        main_pane
+            .read(app)
+            .conflict_resolver_input
+            .read(app)
+            .text()
+            .to_string()
+    });
+    assert_eq!(
+        after,
+        format!("{before}edited"),
+        "a keystroke in a large resolved output should land and persist"
+    );
+
+    fixture.cleanup();
+}
+
+/// Stage-anyway on a whole-file conflict must serialize the merged text the user
+/// is actually looking at. The output is materialized at this size now, so this
+/// guards the buffer-backed save path rather than the projection one.
+#[gpui::test]
+fn whole_file_conflict_stage_anyway_serializes_the_materialized_output(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -2167,7 +2290,7 @@ fn whole_file_conflict_stage_anyway_uses_streamed_output_without_materializing(
             pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
                 && pane.conflict_resolver.rendering_mode()
                     == crate::view::conflict_resolver::ConflictRenderingMode::StreamedLargeFile
-                && pane.conflict_resolved_output_projection.is_some()
+                && pane.conflict_resolved_output_projection.is_none()
         },
         |pane| {
             format!(
@@ -2204,24 +2327,24 @@ fn whole_file_conflict_stage_anyway_uses_streamed_output_without_materializing(
         });
 
     assert_eq!(
-        input_before, "",
-        "streamed whole-file output should still be virtual before stage confirmation"
+        input_before, expected,
+        "a whole-file conflict should already hold its merged text in the editable buffer"
     );
     assert_eq!(
         actual, expected,
-        "stage confirmation should serialize the streamed resolved output, not the empty editor buffer"
+        "stage confirmation should serialize the resolved output the user is editing"
     );
     assert!(
         !actual.is_empty(),
-        "streamed stage-confirm contents should contain the resolved output text"
+        "stage-confirm contents should contain the resolved output text"
     );
     assert_eq!(
-        input_after, "",
-        "stage confirmation should not materialize the resolved-output editor"
+        input_after, input_before,
+        "stage confirmation should read the editor buffer, not rewrite it"
     );
     assert!(
-        projection_after,
-        "stage confirmation should keep the resolved-output projection active"
+        !projection_after,
+        "stage confirmation should not push the output back into projection mode"
     );
 
     fixture.cleanup();
@@ -4942,8 +5065,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
                     .highlights_for_byte_range(0..text.len());
                 let cold = rows::LiveSyntaxDocument::new(
                     rows::DiffSyntaxLanguage::Rust,
-                    Arc::clone(&text),
-                    snapshot.shared_line_starts(),
+                    snapshot.rope(),
                     resolved_output_placeholder_protected_ranges_for_test(&text),
                     None,
                 )
@@ -7594,6 +7716,267 @@ fn conflict_navigation_places_the_editable_output_without_waiting_for_a_frame(
     assert_eq!(
         settled, after,
         "the drawn frame must agree with the offset navigation placed"
+    );
+
+    fixture.cleanup();
+}
+
+/// Conflict navigation must not re-run the resolved output's edit pipeline.
+///
+/// Moving the yellow wash rebinds the highlight provider, which notifies the
+/// input, which re-enters the observe that refreshes syntax. Without an
+/// early-out that refresh rescans the whole document — two line walks and a
+/// materialization — on every F3. Materialization is the observable half, so
+/// that is what this pins.
+#[gpui::test]
+fn conflict_navigation_does_not_rescan_the_resolved_output(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(983);
+    let fixture = SyntheticLargeConflictFixture::new(
+        "nav_no_rescan",
+        "fixtures/nav_no_rescan.html",
+        4_000,
+        24,
+    );
+    fixture.write();
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &fixture.workdir,
+        &fixture.file_rel,
+        &fixture.base_text,
+        &fixture.ours_text,
+        &fixture.theirs_text,
+        &fixture.current_text,
+    );
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "nav rescan fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&fixture.file_rel)
+                && !pane.conflict_resolver.nav_targets.is_empty()
+                && !pane.conflict_resolved_output_is_streamed()
+        },
+        |pane| format!("targets={}", pane.conflict_resolver.nav_targets.len()),
+    );
+    draw_and_drain_test_window(cx);
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+
+    // An edit legitimately rescans. Navigation must not add any.
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            let at = pane.conflict_resolver_input.read(cx).text().len();
+            pane.conflict_resolver_input.update(cx, |input, cx| {
+                input.replace_utf8_range(at..at, "\n", cx);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let before = cx.update(|_window, app| main_pane.read(app).conflict_resolved_output_full_scans);
+
+    for _ in 0..4 {
+        cx.update(|_window, app| {
+            main_pane.update(app, |pane, cx| {
+                pane.conflict_jump_next(cx);
+            });
+        });
+        draw_and_drain_test_window(cx);
+    }
+
+    let after = cx.update(|_window, app| main_pane.read(app).conflict_resolved_output_full_scans);
+    assert_eq!(
+        after, before,
+        "four conflict jumps changed no text, so none of them may rescan the document"
+    );
+
+    fixture.cleanup();
+}
+
+/// Shift+F2/F3 step between *unresolved* conflicts, in both focus states.
+///
+/// The chord replaces Ctrl+PgUp/PgDn, which collided with repository-tab
+/// switching. Two things have to hold that plain F2/F3 does not give you: the
+/// jump *skips over* conflicts already resolved, and it still fires while the
+/// resolved-output editor has focus — resolving a merge means typing in that
+/// editor, so a shortcut that dies there is the one you need most.
+///
+/// The resolved conflict is deliberately placed *between* the starting point
+/// and the expected destination. Resolving the conflict you are standing on
+/// and then stepping forward proves nothing: unfiltered navigation leaves it
+/// too, simply by moving.
+#[gpui::test]
+fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(991);
+    let fixture =
+        SyntheticLargeConflictFixture::new("shift_f3_nav", "fixtures/shift_f3_nav.html", 400, 6);
+    fixture.write();
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &fixture.workdir,
+        &fixture.file_rel,
+        &fixture.base_text,
+        &fixture.ours_text,
+        &fixture.theirs_text,
+        &fixture.current_text,
+    );
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "shift-f3 nav fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver
+                .nav_targets
+                .iter()
+                .filter(|target| target.unresolved)
+                .count()
+                >= 3
+        },
+        |pane| format!("targets={}", pane.conflict_resolver.nav_targets.len()),
+    );
+    draw_and_drain_test_window(cx);
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+
+    // Nav-target positions of the first three still-open conflicts.
+    let open: Vec<usize> = cx.update(|_window, app| {
+        main_pane
+            .read(app)
+            .conflict_resolver
+            .nav_targets
+            .iter()
+            .enumerate()
+            .filter(|(_, target)| target.unresolved)
+            .map(|(ix, _)| ix)
+            .collect()
+    });
+    let (start, middle, beyond) = (open[0], open[1], open[2]);
+
+    // Resolve the middle one, so it sits between the caret and the next open
+    // conflict. This is the conflict the chord must step over.
+    let middle_display = cx.update(|_window, app| {
+        main_pane.read(app).conflict_resolver.nav_targets[middle]
+            .display_conflict_index
+            .expect("an unresolved conflict target has a display index")
+    });
+    // Resolve the middle conflict for real — select it and pick a side, the way
+    // a user does — so the chord is exercised against genuine resolution state.
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_select_conflict(middle_display, cx);
+            pane.conflict_resolver_pick_active_conflict(
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_jump_to_nav_target(start, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let order_of = |cx: &mut gpui::VisualTestContext, target_ix: usize| -> usize {
+        cx.update(|_window, app| main_pane.read(app).conflict_resolver.nav_targets[target_ix].order)
+    };
+    let anchor = |cx: &mut gpui::VisualTestContext| -> Option<usize> {
+        cx.update(|_window, app| {
+            main_pane
+                .read(app)
+                .conflict_resolver
+                .nav_anchor
+                .map(|anchor| anchor.order_hint)
+        })
+    };
+    let press = |cx: &mut gpui::VisualTestContext, chord: &str| -> bool {
+        let keystroke = gpui::Keystroke::parse(chord).expect("valid chord");
+        cx.update(|window, app| {
+            main_pane.update(app, |pane, cx| {
+                pane.handle_diff_shortcut(&keystroke, window, cx)
+            })
+        })
+    };
+
+    let (middle_order, beyond_order) = (order_of(cx, middle), order_of(cx, beyond));
+    assert!(
+        cx.update(|_window, app| {
+            !main_pane.read(app).conflict_resolver.nav_targets[middle].unresolved
+        }),
+        "the middle conflict must be marked resolved for this test to mean anything"
+    );
+    assert_eq!(
+        anchor(cx),
+        Some(order_of(cx, start)),
+        "should start at the first open conflict"
+    );
+
+    assert!(press(cx, "shift-f3"), "shift-f3 should be handled");
+    draw_and_drain_test_window(cx);
+    assert_ne!(
+        anchor(cx),
+        Some(middle_order),
+        "shift-f3 landed on the conflict that was just resolved: it is navigating \
+         conflicts, not unresolved conflicts"
+    );
+    assert_eq!(
+        anchor(cx),
+        Some(beyond_order),
+        "shift-f3 should skip the resolved conflict and land on the next open one"
+    );
+
+    // Shift+F2 comes back the same way, skipping the same resolved conflict.
+    assert!(press(cx, "shift-f2"), "shift-f2 should be handled");
+    draw_and_drain_test_window(cx);
+    assert_ne!(
+        anchor(cx),
+        Some(middle_order),
+        "shift-f2 must skip the resolved conflict too"
+    );
+
+    // The chord must survive focus being in the resolved-output editor, which
+    // is where a merge is actually resolved.
+    cx.update(|window, app| {
+        main_pane.update(app, |pane, cx| {
+            let handle = pane.conflict_resolver_input.read(cx).focus_handle();
+            handle.focus(window, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let before_focused = anchor(cx);
+    assert!(
+        press(cx, "shift-f3"),
+        "shift-f3 must still be handled while the resolved-output editor has focus"
+    );
+    draw_and_drain_test_window(cx);
+    assert_ne!(
+        anchor(cx),
+        before_focused,
+        "shift-f3 should navigate while the editor has focus"
+    );
+    assert_ne!(
+        anchor(cx),
+        Some(middle_order),
+        "the focused-editor path must filter by resolution state as well"
     );
 
     fixture.cleanup();

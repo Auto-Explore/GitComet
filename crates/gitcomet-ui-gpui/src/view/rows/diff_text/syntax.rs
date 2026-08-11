@@ -191,7 +191,9 @@ fn with_ts_parser_parse_result<R>(
     result
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+// `Ord` so injection layers can be sorted by (range, language) and deduped;
+// the order itself carries no meaning beyond being total and stable.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(in crate::view) enum DiffSyntaxLanguage {
     Markdown,
     MarkdownInline,

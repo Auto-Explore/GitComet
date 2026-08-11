@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
@@ -61,26 +62,113 @@ pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u3
     scaled_diff_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
 }
 
-pub(super) fn build_resolved_output_syntax_fallback_highlights(
+/// Heuristic highlights for the rows overlapping `byte_range`.
+///
+/// Windowing this is *exact*, not an approximation: the heuristic tokenizer is
+/// line-local, so a row's tokens do not depend on anything above it. (A
+/// tree-sitter query is the opposite — it needs the enclosing tree, which is why
+/// that path queries a range of a whole-document parse instead.)
+///
+/// Reading rows through the rope keeps the cost proportional to the viewport.
+/// The previous shape tokenized the entire document and handed the result to
+/// `set_highlights` on every keystroke, which is the one thing this arm — the
+/// arm reached by the *largest* buffers — could least afford.
+pub(super) fn resolved_output_heuristic_highlights_for_range(
     theme: AppTheme,
-    output_text: &str,
+    output_text: &Rope,
     language: rows::DiffSyntaxLanguage,
-    syntax_mode: rows::DiffSyntaxMode,
+    byte_range: Range<usize>,
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    let line_starts = build_line_starts(output_text);
-    let text_len = output_text.len();
+    let len = output_text.len();
+    let start = byte_range.start.min(len);
+    let end = byte_range.end.min(len).max(start);
+    if start == end {
+        return Vec::new();
+    }
+
+    let first_row = output_text.offset_to_point(start).row;
+    let last_row = output_text.offset_to_point(end).row;
     let mut highlights = Vec::new();
-    for (line_ix, &line_start) in line_starts.iter().enumerate() {
-        let line_end = line_starts
-            .get(line_ix + 1)
-            .map(|s| s.saturating_sub(1)) // exclude '\n'
-            .unwrap_or(text_len);
-        let line = &output_text[line_start..line_end];
-        for (range, style) in rows::syntax_highlights_for_line(theme, line, language, syntax_mode) {
-            highlights.push(((line_start + range.start)..(line_start + range.end), style));
+    for row in first_row..=last_row {
+        let line_range = output_text.line_range(row);
+        if line_range.start >= len && row > first_row {
+            break;
+        }
+        let line = output_text.line_text(row);
+        for (range, style) in rows::syntax_highlights_for_line(
+            theme,
+            &line,
+            language,
+            rows::DiffSyntaxMode::HeuristicOnly,
+        ) {
+            highlights.push((
+                (line_range.start + range.start)..(line_range.start + range.end),
+                style,
+            ));
         }
     }
     highlights
+}
+
+/// The fallback counterpart to [`resolved_output_live_highlight_provider`], for
+/// buffers with no live tree — no wired grammar, or past the parse ceiling.
+///
+/// Same contract: answers whatever window the input asks for, never reports
+/// pending, and carries the unresolved-conflict overlay on top.
+pub(super) fn resolved_output_heuristic_highlight_provider(
+    theme: AppTheme,
+    output_text: Rope,
+    language: Option<rows::DiffSyntaxLanguage>,
+    unresolved_spans: ResolvedOutputUnresolvedSpans,
+) -> HighlightProvider {
+    let unresolved_style = resolved_output_unresolved_highlight_style(theme);
+    let active_unresolved_style = resolved_output_active_unresolved_highlight_style(theme);
+    HighlightProvider::with_pending(
+        move |byte_range: Range<usize>| HighlightProviderResult {
+            highlights: apply_resolved_output_unresolved_highlights(
+                language
+                    .map(|language| {
+                        resolved_output_heuristic_highlights_for_range(
+                            theme,
+                            &output_text,
+                            language,
+                            byte_range.clone(),
+                        )
+                    })
+                    .unwrap_or_default(),
+                &unresolved_spans,
+                byte_range,
+                unresolved_style,
+                active_unresolved_style,
+            ),
+            pending: false,
+        },
+        || 0,
+        || false,
+    )
+}
+
+/// Binding key for the heuristic provider.
+///
+/// The live provider keys on its tree's version; this one has no tree, so it
+/// keys on the buffer revision the closure captured, plus the theme and the
+/// overlay. Distinct from the live key space so the two can never collide on a
+/// buffer that switches arms.
+pub(super) fn resolved_output_heuristic_provider_binding_key(
+    revision: ResolvedOutputSourceRevision,
+    theme_epoch: u64,
+    unresolved_spans: &ResolvedOutputUnresolvedSpans,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    "heuristic".hash(&mut hasher);
+    revision.model_id.hash(&mut hasher);
+    revision.revision.hash(&mut hasher);
+    theme_epoch.hash(&mut hasher);
+    unresolved_spans.all.hash(&mut hasher);
+    unresolved_spans.active.hash(&mut hasher);
+    hasher.finish()
 }
 
 pub(super) fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
@@ -747,15 +835,17 @@ pub(super) fn remap_resolved_output_conflict_block_ranges_for_delta(
 
 pub(super) fn resolved_output_conflict_block_ranges_in_text(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
 ) -> Option<Vec<Range<usize>>> {
-    fn is_line_boundary(text: &str, byte_ix: usize) -> bool {
+    fn is_line_boundary(
+        text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+        byte_ix: usize,
+    ) -> bool {
         if byte_ix == 0 || byte_ix == text.len() {
             return true;
         }
-        text.as_bytes()
-            .get(byte_ix.saturating_sub(1))
-            .is_some_and(|b| *b == b'\n')
+        text.byte_at(byte_ix.saturating_sub(1))
+            .is_some_and(|b| b == b'\n')
     }
 
     let mut ranges = Vec::new();
@@ -764,8 +854,7 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
     for seg in marker_segments {
         match seg {
             conflict_resolver::ConflictSegment::Text(text) => {
-                let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(text.as_str()) {
+                if !output_text.starts_with_at(cursor, text.as_str()) {
                     return None;
                 }
                 cursor = cursor.saturating_add(text.len());
@@ -775,8 +864,7 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
                 let expected = conflict_resolver::generate_resolved_text(&[
                     conflict_resolver::ConflictSegment::Block(block.clone()),
                 ]);
-                let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(&expected) {
+                if !output_text.starts_with_at(cursor, &expected) {
                     return None;
                 }
                 let end = cursor.saturating_add(expected.len());
@@ -817,7 +905,7 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
 /// through edits, so fall back to it and convert its ranges into line space.
 pub(super) fn resolved_output_conflict_block_line_ranges(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
     block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Option<Vec<Range<usize>>> {
     resolved_output_conflict_block_ranges_in_text(marker_segments, output_text).or_else(|| {
@@ -827,7 +915,7 @@ pub(super) fn resolved_output_conflict_block_line_ranges(
 
 fn conflict_block_line_ranges_from_block_map(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
     block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Option<Vec<Range<usize>>> {
     if !block_map.is_valid_for(marker_segments, output_text) {
@@ -841,17 +929,25 @@ fn conflict_block_line_ranges_from_block_map(
     let mut cursor = 0usize;
     let mut line = 0usize;
     for range in byte_ranges {
-        let lead = output_text.get(cursor..range.start)?;
-        let body = output_text.get(range.clone())?;
-        let start_line = line.saturating_add(count_newlines(lead));
-        let mut end_line = start_line.saturating_add(count_newlines(body));
+        let start_line = line.saturating_add(output_text.count_newlines_in(cursor..range.start));
+        let body_newlines = output_text.count_newlines_in(range.clone());
+        let mut end_line = start_line.saturating_add(body_newlines);
         // A block that ends the file without a trailing newline still occupies
-        // its last row, matching the strict walk's accounting.
-        if range.end == output_text.len() && !body.is_empty() && !body.ends_with('\n') {
+        // its last row, which no newline accounts for — matching the strict
+        // walk. The carried `line` below must not include this adjustment: it
+        // counts newlines actually seen, and the next block's start is measured
+        // from those.
+        let body_is_empty = range.start == range.end;
+        let body_ends_with_newline = range
+            .end
+            .checked_sub(1)
+            .and_then(|last| output_text.byte_at(last))
+            .is_some_and(|byte| byte == b'\n');
+        if range.end == output_text.len() && !body_is_empty && !body_ends_with_newline {
             end_line = end_line.saturating_add(1);
         }
         line_ranges.push(start_line..end_line);
-        line = start_line.saturating_add(count_newlines(body));
+        line = start_line.saturating_add(body_newlines);
         cursor = range.end;
     }
 
@@ -1113,7 +1209,7 @@ pub(super) fn unresolved_decision_ranges_for_block(
 
 pub(super) fn build_resolved_output_conflict_markers(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
     output_line_count: usize,
     block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
@@ -1208,10 +1304,10 @@ pub(super) fn push_conflict_text_segment(
 
 pub(super) fn resolved_output_markers_for_text(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
     block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
-    let output_line_count = conflict_resolver::resolved_output_outline_line_count(output_text);
+    let output_line_count = output_text.row_count();
     build_resolved_output_conflict_markers(
         marker_segments,
         output_text,
@@ -1224,44 +1320,177 @@ pub(super) fn resolved_output_markers_for_text(
 /// owned by `active_conflict`. Derive these from the current segments instead of
 /// the asynchronously refreshed outline so syntax styling never briefly wins
 /// while outline metadata catches up.
-pub(super) fn resolved_output_unresolved_byte_ranges(
+/// Unresolved output rows and the conflict each belongs to.
+pub(in crate::view) type UnresolvedRows = Arc<[(Range<usize>, usize)]>;
+
+/// [`UnresolvedRows`] paired with the state they were scanned from.
+pub(in crate::view) type CachedUnresolvedRows = (ResolvedOutputKey, UnresolvedRows);
+
+/// What the unresolved rows actually depend on: the buffer *and* which blocks
+/// are still open.
+///
+/// The revision alone is not enough. A pick can leave the output byte-identical
+/// — choosing the side already displayed, or resolving a whitespace-only block —
+/// so the buffer never bumps its revision while the answer changes. Keying on
+/// the revision alone leaves the yellow wash painted on a block the user just
+/// resolved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct ResolvedOutputKey {
+    pub(in crate::view) revision: ResolvedOutputSourceRevision,
+    pub(in crate::view) resolution: u64,
+    pub(in crate::view) block_map: u64,
+}
+
+impl ResolvedOutputKey {
+    pub(in crate::view) fn new(
+        snapshot: &TextModelSnapshot,
+        marker_segments: &[conflict_resolver::ConflictSegment],
+        block_map: &conflict_resolver::ResolvedOutputBlockMap,
+    ) -> Self {
+        Self {
+            revision: ResolvedOutputSourceRevision::from_snapshot(snapshot),
+            resolution: resolution_fingerprint(marker_segments),
+            block_map: block_map_fingerprint(block_map),
+        }
+    }
+}
+
+/// O(conflicts) digest of the block map's byte ranges.
+///
+/// The rows fall back to the map for block geometry whenever the strict walk
+/// fails — which is exactly once the user has edited the buffer. The map can be
+/// rebuilt or reset without the text revision or any block's resolution moving,
+/// and rows computed against the old geometry then land on the wrong lines.
+fn block_map_fingerprint(block_map: &conflict_resolver::ResolvedOutputBlockMap) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    let ranges = block_map.ranges();
+    ranges.len().hash(&mut hasher);
+    for range in ranges {
+        range.start.hash(&mut hasher);
+        range.end.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// O(conflicts) digest of which blocks are resolved. Not a hash of the text —
+/// the revision already covers that.
+fn resolution_fingerprint(marker_segments: &[conflict_resolver::ConflictSegment]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    for segment in marker_segments {
+        match segment {
+            conflict_resolver::ConflictSegment::Block(block) => {
+                block.resolved.hash(&mut hasher);
+                block.choice.hash(&mut hasher);
+            }
+            conflict_resolver::ConflictSegment::Text(_) => 0u8.hash(&mut hasher),
+        }
+    }
+    hasher.finish()
+}
+
+/// Every still-unresolved output row, tagged with the conflict it belongs to.
+///
+/// Depends only on the *text*. Selecting a different conflict does not change
+/// it, which is what lets the caller cache it across navigation.
+///
+/// Takes the rope rather than a materialized document plus a line-start array:
+/// the rows wanted are the marker rows of unresolved blocks, and the rope
+/// answers "byte range of row N" in O(log n), so this never has to build an
+/// index proportional to the document.
+pub(super) fn resolved_output_unresolved_rows(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
-    line_starts: &[usize],
+    output_text: &crate::kit::rope::Rope,
     block_map: &conflict_resolver::ResolvedOutputBlockMap,
-    active_conflict: Option<usize>,
-) -> ResolvedOutputUnresolvedSpans {
+) -> UnresolvedRows {
     if !marker_segments.iter().any(|segment| {
         matches!(segment, conflict_resolver::ConflictSegment::Block(block) if !block.resolved)
     }) {
-        return ResolvedOutputUnresolvedSpans::default();
+        return Arc::default();
     }
-    let markers = resolved_output_markers_for_text(marker_segments, output_text, block_map);
-    let mut ranges = Vec::new();
-    let mut active_ranges = Vec::new();
-    for (line_ix, marker) in markers.iter().enumerate() {
-        let Some(marker) = marker.filter(|marker| marker.unresolved) else {
+    let Some(block_ranges) =
+        resolved_output_conflict_block_line_ranges(marker_segments, output_text, block_map)
+    else {
+        return Arc::default();
+    };
+
+    // Walk the unresolved blocks rather than building a marker entry for every
+    // row and filtering it. The per-line array is proportional to the document;
+    // this is proportional to the conflicts, which is what the caller actually
+    // asked about.
+    let mut rows = Vec::new();
+    for (conflict_ix, (block, line_range)) in marker_segments
+        .iter()
+        .filter_map(|segment| match segment {
+            conflict_resolver::ConflictSegment::Block(block) => Some(block),
+            conflict_resolver::ConflictSegment::Text(_) => None,
+        })
+        .zip(block_ranges.iter().cloned())
+        .enumerate()
+    {
+        if block.resolved {
             continue;
-        };
-        let Some(mut range) = indexed_line_byte_range(line_starts, output_text.len(), line_ix)
-        else {
-            continue;
-        };
-        while range.end > range.start && output_text.as_bytes().get(range.end - 1) == Some(&b'\r') {
-            range.end -= 1;
         }
-        if range.is_empty() {
-            continue;
+        for marker_range in conflict_marker_ranges_for_block(block, line_range) {
+            for line_ix in marker_range.start..marker_range.end {
+                let Ok(row) = u32::try_from(line_ix) else {
+                    continue;
+                };
+                if row >= output_text.line_count() {
+                    continue;
+                }
+                let mut range = output_text.line_range(row);
+                while range.end > range.start
+                    && conflict_resolver::ResolvedOutputSource::byte_at(output_text, range.end - 1)
+                        == Some(b'\r')
+                {
+                    range.end -= 1;
+                }
+                if !range.is_empty() {
+                    rows.push((range, conflict_ix));
+                }
+            }
         }
-        if active_conflict == Some(marker.conflict_ix) {
-            active_ranges.push(range.clone());
+    }
+    rows.sort_by_key(|(range, _)| (range.start, range.end));
+    rows.into()
+}
+
+/// Split cached rows into "every unresolved row" and "the selected conflict's".
+///
+/// O(unresolved rows), so moving the wash between conflicts costs nothing that
+/// scales with the document.
+pub(super) fn resolved_output_unresolved_spans_for_active(
+    rows: &[(Range<usize>, usize)],
+    active_conflict: Option<usize>,
+) -> ResolvedOutputUnresolvedSpans {
+    let mut all = Vec::with_capacity(rows.len());
+    let mut active = Vec::new();
+    for (range, conflict_ix) in rows {
+        if active_conflict == Some(*conflict_ix) {
+            active.push(range.clone());
         }
-        ranges.push(range);
+        all.push(range.clone());
     }
     ResolvedOutputUnresolvedSpans {
-        all: ranges.into(),
-        active: active_ranges.into(),
+        all: all.into(),
+        active: active.into(),
     }
+}
+
+/// Scan and select in one call. Production splits the two so navigation can
+/// reuse the scan; this stays for tests that only care about the result.
+#[cfg(test)]
+pub(super) fn resolved_output_unresolved_byte_ranges(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &str,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
+    active_conflict: Option<usize>,
+) -> ResolvedOutputUnresolvedSpans {
+    let rope = crate::kit::rope::Rope::from_str(output_text);
+    let rows = resolved_output_unresolved_rows(marker_segments, &rope, block_map);
+    resolved_output_unresolved_spans_for_active(rows.as_ref(), active_conflict)
 }
 
 /// Byte spans of the unresolved-conflict placeholder rows, terminator included.
@@ -1272,35 +1501,14 @@ pub(super) fn resolved_output_unresolved_byte_ranges(
 /// own content, which keeps the protection standing even once the marker
 /// segments no longer line up with the buffer.
 pub(super) fn resolved_output_placeholder_protected_ranges(
-    output_text: &str,
-    line_starts: &[usize],
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
 ) -> Arc<[Range<usize>]> {
-    if !conflict_resolver::text_may_contain_unresolved_conflict_placeholder(output_text) {
-        return Arc::default();
-    }
-
-    let line_count = indexed_line_count(output_text, line_starts);
     let mut ranges: Vec<Range<usize>> = Vec::new();
-    for line_ix in 0..line_count {
-        let start = line_starts
-            .get(line_ix)
-            .copied()
-            .unwrap_or(output_text.len())
-            .min(output_text.len());
-        let end = line_starts
-            .get(line_ix.saturating_add(1))
-            .copied()
-            .unwrap_or(output_text.len())
-            .min(output_text.len())
-            .max(start);
-        let Some(line) = output_text.get(start..end) else {
-            continue;
-        };
+    output_text.for_each_row_with_terminator(&mut |range, line| {
         if conflict_resolver::line_is_unresolved_conflict_placeholder(line) {
-            ranges.push(start..end);
+            ranges.push(range);
         }
-    }
-
+    });
     ranges.into()
 }
 
@@ -1315,19 +1523,18 @@ pub(super) fn resolved_output_placeholder_protected_ranges(
 /// the protection can never drift apart.
 pub(super) fn resolved_output_live_syntax_mask(
     protected_ranges: &[Range<usize>],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
 ) -> Arc<[Range<usize>]> {
     if protected_ranges.is_empty() {
         return Arc::default();
     }
-    let bytes = output_text.as_bytes();
     let mut mask = Vec::with_capacity(protected_ranges.len());
     for range in protected_ranges {
-        let mut end = range.end.min(bytes.len());
-        if end > range.start && bytes.get(end - 1) == Some(&b'\n') {
+        let mut end = range.end.min(output_text.len());
+        if end > range.start && output_text.byte_at(end - 1) == Some(b'\n') {
             end -= 1;
         }
-        if end > range.start && bytes.get(end - 1) == Some(&b'\r') {
+        if end > range.start && output_text.byte_at(end - 1) == Some(b'\r') {
             end -= 1;
         }
         if end > range.start {
@@ -2993,6 +3200,18 @@ pub(crate) struct MainPaneView {
     /// paths fire on it; this is what tells the render pass the active row moved
     /// and the provider has to be rebuilt.
     pub(in crate::view) conflict_resolved_output_highlighted_conflict: Option<usize>,
+    /// Unresolved output rows and their conflict, cached for the buffer
+    /// revision they were computed from.
+    ///
+    /// Conflict navigation moves the yellow wash but changes no text, so
+    /// recomputing these would rescan the whole document on every jump — which
+    /// is exactly what made F3 cost tens of milliseconds on a large file.
+    pub(in crate::view) conflict_resolved_output_unresolved_rows: Option<CachedUnresolvedRows>,
+    /// How many times the resolved output's syntax refresh has gone past its
+    /// early-out and rescanned the document. Only an edit should do that;
+    /// navigation must not.
+    #[cfg(test)]
+    pub(in crate::view) conflict_resolved_output_full_scans: usize,
     /// Revision an off-thread first parse is currently running for, so repeated
     /// refreshes over the same text do not pile up duplicate builds.
     pub(in crate::view) conflict_resolved_output_live_syntax_building:

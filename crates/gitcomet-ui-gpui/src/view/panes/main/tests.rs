@@ -782,8 +782,8 @@ fn resolved_output_conflict_block_ranges_match_point_lookup() {
         }),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
-    let ranges =
-        resolved_output_conflict_block_ranges_in_text(&segments, &output).expect("block ranges");
+    let ranges = resolved_output_conflict_block_ranges_in_text(&segments, output.as_str())
+        .expect("block ranges");
     assert_eq!(ranges.len(), 2);
     assert_eq!(
         output_line_range_for_conflict_block_in_text(&segments, &output, 0),
@@ -909,7 +909,7 @@ fn build_resolved_output_conflict_markers_maps_chunk_boundaries() {
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -968,7 +968,7 @@ fn build_resolved_output_conflict_markers_anchors_zero_length_ranges() {
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1005,7 +1005,7 @@ fn build_resolved_output_conflict_markers_marks_unresolved_blocks() {
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1046,7 +1046,7 @@ fn build_resolved_output_conflict_markers_cover_a_multi_line_block() {
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1096,7 +1096,7 @@ fn build_resolved_output_conflict_markers_stop_at_a_file_final_block() {
     );
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1138,7 +1138,7 @@ fn build_resolved_output_conflict_markers_cover_a_file_final_block_without_newli
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1180,8 +1180,8 @@ fn remapped_resolved_output_conflict_markers_cover_inserted_rows() {
         ConflictSegment::Text("tail\n".to_string().into()),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
-    let old_ranges =
-        resolved_output_conflict_block_ranges_in_text(&segments, &output).expect("block ranges");
+    let old_ranges = resolved_output_conflict_block_ranges_in_text(&segments, output.as_str())
+        .expect("block ranges");
     let new_ranges =
         remap_resolved_output_conflict_block_ranges_for_delta(&old_ranges, 2..3, 2..4, 5);
     let markers = build_resolved_output_conflict_markers_from_block_ranges(
@@ -1382,7 +1382,7 @@ fn build_resolved_output_conflict_markers_splits_unresolved_subchunks() {
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1422,7 +1422,7 @@ fn build_resolved_output_conflict_markers_splits_method_edit_and_trailing_insert
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1446,7 +1446,7 @@ fn build_resolved_output_conflict_markers_matches_combined_conflict_marker_case(
     let line_count = conflict_resolver::split_output_lines_for_outline(&output).len();
     let markers = build_resolved_output_conflict_markers(
         &segments,
-        &output,
+        output.as_str(),
         line_count,
         &block_map_for(&segments),
     );
@@ -1471,8 +1471,11 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
     let output_before = conflict_resolver::generate_resolved_text(&segments);
     let projection_before = conflict_resolver::ResolvedOutputProjection::from_segments(&segments);
 
-    let before_markers =
-        resolved_output_markers_for_text(&segments, &output_before, &block_map_for(&segments));
+    let before_markers = resolved_output_markers_for_text(
+        &segments,
+        output_before.as_str(),
+        &block_map_for(&segments),
+    );
     let before_starts = before_markers
         .iter()
         .flatten()
@@ -1534,8 +1537,11 @@ fn split_target_conflict_block_into_subchunks_isolates_close_markers() {
         "lazy split should expose one coarse marker start per resulting subchunk block"
     );
 
-    let after_markers =
-        resolved_output_markers_for_text(&segments, &output_after, &block_map_for(&segments));
+    let after_markers = resolved_output_markers_for_text(
+        &segments,
+        output_after.as_str(),
+        &block_map_for(&segments),
+    );
     let mut starts_by_conflict: std::collections::BTreeMap<usize, usize> =
         std::collections::BTreeMap::new();
     for marker in after_markers.iter().flatten().filter(|m| m.is_start) {
@@ -2079,14 +2085,8 @@ fn unresolved_output_ranges_cover_placeholders_and_selected_unresolved_rows() {
         ConflictSegment::Text("tail\n".into()),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
-    let line_starts = build_line_starts(&output);
-    let spans = resolved_output_unresolved_byte_ranges(
-        &segments,
-        &output,
-        line_starts.as_slice(),
-        &block_map_for(&segments),
-        None,
-    );
+    let spans =
+        resolved_output_unresolved_byte_ranges(&segments, &output, &block_map_for(&segments), None);
     let highlighted_text: Vec<&str> = spans
         .all
         .iter()
@@ -2127,16 +2127,10 @@ fn unresolved_output_ranges_single_out_the_active_conflict() {
         ConflictSegment::Text("tail\n".into()),
     ];
     let output = conflict_resolver::generate_resolved_text(&segments);
-    let line_starts = build_line_starts(&output);
     let block_map = block_map_for(&segments);
 
-    let second_active = resolved_output_unresolved_byte_ranges(
-        &segments,
-        &output,
-        line_starts.as_slice(),
-        &block_map,
-        Some(1),
-    );
+    let second_active =
+        resolved_output_unresolved_byte_ranges(&segments, &output, &block_map, Some(1));
     assert_eq!(second_active.all.len(), 2, "both conflicts are still open");
     assert_eq!(
         second_active.active.as_ref(),
@@ -2144,13 +2138,8 @@ fn unresolved_output_ranges_single_out_the_active_conflict() {
         "only the second conflict's row is active"
     );
 
-    let first_active = resolved_output_unresolved_byte_ranges(
-        &segments,
-        &output,
-        line_starts.as_slice(),
-        &block_map,
-        Some(0),
-    );
+    let first_active =
+        resolved_output_unresolved_byte_ranges(&segments, &output, &block_map, Some(0));
     assert_eq!(
         first_active.active.as_ref(),
         std::slice::from_ref(&first_active.all[0])
@@ -2230,14 +2219,7 @@ fn conflict_markers_survive_a_manual_edit_outside_the_blocks() {
     );
     assert!(markers[0].is_none() && markers[2].is_none());
 
-    let line_starts = build_line_starts(edited);
-    let spans = resolved_output_unresolved_byte_ranges(
-        &segments,
-        edited,
-        line_starts.as_slice(),
-        &block_map,
-        Some(0),
-    );
+    let spans = resolved_output_unresolved_byte_ranges(&segments, edited, &block_map, Some(0));
     let highlighted: Vec<&str> = spans
         .all
         .iter()
@@ -2254,8 +2236,7 @@ fn conflict_markers_survive_a_manual_edit_outside_the_blocks() {
 #[test]
 fn placeholder_protected_ranges_cover_whole_placeholder_lines() {
     let output = "head\n<Merge Conflict>\n<Merge Conflict (Whitespace only)>\r\ntail";
-    let line_starts = build_line_starts(output);
-    let ranges = resolved_output_placeholder_protected_ranges(output, line_starts.as_slice());
+    let ranges = resolved_output_placeholder_protected_ranges(output);
     let protected: Vec<&str> = ranges.iter().map(|range| &output[range.clone()]).collect();
 
     assert_eq!(
@@ -2270,11 +2251,8 @@ fn placeholder_protected_ranges_cover_whole_placeholder_lines() {
 #[test]
 fn placeholder_protected_ranges_are_empty_without_a_placeholder() {
     let output = "head\nresolved\ntail\n";
-    let line_starts = build_line_starts(output);
 
-    assert!(
-        resolved_output_placeholder_protected_ranges(output, line_starts.as_slice()).is_empty()
-    );
+    assert!(resolved_output_placeholder_protected_ranges(output).is_empty());
 }
 
 #[test]
@@ -2286,9 +2264,8 @@ fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
     let output = "<div>clean</div>\n<Merge Conflict>\n<span>tail</span>\n";
     let model = TextModel::from(output);
     let snapshot = model.snapshot();
-    let line_starts = snapshot.shared_line_starts();
 
-    let protected = resolved_output_placeholder_protected_ranges(output, line_starts.as_ref());
+    let protected = resolved_output_placeholder_protected_ranges(output);
     let mask = resolved_output_live_syntax_mask(protected.as_ref(), output);
 
     let placeholder_start = output.find("<Merge Conflict>").expect("placeholder");
@@ -2300,14 +2277,9 @@ fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
         "the mask should cover the placeholder text but not its newline"
     );
 
-    let document = rows::LiveSyntaxDocument::new(
-        rows::DiffSyntaxLanguage::Html,
-        Arc::from(output),
-        line_starts,
-        mask,
-        None,
-    )
-    .expect("html output should build a live syntax document");
+    let document =
+        rows::LiveSyntaxDocument::new(rows::DiffSyntaxLanguage::Html, snapshot.rope(), mask, None)
+            .expect("html output should build a live syntax document");
     let provider = resolved_output_live_highlight_provider(
         theme,
         document.snapshot(theme),
@@ -2470,7 +2442,7 @@ fn the_live_provider_binding_key_is_stable_for_unchanged_inputs() {
     // loop would never settle and the pane would hang. The key must therefore
     // be a function of what the provider closes over, not a counter.
     let spans = ResolvedOutputUnresolvedSpans {
-        all: Arc::from([5..21usize]),
+        all: Arc::from([5..21usize; 1]),
         active: Arc::default(),
     };
 
@@ -2517,4 +2489,362 @@ fn the_live_provider_binding_key_is_stable_for_unchanged_inputs() {
         ),
         "selecting the conflict moves the wash onto its row, so it must rebind too"
     );
+}
+
+/// The resolved-output scanners read through the rope.
+///
+/// `ResolvedOutputSource` is implemented for both `str` and `Rope` so the same
+/// analysis serves a materialized string and the live buffer. These pin the two
+/// halves that matter: the answers must be identical, and the rope path must not
+/// flatten the document to produce them.
+#[cfg(test)]
+mod rope_backed_scanner_tests {
+    use super::super::helpers::resolved_output_unresolved_rows;
+    use super::*;
+    use crate::view::conflict_resolver::ResolvedOutputSource;
+
+    fn fixture() -> (Vec<ConflictSegment>, String) {
+        let mut segments = vec![ConflictSegment::Text("head\n".into())];
+        for ix in 0..40 {
+            segments.push(ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: format!("ours {ix}\n").into(),
+                theirs: format!("theirs {ix}\n").into(),
+                choice: if ix % 3 == 0 {
+                    ConflictChoice::Ours
+                } else {
+                    ConflictChoice::empty()
+                },
+                resolved: ix % 3 == 0,
+                whitespace_only: false,
+            }));
+            segments.push(ConflictSegment::Text(
+                format!("context {ix}\nmore {ix}\n").into(),
+            ));
+        }
+        let output = conflict_resolver::generate_resolved_text(&segments);
+        (segments, output)
+    }
+
+    /// The rope source must answer for non-ASCII text, not abort on it.
+    ///
+    /// `byte_at` is called on row ends (trimming `\r`) and `starts_with_at` on
+    /// text segments while checking whether the buffer still matches the
+    /// segments — both land inside a multi-byte character as soon as the user
+    /// types one, and both used to slice a chunk as `&str` at that offset.
+    #[test]
+    fn the_rope_source_reads_non_ascii_offsets_without_panicking() {
+        let text = "// caf\u{e9}\r\nlet s = \"\u{1f642}\";\n";
+        let rope = crate::kit::rope::Rope::from_str(text);
+
+        // Every offset, including interior ones, must answer as the raw byte.
+        for offset in 0..text.len() {
+            assert_eq!(
+                ResolvedOutputSource::byte_at(&rope, offset),
+                Some(text.as_bytes()[offset]),
+                "byte_at({offset}) on {text:?}"
+            );
+        }
+        assert_eq!(ResolvedOutputSource::byte_at(&rope, text.len()), None);
+
+        // The `\r` trim in `resolved_output_unresolved_rows` reads the byte
+        // before a row end; here that byte is the tail of `é`.
+        let row_end = text.find('\n').expect("fixture has a row terminator");
+        assert_eq!(
+            ResolvedOutputSource::byte_at(&rope, row_end - 1),
+            Some(b'\r')
+        );
+
+        // A needle that ends inside a character is a mismatch, not a panic.
+        assert!(!ResolvedOutputSource::starts_with_at(
+            &rope,
+            0,
+            "// caf\u{ea}"
+        ));
+        assert!(ResolvedOutputSource::starts_with_at(
+            &rope,
+            0,
+            "// caf\u{e9}"
+        ));
+        // Starting inside a character likewise reports mismatch.
+        assert!(!ResolvedOutputSource::starts_with_at(&rope, 7, "\u{e9}"));
+        assert!(ResolvedOutputSource::starts_with_at(&rope, 6, "\u{e9}"));
+        // And the str impl agrees on the answers it can give.
+        assert!(ResolvedOutputSource::starts_with_at(
+            text,
+            0,
+            "// caf\u{e9}"
+        ));
+        assert!(!ResolvedOutputSource::starts_with_at(
+            text,
+            0,
+            "// caf\u{ea}"
+        ));
+    }
+
+    /// Resolving a block must invalidate the unresolved-row cache even when the
+    /// output text does not move.
+    ///
+    /// Picking the side already displayed — or resolving a whitespace-only block
+    /// — rewrites the segments while leaving the buffer byte-identical, so its
+    /// revision never bumps. Keyed on the revision alone, the cache would keep
+    /// serving the pre-pick rows and the yellow wash would stay painted on a
+    /// conflict the user just resolved.
+    #[test]
+    fn the_unresolved_row_key_changes_when_a_block_resolves_without_editing_the_text() {
+        use super::super::helpers::ResolvedOutputKey;
+        use crate::kit::text_model::TextModel;
+
+        let (segments, output) = fixture();
+        let snapshot = TextModel::from_large_text(&output).snapshot();
+
+        let map = block_map_for(&segments);
+        let before = ResolvedOutputKey::new(&snapshot, &segments, &map);
+
+        // Resolve one still-open block. The output text is untouched.
+        let mut resolved = segments.clone();
+        let flipped = resolved
+            .iter_mut()
+            .find_map(|segment| match segment {
+                ConflictSegment::Block(block) if !block.resolved => Some(block),
+                _ => None,
+            })
+            .expect("fixture has an unresolved block");
+        flipped.resolved = true;
+        flipped.choice = ConflictChoice::Ours;
+
+        let after = ResolvedOutputKey::new(&snapshot, &resolved, &map);
+
+        assert_eq!(
+            before.revision, after.revision,
+            "this test is only meaningful while the buffer revision stays put"
+        );
+        assert_ne!(
+            before, after,
+            "the cache key must notice a block that changed resolution state"
+        );
+
+        // The rows also fall back to the block map for block geometry, so the
+        // map is part of what they depend on. A map rebuilt or reset without the
+        // text or any resolution moving would otherwise serve rows placed by the
+        // old geometry.
+        let empty_map = conflict_resolver::ResolvedOutputBlockMap::default();
+        assert_ne!(
+            ResolvedOutputKey::new(&snapshot, &segments, &map),
+            ResolvedOutputKey::new(&snapshot, &segments, &empty_map),
+            "the cache key must notice the block map changing under it"
+        );
+    }
+
+    #[test]
+    fn rope_and_str_scanners_agree() {
+        let (segments, output) = fixture();
+        let block_map = block_map_for(&segments);
+        let rope = crate::kit::rope::Rope::from_str(&output);
+
+        assert_eq!(
+            resolved_output_placeholder_protected_ranges(output.as_str()).as_ref(),
+            resolved_output_placeholder_protected_ranges(&rope).as_ref(),
+            "protected ranges"
+        );
+
+        let protected = resolved_output_placeholder_protected_ranges(&rope);
+        assert!(!protected.is_empty(), "fixture should have open conflicts");
+        assert_eq!(
+            resolved_output_live_syntax_mask(protected.as_ref(), output.as_str()).as_ref(),
+            resolved_output_live_syntax_mask(protected.as_ref(), &rope).as_ref(),
+            "syntax mask"
+        );
+
+        assert_eq!(
+            resolved_output_markers_for_text(&segments, output.as_str(), &block_map),
+            resolved_output_markers_for_text(&segments, &rope, &block_map),
+            "conflict markers"
+        );
+    }
+
+    /// The point of the exercise: scanning must not flatten the buffer.
+    #[test]
+    fn scanning_through_the_rope_does_not_materialize() {
+        let (segments, output) = fixture();
+        let block_map = block_map_for(&segments);
+
+        let mut model = TextModel::from_large_text(&output);
+        // Edit so the materialization cache is cold and cannot be a leftover.
+        model.replace_range(0..0, "// edited\n");
+        let snapshot = model.snapshot();
+        assert!(!snapshot.is_materialized());
+
+        let rope = snapshot.rope();
+        let _ = resolved_output_unresolved_rows(&segments, &rope, &block_map);
+        let protected = resolved_output_placeholder_protected_ranges(&rope);
+        let _ = resolved_output_live_syntax_mask(protected.as_ref(), &rope);
+        let _ = resolved_output_markers_for_text(&segments, &rope, &block_map);
+
+        assert!(
+            !snapshot.is_materialized(),
+            "the scanners must read through the rope, not flatten it"
+        );
+        assert!(
+            !snapshot.is_line_index_built(),
+            "the scanners must seek rows in the rope, not build a document-sized \
+             line-start index"
+        );
+    }
+}
+
+/// The heuristic arm — the one large buffers without a live tree land on.
+#[cfg(test)]
+mod heuristic_window_tests {
+    use super::super::helpers::resolved_output_heuristic_highlights_for_range;
+    use super::*;
+    use crate::kit::rope::Rope;
+
+    fn fixture() -> String {
+        (0..400)
+            .map(|ix| {
+                format!("fn value_{ix}() -> &'static str {{ /* note {ix} */ \"text {ix}\" }}\n")
+            })
+            .collect()
+    }
+
+    /// Tokenizing a window must give exactly what tokenizing the document gives
+    /// for those rows — the property that makes windowing this arm sound rather
+    /// than approximate.
+    #[test]
+    fn a_window_matches_the_whole_document_over_the_same_rows() {
+        let theme = AppTheme::gitcomet_dark();
+        let text = fixture();
+        let rope = Rope::from_str(&text);
+        let language = rows::DiffSyntaxLanguage::Rust;
+
+        let whole =
+            resolved_output_heuristic_highlights_for_range(theme, &rope, language, 0..text.len());
+        assert!(!whole.is_empty(), "fixture should produce highlights");
+
+        // A window in the middle, snapped to row boundaries the same way the
+        // function does internally.
+        let start = rope.line_range(150).start;
+        let end = rope.line_range(180).end;
+        let window =
+            resolved_output_heuristic_highlights_for_range(theme, &rope, language, start..end);
+
+        let expected: Vec<_> = whole
+            .iter()
+            .filter(|(range, _)| range.start >= rope.line_range(150).start && range.end <= end)
+            .cloned()
+            .collect();
+        assert!(!expected.is_empty(), "the window should contain highlights");
+        for hit in &expected {
+            assert!(
+                window.contains(hit),
+                "window is missing {hit:?} that the whole-document pass produced"
+            );
+        }
+        // And it must not reach far outside the window.
+        for (range, _) in &window {
+            assert!(
+                range.start >= rope.line_range(150).start && range.end <= end,
+                "window produced {range:?} outside {start}..{end}"
+            );
+        }
+    }
+
+    #[test]
+    fn tokenizing_a_window_does_not_materialize_the_document() {
+        let theme = AppTheme::gitcomet_dark();
+        let mut model = TextModel::from_large_text(&fixture());
+        model.replace_range(0..0, "// edited\n");
+        let snapshot = model.snapshot();
+        assert!(!snapshot.is_materialized());
+
+        let rope = snapshot.rope();
+        let start = rope.line_range(100).start;
+        let end = rope.line_range(120).end;
+        let highlights = resolved_output_heuristic_highlights_for_range(
+            theme,
+            &rope,
+            rows::DiffSyntaxLanguage::Rust,
+            start..end,
+        );
+
+        assert!(!highlights.is_empty());
+        assert!(
+            !snapshot.is_materialized(),
+            "the heuristic arm must read rows through the rope, not flatten the buffer"
+        );
+    }
+
+    #[test]
+    fn an_empty_or_out_of_bounds_window_is_empty() {
+        let theme = AppTheme::gitcomet_dark();
+        let rope = Rope::from_str(&fixture());
+        let language = rows::DiffSyntaxLanguage::Rust;
+        assert!(
+            resolved_output_heuristic_highlights_for_range(theme, &rope, language, 5..5).is_empty()
+        );
+        assert!(
+            resolved_output_heuristic_highlights_for_range(
+                theme,
+                &rope,
+                language,
+                rope.len()..rope.len() + 99
+            )
+            .is_empty()
+        );
+    }
+}
+
+/// The `str` and `Rope` implementations must answer identically, including for
+/// ranges no caller should have produced.
+///
+/// Both are used against the same buffers in the same frame — `&str` from the
+/// block-map rebuild, `&Rope` from the syntax and unresolved-row paths — so a
+/// disagreement means one caller judges the output valid and another does not.
+/// `str::count_newlines_in` used to answer 0 for any out-of-range or mid-
+/// character span, which reads as "no newlines here" and lands conflict markers
+/// on the wrong rows.
+#[test]
+fn the_str_and_rope_sources_agree_on_out_of_range_and_mid_character_input() {
+    use crate::kit::rope::Rope;
+    use crate::view::conflict_resolver::ResolvedOutputSource;
+
+    for text in [
+        "a\u{e9}bc\nd\u{1f642}e\nfg",
+        "plain\nascii\nrows\n",
+        "\u{1f642}\n\u{1f642}",
+        "",
+    ] {
+        let rope = Rope::from_str(text);
+        let past_end = text.len() + 5;
+
+        for start in 0..=past_end {
+            for end in 0..=past_end {
+                let range = start..end;
+                assert_eq!(
+                    ResolvedOutputSource::count_newlines_in(text, range.clone()),
+                    ResolvedOutputSource::count_newlines_in(&rope, range.clone()),
+                    "count_newlines_in({range:?}) on {text:?}"
+                );
+            }
+            assert_eq!(
+                ResolvedOutputSource::byte_at(text, start),
+                ResolvedOutputSource::byte_at(&rope, start),
+                "byte_at({start}) on {text:?}"
+            );
+            for needle in ["\n", "a", "\u{e9}", "\u{1f642}", "bc"] {
+                assert_eq!(
+                    ResolvedOutputSource::starts_with_at(text, start, needle),
+                    ResolvedOutputSource::starts_with_at(&rope, start, needle),
+                    "starts_with_at({start}, {needle:?}) on {text:?}"
+                );
+            }
+        }
+
+        assert_eq!(
+            ResolvedOutputSource::row_count(text),
+            ResolvedOutputSource::row_count(&rope),
+            "row_count on {text:?}"
+        );
+    }
 }

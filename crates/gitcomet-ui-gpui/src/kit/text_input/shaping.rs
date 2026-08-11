@@ -213,6 +213,105 @@ pub(super) fn compute_line_starts(text: &str) -> Vec<usize> {
     starts
 }
 
+/// Where a frame reads its row text from.
+///
+/// The soft-wrap and masked arms hand over a document they already hold as one
+/// `&str`; the plain arm copies out only the rows it is about to shape, so a
+/// frame costs the viewport rather than the document.
+pub(super) enum LineTextSource<'a> {
+    Whole {
+        text: &'a str,
+        starts: &'a [usize],
+    },
+    Window {
+        rows: Range<usize>,
+        text: String,
+        starts: Vec<usize>,
+        /// The caret's row, when it sits outside `rows` and still has to be
+        /// shaped to place the caret.
+        stray: Option<(usize, String)>,
+    },
+}
+
+impl LineTextSource<'_> {
+    /// Copy out `rows` (and `extra`, if it falls outside them) from `snapshot`.
+    ///
+    /// Cost is proportional to the rows taken, not to the document.
+    pub(super) fn window(
+        snapshot: &crate::kit::text_model::TextModelSnapshot,
+        rows: Range<usize>,
+        extra: Option<usize>,
+    ) -> Self {
+        let mut text = String::new();
+        let mut starts = Vec::with_capacity(rows.len() + 1);
+        let line_count = snapshot.line_count();
+        for row in rows.clone() {
+            starts.push(text.len());
+            text.push_str(snapshot.line_text(row).as_ref());
+            // Re-add the terminator the model strips, so `line_text_for_index`
+            // sees the same shape it does for a whole document — but only where
+            // the document really has one. A final row with no trailing newline
+            // that ends in `\r` keeps that `\r` in the `Whole` variant, so
+            // inventing a terminator here would make the same row shape one
+            // character narrower in this arm than in the other.
+            if row + 1 < line_count {
+                text.push('\n');
+            }
+        }
+        starts.push(text.len());
+
+        // The caret's row, when it is outside the window. Stored already
+        // stripped: the windowed rows lose their `\r` to `line_text_for_index`
+        // and the `Whole` variant strips it too, but `line_text` only excludes
+        // the `\n`. Leaving it on would make the caret's row shape one column
+        // wider than the identical row shapes in-viewport, so scrolling the
+        // caret in and out would move it.
+        let stray = extra.filter(|row| !rows.contains(row)).map(|row| {
+            let text = snapshot.line_text(row);
+            // Strip only where the document really terminates the row, exactly
+            // as the windowed rows above do: a `\r` at the very end of a file
+            // with no trailing newline survives in the `Whole` variant, so it
+            // has to survive here.
+            let text = match text.strip_suffix('\r') {
+                Some(stripped) if row + 1 < line_count => stripped,
+                _ => text.as_ref(),
+            };
+            (row, text.to_owned())
+        });
+
+        Self::Window {
+            rows,
+            text,
+            starts,
+            stray,
+        }
+    }
+
+    /// Text of `line_ix`, excluding its terminator. Empty for rows outside the
+    /// window, which a correct caller never asks for.
+    pub(super) fn line_text(&self, line_ix: usize) -> &str {
+        match self {
+            Self::Whole { text, starts } => line_text_for_index(text, starts, line_ix),
+            Self::Window {
+                rows,
+                text,
+                starts,
+                stray,
+            } => {
+                if let Some((stray_row, stray_text)) = stray
+                    && *stray_row == line_ix
+                {
+                    return stray_text;
+                }
+                if !rows.contains(&line_ix) {
+                    return "";
+                }
+                line_text_for_index(text, starts, line_ix - rows.start)
+            }
+        }
+    }
+}
+
 pub(super) fn line_text_for_index<'a>(text: &'a str, starts: &[usize], line_ix: usize) -> &'a str {
     let text_len = text.len();
     let Some(start) = starts.get(line_ix).copied() else {

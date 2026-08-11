@@ -113,27 +113,33 @@ impl Element for TextElement {
             let style = window.text_style();
             let has_content = !content.is_empty();
 
-            let (display_text, text_color) = if content.is_empty() {
-                (input.placeholder.clone(), style_colors.placeholder)
+            // A placeholder or masked rendering is a synthesized string that is
+            // not the document; everything else reads through the model.
+            let substitute_text: Option<SharedString> = if content.is_empty() {
+                Some(input.placeholder.clone())
             } else if input.masked {
-                (
-                    mask_text_for_display(content.as_ref()).into(),
-                    style_colors.text,
-                )
+                Some(mask_text_for_display(content.as_ref()).into())
             } else {
-                (content.as_shared_string(), style_colors.text)
+                None
+            };
+            let text_color = if content.is_empty() {
+                style_colors.placeholder
+            } else {
+                style_colors.text
             };
 
             let font_size = style.font_size.to_pixels(window.rem_size());
             let line_height = input.effective_line_height(window);
             let base_font = style.font();
 
-            let display_text_str = display_text.as_ref();
-            let line_starts: Arc<[usize]> = if has_content && !input.masked {
-                content.shared_line_starts()
-            } else {
-                compute_line_starts(display_text_str).into()
+            let line_starts: Arc<[usize]> = match substitute_text.as_ref() {
+                Some(text) => compute_line_starts(text).into(),
+                None => content.shared_line_starts(),
             };
+            let display_len = substitute_text
+                .as_ref()
+                .map(|text| text.len())
+                .unwrap_or_else(|| content.len());
             let line_count = line_starts.len().max(1);
             let (visible_top, visible_bottom) =
                 visible_vertical_window(bounds, input.interaction.vertical_scroll_handle.as_ref());
@@ -146,7 +152,7 @@ impl Element for TextElement {
             } else {
                 let byte_range = provider_prefetch_byte_range_for_visible_window(
                     line_starts.as_ref(),
-                    display_text_str.len(),
+                    display_len,
                     line_count,
                     line_height,
                     visible_top,
@@ -180,11 +186,14 @@ impl Element for TextElement {
                 {
                     let mut base_text_style = style.clone();
                     base_text_style.color = text_color;
+                    // Single line by construction, so materializing it is the
+                    // row, not the document.
+                    let single_line = content.as_shared_string();
                     let truncated_line = shape_truncated_line_cached(
                         window,
                         cx,
                         &base_text_style,
-                        &display_text,
+                        &single_line,
                         Some(bounds.size.width.max(px(0.0))),
                         input
                             .display_truncation
@@ -263,8 +272,33 @@ impl Element for TextElement {
                 if visible_line_range.is_empty() {
                     visible_line_range = 0..line_count.min(1);
                 }
+
+                let cursor_line_ix =
+                    line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+                // The rows this frame will shape: the viewport, plus the caret's
+                // row when it has scrolled out of it. Every *text* read below
+                // goes through this, so shaping costs the viewport.
+                //
+                // The frame as a whole is not yet free of the document:
+                // `line_starts` above is still the whole-document array, and an
+                // edit drops that cache, so each post-edit frame rebuilds it
+                // (~1.6ms at 100k rows). Closing that means giving the handful
+                // of `line_starts` readers in prepaint and paint a windowed
+                // equivalent.
+                let line_source = match substitute_text.as_ref() {
+                    Some(text) => LineTextSource::Whole {
+                        text,
+                        starts: line_starts.as_ref(),
+                    },
+                    None => LineTextSource::window(
+                        &content,
+                        visible_line_range.clone(),
+                        (cursor_line_ix < line_count).then_some(cursor_line_ix),
+                    ),
+                };
+
                 let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
-                    display_text_str,
+                    &line_source,
                     line_starts.as_ref(),
                     visible_line_range.clone(),
                     &shape_style,
@@ -287,11 +321,7 @@ impl Element for TextElement {
                         LineShapeInput {
                             line_ix,
                             line_start: line_starts.get(line_ix).copied().unwrap_or(0),
-                            line_text: line_text_for_index(
-                                display_text_str,
-                                line_starts.as_ref(),
-                                line_ix,
-                            ),
+                            line_text: line_source.line_text(line_ix),
                         },
                         precomputed_runs,
                         &shape_style,
@@ -300,8 +330,6 @@ impl Element for TextElement {
                     lines.push(shaped);
                 }
 
-                let cursor_line_ix =
-                    line_index_for_offset(line_starts.as_ref(), cursor, line_count);
                 if cursor_line_ix < line_count
                     && (cursor_line_ix < visible_line_range.start
                         || cursor_line_ix >= visible_line_range.end)
@@ -310,11 +338,7 @@ impl Element for TextElement {
                         LineShapeInput {
                             line_ix: cursor_line_ix,
                             line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
-                            line_text: line_text_for_index(
-                                display_text_str,
-                                line_starts.as_ref(),
-                                cursor_line_ix,
-                            ),
+                            line_text: line_source.line_text(cursor_line_ix),
                         },
                         None,
                         &shape_style,
@@ -378,10 +402,7 @@ impl Element for TextElement {
                             continue;
                         };
                         let start = line_starts.get(ix).copied().unwrap_or(0);
-                        let next_start = line_starts
-                            .get(ix + 1)
-                            .copied()
-                            .unwrap_or(display_text.len());
+                        let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
                         let line_end = start + line.len();
 
                         let seg_start = selected_range.start.max(start);
@@ -418,6 +439,18 @@ impl Element for TextElement {
                     has_background_runs,
                 };
             }
+
+            // The soft-wrap arm still works over the whole document: its row
+            // counts, y-offset prefix sum and wrap job are all document-wide, so
+            // windowing the text alone would buy nothing. Soft wrap is only ever
+            // enabled on small inputs today (commit messages, toasts, details
+            // panes) — windowing this arm is the prerequisite for offering it on
+            // a large file, and is deliberately not attempted here.
+            let display_text: SharedString = match substitute_text.as_ref() {
+                Some(text) => text.clone(),
+                None => content.as_shared_string(),
+            };
+            let display_text_str = display_text.as_ref();
 
             let wrap_width = bounds.size.width.max(px(0.0));
             let rounded_wrap_width = wrap_width.round();
@@ -475,8 +508,12 @@ impl Element for TextElement {
                 line_count,
                 !started_wrap_job,
             );
+            let wrapped_line_source = LineTextSource::Whole {
+                text: display_text_str,
+                starts: line_starts.as_ref(),
+            };
             let mut streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
-                display_text_str,
+                &wrapped_line_source,
                 line_starts.as_ref(),
                 visible_line_range.clone(),
                 &shape_style,
@@ -593,7 +630,7 @@ impl Element for TextElement {
                     TEXT_INPUT_GUARD_ROWS,
                 );
                 streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
-                    display_text_str,
+                    &wrapped_line_source,
                     line_starts.as_ref(),
                     visible_line_range.clone(),
                     &shape_style,
@@ -669,10 +706,7 @@ impl Element for TextElement {
             } else {
                 for ix in visible_line_range.clone() {
                     let start = line_starts.get(ix).copied().unwrap_or(0);
-                    let next_start = line_starts
-                        .get(ix + 1)
-                        .copied()
-                        .unwrap_or(display_text.len());
+                    let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
                     let line_len = lines[ix].len();
                     let line_end = start + line_len;
 
