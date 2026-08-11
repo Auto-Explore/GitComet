@@ -2,7 +2,8 @@
 //!
 //! Turns a repository's `origin` remote URL (SSH or HTTPS) into a web URL for
 //! a specific commit or file on the hosting forge (GitHub, GitLab, Bitbucket,
-//! Azure DevOps, or any GitHub-style forge such as Gitea/Codeberg).
+//! Azure DevOps, Gitea/Codeberg, AWS CodeCommit, or any GitHub-style forge
+//! such as a self-hosted Gitea instance).
 
 use gitcomet_core::domain::Remote;
 
@@ -16,6 +17,13 @@ enum ForgeKind {
     /// hosts). Unlike the other forges, files are addressed with a `path`
     /// query parameter instead of a `blob` path segment.
     AzureDevOps,
+    /// Hosted Gitea instances (`codeberg.org`, `gitea.com`, …). Files use the
+    /// canonical `src/branch/<ref>` / `src/commit/<sha>` paths.
+    Gitea,
+    /// AWS CodeCommit. The git remote lives on
+    /// `git-codecommit.<region>.amazonaws.com` while the web console is under
+    /// `<region>.console.aws.amazon.com/codesuite/codecommit/…`.
+    CodeCommit,
     /// Any other host; GitHub-style `/{owner}/{repo}/…` paths are the
     /// de-facto standard shared by Gitea, Codeberg, and friends.
     Generic,
@@ -46,7 +54,7 @@ pub(super) fn commit_permalink(remotes: &[Remote], sha: &str) -> Option<String> 
         return None;
     }
     Some(match base.kind {
-        ForgeKind::GitHub | ForgeKind::Generic => {
+        ForgeKind::GitHub | ForgeKind::Generic | ForgeKind::Gitea | ForgeKind::CodeCommit => {
             format!("{}/commit/{sha}", base.web_root)
         }
         ForgeKind::GitLab => format!("{}/-/commit/{sha}", base.web_root),
@@ -75,6 +83,29 @@ pub(super) fn file_permalink(remotes: &[Remote], reference: &str, path: &str) ->
         ForgeKind::GitLab => format!("{}/-/blob/{reference}/{encoded_path}", base.web_root),
         ForgeKind::Bitbucket => {
             format!("{}/src/{reference}/{encoded_path}", base.web_root)
+        }
+        ForgeKind::Gitea => {
+            // Gitea's canonical file URL distinguishes branches (`src/branch`)
+            // from commits (`src/commit`).
+            let ref_kind = if is_full_sha(reference) {
+                "commit"
+            } else {
+                "branch"
+            };
+            format!(
+                "{}/src/{ref_kind}/{reference}/{encoded_path}",
+                base.web_root
+            )
+        }
+        ForgeKind::CodeCommit => {
+            // CodeCommit browses branches via `refs/heads/…` and commits by
+            // their id, with `--` separating the reference from the path.
+            let browse_ref = if is_full_sha(reference) {
+                reference.to_string()
+            } else {
+                format!("refs/heads/{reference}")
+            };
+            format!("{}/browse/{browse_ref}/--/{encoded_path}", base.web_root)
         }
         ForgeKind::AzureDevOps => {
             // Azure DevOps addresses the version in a query parameter and
@@ -138,11 +169,14 @@ fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
     if host.is_empty() || (host != "localhost" && !host.contains('.')) {
         return None;
     }
-    // Azure DevOps remotes use a different web-root shape than the
-    // GitHub-style `/{owner}/{repo}` layout, so they are handled exclusively
-    // here and never fall through to the generic path.
+    // Azure DevOps and AWS CodeCommit remotes use a different web-root shape
+    // than the GitHub-style `/{owner}/{repo}` layout, so they are handled
+    // exclusively here and never fall through to the generic path.
     if is_azure_devops_host(&host) {
         return azure_devops_base(&host, path);
+    }
+    if let Some(base) = code_commit_base(&host, path) {
+        return Some(base);
     }
     let owner_repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
     if owner_repo.is_empty() || !owner_repo.contains('/') {
@@ -152,6 +186,7 @@ fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
         "github.com" => ForgeKind::GitHub,
         "gitlab.com" => ForgeKind::GitLab,
         "bitbucket.org" => ForgeKind::Bitbucket,
+        "codeberg.org" | "gitea.com" | "code.forgejo.org" => ForgeKind::Gitea,
         _ => ForgeKind::Generic,
     };
     // Keep the remote's own scheme: an http-only self-hosted forge stays
@@ -206,8 +241,33 @@ fn azure_devops_base(host: &str, path: &str) -> Option<ForgeWebBase> {
     })
 }
 
-/// Whether a reference is a full 40-hex-digit git commit id. Azure DevOps
-/// version descriptors distinguish branches (`GB`) from commits (`GC`).
+/// Web root for an AWS CodeCommit remote. The git host is
+/// `git-codecommit.<region>.amazonaws.com` and the web console lives at
+/// `<region>.console.aws.amazon.com/codesuite/codecommit/repositories/<repo>`,
+/// which mirrors the remote's `v1/repos/<repo>` path.
+fn code_commit_base(host: &str, path: &str) -> Option<ForgeWebBase> {
+    let region = host
+        .strip_prefix("git-codecommit.")?
+        .strip_suffix(".amazonaws.com")?;
+    if region.is_empty() || region.contains('.') {
+        return None;
+    }
+    let repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    let repo = repo.strip_prefix("v1/repos/")?;
+    if repo.is_empty() || repo.contains('/') {
+        return None;
+    }
+    Some(ForgeWebBase {
+        kind: ForgeKind::CodeCommit,
+        web_root: format!(
+            "https://{region}.console.aws.amazon.com/codesuite/codecommit/repositories/{repo}"
+        ),
+    })
+}
+
+/// Whether a reference is a full 40-hex-digit git commit id. Forges like
+/// Azure DevOps and Gitea need to distinguish branches from commits in the
+/// URL (`GB`/`GC`, `src/branch`/`src/commit`).
 fn is_full_sha(reference: &str) -> bool {
     reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -453,6 +513,86 @@ mod tests {
         assert_eq!(commit_permalink(&remotes, "abc123"), None);
         let ssh = [remote("origin", "git@ssh.dev.azure.com:v3/org/repo")];
         assert_eq!(commit_permalink(&ssh, "abc123"), None);
+    }
+
+    #[test]
+    fn commit_permalink_for_gitea_and_codeberg() {
+        let gitea = [remote("origin", "git@gitea.com:org/repo.git")];
+        assert_eq!(
+            commit_permalink(&gitea, "abc123").as_deref(),
+            Some("https://gitea.com/org/repo/commit/abc123")
+        );
+        let codeberg = [remote("origin", "https://codeberg.org/org/repo.git")];
+        assert_eq!(
+            commit_permalink(&codeberg, "abc123").as_deref(),
+            Some("https://codeberg.org/org/repo/commit/abc123")
+        );
+    }
+
+    #[test]
+    fn file_permalink_for_gitea_uses_src_branch_and_src_commit() {
+        let remotes = [remote("origin", "git@codeberg.org:org/repo.git")];
+        assert_eq!(
+            file_permalink(&remotes, "main", "src/lib.rs").as_deref(),
+            Some("https://codeberg.org/org/repo/src/branch/main/src/lib.rs")
+        );
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
+            Some(
+                "https://codeberg.org/org/repo/src/commit/0123456789abcdef0123456789abcdef01234567/src/lib.rs"
+            )
+        );
+    }
+
+    #[test]
+    fn commit_permalink_for_code_commit() {
+        let remotes = [remote(
+            "origin",
+            "https://git-codecommit.eu-west-1.amazonaws.com/v1/repos/my-repo",
+        )];
+        assert_eq!(
+            commit_permalink(&remotes, "abc123").as_deref(),
+            Some(
+                "https://eu-west-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo/commit/abc123"
+            )
+        );
+    }
+
+    #[test]
+    fn file_permalink_for_code_commit() {
+        let remotes = [remote(
+            "origin",
+            "ssh://git-codecommit.us-east-1.amazonaws.com/v1/repos/my-repo",
+        )];
+        assert_eq!(
+            file_permalink(&remotes, "main", "src/lib.rs").as_deref(),
+            Some(
+                "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo/browse/refs/heads/main/--/src/lib.rs"
+            )
+        );
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            file_permalink(&remotes, sha, "src/lib.rs").as_deref(),
+            Some(
+                "https://us-east-1.console.aws.amazon.com/codesuite/codecommit/repositories/my-repo/browse/0123456789abcdef0123456789abcdef01234567/--/src/lib.rs"
+            )
+        );
+    }
+
+    #[test]
+    fn code_commit_remotes_with_unexpected_shapes_are_rejected() {
+        // Missing region in the git host or a repo id containing slashes.
+        let no_region = [remote(
+            "origin",
+            "https://git-codecommit.amazonaws.com/v1/repos/repo",
+        )];
+        assert_eq!(commit_permalink(&no_region, "abc123"), None);
+        let nested_repo = [remote(
+            "origin",
+            "https://git-codecommit.us-east-1.amazonaws.com/v1/repos/a/b",
+        )];
+        assert_eq!(commit_permalink(&nested_repo, "abc123"), None);
     }
 
     #[test]
