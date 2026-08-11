@@ -451,11 +451,12 @@ fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestApp
                 name: "origin".to_string(),
                 url: Some("git@github.com:Auto-Explore/GitComet.git".to_string()),
             }]));
-            repo.remote_branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
-                remote: "origin".to_string(),
-                name: "main".to_string(),
-                target: gitcomet_core::domain::CommitId("deadbeef".into()),
-            }]));
+            repo.remote_branches =
+                Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "main".to_string(),
+                    target: gitcomet_core::domain::CommitId("deadbeef".into()),
+                }]));
 
             let state = Arc::new(AppState {
                 repos: vec![repo],
@@ -530,11 +531,12 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
                 name: "origin".to_string(),
                 url: Some("git@github.com:Auto-Explore/GitComet.git".to_string()),
             }]));
-            repo.remote_branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
-                remote: "origin".to_string(),
-                name: "main".to_string(),
-                target: gitcomet_core::domain::CommitId("deadbeef".into()),
-            }]));
+            repo.remote_branches =
+                Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "main".to_string(),
+                    target: gitcomet_core::domain::CommitId("deadbeef".into()),
+                }]));
 
             let state = Arc::new(AppState {
                 repos: vec![repo],
@@ -574,7 +576,10 @@ fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppCon
         });
         match permalink {
             Some(ContextMenuAction::CopyText { text }) => {
-                assert_eq!(text, "https://github.com/Auto-Explore/GitComet/blob/main/a.txt");
+                assert_eq!(
+                    text,
+                    "https://github.com/Auto-Explore/GitComet/blob/main/a.txt"
+                );
             }
             _ => panic!("expected Copy file permalink to copy the branch permalink"),
         }
