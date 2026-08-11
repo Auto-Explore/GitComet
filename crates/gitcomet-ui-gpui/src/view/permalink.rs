@@ -381,7 +381,11 @@ mod tests {
             "permalink-copy"
         ));
         assert!(!branch_exists_on_permalink_remote(&remotes, &[], "main"));
-        assert!(!branch_exists_on_permalink_remote(&[], &remote_branches, "main"));
+        assert!(!branch_exists_on_permalink_remote(
+            &[],
+            &remote_branches,
+            "main"
+        ));
     }
 
     #[test]
