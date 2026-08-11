@@ -414,6 +414,174 @@ fn status_file_menu_hides_external_mergetool_for_staged_conflicts(cx: &mut gpui:
 }
 
 #[gpui::test]
+fn status_file_menu_hides_permalink_for_local_only_branch(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(8);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_status_menu_local_only_permalink",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("a.txt");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            // `permalink-copy` exists only locally: a `blob/<branch>` link
+            // would point at a nonexistent source on the forge.
+            repo.head_branch = Loadable::Ready("permalink-copy".to_string());
+            repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
+                name: "origin".to_string(),
+                url: Some("git@github.com:Auto-Explore/GitComet.git".to_string()),
+            }]));
+            repo.remote_branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: gitcomet_core::domain::CommitId("deadbeef".into()),
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: path.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected status file context menu model");
+
+        let has_permalink = model.items.iter().any(|item| match item {
+            ContextMenuItem::Entry { label, .. } => label.as_ref() == "Copy file permalink",
+            _ => false,
+        });
+        assert!(!has_permalink);
+    });
+}
+
+#[gpui::test]
+fn status_file_menu_offers_permalink_for_pushed_branch(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    let repo_id = RepoId(9);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_status_menu_pushed_permalink",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("a.txt");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.status = Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: vec![],
+                    unstaged: vec![gitcomet_core::domain::FileStatus {
+                        path: path.clone(),
+                        kind: gitcomet_core::domain::FileStatusKind::Modified,
+                        conflict: None,
+                    }],
+                }
+                .into(),
+            );
+            // `main` has a remote counterpart, so the permalink resolves.
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.remotes = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::Remote {
+                name: "origin".to_string(),
+                url: Some("git@github.com:Auto-Explore/GitComet.git".to_string()),
+            }]));
+            repo.remote_branches = Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                remote: "origin".to_string(),
+                name: "main".to_string(),
+                target: gitcomet_core::domain::CommitId("deadbeef".into()),
+            }]));
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::StatusFileMenu {
+                            repo_id,
+                            area: DiffArea::Unstaged,
+                            path: path.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected status file context menu model");
+
+        let permalink = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. }
+                if label.as_ref() == "Copy file permalink" =>
+            {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        match permalink {
+            Some(ContextMenuAction::CopyText { text }) => {
+                assert_eq!(text, "https://github.com/Auto-Explore/GitComet/blob/main/a.txt");
+            }
+            _ => panic!("expected Copy file permalink to copy the branch permalink"),
+        }
+    });
+}
+
+#[gpui::test]
 fn status_file_menu_open_from_details_pane_does_not_double_lease_panic(
     cx: &mut gpui::TestAppContext,
 ) {

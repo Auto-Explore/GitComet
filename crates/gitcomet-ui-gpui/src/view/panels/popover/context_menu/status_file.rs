@@ -309,11 +309,32 @@ pub(super) fn model(
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| match (&repo.remotes, &repo.head_branch) {
-            (Loadable::Ready(remotes), Loadable::Ready(head))
+        .and_then(|repo| match (&repo.remotes, &repo.head_branch, &repo.remote_branches) {
+            (Loadable::Ready(remotes), Loadable::Ready(head), remote_branches)
                 if !head.is_empty() && head != "HEAD" =>
             {
-                crate::view::permalink::file_permalink(remotes, head, &path.display().to_string())
+                // A `blob/<branch>` permalink only resolves while the branch
+                // exists on the permalink's remote; a local-only branch would
+                // point at a nonexistent source, so skip the action there.
+                let branch_is_pushed = match remote_branches {
+                    Loadable::Ready(remote_branches) => {
+                        crate::view::permalink::branch_exists_on_permalink_remote(
+                            remotes,
+                            remote_branches,
+                            head,
+                        )
+                    }
+                    // Remote branches not loaded yet: keep offering the
+                    // permalink rather than hiding it on incomplete data.
+                    _ => true,
+                };
+                branch_is_pushed.then(|| {
+                    crate::view::permalink::file_permalink(
+                        remotes,
+                        head,
+                        &path.display().to_string(),
+                    )
+                })?
             }
             _ => None,
         });

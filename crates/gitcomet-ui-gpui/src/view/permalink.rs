@@ -5,7 +5,7 @@
 //! Azure DevOps, Gitea/Codeberg, AWS CodeCommit, or any GitHub-style forge
 //! such as a self-hosted Gitea instance).
 
-use gitcomet_core::domain::Remote;
+use gitcomet_core::domain::{Remote, RemoteBranch};
 
 /// The forge URL shapes GitComet knows how to generate.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -61,6 +61,26 @@ pub(super) fn commit_permalink(remotes: &[Remote], sha: &str) -> Option<String> 
         ForgeKind::Bitbucket => format!("{}/commits/{sha}", base.web_root),
         ForgeKind::AzureDevOps => format!("{}/commit/{sha}", base.web_root),
     })
+}
+
+/// Whether a branch exists on the remote that web links are based on. A
+/// branch-only permalink (`blob/<branch>`) only resolves while the branch is
+/// on the forge; for a local-only branch (never pushed) it would point at a
+/// nonexistent source, so callers should suppress the permalink action.
+/// Matching is done against the permalink remote specifically: a branch pushed
+/// to a *different* remote still has no counterpart on the forge the link
+/// targets.
+pub(super) fn branch_exists_on_permalink_remote(
+    remotes: &[Remote],
+    remote_branches: &[RemoteBranch],
+    branch: &str,
+) -> bool {
+    let Some(remote) = origin_remote(remotes) else {
+        return false;
+    };
+    remote_branches
+        .iter()
+        .any(|remote_branch| remote_branch.remote == remote.name && remote_branch.name == branch)
 }
 
 /// Web permalink for a file at a given reference (commit sha or branch name),
@@ -175,8 +195,8 @@ fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
     if is_azure_devops_host(&host) {
         return azure_devops_base(&host, path);
     }
-    if let Some(base) = code_commit_base(&host, path) {
-        return Some(base);
+    if host.starts_with("git-codecommit.") {
+        return code_commit_base(&host, path);
     }
     let owner_repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
     if owner_repo.is_empty() || !owner_repo.contains('/') {
@@ -327,6 +347,70 @@ mod tests {
             Some("upstream")
         );
         assert_eq!(origin_remote(&[]), None);
+    }
+
+    fn remote_branch(remote: &str, name: &str) -> RemoteBranch {
+        RemoteBranch {
+            remote: remote.to_string(),
+            name: name.to_string(),
+            target: gitcomet_core::domain::CommitId("abc123".into()),
+        }
+    }
+
+    #[test]
+    fn branch_exists_on_permalink_remote_when_pushed_to_origin() {
+        let remotes = [remote("origin", "git@github.com:org/repo.git")];
+        let remote_branches = [
+            remote_branch("origin", "main"),
+            remote_branch("origin", "feature/x"),
+        ];
+        assert!(branch_exists_on_permalink_remote(
+            &remotes,
+            &remote_branches,
+            "feature/x"
+        ));
+    }
+
+    #[test]
+    fn local_only_branch_is_not_on_permalink_remote() {
+        let remotes = [remote("origin", "git@github.com:org/repo.git")];
+        let remote_branches = [remote_branch("origin", "main")];
+        assert!(!branch_exists_on_permalink_remote(
+            &remotes,
+            &remote_branches,
+            "permalink-copy"
+        ));
+        assert!(!branch_exists_on_permalink_remote(&remotes, &[], "main"));
+        assert!(!branch_exists_on_permalink_remote(&[], &remote_branches, "main"));
+    }
+
+    #[test]
+    fn branch_pushed_to_another_remote_does_not_count_for_the_permalink_remote() {
+        let remotes = [remote("origin", "git@github.com:org/repo.git")];
+        let remote_branches = [remote_branch("backup", "feature")];
+        // The permalink is based on `origin`, where the branch has no
+        // counterpart, so the link would not resolve.
+        assert!(!branch_exists_on_permalink_remote(
+            &remotes,
+            &remote_branches,
+            "feature"
+        ));
+    }
+
+    #[test]
+    fn branch_is_checked_against_the_fallback_remote_when_origin_is_missing() {
+        let remotes = [remote("upstream", "git@github.com:org/repo.git")];
+        let remote_branches = [remote_branch("upstream", "feature")];
+        assert!(branch_exists_on_permalink_remote(
+            &remotes,
+            &remote_branches,
+            "feature"
+        ));
+        assert!(!branch_exists_on_permalink_remote(
+            &remotes,
+            &remote_branches,
+            "other"
+        ));
     }
 
     #[test]
