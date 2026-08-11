@@ -469,23 +469,25 @@ fn popover_feeds_pointer_positions_to_the_tooltip_host(cx: &mut gpui::TestAppCon
 fn rebase_onto_picker_excludes_current_branch_and_opens_confirm(cx: &mut gpui::TestAppContext) {
     let (store, events, _repo, _workdir) = create_tracking_store("rebase-onto-picker");
     let repo_id = store.snapshot().active_repo.expect("expected active repo");
-    store.dispatch(Msg::Internal(gitcomet_state::msg::InternalMsg::BranchesLoaded {
-        repo_id,
-        result: Ok(vec![
-            Branch {
-                name: "main".to_string(),
-                target: CommitId("HEAD".into()),
-                upstream: None,
-                divergence: None,
-            },
-            Branch {
-                name: "feature".to_string(),
-                target: CommitId("HEAD".into()),
-                upstream: None,
-                divergence: None,
-            },
-        ]),
-    }));
+    store.dispatch(Msg::Internal(
+        gitcomet_state::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![
+                Branch {
+                    name: "main".to_string(),
+                    target: CommitId("HEAD".into()),
+                    upstream: None,
+                    divergence: None,
+                },
+                Branch {
+                    name: "feature".to_string(),
+                    target: CommitId("HEAD".into()),
+                    upstream: None,
+                    divergence: None,
+                },
+            ]),
+        },
+    ));
     let store_for_view = store.clone();
     let (view, cx) = cx
         .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));

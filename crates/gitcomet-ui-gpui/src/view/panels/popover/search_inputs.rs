@@ -187,8 +187,7 @@ impl PopoverHost {
                     let hide_current_branch = matches!(
                         this.popover,
                         Some(PopoverKind::BranchPicker {
-                            purpose:
-                                BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto
+                            purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto
                         })
                     );
                     let with_refs = branch_picker_offers_refs(this);

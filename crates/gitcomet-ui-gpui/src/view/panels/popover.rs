@@ -2264,7 +2264,10 @@ impl PopoverHost {
                 purpose: BranchPickerPurpose::RebaseOnto,
             }) => {
                 self.open_popover_centered(
-                    PopoverKind::RebaseOntoConfirm { repo_id, onto: name },
+                    PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name,
+                    },
                     window,
                     cx,
                 );

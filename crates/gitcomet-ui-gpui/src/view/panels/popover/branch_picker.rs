@@ -48,8 +48,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                         .filter_map(|b| {
                             // The current branch cannot be rebased onto itself;
                             // deleting it is impossible too.
-                            if (is_delete || is_rebase_onto)
-                                && head_branch == Some(b.name.as_str())
+                            if (is_delete || is_rebase_onto) && head_branch == Some(b.name.as_str())
                             {
                                 None
                             } else {
