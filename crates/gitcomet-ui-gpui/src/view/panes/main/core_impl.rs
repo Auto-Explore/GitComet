@@ -111,20 +111,6 @@ fn diff_wrap_byte_range_at(
     ranges.get(wrap_ix).copied().unwrap_or_default()
 }
 
-pub(in crate::view::panes::main) fn resolved_output_highlight_provider_binding_key(
-    theme_epoch: u64,
-    language: rows::DiffSyntaxLanguage,
-    document: rows::PreparedDiffSyntaxDocument,
-) -> u64 {
-    use std::hash::{Hash, Hasher};
-
-    let mut hasher = rustc_hash::FxHasher::default();
-    theme_epoch.hash(&mut hasher);
-    language.hash(&mut hasher);
-    document.hash(&mut hasher);
-    hasher.finish()
-}
-
 fn shift_resolved_output_marker(
     marker: ResolvedOutputConflictMarker,
     line_delta: isize,
@@ -136,13 +122,6 @@ fn shift_resolved_output_marker(
         is_start: marker.is_start,
         is_end: marker.is_end,
         unresolved: marker.unresolved,
-    }
-}
-
-fn diff_syntax_edit_from_outline_delta(delta: ResolvedOutlineDelta) -> rows::DiffSyntaxEdit {
-    rows::DiffSyntaxEdit {
-        old_range: delta.old_range,
-        new_range: delta.new_range,
     }
 }
 
@@ -262,6 +241,7 @@ struct BackgroundResolvedOutlineRecomputeRequest {
     output_text: Arc<str>,
     output_line_count: usize,
     marker_segments: Vec<conflict_resolver::ConflictSegment>,
+    block_map: conflict_resolver::ResolvedOutputBlockMap,
     sources: OwnedResolvedOutlineSourceData,
 }
 
@@ -276,11 +256,16 @@ fn compute_resolved_outline_computation(
     output_text: &str,
     output_line_count: usize,
     marker_segments: &[conflict_resolver::ConflictSegment],
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
     sources: ResolvedOutlineSourceView<'_>,
 ) -> ResolvedOutlineComputation {
     let view_mode = sources.view_mode();
-    let markers =
-        build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count);
+    let markers = build_resolved_output_conflict_markers(
+        marker_segments,
+        output_text,
+        output_line_count,
+        block_map,
+    );
     if should_skip_resolved_outline_provenance(view_mode, output_line_count) {
         return ResolvedOutlineComputation {
             output_line_count,
@@ -531,18 +516,13 @@ fn update_line_sources_index_for_range(
     }
 }
 
-fn widest_resolved_output_line_ix(text: &str, line_starts: &[usize]) -> usize {
-    let mut best_ix = 0usize;
-    let mut best_len = 0usize;
-    let line_count = line_starts.len().max(1);
-    for line_ix in 0..line_count {
-        let width = rows::resolved_output_line_text(text, line_starts, line_ix).len();
-        if width > best_len {
-            best_len = width;
-            best_ix = line_ix;
-        }
-    }
-    best_ix
+/// The row the resolved-output column measures its width against.
+///
+/// O(1): the rope carries the widest row in its summary, so the measurement
+/// never scans the document. Ties keep the earliest row, matching the linear
+/// scan this replaced.
+fn resolved_output_measure_row(snapshot: &TextModelSnapshot) -> usize {
+    snapshot.rope().longest_row() as usize
 }
 
 fn preferred_scroll_master_index<const N: usize>(max_scrolls: [Pixels; N]) -> usize {
@@ -672,7 +652,7 @@ impl SyncedScrollAxis {
     }
 }
 
-fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> ScrollHandle {
+pub(super) fn uniform_list_base_handle(handle: &UniformListScrollHandle) -> ScrollHandle {
     handle.0.borrow().base_handle.clone()
 }
 
@@ -704,7 +684,6 @@ fn sync_conflict_preview_axis(
     axis: SyncedScrollAxis,
     mode: DiffScrollSync,
     group: ConflictPreviewSyncGroup,
-    anchors: &[(f32, f32)],
     explicit_master_ix: Option<usize>,
 ) {
     // An editable output lays out at content width and therefore has a real
@@ -720,16 +699,34 @@ fn sync_conflict_preview_axis(
         (SyncedScrollAxis::Horizontal, ConflictPreviewSyncGroup::TwoWayPairAndOutput, false) => {
             ConflictPreviewSyncGroup::TwoWayPair
         }
+        // Vertically the resolved output stands on its own, as KDiff3's merge
+        // result window does: it owns a scrollbar the diff windows are not
+        // connected to. The columns share one aligned row space, so keeping
+        // them together is exact; the output is a different document whose
+        // lines correspond to aligned rows only through the merge structure,
+        // and on a file that changes every few rows there is no continuous
+        // correspondence to follow. Tying them together made the output creep
+        // relative to the diffs instead of tracking them. The two are brought
+        // together on navigation instead, where the block being visited gives
+        // an exact position in both.
+        //
+        // Horizontally they stay coupled, which KDiff3 also does — one shared
+        // horizontal scrollbar drives all three inputs and the merge result.
+        (SyncedScrollAxis::Vertical, ConflictPreviewSyncGroup::ColumnsAndOutput, _) => {
+            ConflictPreviewSyncGroup::ColumnsOnly
+        }
+        (SyncedScrollAxis::Vertical, ConflictPreviewSyncGroup::TwoWayPairAndOutput, _) => {
+            ConflictPreviewSyncGroup::TwoWayPair
+        }
         (_, group, _) => group,
     };
     match group {
         ConflictPreviewSyncGroup::ColumnsAndOutput => {
-            maybe_sync_synced_scroll_offsets_with_output_anchor(
+            maybe_sync_synced_scroll_offsets_with_master(
                 handles,
                 last_synced,
                 axis,
                 mode,
-                anchors,
                 explicit_master_ix,
             );
         }
@@ -769,12 +766,11 @@ fn sync_conflict_preview_axis(
         ConflictPreviewSyncGroup::TwoWayPairAndOutput => {
             let group = [handles[0].clone(), handles[2].clone(), handles[3].clone()];
             let mut group_last = [last_synced[0], last_synced[2], last_synced[3]];
-            maybe_sync_synced_scroll_offsets_with_output_anchor(
+            maybe_sync_synced_scroll_offsets_with_master(
                 &group,
                 &mut group_last,
                 axis,
                 mode,
-                anchors,
                 match explicit_master_ix {
                     Some(0) => Some(0),
                     Some(2) => Some(1),
@@ -795,14 +791,6 @@ fn snapshot_synced_scroll_offsets<const N: usize>(
     axis: SyncedScrollAxis,
 ) -> [Pixels; N] {
     std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()))
-}
-
-fn sync_synced_scroll_offsets<const N: usize>(
-    handles: &[ScrollHandle; N],
-    last_synced: &mut [Pixels; N],
-    axis: SyncedScrollAxis,
-) {
-    sync_synced_scroll_offsets_with_master(handles, last_synced, axis, None);
 }
 
 fn sync_synced_scroll_offsets_with_master<const N: usize>(
@@ -871,170 +859,6 @@ fn maybe_sync_synced_scroll_offsets_with_master<const N: usize>(
     } else {
         *last_synced = snapshot_synced_scroll_offsets(handles, axis);
     }
-}
-
-/// Row height (px) shared by the aligned columns and the resolved-output
-/// preview/editor. Both render 20px rows, so column↔output sync is a pure
-/// row-index remap.
-const CONFLICT_PREVIEW_ROW_H: f32 = 20.0;
-
-#[cfg(test)]
-fn compute_anchored_vertical_scroll_offsets<const N: usize>(
-    offsets: [Pixels; N],
-    max_scrolls: [Pixels; N],
-    last_synced: [Pixels; N],
-    anchors: &[(f32, f32)],
-) -> [Pixels; N] {
-    compute_anchored_vertical_scroll_offsets_with_master(
-        offsets,
-        max_scrolls,
-        last_synced,
-        anchors,
-        None,
-    )
-}
-
-fn compute_anchored_vertical_scroll_offsets_with_master<const N: usize>(
-    offsets: [Pixels; N],
-    max_scrolls: [Pixels; N],
-    last_synced: [Pixels; N],
-    anchors: &[(f32, f32)],
-    explicit_master_ix: Option<usize>,
-) -> [Pixels; N] {
-    if N == 0 {
-        return offsets;
-    }
-
-    let row_h = px(CONFLICT_PREVIEW_ROW_H);
-    let output_ix = N - 1;
-    let to_rows = |off: Pixels| -> f32 {
-        let mag = if off < px(0.0) { -off } else { off };
-        (mag / row_h).max(0.0)
-    };
-
-    // Prefer output if it moved; otherwise the first moved source column is
-    // the master. If nobody moved, preserve the current (possibly clamped)
-    // offsets. Re-electing output in that case pulls longer source panes out
-    // of their intentional EOF overscroll and creates a scroll/reset loop.
-    let changed = |ix: usize| offsets[ix] != clamp_raw_scroll_y(last_synced[ix], max_scrolls[ix]);
-    let output_changed = changed(output_ix);
-    let master_column = (0..output_ix).find(|&ix| changed(ix));
-    let explicit_master_ix = explicit_master_ix.filter(|&ix| ix < N);
-    if explicit_master_ix.is_none() && !output_changed && master_column.is_none() {
-        return offsets;
-    }
-
-    let mut targets = offsets;
-    if explicit_master_ix == Some(output_ix) || (explicit_master_ix.is_none() && output_changed) {
-        // Output drives the columns.
-        let output_offset = clamp_raw_scroll_y(offsets[output_ix], max_scrolls[output_ix]);
-        targets[output_ix] = output_offset;
-        let out_row = to_rows(output_offset);
-        let col_row = (out_row + interpolated_anchor_shift(anchors, out_row, false)).max(0.0);
-        for ix in 0..output_ix {
-            targets[ix] = clamp_raw_scroll_y(-(row_h * col_row), max_scrolls[ix]);
-        }
-    } else {
-        // A column drives the output; the other columns follow it 1:1.
-        let master = explicit_master_ix
-            .filter(|&ix| ix < output_ix)
-            .or(master_column)
-            .expect("changed column present");
-        let master_offset = clamp_raw_scroll_y(offsets[master], max_scrolls[master]);
-        let al_row = to_rows(master_offset);
-        let out_row = (al_row + interpolated_anchor_shift(anchors, al_row, true)).max(0.0);
-        targets[output_ix] = clamp_raw_scroll_y(-(row_h * out_row), max_scrolls[output_ix]);
-        for ix in 0..output_ix {
-            targets[ix] = clamp_raw_scroll_y(master_offset, max_scrolls[ix]);
-        }
-    }
-
-    targets
-}
-
-/// Sync a group that includes the resolved output. The aligned columns carry
-/// padding rows (one-sided insertions/deletions) the merged output does not, so
-/// a single global ratio drifts across the file. Horizontal stays pixel-aligned;
-/// vertically we re-anchor on the nearest conflict — context regions between
-/// conflicts are 1:1, so applying the master↔follower row shift of the nearest
-/// conflict keeps drift bounded to a single conflict block's padding.
-///
-/// The resolved output is always the LAST handle in `handles`; the rest are
-/// aligned columns. `anchors` are `(aligned_row, output_row)` pairs.
-fn maybe_sync_synced_scroll_offsets_with_output_anchor<const N: usize>(
-    handles: &[ScrollHandle; N],
-    last_synced: &mut [Pixels; N],
-    axis: SyncedScrollAxis,
-    mode: DiffScrollSync,
-    anchors: &[(f32, f32)],
-    explicit_master_ix: Option<usize>,
-) {
-    if !axis.includes(mode) {
-        *last_synced = snapshot_synced_scroll_offsets(handles, axis);
-        return;
-    }
-    if axis != SyncedScrollAxis::Vertical || N == 0 {
-        // Horizontal scrolling stays pixel-aligned across the panes.
-        sync_synced_scroll_offsets(handles, last_synced, axis);
-        return;
-    }
-
-    let offsets: [Pixels; N] =
-        std::array::from_fn(|ix| axis.offset_component(handles[ix].offset()));
-    let max_scrolls: [Pixels; N] = std::array::from_fn(|ix| {
-        axis.max_scroll_component(handles[ix].max_offset().into())
-            .max(px(0.0))
-    });
-    let targets = compute_anchored_vertical_scroll_offsets_with_master(
-        offsets,
-        max_scrolls,
-        *last_synced,
-        anchors,
-        explicit_master_ix,
-    );
-
-    for ix in 0..N {
-        if offsets[ix] != targets[ix] {
-            handles[ix].set_offset(axis.with_offset_component(handles[ix].offset(), targets[ix]));
-        }
-    }
-    *last_synced = targets;
-}
-
-/// Continuous row shift `follower_row - master_row` between conflict anchors.
-/// `by_aligned` selects whether `pos` is in aligned-column space (a column is
-/// master) or output space. Outside the anchor range the nearest endpoint's
-/// shift is extended with slope 1, including source comfort overscroll at EOF.
-///
-/// Using the nearest anchor directly is discontinuous: when consecutive
-/// conflicts have different cumulative padding, crossing their midpoint can
-/// send the follower backward by many rows even while the user scrolls down.
-fn interpolated_anchor_shift(anchors: &[(f32, f32)], pos: f32, by_aligned: bool) -> f32 {
-    let mut previous: Option<(f32, f32)> = None;
-    for &(aligned, output) in anchors {
-        let (coord, follower) = if by_aligned {
-            (aligned, output)
-        } else {
-            (output, aligned)
-        };
-        if pos <= coord {
-            let Some((previous_coord, previous_follower)) = previous else {
-                return follower - coord;
-            };
-            let span = coord - previous_coord;
-            if span <= f32::EPSILON {
-                return follower - coord;
-            }
-            let progress = ((pos - previous_coord) / span).clamp(0.0, 1.0);
-            let mapped = previous_follower + (follower - previous_follower) * progress;
-            return mapped - pos;
-        }
-        previous = Some((coord, follower));
-    }
-
-    previous
-        .map(|(coord, follower)| follower - coord)
-        .unwrap_or(0.0)
 }
 
 /// Resolve the file path and blame source for a diff target, or `None` for
@@ -1383,6 +1207,7 @@ impl MainPaneView {
         let save_payload = build_focused_mergetool_save_payload(
             &self.conflict_resolver.marker_segments,
             &self.conflict_resolver.conflict_region_indices,
+            &self.conflict_resolved_output_block_map,
             materialized_output.as_deref(),
             ConflictMarkerLabels {
                 local: labels.local.as_str(),
@@ -1390,6 +1215,12 @@ impl MainPaneView {
                 base: labels.base.as_str(),
             },
         );
+        if save_payload.total_conflicts != save_payload.resolved_conflicts
+            || conflict_resolver::text_contains_conflict_markers(&save_payload.output)
+        {
+            cx.notify();
+            return;
+        }
         let output = save_payload.output;
         let exit_code = focused_mergetool_save_exit_code(
             save_payload.total_conflicts,
@@ -1564,9 +1395,26 @@ impl MainPaneView {
 
         let conflict_resolver_subscription =
             cx.observe(&conflict_resolver_input, |this, input, cx| {
-                let (output_snapshot, edit_delta) = input.update(cx, |input, _| {
-                    (input.text_snapshot(), input.take_recent_utf8_edit_delta())
+                let _perf_scope = crate::view::perf::span(
+                    crate::view::perf::ViewPerfSpan::ResolvedOutputEditObserve,
+                );
+                let (output_snapshot, edit_deltas) = input.update(cx, |input, _| {
+                    (input.text_snapshot(), input.drain_recent_utf8_edit_deltas())
                 });
+                let outline_edit_delta = (edit_deltas.len() == 1)
+                    .then(|| edit_deltas.first().cloned())
+                    .flatten();
+                // Fold the tree forward before anything else looks at the
+                // buffer, so the very next frame paints from a tree that
+                // already describes what was just typed.
+                let syntax_edit = coalesce_resolved_output_edit_deltas(&edit_deltas);
+                this.apply_conflict_resolved_output_edit_deltas(
+                    edit_deltas,
+                    &output_snapshot.rope(),
+                );
+                if !this.conflict_resolved_output_is_streamed() {
+                    this.refresh_conflict_resolved_output_syntax(&output_snapshot, syntax_edit, cx);
+                }
                 let source_revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
                 let output_modified = resolved_output_snapshot_is_modified(
                     this.conflict_resolved_output_saved_snapshot.as_ref(),
@@ -1579,7 +1427,7 @@ impl MainPaneView {
                 let outline_delta = resolved_outline_delta_for_snapshot_transition(
                     &this.conflict_resolved_preview_text,
                     &output_snapshot,
-                    edit_delta,
+                    outline_edit_delta,
                 );
 
                 let path = this.conflict_resolver.path.clone();
@@ -1597,6 +1445,10 @@ impl MainPaneView {
                     outline_delta,
                     cx,
                 );
+                // The Save gates derive effective resolutions from the live
+                // editor text, so the containing toolbar must re-render for
+                // every edit even while session state remains deferred.
+                cx.notify();
             });
 
         let diff_search_scroll = ScrollHandle::new();
@@ -1899,17 +1751,24 @@ impl MainPaneView {
             conflict_resolved_output_saved_snapshot: None,
             conflict_resolved_output_modified: false,
             conflict_resolved_output_projection: None,
+            conflict_resolved_output_block_map: conflict_resolver::ResolvedOutputBlockMap::default(
+            ),
             conflict_resolved_preview_text: TextModelSnapshot::default(),
             conflict_resolved_preview_syntax_language: None,
-            conflict_resolved_preview_highlight_provider_theme_epoch: 1,
-            conflict_resolved_preview_style_cache_epoch: 0,
-            conflict_resolved_preview_prepared_syntax_document: None,
-            conflict_resolved_preview_syntax_inflight: None,
             conflict_resolved_preview_line_count: 0,
             conflict_resolved_preview_line_starts: Arc::default(),
+            conflict_resolved_output_live_syntax: None,
+            conflict_resolved_output_live_syntax_reparse: None,
+            conflict_resolved_output_live_syntax_source: None,
+            conflict_resolved_output_provider_theme_epoch: 1,
+            conflict_resolved_output_highlighted_conflict: None,
+            conflict_resolved_output_unresolved_rows: None,
+            #[cfg(test)]
+            conflict_resolved_output_full_scans: 0,
+            conflict_resolved_output_live_syntax_building: None,
+            conflict_resolved_output_live_syntax_build: None,
             conflict_resolved_output_measure_row: 0,
             conflict_resolved_outline_stash: None,
-            conflict_resolved_preview_segments_cache: HashMap::default(),
             #[cfg(test)]
             conflict_resolved_outline_background_delay_override: None,
             history_view,
@@ -1967,15 +1826,14 @@ impl MainPaneView {
 
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
-        self.conflict_resolved_preview_highlight_provider_theme_epoch = self
-            .conflict_resolved_preview_highlight_provider_theme_epoch
+        self.conflict_resolved_output_provider_theme_epoch = self
+            .conflict_resolved_output_provider_theme_epoch
             .wrapping_add(1)
             .max(1);
         self.clear_diff_text_style_caches();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_style_caches();
         self.conflict_three_way_segments_cache.clear();
-        self.conflict_resolved_preview_segments_cache.clear();
         self.diff_raw_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.diff_search_input
@@ -1987,8 +1845,6 @@ impl MainPaneView {
                 .conflict_resolved_preview_path
                 .as_ref()
                 .and_then(rows::diff_syntax_language_for_path);
-            self.conflict_resolved_preview_prepared_syntax_document = None;
-            self.conflict_resolved_preview_syntax_inflight = None;
             self.conflict_resolved_output_measure_row = self
                 .conflict_resolved_output_projection
                 .as_ref()
@@ -1999,12 +1855,9 @@ impl MainPaneView {
                 .conflict_resolver_input
                 .read_with(cx, |input, _| input.text_snapshot());
             self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
-            self.conflict_resolved_preview_line_count =
-                self.conflict_resolved_preview_line_starts.len().max(1);
-            self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
-                output_snapshot.as_str(),
-                self.conflict_resolved_preview_line_starts.as_ref(),
-            );
+            self.conflict_resolved_preview_line_count = output_snapshot.line_count().max(1);
+            self.conflict_resolved_output_measure_row =
+                resolved_output_measure_row(&output_snapshot);
             self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
         }
         self.history_view
@@ -2113,6 +1966,50 @@ impl MainPaneView {
         self.conflict_resolved_output_projection.is_some()
     }
 
+    pub(in crate::view) fn rebuild_conflict_resolved_output_block_map(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolver.output_is_protected {
+            self.conflict_resolved_output_block_map =
+                conflict_resolver::ResolvedOutputBlockMap::default();
+            return;
+        }
+        let map = conflict_resolver::ResolvedOutputBlockMap::from_segments(
+            &self.conflict_resolver.marker_segments,
+        );
+        if self.conflict_resolved_output_is_streamed()
+            || self.conflict_resolver_input.read_with(cx, |input, _| {
+                map.is_valid_for(&self.conflict_resolver.marker_segments, input.text())
+            })
+        {
+            self.conflict_resolved_output_block_map = map;
+        } else {
+            self.conflict_resolved_output_block_map =
+                conflict_resolver::ResolvedOutputBlockMap::default();
+        }
+    }
+
+    pub(super) fn apply_conflict_resolved_output_edit_deltas(
+        &mut self,
+        edit_deltas: Vec<(Range<usize>, Range<usize>)>,
+        output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+    ) {
+        if edit_deltas.is_empty() {
+            return;
+        }
+        if !self
+            .conflict_resolved_output_block_map
+            .apply_edit_deltas(edit_deltas)
+            || !self
+                .conflict_resolved_output_block_map
+                .is_valid_for(&self.conflict_resolver.marker_segments, output_text)
+        {
+            self.conflict_resolved_output_block_map =
+                conflict_resolver::ResolvedOutputBlockMap::default();
+        }
+    }
+
     pub(in crate::view) fn conflict_resolved_output_is_modified(&self) -> bool {
         self.conflict_resolved_output_modified
     }
@@ -2134,21 +2031,21 @@ impl MainPaneView {
         projection: conflict_resolver::ResolvedOutputProjection,
         path: Option<&std::path::PathBuf>,
     ) {
+        self.conflict_resolved_output_block_map =
+            conflict_resolver::ResolvedOutputBlockMap::from_segments(
+                &self.conflict_resolver.marker_segments,
+            );
         self.conflict_resolved_output_projection = Some(projection.clone());
         self.conflict_resolved_preview_path = path.cloned();
         self.conflict_resolved_preview_source_revision = None;
         self.conflict_resolved_preview_text = TextModelSnapshot::default();
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
-        self.conflict_resolved_preview_prepared_syntax_document = None;
-        self.conflict_resolved_preview_syntax_inflight = None;
         self.conflict_resolved_preview_line_count = projection.len();
         self.conflict_resolved_preview_line_starts = Arc::default();
         self.conflict_resolved_output_measure_row = projection.widest_line_ix();
         self.conflict_resolved_outline_stash = None;
-        self.conflict_resolved_preview_segments_cache.clear();
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
     }
 
     pub(in crate::view) fn refresh_streamed_resolved_output_preview_from_projection(
@@ -2188,37 +2085,48 @@ impl MainPaneView {
             return;
         }
 
-        // Perf guard: a whole-file conflict can produce a merged output far too
-        // large to pull into the editable buffer. Above the threshold the output
-        // stays in read-only streamed mode (rendered from the projection); the
-        // edit affordances are gated on `!conflict_resolved_output_is_streamed`.
-        if self
-            .conflict_resolved_output_projection
-            .as_ref()
-            .is_some_and(|projection| {
-                projection.len() > conflict_resolver::RESOLVED_OUTPUT_EDITABLE_MAX_LINES
-            })
-        {
-            return;
-        }
-
+        // No size ceiling here. The output pane is editable by definition, and a
+        // read-only fallback above some line count is a worse answer than a
+        // slower one: the user opened a merge to resolve it. The buffer is
+        // rope-backed and every hot path (syntax refresh, unresolved-row scan,
+        // shaping) reads windows rather than the whole document, so cost scales
+        // with the visible region plus the conflict count, not the file.
         let resolved =
             conflict_resolver::generate_resolved_text(&self.conflict_resolver.marker_segments);
-        let line_ending = crate::kit::TextInput::detect_line_ending(&resolved);
-        let theme = self.theme;
         let path = self.conflict_resolver.path.clone();
         self.conflict_resolved_output_projection = None;
         self.conflict_resolved_preview_path = path.clone();
-        self.conflict_resolver_input.update(cx, |input, cx| {
-            input.set_theme(theme, cx);
-            input.set_line_ending(line_ending);
-            input.set_text(resolved.clone(), cx);
-        });
+        self.fill_conflict_resolved_output_buffer(resolved, cx);
         self.conflict_resolved_preview_source_revision =
             Some(self.conflict_resolver_input.read_with(cx, |input, _| {
                 ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
             }));
+        self.rebuild_conflict_resolved_output_block_map(cx);
         self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
+    }
+
+    /// Load merged text into the resolved-output editor.
+    ///
+    /// Every path that fills this buffer goes through here, because filling it
+    /// has one non-obvious obligation: `set_text` leaves the caret at
+    /// end-of-document, and the pane opens scrolled to the top, so a caret
+    /// parked at the far end sends the first arrow key (or undo) autoscrolling
+    /// to the bottom of a file the user was reading from the top. Park it where
+    /// the view actually is; the user has not placed a caret yet.
+    pub(in crate::view) fn fill_conflict_resolved_output_buffer(
+        &mut self,
+        text: impl Into<SharedString>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let text = text.into();
+        let line_ending = crate::kit::TextInput::detect_line_ending(text.as_ref());
+        let theme = self.theme;
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_theme(theme, cx);
+            input.set_line_ending(line_ending);
+            input.set_text(text, cx);
+            input.set_selected_range(0..0, false, cx);
+        });
     }
 
     /// Configure the resolved-output `TextInput` for rendering as the editable
@@ -2231,6 +2139,7 @@ impl MainPaneView {
         &mut self,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.sync_conflict_resolved_output_active_conflict_highlight(cx);
         let scroll = self.conflict_resolved_output_editor_scroll.clone();
         let theme = self.theme;
         self.conflict_resolver_input.update(cx, |input, cx| {
@@ -2243,6 +2152,78 @@ impl MainPaneView {
             // on the horizontal axis too.
             input.set_content_width_layout(true);
         });
+    }
+
+    /// Unresolved rows for `snapshot`, from the cache when it is still current.
+    ///
+    /// A miss only happens when navigation runs before any refresh has scanned
+    /// this revision; the scan is then done once and cached like any other.
+    fn conflict_resolved_output_unresolved_rows_for(
+        &mut self,
+        snapshot: &TextModelSnapshot,
+    ) -> UnresolvedRows {
+        let key = ResolvedOutputKey::new(
+            snapshot,
+            &self.conflict_resolver.marker_segments,
+            &self.conflict_resolved_output_block_map,
+        );
+        if let Some((cached_for, rows)) = self.conflict_resolved_output_unresolved_rows.as_ref()
+            && *cached_for == key
+        {
+            return Arc::clone(rows);
+        }
+
+        #[cfg(test)]
+        {
+            self.conflict_resolved_output_full_scans += 1;
+        }
+        let rows = resolved_output_unresolved_rows(
+            &self.conflict_resolver.marker_segments,
+            &snapshot.rope(),
+            &self.conflict_resolved_output_block_map,
+        );
+        self.conflict_resolved_output_unresolved_rows = Some((key, Arc::clone(&rows)));
+        rows
+    }
+
+    /// Rebuild the output highlights when conflict navigation lands on another
+    /// conflict, so the yellow wash follows the selection.
+    ///
+    /// Every other refresh path hangs off the text or the tree, and navigation
+    /// moves neither — it only reassigns `active_conflict`, from a dozen call
+    /// sites on a state struct that cannot reach the input. Comparing against the
+    /// conflict the installed provider was built for catches all of them in one
+    /// place, and makes the common render (nothing moved) a single comparison.
+    fn sync_conflict_resolved_output_active_conflict_highlight(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolved_output_highlighted_conflict
+            == self.conflict_resolver.active_conflict
+        {
+            return;
+        }
+        self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
+        // Streamed output is drawn row by row from the projection, which reads
+        // the active conflict as it renders; only the editable buffer carries
+        // highlights that have to be reinstalled.
+        if self.conflict_resolved_output_is_streamed() {
+            return;
+        }
+        // With a tree in hand, rebinding the provider is the whole job:
+        // navigation moves no text, so the tree, the placeholder mask and the
+        // protected spans all still stand. Going through the full syntax refresh
+        // would redo them on every jump — and on the tree-less arm it would
+        // re-tokenize the entire document, which is exactly the kind of
+        // per-keypress cost the live engine exists to avoid.
+        if self.conflict_resolved_output_live_syntax.is_some() {
+            self.rebind_conflict_resolved_output_highlight_provider(cx);
+            return;
+        }
+        let output_snapshot = self
+            .conflict_resolver_input
+            .read_with(cx, |input, _| input.text_snapshot());
+        self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
     }
 
     pub(in crate::view) fn current_conflict_resolved_output_text(
@@ -2263,14 +2244,6 @@ impl MainPaneView {
     ) -> String {
         self.conflict_resolver_sync_session_resolutions_from_output(&text);
         text
-    }
-
-    pub(in crate::view) fn conflict_resolver_save_contents(
-        &mut self,
-        cx: &mut gpui::Context<Self>,
-    ) -> String {
-        let text = self.current_conflict_resolved_output_text(cx);
-        self.conflict_resolver_save_contents_from_text(text)
     }
 
     pub(in crate::view) fn ensure_prepared_syntax_chunk_poll(
@@ -2336,17 +2309,6 @@ impl MainPaneView {
             applied = true;
         }
 
-        let resolved_preview_applied = self
-            .conflict_resolved_preview_prepared_syntax_document
-            .map(rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document)
-            .unwrap_or(0);
-        if resolved_preview_applied > 0 {
-            self.conflict_resolved_preview_style_cache_epoch = self
-                .conflict_resolved_preview_style_cache_epoch
-                .wrapping_add(1);
-            applied = true;
-        }
-
         if rows::drain_completed_prepared_diff_syntax_chunk_builds() > 0 {
             applied = true;
         }
@@ -2362,137 +2324,420 @@ impl MainPaneView {
         pending
     }
 
+    /// Build the first tree off-thread after the foreground budget ran out.
+    ///
+    /// Guarded on the revision it is building for, so a burst of refreshes over
+    /// the same text schedules one parse rather than one per call. A result for
+    /// text the buffer has since moved past is never installed — it is re-issued
+    /// against the current text instead, so the pane cannot be left on the
+    /// heuristic fallback by an edit that raced the parse.
+    fn ensure_conflict_resolved_output_live_syntax_build(
+        &mut self,
+        language: rows::DiffSyntaxLanguage,
+        rope: crate::kit::rope::Rope,
+        mask: Arc<[Range<usize>]>,
+        revision: ResolvedOutputSourceRevision,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.conflict_resolved_output_live_syntax_building == Some(revision) {
+            return;
+        }
+        self.conflict_resolved_output_live_syntax_building = Some(revision);
+
+        let build_mask = Arc::clone(&mask);
+        self.conflict_resolved_output_live_syntax_build =
+            Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
+                let build = move || rows::LiveSyntaxDocument::new(language, rope, build_mask, None);
+                let built = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(build).await
+                } else {
+                    build()
+                };
+                let _ = view.update(cx, |this, cx| {
+                    if this.conflict_resolved_output_live_syntax_building != Some(revision) {
+                        // A newer generation owns the guard. Leave it alone --
+                        // clearing it here would let its own scheduling check
+                        // pass again and start a duplicate build.
+                        return;
+                    }
+                    this.conflict_resolved_output_live_syntax_building = None;
+                    let Some(document) = built else {
+                        // Unbudgeted, so this is not a timeout: the text is past
+                        // the size ceiling or the language has no wired grammar.
+                        // Both are permanent, so re-issuing would spin. The
+                        // heuristic arm of the refresh is the right answer here,
+                        // and it is the same one the diff panes take.
+                        return;
+                    };
+                    // Zed's `parse_again` (`Buffer::reparse`): a result for text
+                    // the buffer has moved past is useless, but so is waiting --
+                    // nothing else is guaranteed to come along and ask again, so
+                    // re-issue from where the buffer is now.
+                    let still_current = this.conflict_resolver_input.read_with(cx, |input, _| {
+                        ResolvedOutputSourceRevision::from_snapshot(&input.text_snapshot())
+                    }) == revision;
+                    if !still_current {
+                        this.reissue_conflict_resolved_output_live_syntax_build(cx);
+                        return;
+                    }
+                    this.conflict_resolved_output_live_syntax = Some(document);
+                    // Record what it was built for, or the next refresh sees a
+                    // stale source, retries in the foreground, fails the budget
+                    // again and schedules another build -- forever.
+                    this.conflict_resolved_output_live_syntax_source = Some((revision, mask));
+                    this.rebind_conflict_resolved_output_highlight_provider(cx);
+                });
+            }));
+    }
+
+    /// Re-run the off-thread first parse against the buffer as it stands now.
+    ///
+    /// Called when a build lands for text the buffer has already moved past.
+    /// Recomputes the source the way [`Self::refresh_conflict_resolved_output_syntax`]
+    /// does, so the two cannot disagree about what the tree is being built over.
+    /// A no-op once a document exists -- from there on, edits go through
+    /// `sync`, which always has a tree to fall back on.
+    fn reissue_conflict_resolved_output_live_syntax_build(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.conflict_resolved_output_live_syntax.is_some() {
+            return;
+        }
+        let Some(language) = self.conflict_resolved_preview_syntax_language else {
+            return;
+        };
+        let output_snapshot = self
+            .conflict_resolver_input
+            .read_with(cx, |input, _| input.text_snapshot());
+        let rope = output_snapshot.rope();
+        let protected_ranges = resolved_output_placeholder_protected_ranges(&rope);
+        let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), &rope);
+        let revision = ResolvedOutputSourceRevision::from_snapshot(&output_snapshot);
+        self.ensure_conflict_resolved_output_live_syntax_build(
+            language,
+            output_snapshot.rope(),
+            mask,
+            revision,
+            cx,
+        );
+    }
+
+    /// Finish a reparse the foreground budget could not.
+    ///
+    /// Only reachable when an edit landed on a document too large to reparse in
+    /// the budget. The viewport is not blocked meanwhile: the `tree.edit()`ed
+    /// tree is already positionally correct, so it keeps painting — this just
+    /// restores exactness near the edit.
+    fn ensure_conflict_resolved_output_live_syntax_reparse(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(request) = self
+            .conflict_resolved_output_live_syntax
+            .as_ref()
+            .and_then(rows::LiveSyntaxDocument::background_reparse_request)
+        else {
+            self.conflict_resolved_output_live_syntax_reparse = None;
+            return;
+        };
+
+        self.conflict_resolved_output_live_syntax_reparse =
+            Some(cx.spawn(async move |view: WeakEntity<MainPaneView>, cx| {
+                let reparse = move || rows::live_syntax_reparse(request);
+                let parsed = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(reparse).await
+                } else {
+                    reparse()
+                };
+                let Some((version, tree, injections)) = parsed else {
+                    return;
+                };
+                let _ = view.update(cx, |this, cx| {
+                    let adopted = this
+                        .conflict_resolved_output_live_syntax
+                        .as_mut()
+                        .is_some_and(|document| {
+                            document.adopt_background_tree(version, tree, injections)
+                        });
+                    if !adopted {
+                        // The buffer moved while this was in flight, so the tree
+                        // describes text that no longer exists. Re-issue from
+                        // wherever the document is now.
+                        this.conflict_resolved_output_live_syntax_reparse = None;
+                        this.ensure_conflict_resolved_output_live_syntax_reparse(cx);
+                        return;
+                    }
+                    this.conflict_resolved_output_live_syntax_reparse = None;
+                    this.rebind_conflict_resolved_output_highlight_provider(cx);
+                });
+            }));
+    }
+
+    /// Hand the input a provider over the document's current tree.
+    fn rebind_conflict_resolved_output_highlight_provider(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some((version, snapshot)) = self
+            .conflict_resolved_output_live_syntax
+            .as_ref()
+            .map(|document| (document.version(), document.snapshot(self.theme)))
+        else {
+            return;
+        };
+        let output_snapshot = self
+            .conflict_resolver_input
+            .read_with(cx, |input, _| input.text_snapshot());
+        self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
+        // Reuse the scan from the last refresh when the text has not moved.
+        // Rebinding happens on every conflict jump, and rescanning here is what
+        // made navigation scale with the file rather than with the conflict.
+        let rows = self.conflict_resolved_output_unresolved_rows_for(&output_snapshot);
+        let unresolved_spans = resolved_output_unresolved_spans_for_active(
+            rows.as_ref(),
+            self.conflict_resolver.active_conflict,
+        );
+        let binding_key = resolved_output_live_provider_binding_key(
+            version,
+            self.conflict_resolved_output_provider_theme_epoch,
+            &unresolved_spans,
+        );
+        let provider =
+            resolved_output_live_highlight_provider(self.theme, snapshot, unresolved_spans);
+        let source_len = output_snapshot.len();
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_highlight_provider_with_key(binding_key, provider, source_len, cx);
+        });
+    }
+
+    /// Bring the resolved output's live tree up to date with `output_snapshot`
+    /// and rebind the highlight provider to it.
+    ///
+    /// `edit` is the coalesced `(replaced, inserted)` span, or `None` when the
+    /// text was replaced wholesale (bootstrap, a conflict resolution, an undo of
+    /// one) — which reparses from scratch.
+    ///
+    /// Cheap enough to run on the keystroke: the tree is edited in place and the
+    /// reparse reuses it, rather than rebuilding the prepared document this
+    /// replaced.
+    ///
+    /// The root parse is incremental; the *injected* layers are not. A reparse
+    /// re-runs the injection query over the whole document and reparses every
+    /// injected region from scratch, each with its own copy of the foreground
+    /// budget. On a document with many injections (fenced blocks, `<script>`
+    /// bodies) that is the dominant per-keystroke cost and does scale with the
+    /// document — the outstanding gap against Zed's `SyntaxMap`, which keys
+    /// layers by (language, range) and reparses them incrementally.
     fn refresh_conflict_resolved_output_syntax(
         &mut self,
         output_snapshot: &TextModelSnapshot,
-        syntax_edit: Option<rows::DiffSyntaxEdit>,
+        edit: Option<(Range<usize>, Range<usize>)>,
         cx: &mut gpui::Context<Self>,
     ) {
-        let old_document = self.conflict_resolved_preview_prepared_syntax_document;
-        let syntax_state = build_resolved_output_syntax_state_for_snapshot_with_budget(
-            self.theme,
-            output_snapshot,
-            self.conflict_resolved_preview_syntax_language,
-            old_document,
-            syntax_edit.clone(),
-            self.full_document_syntax_budget(),
-        );
-        let background_key = if syntax_state.needs_background_prepare {
-            self.conflict_resolved_preview_syntax_language
-                .map(|language| ResolvedOutputSyntaxBackgroundKey {
-                    source_revision: ResolvedOutputSourceRevision::from_snapshot(output_snapshot),
-                    language,
-                })
-        } else {
-            None
-        };
-        let prepared_document_changed = old_document != syntax_state.prepared_document;
-        self.conflict_resolved_preview_prepared_syntax_document = syntax_state.prepared_document;
-        if prepared_document_changed {
-            self.conflict_resolved_preview_style_cache_epoch = self
-                .conflict_resolved_preview_style_cache_epoch
-                .wrapping_add(1);
-            cx.notify();
-        }
-        if background_key.is_none() {
-            self.conflict_resolved_preview_syntax_inflight = None;
-        }
-        let provider_key = syntax_state
-            .prepared_document
-            .zip(self.conflict_resolved_preview_syntax_language)
-            .map(|(document, language)| {
-                resolved_output_highlight_provider_binding_key(
-                    self.conflict_resolved_preview_highlight_provider_theme_epoch,
-                    language,
-                    document,
-                )
+        // Everything below is derived from the *text*. When the text has not
+        // moved, all of it still stands and the only thing that can need
+        // updating is the provider binding — a theme change, or a different
+        // conflict wearing the wash.
+        //
+        // Only when the caller reports no edit. An `edit` is the caller stating
+        // that the text moved, and the tree must be folded forward even if the
+        // revision happens to look settled — skipping the sync there leaves the
+        // tree describing the pre-edit text, which shows up as the row you just
+        // typed into keeping its old colours.
+        let revision = ResolvedOutputSourceRevision::from_snapshot(output_snapshot);
+        let text_is_unchanged = self
+            .conflict_resolved_output_live_syntax_source
+            .as_ref()
+            .is_some_and(|(built_for, _)| *built_for == revision);
+        // The language has to match too, not just the text. The reuse check
+        // that would drop a document built by the wrong grammar lives *below*
+        // this return, so leaving it out lets a language change with unchanged
+        // text keep the previous grammar's tree — the state
+        // `conflict_resolver_invalidate_resolved_outline` leaves behind, which
+        // clears the language but not the live document.
+        let language_is_unchanged = self
+            .conflict_resolved_output_live_syntax
+            .as_ref()
+            .is_some_and(|document| {
+                Some(document.language()) == self.conflict_resolved_preview_syntax_language
             });
-        self.conflict_resolver_input.update(cx, |input, cx| {
-            if let Some(provider) = syntax_state.highlight_provider {
-                if let Some(provider_key) = provider_key {
-                    input.set_highlight_provider_with_key(provider_key, provider, cx);
-                } else {
-                    input.set_highlight_provider(provider, cx);
-                }
-            } else {
-                input.set_highlights(syntax_state.highlights, cx);
-            }
-        });
-        if let Some(background_key) = background_key {
-            self.ensure_conflict_resolved_output_background_syntax_prepare(
-                background_key,
-                output_snapshot,
-                old_document,
-                syntax_edit,
-                cx,
-            );
-        }
-    }
-
-    fn ensure_conflict_resolved_output_background_syntax_prepare(
-        &mut self,
-        request_key: ResolvedOutputSyntaxBackgroundKey,
-        output_snapshot: &TextModelSnapshot,
-        old_document: Option<rows::PreparedDiffSyntaxDocument>,
-        syntax_edit: Option<rows::DiffSyntaxEdit>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.conflict_resolved_preview_syntax_inflight == Some(request_key) {
+        if edit.is_none() && text_is_unchanged && language_is_unchanged {
+            self.conflict_resolved_output_highlighted_conflict =
+                self.conflict_resolver.active_conflict;
+            self.rebind_conflict_resolved_output_highlight_provider(cx);
             return;
         }
-        self.conflict_resolved_preview_syntax_inflight = Some(request_key);
-        let output_text = output_snapshot.as_shared_string();
-        let output_line_starts = output_snapshot.shared_line_starts();
-        let old_reparse_seed = old_document.and_then(rows::prepared_diff_syntax_reparse_seed);
-        cx.spawn(
-            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
-                let prepare_document = move || {
-                    rows::prepare_diff_syntax_document_in_background_text_with_reuse(
-                        request_key.language,
-                        rows::DiffSyntaxMode::Auto,
-                        output_text,
-                        output_line_starts,
-                        old_reparse_seed,
-                        syntax_edit,
-                    )
-                };
-                let parsed_document = if crate::ui_runtime::current().uses_background_compute() {
-                    smol::unblock(prepare_document).await
+
+        // Every read below goes through the rope, and nothing on this path
+        // builds either whole-document cache — not the flattened string, and
+        // not the line-start array, which is the quieter of the two and was the
+        // one that lingered here. `no_materialization_tests` asserts both.
+        let rope = output_snapshot.rope();
+        self.conflict_resolved_output_highlighted_conflict = self.conflict_resolver.active_conflict;
+        #[cfg(test)]
+        {
+            self.conflict_resolved_output_full_scans += 1;
+        }
+        let unresolved_rows = resolved_output_unresolved_rows(
+            &self.conflict_resolver.marker_segments,
+            &rope,
+            &self.conflict_resolved_output_block_map,
+        );
+        self.conflict_resolved_output_unresolved_rows = Some((
+            ResolvedOutputKey::new(
+                output_snapshot,
+                &self.conflict_resolver.marker_segments,
+                &self.conflict_resolved_output_block_map,
+            ),
+            Arc::clone(&unresolved_rows),
+        ));
+        let unresolved_spans = resolved_output_unresolved_spans_for_active(
+            unresolved_rows.as_ref(),
+            self.conflict_resolver.active_conflict,
+        );
+        // The placeholder rows are a rendering of open decisions, so hand them
+        // to the buffer as uneditable spans — and hide the same spans from the
+        // parser, which would otherwise read `<Merge Conflict>` as code.
+        let protected_ranges = resolved_output_placeholder_protected_ranges(&rope);
+        let mask = resolved_output_live_syntax_mask(protected_ranges.as_ref(), &rope);
+        let budget = Some(self.full_document_syntax_budget().foreground_parse);
+
+        let language = self.conflict_resolved_preview_syntax_language;
+        let reusable = self
+            .conflict_resolved_output_live_syntax
+            .as_ref()
+            .is_some_and(|document| Some(document.language()) == language);
+        if !reusable {
+            self.conflict_resolved_output_live_syntax = None;
+            self.conflict_resolved_output_live_syntax_source = None;
+        }
+
+        let revision = ResolvedOutputSourceRevision::from_snapshot(output_snapshot);
+        let current = self
+            .conflict_resolved_output_live_syntax_source
+            .as_ref()
+            .is_some_and(|(built_for, built_mask)| {
+                *built_for == revision && built_mask.as_ref() == mask.as_ref()
+            });
+
+        match self.conflict_resolved_output_live_syntax.as_mut() {
+            // Nothing about the buffer moved. The tree stands, and so does its
+            // version — the binding key below folds in the theme and the
+            // unresolved spans, so an overlay change still rebinds while a
+            // no-op re-entry does not, which is what stops this method from
+            // re-triggering the observe that called it.
+            Some(_) if current => {}
+            Some(document) => {
+                let outcome = document.sync(rope.clone(), Arc::clone(&mask), edit, budget);
+                if outcome == rows::LiveSyntaxSyncOutcome::Abandoned {
+                    // The edit took the buffer past the size ceiling, so the
+                    // document now describes text that no longer exists. Drop it
+                    // and take the heuristic arm below, which is the same answer
+                    // a buffer that started out this large would have got.
+                    self.conflict_resolved_output_live_syntax = None;
+                    self.conflict_resolved_output_live_syntax_source = None;
                 } else {
-                    prepare_document()
-                };
+                    self.conflict_resolved_output_live_syntax_source =
+                        Some((revision, Arc::clone(&mask)));
+                }
+            }
+            None => {
+                // Zed's fast path (`Buffer::reparse` under `sync_parse_timeout`):
+                // worth a budgeted attempt because a small buffer finishes inside
+                // it and never shows a frame of unhighlighted text. Skipped when
+                // a build for exactly this text is already off-thread -- that
+                // attempt has demonstrably failed once, so re-running it on the
+                // keystroke path is pure latency.
+                let already_building =
+                    self.conflict_resolved_output_live_syntax_building == Some(revision);
+                self.conflict_resolved_output_live_syntax =
+                    language.filter(|_| !already_building).and_then(|language| {
+                        rows::LiveSyntaxDocument::new(
+                            language,
+                            rope.clone(),
+                            Arc::clone(&mask),
+                            budget,
+                        )
+                    });
+                self.conflict_resolved_output_live_syntax_source = self
+                    .conflict_resolved_output_live_syntax
+                    .is_some()
+                    .then(|| (revision, Arc::clone(&mask)));
 
-                let _ = view.update(cx, |this, cx| {
-                    if this.conflict_resolved_preview_syntax_inflight != Some(request_key) {
-                        return;
-                    }
-                    if this.conflict_resolved_preview_source_revision
-                        != Some(request_key.source_revision)
-                        || this.conflict_resolved_preview_syntax_language
-                            != Some(request_key.language)
-                    {
-                        this.conflict_resolved_preview_syntax_inflight = None;
-                        return;
-                    }
-
-                    if let Some(parsed_document) = parsed_document {
-                        let document =
-                            rows::inject_background_prepared_diff_syntax_document(parsed_document);
-                        this.conflict_resolved_preview_prepared_syntax_document = Some(document);
-                    }
-                    let current_output_snapshot = this
-                        .conflict_resolver_input
-                        .read_with(cx, |input, _| input.text_snapshot());
-                    this.refresh_conflict_resolved_output_syntax(
-                        &current_output_snapshot,
-                        None,
+                // A first parse has no tree to fall back on, so exhausting the
+                // foreground budget leaves nothing at all -- and an incremental
+                // reparse can never rescue it, because there is no document to
+                // reparse. Finish it off-thread instead. Not a rare path: the
+                // live budget is 1ms and a cold parse of a ~10KB file is
+                // already over it, so without this the resolved output would
+                // sit on heuristic tokens for the whole session.
+                if let Some(language) =
+                    language.filter(|_| self.conflict_resolved_output_live_syntax.is_none())
+                {
+                    self.ensure_conflict_resolved_output_live_syntax_build(
+                        language,
+                        rope.clone(),
+                        Arc::clone(&mask),
+                        revision,
                         cx,
                     );
-                    this.conflict_resolved_preview_syntax_inflight = None;
-                });
-            },
-        )
-        .detach();
+                }
+            }
+        }
+
+        let live = self
+            .conflict_resolved_output_live_syntax
+            .as_ref()
+            .map(|document| (document.version(), document.snapshot(self.theme)));
+        self.ensure_conflict_resolved_output_live_syntax_reparse(cx);
+
+        self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_protected_ranges(protected_ranges);
+            match live {
+                Some((version, snapshot)) => {
+                    let provider = resolved_output_live_highlight_provider(
+                        self.theme,
+                        snapshot,
+                        unresolved_spans.clone(),
+                    );
+                    // Rebinding under a fresh key whenever the text moved is
+                    // load-bearing: it resets the interpolation that would
+                    // otherwise map these already-current highlights through a
+                    // stale patch.
+                    let binding_key = resolved_output_live_provider_binding_key(
+                        version,
+                        self.conflict_resolved_output_provider_theme_epoch,
+                        &unresolved_spans,
+                    );
+                    input.set_highlight_provider_with_key(binding_key, provider, rope.len(), cx);
+                }
+                None => {
+                    // Heuristic tokens, with the open conflicts still called out
+                    // in red. Reachable in exactly two states, both permanent and
+                    // both shared with the diff panes above -- the language has
+                    // no wired grammar, or the text is past
+                    // `PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES`. It is *not*
+                    // a general fallback: the tokenizer knows only keywords,
+                    // strings, numbers and comments, so landing here while a
+                    // grammar exists is precisely the bug where the output stops
+                    // matching the panes above it. A budget-exhausted first parse
+                    // must go to `ensure_conflict_resolved_output_live_syntax_build`
+                    // instead.
+                    //
+                    // A provider rather than a whole-document `set_highlights`:
+                    // this arm is reached by the *largest* buffers, and the
+                    // tokenizer is line-local, so answering per window is both
+                    // exact and proportional to the viewport.
+                    let provider = resolved_output_heuristic_highlight_provider(
+                        self.theme,
+                        rope.clone(),
+                        language,
+                        unresolved_spans.clone(),
+                    );
+                    let binding_key = resolved_output_heuristic_provider_binding_key(
+                        revision,
+                        self.conflict_resolved_output_provider_theme_epoch,
+                        &unresolved_spans,
+                    );
+                    input.set_highlight_provider_with_key(binding_key, provider, rope.len(), cx);
+                }
+            }
+        });
     }
 
     /// Schedule a background tree-sitter parse for one merge-input side.
@@ -2642,27 +2887,15 @@ impl MainPaneView {
         self.conflict_resolved_output_projection = None;
         self.conflict_resolved_preview_text = TextModelSnapshot::default();
         self.conflict_resolved_preview_syntax_language = None;
-        self.conflict_resolved_preview_prepared_syntax_document = None;
-        self.conflict_resolved_preview_syntax_inflight = None;
         self.conflict_resolved_preview_line_count = 0;
         self.conflict_resolved_preview_line_starts = Arc::default();
         self.conflict_resolved_output_measure_row = 0;
         self.conflict_resolved_outline_stash = None;
-        self.conflict_resolved_preview_segments_cache.clear();
         self.conflict_three_way_prepared_syntax_documents = ThreeWaySides::default();
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
         self.conflict_three_way_segments_cache.clear();
         self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
-    }
-
-    pub(super) fn recompute_conflict_resolved_outline_and_provenance(
-        &mut self,
-        path: Option<&std::path::PathBuf>,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.recompute_conflict_resolved_outline_and_provenance_with_syntax_edit(path, None, cx);
     }
 
     fn resolved_outline_source_view(&self) -> ResolvedOutlineSourceView<'_> {
@@ -2694,6 +2927,20 @@ impl MainPaneView {
         }
     }
 
+    /// Snapshot everything the outline recompute needs, so it can run detached.
+    ///
+    /// This materializes the output, and unlike the syntax path it is not an
+    /// artifact worth removing: the outline assigns a
+    /// provenance to *every* row by comparing its text against the three source
+    /// sides, so the work is O(document) whatever it reads through, and the copy
+    /// is a small constant beside it.
+    ///
+    /// What keeps that off the keystroke path is *where* it is called from, not
+    /// its cost: both the production task and the synchronous test arm build the
+    /// request only once the debounce
+    /// (`CONFLICT_RESOLVED_OUTLINE_DEBOUNCE_MS`) has settled and the recompute
+    /// is going to run. Hoisting this call above that check charges every
+    /// keystroke for a copy of the document that is then discarded.
     fn background_resolved_outline_recompute_request(
         &self,
         output_snapshot: &TextModelSnapshot,
@@ -2731,6 +2978,7 @@ impl MainPaneView {
             output_text,
             output_line_count,
             marker_segments: self.conflict_resolver.marker_segments.clone(),
+            block_map: self.conflict_resolved_output_block_map.clone(),
             sources,
         }
     }
@@ -2786,7 +3034,6 @@ impl MainPaneView {
         &mut self,
         output_snapshot: &TextModelSnapshot,
         path: Option<&std::path::PathBuf>,
-        syntax_edit: Option<rows::DiffSyntaxEdit>,
         clear_outline: bool,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -2798,20 +3045,21 @@ impl MainPaneView {
         self.conflict_resolved_preview_line_starts = output_snapshot.shared_line_starts();
         self.conflict_resolved_preview_syntax_language =
             path.and_then(rows::diff_syntax_language_for_path);
-        self.conflict_resolved_preview_line_count =
-            self.conflict_resolved_preview_line_starts.len().max(1);
-        self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
-            output_snapshot.as_str(),
-            self.conflict_resolved_preview_line_starts.as_ref(),
-        );
-        self.conflict_resolved_preview_segments_cache.clear();
-        self.refresh_conflict_resolved_output_syntax(output_snapshot, syntax_edit, cx);
+        self.conflict_resolved_preview_line_count = output_snapshot.line_count().max(1);
+        self.conflict_resolved_output_measure_row = resolved_output_measure_row(output_snapshot);
+        // Syntax no longer *waits* on this debounce — it tracks the buffer on
+        // the keystroke, in the `cx.observe` on `conflict_resolver_input`. The
+        // call stays because this method is also how the language arrives
+        // (from `path`) and how a wholesale text replacement lands, neither of
+        // which produces edit deltas. It reparses only if the buffer actually
+        // differs from what the tree already describes, so on the common path
+        // it is a version bump and nothing more.
+        self.refresh_conflict_resolved_output_syntax(output_snapshot, None, cx);
         self.conflict_resolved_preview_text = output_snapshot.clone();
 
         if clear_outline {
             self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
             self.conflict_resolver.resolved_output_visible_dirty = true;
-            self.conflict_resolver.conflict_output_row_anchors_dirty = true;
             self.conflict_resolver.resolved_outline_gutter_rows.clear();
         }
     }
@@ -2825,19 +3073,16 @@ impl MainPaneView {
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_outline = computed.outline;
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
         self.conflict_resolver.resolved_outline_gutter_rows.clear();
         record_resolved_outline_trace(path, trace_started, self, computed.output_line_count);
     }
 
-    fn recompute_conflict_resolved_outline_and_provenance_with_syntax_edit(
+    pub(super) fn recompute_conflict_resolved_outline_and_provenance(
         &mut self,
         path: Option<&std::path::PathBuf>,
-        syntax_edit: Option<rows::DiffSyntaxEdit>,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.conflict_resolved_output_is_streamed() {
-            let _ = syntax_edit;
             let _ = cx;
             self.refresh_streamed_resolved_output_preview_from_markers(path);
             return;
@@ -2853,15 +3098,10 @@ impl MainPaneView {
             output_text,
             output_line_count,
             &self.conflict_resolver.marker_segments,
+            &self.conflict_resolved_output_block_map,
             self.resolved_outline_source_view(),
         );
-        self.sync_conflict_resolved_preview_snapshot(
-            &output_snapshot,
-            path,
-            syntax_edit,
-            false,
-            cx,
-        );
+        self.sync_conflict_resolved_preview_snapshot(&output_snapshot, path, false, cx);
         self.apply_resolved_outline_computation(path, trace_started, computed);
     }
 
@@ -2932,9 +3172,10 @@ impl MainPaneView {
         else {
             return false;
         };
-        let new_block_ranges = match resolved_output_conflict_block_ranges_in_text(
+        let new_block_ranges = match resolved_output_conflict_block_line_ranges(
             &self.conflict_resolver.marker_segments,
             output_text,
+            &self.conflict_resolved_output_block_map,
         ) {
             Some(ranges) if ranges.len() == old_block_ranges.len() => ranges,
             _ => remap_resolved_output_conflict_block_ranges_for_delta(
@@ -3163,21 +3404,13 @@ impl MainPaneView {
         );
         self.conflict_resolved_preview_line_count = new_line_count;
         self.conflict_resolved_preview_line_starts = new_line_starts;
-        self.conflict_resolved_output_measure_row = widest_resolved_output_line_ix(
-            output_text,
-            self.conflict_resolved_preview_line_starts.as_ref(),
-        );
-        if used_stash {
-            self.conflict_resolved_preview_segments_cache.clear();
-        } else {
-            remap_line_keyed_cache_for_delta(
-                &mut self.conflict_resolved_preview_segments_cache,
-                old_affected,
-                new_affected,
-            );
-        }
-        let syntax_edit = (!used_stash).then(|| diff_syntax_edit_from_outline_delta(delta));
-        self.refresh_conflict_resolved_output_syntax(&output_snapshot, syntax_edit, cx);
+        self.conflict_resolved_output_measure_row = resolved_output_measure_row(&output_snapshot);
+        // The text already reached the live tree on the keystroke. This call is
+        // here for what the outline recompute itself changed: the language (the
+        // path may have only just resolved) and the unresolved-conflict overlay,
+        // which is derived from the marker segments this delta rewrote. It
+        // reparses only if the buffer really is different.
+        self.refresh_conflict_resolved_output_syntax(&output_snapshot, None, cx);
         self.conflict_resolved_outline_stash = None;
         self.conflict_resolver.resolved_outline = ResolvedOutlineData {
             meta: next_meta,
@@ -3185,7 +3418,6 @@ impl MainPaneView {
             sources_index: next_sources_index,
         };
         self.conflict_resolver.resolved_output_visible_dirty = true;
-        self.conflict_resolver.conflict_output_row_anchors_dirty = true;
         self.conflict_resolver.resolved_outline_gutter_rows.clear();
         self.conflict_resolved_preview_text = output_snapshot;
         true
@@ -3262,28 +3494,26 @@ impl MainPaneView {
             let output_snapshot = self
                 .conflict_resolver_input
                 .read_with(cx, |input, _| input.text_snapshot());
-            let syntax_edit = delta.clone().map(diff_syntax_edit_from_outline_delta);
-            let request = self.background_resolved_outline_recompute_request(&output_snapshot);
             let background_delay = self
                 .conflict_resolved_outline_background_delay_override
                 .unwrap_or_default();
-            self.sync_conflict_resolved_preview_snapshot(
-                &output_snapshot,
-                path.as_ref(),
-                syntax_edit,
-                true,
-                cx,
-            );
+            self.sync_conflict_resolved_preview_snapshot(&output_snapshot, path.as_ref(), true, cx);
 
             if background_delay.is_zero()
                 && self.conflict_resolver.resolver_pending_recompute_seq == seq
                 && self.conflict_resolved_preview_source_revision == Some(source_revision)
                 && self.conflict_resolved_preview_path.as_ref() == path.as_ref()
             {
+                // Built here rather than above so this arm matches production,
+                // where the request is assembled inside the debounced task. It
+                // copies the document, so hoisting it would charge every
+                // keystroke for an outline that only runs once per burst.
+                let request = self.background_resolved_outline_recompute_request(&output_snapshot);
                 let computed = compute_resolved_outline_computation(
                     request.output_text.as_ref(),
                     request.output_line_count,
                     &request.marker_segments,
+                    &request.block_map,
                     request.sources.as_view(),
                 );
                 self.apply_resolved_outline_computation(path.as_ref(), trace_started, computed);
@@ -3321,15 +3551,12 @@ impl MainPaneView {
                             let output_snapshot = this
                                 .conflict_resolver_input
                                 .read_with(cx, |input, _| input.text_snapshot());
-                            let syntax_edit =
-                                delta.clone().map(diff_syntax_edit_from_outline_delta);
                             let request = this
                                 .background_resolved_outline_recompute_request(&output_snapshot);
                             let background_delay = Duration::default();
                             this.sync_conflict_resolved_preview_snapshot(
                                 &output_snapshot,
                                 path.as_ref(),
-                                syntax_edit,
                                 true,
                                 cx,
                             );
@@ -3354,6 +3581,7 @@ impl MainPaneView {
                             request.output_text.as_ref(),
                             request.output_line_count,
                             &request.marker_segments,
+                            &request.block_map,
                             request.sources.as_view(),
                         )
                     };
@@ -3388,11 +3616,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         let path = self.conflict_resolver.path.clone();
-        self.recompute_conflict_resolved_outline_and_provenance_with_syntax_edit(
-            path.as_ref(),
-            None,
-            cx,
-        );
+        self.recompute_conflict_resolved_outline_and_provenance(path.as_ref(), cx);
     }
 
     #[cfg(test)]
@@ -3762,7 +3986,6 @@ impl MainPaneView {
         self.clear_diff_text_style_caches();
         self.clear_conflict_diff_style_caches();
         self.conflict_three_way_segments_cache.clear();
-        self.conflict_resolved_preview_segments_cache.clear();
         self.diff_wrap_visible_cache_key = None;
         self.diff_wrap_visible_rows.clear();
         cx.notify();
@@ -4338,7 +4561,7 @@ impl MainPaneView {
         // *other* pane to it — the pane the user right-clicked is already in
         // view and must not jump under the open menu. Reveals are non-strict:
         // nothing scrolls when the target rows are already fully visible.
-        self.conflict_resolver.active_conflict = conflict_ix;
+        self.conflict_resolver_select_conflict(conflict_ix, cx);
         if output_line_ix.is_some() {
             // Invoked from the resolved output: reveal the source columns.
             if let Some(vi) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) {
@@ -4374,6 +4597,8 @@ impl MainPaneView {
                 split_selection_rows,
                 join_previous_region,
                 join_next_region,
+                alignment_marked_columns: self.conflict_resolver_alignment_marked_columns(),
+                has_manual_alignments: self.conflict_resolver_has_manual_alignments(),
             },
             anchor,
             window,
@@ -4603,6 +4828,7 @@ impl MainPaneView {
                 &self.conflict_resolver.marker_segments,
                 &content,
                 context_line,
+                &self.conflict_resolved_output_block_map,
             )
         };
         if let Some(marker) = conflict_marker {
@@ -5024,16 +5250,6 @@ impl MainPaneView {
         self.conflict_resolver.conflict_syntax_language
     }
 
-    pub(in crate::view) fn conflict_resolved_preview_render_syntax_language(
-        &self,
-    ) -> Option<rows::DiffSyntaxLanguage> {
-        const MAX_RENDER_LINES: usize = 20_000;
-
-        (self.conflict_resolved_preview_line_count <= MAX_RENDER_LINES)
-            .then_some(self.conflict_resolved_preview_syntax_language)
-            .flatten()
-    }
-
     pub(in crate::view) fn worktree_preview_segments_cache_get(
         &self,
         key: usize,
@@ -5053,31 +5269,6 @@ impl MainPaneView {
             key,
             VersionedCachedDiffStyledText {
                 syntax_epoch: self.worktree_preview_style_cache_epoch,
-                query_generation: 0,
-                styled: value,
-            },
-        );
-    }
-
-    pub(in crate::view) fn conflict_resolved_preview_segments_cache_get(
-        &self,
-        key: usize,
-    ) -> Option<&CachedDiffStyledText> {
-        versioned_cached_diff_styled_text_is_current(
-            self.conflict_resolved_preview_segments_cache.get(&key),
-            self.conflict_resolved_preview_style_cache_epoch,
-        )
-    }
-
-    pub(in crate::view) fn conflict_resolved_preview_segments_cache_set(
-        &mut self,
-        key: usize,
-        value: CachedDiffStyledText,
-    ) {
-        self.conflict_resolved_preview_segments_cache.insert(
-            key,
-            VersionedCachedDiffStyledText {
-                syntax_epoch: self.conflict_resolved_preview_style_cache_epoch,
                 query_generation: 0,
                 styled: value,
             },
@@ -5987,15 +6178,6 @@ impl MainPaneView {
         let vertical_wheel_master = self.conflict_preview_vertical_wheel_master.take();
         let handles = self.conflict_preview_scroll_handles();
         let group = self.conflict_preview_sync_group();
-        let anchors = if matches!(
-            group,
-            ConflictPreviewSyncGroup::ColumnsAndOutput
-                | ConflictPreviewSyncGroup::TwoWayPairAndOutput
-        ) {
-            self.conflict_output_row_anchors()
-        } else {
-            Arc::from([(0.0f32, 0.0f32)])
-        };
         for (axis, last_synced) in [
             (
                 SyncedScrollAxis::Vertical,
@@ -6012,7 +6194,6 @@ impl MainPaneView {
                 axis,
                 self.diff_scroll_sync,
                 group,
-                anchors.as_ref(),
                 if axis == SyncedScrollAxis::Vertical {
                     vertical_wheel_master
                 } else {
@@ -6020,70 +6201,6 @@ impl MainPaneView {
                 },
             );
         }
-    }
-
-    /// `(aligned_row, output_row)` anchor pairs for the conflict-anchored
-    /// output scroll sync — the aligned column row and the resolved-output line
-    /// where each conflict starts. Seeded with `(0, 0)` so scrolling above the
-    /// first conflict stays 1:1. Conflicts with no locatable output line (e.g.
-    /// resolved, no marker) are skipped; the nearest remaining anchor is used.
-    fn conflict_output_row_anchors(&mut self) -> Arc<[(f32, f32)]> {
-        if !self.conflict_resolver.conflict_output_row_anchors_dirty {
-            return Arc::clone(&self.conflict_resolver.conflict_output_row_anchors);
-        }
-        let mut anchors = vec![(0.0f32, 0.0f32)];
-        // The anchors map aligned diff rows to output lines. In markdown/image
-        // preview the columns render rendered content, not the 20px aligned row
-        // space, so the mapping is meaningless — keep only the `(0, 0)` seed,
-        // which makes the sync degenerate to a raw 1:1 copy.
-        if self.is_markdown_preview_active() {
-            return anchors.into();
-        }
-        let streamed = self.conflict_resolved_output_is_streamed();
-        let conflict_count = self.conflict_resolver_conflict_count();
-        let output_lines = if streamed {
-            Vec::new()
-        } else {
-            let mut output_lines = vec![None; conflict_count];
-            for (line_ix, marker) in self
-                .conflict_resolver
-                .resolved_outline
-                .markers
-                .iter()
-                .enumerate()
-            {
-                let Some(marker) = marker.filter(|marker| marker.is_start) else {
-                    continue;
-                };
-                if let Some(slot) = output_lines.get_mut(marker.conflict_ix)
-                    && slot.is_none()
-                {
-                    *slot = Some(line_ix);
-                }
-            }
-            output_lines
-        };
-        for conflict_ix in 0..conflict_count {
-            let Some(aligned) = self.conflict_resolver_visible_ix_for_conflict(conflict_ix) else {
-                continue;
-            };
-            let output = if streamed {
-                self.conflict_resolved_output_projection
-                    .as_ref()
-                    .and_then(|projection| projection.conflict_line_range(conflict_ix))
-                    .map(|range| range.start)
-            } else {
-                output_lines.get(conflict_ix).copied().flatten()
-            };
-            let Some(output) = output else {
-                continue;
-            };
-            anchors.push((aligned as f32, output as f32));
-        }
-        anchors.sort_by(|a, b| a.0.total_cmp(&b.0));
-        self.conflict_resolver.conflict_output_row_anchors = anchors.into();
-        self.conflict_resolver.conflict_output_row_anchors_dirty = false;
-        Arc::clone(&self.conflict_resolver.conflict_output_row_anchors)
     }
 
     /// Which conflict-preview lists share a row space and may be raw-offset
@@ -6353,111 +6470,6 @@ mod tests {
         );
 
         assert_eq!(targets, [px(0.0), px(0.0)]);
-    }
-
-    #[test]
-    fn anchored_scroll_holds_diff_overscroll_after_output_clamps() {
-        // The source panes have ten comfort rows below EOF, while resolved
-        // output stops at its last real row. Once output clamps, an idle render
-        // must not promote that shorter follower and pull the sources back.
-        let steady = [px(-500.0), px(-500.0), px(-100.0)];
-        let targets = compute_anchored_vertical_scroll_offsets(
-            steady,
-            [px(500.0), px(500.0), px(100.0)],
-            // Output was requested beyond its range, then clamped during paint.
-            [px(-500.0), px(-500.0), px(-120.0)],
-            &[(0.0, 0.0)],
-        );
-
-        assert_eq!(targets, steady);
-    }
-
-    #[test]
-    fn anchored_scroll_clamps_output_without_clamping_diff_master() {
-        let targets = compute_anchored_vertical_scroll_offsets(
-            [px(-500.0), px(-480.0), px(-100.0)],
-            [px(500.0), px(500.0), px(100.0)],
-            [px(-480.0), px(-480.0), px(-100.0)],
-            &[(0.0, 0.0)],
-        );
-
-        assert_eq!(targets, [px(-500.0), px(-500.0), px(-100.0)]);
-    }
-
-    #[test]
-    fn anchored_scroll_honors_remote_wheel_over_stale_output_change() {
-        let targets = compute_anchored_vertical_scroll_offsets_with_master(
-            [px(-500.0), px(-500.0), px(0.0)],
-            [px(500.0), px(500.0), px(100.0)],
-            [px(-480.0), px(-480.0), px(-100.0)],
-            &[(0.0, 0.0)],
-            Some(1),
-        );
-
-        assert_eq!(targets, [px(-500.0), px(-500.0), px(-100.0)]);
-    }
-
-    #[test]
-    fn anchored_output_wheel_at_top_pulls_stale_sources_to_top() {
-        let targets = compute_anchored_vertical_scroll_offsets_with_master(
-            [px(-100.0), px(-100.0), px(0.0)],
-            [px(500.0), px(500.0), px(500.0)],
-            [px(-100.0), px(-100.0), px(0.0)],
-            &[(0.0, 0.0)],
-            Some(2),
-        );
-
-        assert_eq!(targets, [px(0.0), px(0.0), px(0.0)]);
-    }
-
-    #[test]
-    fn anchored_output_top_overscroll_does_not_propagate_positive_offset() {
-        let targets = compute_anchored_vertical_scroll_offsets_with_master(
-            [px(0.0), px(0.0), px(24.0)],
-            [px(500.0), px(500.0), px(500.0)],
-            [px(0.0), px(0.0), px(0.0)],
-            &[(0.0, 0.0)],
-            Some(2),
-        );
-
-        assert_eq!(targets, [px(0.0), px(0.0), px(0.0)]);
-    }
-
-    #[test]
-    fn interpolated_anchor_shift_is_continuous_and_maps_exact_anchors() {
-        // Conflict 1: aligned row 10 / output row 8 (2 padding rows above it).
-        // Conflict 2: aligned row 30 / output row 25 (5 padding rows above it).
-        let anchors = [(0.0, 0.0), (10.0, 8.0), (30.0, 25.0)];
-        let mapped =
-            |pos: f32, by_aligned: bool| pos + interpolated_anchor_shift(&anchors, pos, by_aligned);
-
-        assert_eq!(mapped(10.0, true), 8.0);
-        assert_eq!(mapped(30.0, true), 25.0);
-        assert_eq!(mapped(8.0, false), 10.0);
-        assert_eq!(mapped(25.0, false), 30.0);
-
-        // Mapping must never jump backward at the midpoint between anchors.
-        assert!(mapped(20.01, true) >= mapped(19.99, true));
-        assert!(mapped(16.51, false) >= mapped(16.49, false));
-
-        // Past the last anchor, retain its shift with slope 1.
-        assert_eq!(mapped(32.0, true), 27.0);
-        assert_eq!(mapped(27.0, false), 32.0);
-    }
-
-    #[test]
-    fn interpolated_anchor_shift_does_not_reset_at_large_asymmetric_block() {
-        // Mirrors pipeline.rs: the later conflict begins 24 rows farther down
-        // in aligned source space than in resolved-output space.
-        let anchors = [(0.0, 0.0), (100.0, 100.0), (140.0, 116.0)];
-        let mapped = |row: f32| row + interpolated_anchor_shift(&anchors, row, true);
-
-        let before_midpoint = mapped(119.99);
-        let after_midpoint = mapped(120.01);
-        assert!(
-            after_midpoint >= before_midpoint,
-            "scrolling down must not map output backward: {before_midpoint} -> {after_midpoint}",
-        );
     }
 
     #[test]

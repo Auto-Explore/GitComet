@@ -8,7 +8,6 @@ mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
 mod clone_repo;
 mod commit_prompt;
-mod conflict_save_stage_confirm;
 pub(in super::super) mod context_menu;
 mod create_branch_from_ref_prompt;
 mod create_tag_prompt;
@@ -411,7 +410,6 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
-            | PopoverKind::ConflictSaveStageConfirm { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
@@ -674,7 +672,6 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
-        | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
@@ -732,9 +729,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
-        PopoverKind::MergeAbortConfirm { .. } | PopoverKind::ConflictSaveStageConfirm { .. } => {
-            Some(DIALOG_360_WIDTH)
-        }
+        PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } => Some(DIALOG_440_WIDTH),
         PopoverKind::Repo {
@@ -3643,19 +3638,6 @@ impl PopoverHost {
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
             }
-            PopoverKind::ConflictSaveStageConfirm {
-                repo_id,
-                path,
-                has_conflict_markers,
-                unresolved_blocks,
-            } => conflict_save_stage_confirm::panel(
-                self,
-                repo_id,
-                &path,
-                has_conflict_markers,
-                unresolved_blocks,
-                cx,
-            ),
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
             }
@@ -3786,6 +3768,8 @@ impl PopoverHost {
                 split_selection_rows,
                 join_previous_region,
                 join_next_region,
+                alignment_marked_columns,
+                has_manual_alignments,
             } => self.context_menu_view(
                 PopoverKind::ConflictResolverChunkMenu {
                     conflict_ix,
@@ -3796,6 +3780,8 @@ impl PopoverHost {
                     split_selection_rows,
                     join_previous_region,
                     join_next_region,
+                    alignment_marked_columns,
+                    has_manual_alignments,
                 },
                 cx,
             ),

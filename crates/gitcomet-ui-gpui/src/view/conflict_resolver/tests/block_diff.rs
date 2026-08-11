@@ -20,6 +20,7 @@ fn three_way_word_highlights_align_shifted_local_and_remote_rows() {
         theirs: "alpha\ninserted\nbeta remote\ngamma\n".into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })];
     let base_text = "";
     let ours_text = "alpha\nbeta changed\ngamma\n";
@@ -84,6 +85,7 @@ fn three_way_word_highlights_keep_global_offsets_per_column() {
             theirs: "added\nsame\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".into()),
     ];
@@ -367,6 +369,7 @@ fn build_three_way_conflict_maps_includes_per_side_ranges() {
             theirs: "theirs1\ntheirs2\ntheirs3\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
     ];
@@ -391,6 +394,7 @@ fn per_side_ranges_binary_search_matches_per_line_maps() {
             theirs: "T1\nT2\nT3\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -399,6 +403,7 @@ fn per_side_ranges_binary_search_matches_per_line_maps() {
             theirs: "y\nz\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -429,6 +434,7 @@ fn projection_matches_visible_map_identity() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("d\ne\n".into()),
     ];
@@ -451,6 +457,7 @@ fn projection_matches_visible_map_with_collapsed() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("d\ne\n".into()),
     ];
@@ -476,6 +483,7 @@ fn projection_matches_visible_map_with_large_block_gap() {
             theirs: big_text.into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("after\n".into()),
     ];
@@ -505,6 +513,7 @@ fn projection_visible_index_for_conflict() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("d\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -513,6 +522,7 @@ fn projection_visible_index_for_conflict() {
             theirs: "z\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let ranges = vec![1..3, 4..5];
@@ -546,6 +556,7 @@ fn projection_multiple_collapsed_blocks() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -554,6 +565,7 @@ fn projection_multiple_collapsed_blocks() {
             theirs: "p\nq\nr\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];

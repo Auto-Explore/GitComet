@@ -452,12 +452,30 @@ struct TextInputShapeCacheKey {
     wrap_width_key: i32,
 }
 
+/// How many keystrokes the steady-typing case types into one line before
+/// restoring it, so a long benchmark run does not drift into shaping a line
+/// that has grown far past `line_bytes`.
+const TEXT_INPUT_STEADY_TYPING_BURST: usize = 32;
+
+/// A caret parked in the middle of a line, snapped to a char boundary.
+fn mid_char_boundary(line: &str) -> usize {
+    let mut caret = line.len() / 2;
+    while caret > 0 && !line.is_char_boundary(caret) {
+        caret -= 1;
+    }
+    caret
+}
+
 pub struct TextInputPrepaintWindowedFixture {
     lines: Vec<String>,
     wrap_width_key: i32,
     guard_rows: usize,
     max_shape_bytes: usize,
     shape_cache: HashMap<TextInputShapeCacheKey, u64>,
+    /// The pristine text of the line the steady-typing case types into, so the
+    /// burst can be rolled back without rebuilding the whole document.
+    typing_line_original: Option<(usize, String)>,
+    keystrokes: usize,
 }
 
 impl TextInputPrepaintWindowedFixture {
@@ -468,6 +486,8 @@ impl TextInputPrepaintWindowedFixture {
             guard_rows: 2,
             max_shape_bytes: 4 * 1024,
             shape_cache: HashMap::default(),
+            typing_line_original: None,
+            keystrokes: 0,
         }
     }
 
@@ -553,6 +573,66 @@ impl TextInputPrepaintWindowedFixture {
                 cache_misses: bench_counter_u64(cache_misses),
             },
         )
+    }
+
+    /// Type one character into a line inside the viewport, then invalidate the
+    /// way a real text edit does.
+    fn apply_single_character_insert(&mut self, start_row: usize, viewport_rows: usize) {
+        let line_count = self.lines.len();
+        if line_count == 0 {
+            return;
+        }
+        let line_ix = start_row.wrapping_add(viewport_rows / 2) % line_count;
+
+        // Restore the previous burst before moving the caret to a new line, so
+        // the document keeps its shape over a long benchmark run.
+        match self.typing_line_original.take() {
+            Some((previous_ix, original)) if previous_ix == line_ix => {
+                if self.keystrokes % TEXT_INPUT_STEADY_TYPING_BURST == 0 {
+                    self.lines[previous_ix].clone_from(&original);
+                }
+                self.typing_line_original = Some((previous_ix, original));
+            }
+            Some((previous_ix, original)) => {
+                self.lines[previous_ix] = original;
+                self.typing_line_original = Some((line_ix, self.lines[line_ix].clone()));
+            }
+            None => {
+                self.typing_line_original = Some((line_ix, self.lines[line_ix].clone()));
+            }
+        }
+
+        let caret = mid_char_boundary(&self.lines[line_ix]);
+        self.lines[line_ix].insert(caret, 'x');
+        self.keystrokes = self.keystrokes.wrapping_add(1);
+        self.invalidate_shape_cache_after_edit();
+    }
+
+    /// Mirrors what a text edit does to the production shaped-row cache.
+    ///
+    /// While rows are keyed by line index, an edit has to drop every shaped row
+    /// — inserting a newline would otherwise hand each line below it the
+    /// previous occupant's shaping. That is what makes a keystroke cost a whole
+    /// viewport reshape rather than one line.
+    fn invalidate_shape_cache_after_edit(&mut self) {
+        self.shape_cache.clear();
+    }
+
+    /// The existing windowed case re-runs prepaint over text that never
+    /// changes, which hides the per-keystroke cache churn entirely. This one
+    /// types between iterations.
+    pub fn run_steady_typing_step(&mut self, start_row: usize, viewport_rows: usize) -> u64 {
+        self.apply_single_character_insert(start_row, viewport_rows);
+        self.run_windowed_step(start_row, viewport_rows)
+    }
+
+    pub fn run_steady_typing_step_with_metrics(
+        &mut self,
+        start_row: usize,
+        viewport_rows: usize,
+    ) -> (u64, TextInputPrepaintWindowedMetrics) {
+        self.apply_single_character_insert(start_row, viewport_rows);
+        self.run_windowed_step_with_metrics(start_row, viewport_rows)
     }
 
     pub fn run_full_document_step(&mut self) -> u64 {
@@ -1344,7 +1424,9 @@ impl TextModelBulkLoadLargeFixture {
         let mut h = FxHasher::default();
         snapshot.len().hash(&mut h);
         snapshot.line_starts().len().hash(&mut h);
-        let suffix_start = snapshot.clamp_to_char_boundary(snapshot.len().saturating_sub(96));
+        // `slice` normalizes to character boundaries itself, so the raw offset
+        // is safe to hand over.
+        let suffix_start = snapshot.len().saturating_sub(96);
         let suffix = snapshot.slice_to_string(suffix_start..snapshot.len());
         suffix.len().hash(&mut h);
 
@@ -1374,7 +1456,7 @@ impl TextModelBulkLoadLargeFixture {
         let mut h = FxHasher::default();
         snapshot.len().hash(&mut h);
         snapshot.line_starts().len().hash(&mut h);
-        let prefix_end = snapshot.clamp_to_char_boundary(snapshot.len().min(96));
+        let prefix_end = snapshot.len().min(96);
         let prefix = snapshot.slice_to_string(0..prefix_end);
         prefix.len().hash(&mut h);
 

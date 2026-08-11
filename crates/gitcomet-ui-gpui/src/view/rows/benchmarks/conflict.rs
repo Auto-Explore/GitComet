@@ -2933,6 +2933,7 @@ fn build_synthetic_three_way_segments(
                 theirs: format!("let shared_{slot_ix} = compute_remote({slot_ix});\n").into(),
                 choice,
                 resolved: slot_ix % 5 == 0,
+                whitespace_only: false,
             }));
         }
     }
@@ -3001,6 +3002,7 @@ fn build_synthetic_two_way_segments(
                 theirs: theirs.into(),
                 choice,
                 resolved: slot_ix % 7 == 0,
+                whitespace_only: false,
             }));
         }
     }
@@ -3185,5 +3187,138 @@ fn build_synthetic_whole_file_conflict_segments(total_lines: usize) -> Vec<Confl
         theirs: theirs.into(),
         choice: ConflictChoice::Ours,
         resolved: false,
+        whitespace_only: false,
     })]
+}
+
+/// Measures the live syntax engine on the merge tool's editable resolved output.
+///
+/// The number that matters is `run_keystroke_step`: under the prepared-document
+/// engine this view rebuilt the whole document on every edit (new content hash,
+/// all 64-line token chunks discarded) and fell back to heuristic tokens until a
+/// worker thread caught up. Here it is `tree.edit` plus an incremental reparse.
+pub struct ConflictResolvedOutputLiveSyntaxFixture {
+    // The rope *is* the document, as in production: the benchmark edits it in
+    // place so a keystroke costs what a keystroke costs, rather than rebuilding
+    // a fresh buffer and line index each step and measuring that instead.
+    rope: crate::kit::rope::Rope,
+    mask: Arc<[Range<usize>]>,
+    document: Option<super::diff_text::LiveSyntaxDocument>,
+    theme: AppTheme,
+    caret: usize,
+}
+
+impl ConflictResolvedOutputLiveSyntaxFixture {
+    pub fn new(lines: usize, conflict_blocks: usize) -> Self {
+        let mut text = String::new();
+        let mut mask = Vec::new();
+        let conflict_every = if conflict_blocks == 0 {
+            usize::MAX
+        } else {
+            (lines / conflict_blocks).max(1)
+        };
+        for ix in 0..lines {
+            if ix > 0 && conflict_every != usize::MAX && ix % conflict_every == 0 {
+                // An unresolved block renders as one placeholder row, which the
+                // parser must not see as code.
+                let start = text.len();
+                text.push_str(
+                    crate::view::conflict_resolver::UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER,
+                );
+                mask.push(start..text.len());
+                text.push('\n');
+                continue;
+            }
+            text.push_str(&format!(
+                "    let resolved_{ix}: usize = compute_{ix}(shared_{ix}());\n"
+            ));
+        }
+
+        let rope = crate::kit::rope::Rope::from_str(&text);
+        let mask: Arc<[Range<usize>]> = mask.into();
+        let theme = AppTheme::gitcomet_dark();
+        let document = super::diff_text::LiveSyntaxDocument::new(
+            super::diff_text::DiffSyntaxLanguage::Rust,
+            rope.clone(),
+            Arc::clone(&mask),
+            None,
+        );
+        let caret = rope.len() / 2;
+        Self {
+            rope,
+            mask,
+            document,
+            theme,
+            caret,
+        }
+    }
+
+    /// One keystroke: insert a character, edit the tree, reparse incrementally.
+    pub fn run_keystroke_step(&mut self) -> u64 {
+        let Some(document) = self.document.as_mut() else {
+            return 0;
+        };
+        // Land the insert on a character boundary near the middle of the
+        // document, which is where an incremental reparse has the most tree to
+        // preserve on either side.
+        let at = self
+            .rope
+            .clip_offset(self.caret.min(self.rope.len()), gpui::sum_tree::Bias::Right);
+        self.rope.replace(at..at, "x");
+
+        let mask: Arc<[Range<usize>]> = self
+            .mask
+            .iter()
+            .map(|span| {
+                if span.start >= at {
+                    span.start + 1..span.end + 1
+                } else {
+                    span.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .into();
+
+        document.sync(
+            self.rope.clone(),
+            Arc::clone(&mask),
+            Some((at..at, at..at + 1)),
+            Some(Duration::from_millis(1)),
+        );
+        self.mask = mask;
+        document.version()
+    }
+
+    /// One frame: highlight the bytes covering a visible window of rows.
+    pub fn run_visible_window_resolve(&self, start_line: usize, rows: usize) -> u64 {
+        let Some(document) = self.document.as_ref() else {
+            return 0;
+        };
+        // Row starts by descent, the way the renderer asks for them.
+        let row_start = |row: usize| -> usize {
+            u32::try_from(row)
+                .ok()
+                .filter(|row| *row < self.rope.line_count())
+                .map(|row| self.rope.line_range(row).start)
+                .unwrap_or(self.rope.len())
+        };
+        let start = row_start(start_line);
+        let end = row_start(start_line.saturating_add(rows));
+        let highlights = document
+            .snapshot(self.theme)
+            .highlights_for_byte_range(start..end);
+        highlights.len() as u64
+    }
+
+    /// A parse with no tree to reuse, for comparison against the keystroke path.
+    pub fn run_cold_parse(&self) -> u64 {
+        super::diff_text::LiveSyntaxDocument::new(
+            super::diff_text::DiffSyntaxLanguage::Rust,
+            self.rope.clone(),
+            Arc::clone(&self.mask),
+            None,
+        )
+        .map(|document| document.version())
+        .unwrap_or(0)
+    }
 }

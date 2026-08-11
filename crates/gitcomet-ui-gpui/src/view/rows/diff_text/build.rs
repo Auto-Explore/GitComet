@@ -1281,6 +1281,10 @@ pub(in crate::view) struct PreparedDocumentByteRangeHighlights {
 }
 
 #[derive(Clone, Default)]
+#[cfg(any(test, feature = "benchmarks"))]
+// The bench warmup only wants the chunk-building side effect and drops the
+// result; the fields are read by the unit tests.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::view) struct PreparedDocumentLineHighlights {
     pub line_ix: usize,
     pub highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,

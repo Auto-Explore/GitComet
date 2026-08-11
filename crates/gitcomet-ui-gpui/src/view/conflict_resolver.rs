@@ -17,13 +17,7 @@ use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
-pub enum ConflictChoice {
-    Base,
-    Ours,
-    Theirs,
-    Both,
-}
+pub use gitcomet_core::conflict_output::ConflictOutputChoice as ConflictChoice;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum ConflictResolverViewMode {
@@ -196,7 +190,9 @@ impl ConflictSplitStyledTextCache {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AutosolveTraceMode {
-    /// High+Medium tiers applied automatically when the file opened (section 30).
+    /// The safe rules and the subchunk split, applied automatically when the
+    /// file opened. Whitespace-only, regex and history merges are never
+    /// automatic — kdiff3 parity, see the section 30 auto-solve policy.
     OnOpen,
     #[cfg(test)]
     History,
@@ -207,6 +203,188 @@ pub enum AutosolveTraceMode {
 pub enum ConflictNavDirection {
     Prev,
     Next,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum ConflictNavTargetId {
+    PlanBlock(gitcomet_core::merge::MergeBlockId),
+    Region(usize),
+    DisplayBlock(usize),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct ConflictNavTarget {
+    pub(in crate::view) id: ConflictNavTargetId,
+    pub(in crate::view) order: usize,
+    pub(in crate::view) aligned_rows: Option<Range<usize>>,
+    pub(in crate::view) region_index: Option<usize>,
+    pub(in crate::view) display_conflict_index: Option<usize>,
+    pub(in crate::view) is_delta: bool,
+    pub(in crate::view) original_conflict: bool,
+    pub(in crate::view) unresolved: bool,
+}
+
+impl ConflictNavTarget {
+    pub(in crate::view) fn anchor(&self) -> ConflictNavAnchor {
+        ConflictNavAnchor {
+            id: self.id,
+            order_hint: self.order,
+            aligned_row_hint: self.aligned_rows.as_ref().map(|range| range.start),
+        }
+    }
+
+    fn contains_aligned_row(&self, row: usize) -> bool {
+        self.aligned_rows
+            .as_ref()
+            .is_some_and(|range| range.contains(&row) || (range.is_empty() && range.start == row))
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct ConflictNavAnchor {
+    pub(in crate::view) id: ConflictNavTargetId,
+    pub(in crate::view) order_hint: usize,
+    pub(in crate::view) aligned_row_hint: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum ConflictNavTargetFilter {
+    Delta,
+    Conflict,
+    Unresolved,
+}
+
+impl ConflictNavTargetFilter {
+    fn matches(self, target: &ConflictNavTarget) -> bool {
+        match self {
+            Self::Delta => target.is_delta,
+            Self::Conflict => conflict_nav_target_is_conflict(target),
+            Self::Unresolved => target.unresolved,
+        }
+    }
+}
+
+/// Whether "next/previous conflict" should stop here.
+///
+/// The plan's `original_conflict` flag alone is too narrow. It answers "did the
+/// merge algorithm call this a conflict", and the resolved output can draw a
+/// `<Merge Conflict>` row for a block the plan did not — a region the worktree
+/// carries markers for, a block left open after an unresolve, a block whose plan
+/// identity was lost to a split or an edit. Skipping those made conflict
+/// navigation step over rows that are visibly awaiting a decision, while the
+/// unresolved-only navigation reached them.
+///
+/// So a target counts as a conflict when *any* of the three agree: the plan
+/// called it one, the output renders it as a decision block, or it is still
+/// unresolved. The last clause is what makes this a superset of
+/// [`ConflictNavTargetFilter::Unresolved`] — conflict navigation can never skip
+/// a row that "next unresolved" would land on.
+fn conflict_nav_target_is_conflict(target: &ConflictNavTarget) -> bool {
+    target.original_conflict || target.display_conflict_index.is_some() || target.unresolved
+}
+
+pub(in crate::view) fn fresh_conflict_nav_target_index(
+    targets: &[ConflictNavTarget],
+) -> Option<usize> {
+    targets
+        .iter()
+        .position(|target| target.unresolved)
+        .or_else(|| targets.iter().position(|target| target.original_conflict))
+        .or_else(|| targets.iter().position(|target| target.is_delta))
+}
+
+pub(in crate::view) fn reconcile_conflict_nav_target_index(
+    anchor: Option<ConflictNavAnchor>,
+    previous_targets: &[ConflictNavTarget],
+    targets: &[ConflictNavTarget],
+) -> Option<usize> {
+    let Some(anchor) = anchor else {
+        return fresh_conflict_nav_target_index(targets);
+    };
+    if targets.is_empty() {
+        return None;
+    }
+
+    // Stable plan identities and unchanged legacy identities win.
+    if let Some(index) = targets.iter().position(|target| target.id == anchor.id) {
+        return Some(index);
+    }
+
+    // Bridge plan-backed and region-backed projections in either direction.
+    let previous_region = match anchor.id {
+        ConflictNavTargetId::Region(region_index) => Some(region_index),
+        ConflictNavTargetId::PlanBlock(_) | ConflictNavTargetId::DisplayBlock(_) => {
+            previous_targets
+                .iter()
+                .find(|target| target.id == anchor.id)
+                .and_then(|target| target.region_index)
+        }
+    };
+    if let Some(region_index) = previous_region
+        && let Some(index) = targets
+            .iter()
+            .position(|target| target.region_index == Some(region_index))
+    {
+        return Some(index);
+    }
+
+    // Structural edits can replace target identities while retaining row
+    // geometry. Prefer the target that still owns the remembered row.
+    if let Some(row) = anchor.aligned_row_hint
+        && let Some(index) = targets
+            .iter()
+            .position(|target| target.contains_aligned_row(row))
+    {
+        return Some(index);
+    }
+
+    // Finally retain the nearest ordered position. Orders are monotonic but
+    // need not be dense, so compare explicitly after clamping the hint.
+    let max_order = targets.iter().map(|target| target.order).max().unwrap_or(0);
+    let clamped_order = anchor.order_hint.min(max_order);
+    targets
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, target)| (target.order.abs_diff(clamped_order), target.order))
+        .map(|(index, _)| index)
+        .or_else(|| fresh_conflict_nav_target_index(targets))
+}
+
+fn conflict_nav_anchor_order(targets: &[ConflictNavTarget], anchor: ConflictNavAnchor) -> usize {
+    targets
+        .iter()
+        .find(|target| target.id == anchor.id)
+        .map(|target| target.order)
+        .unwrap_or(anchor.order_hint)
+}
+
+pub(in crate::view) fn previous_conflict_nav_target_index(
+    targets: &[ConflictNavTarget],
+    anchor: Option<ConflictNavAnchor>,
+    filter: ConflictNavTargetFilter,
+) -> Option<usize> {
+    let anchor = anchor?;
+    let current_order = conflict_nav_anchor_order(targets, anchor);
+    targets
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|(_, target)| target.order < current_order && filter.matches(target))
+        .map(|(index, _)| index)
+}
+
+pub(in crate::view) fn next_conflict_nav_target_index(
+    targets: &[ConflictNavTarget],
+    anchor: Option<ConflictNavAnchor>,
+    filter: ConflictNavTargetFilter,
+) -> Option<usize> {
+    let anchor = anchor?;
+    let current_order = conflict_nav_anchor_order(targets, anchor);
+    targets
+        .iter()
+        .enumerate()
+        .find(|(_, target)| target.order > current_order && filter.matches(target))
+        .map(|(index, _)| index)
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -371,6 +549,13 @@ pub struct ConflictBlock {
     /// Whether this block has been explicitly resolved (by user pick or auto-resolve).
     /// Blocks start unresolved; becomes `true` when the user picks a side or auto-resolve runs.
     pub resolved: bool,
+    /// Whether every aligned row in this block differs only in whitespace
+    /// (kdiff3 `MergeBlock::bWhiteSpaceConflict`).
+    ///
+    /// Set from the merge plan's classification, which applies kdiff3's
+    /// per-row rule; marker-only sessions have no aligned rows to classify and
+    /// leave this `false`. Drives the `(Whitespace only)` placeholder variant.
+    pub whitespace_only: bool,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -428,7 +613,15 @@ impl ResolvedOutputGutterRow {
     const IS_START_FLAG: u32 = 1 << 2;
     const IS_END_FLAG: u32 = 1 << 3;
     const UNRESOLVED_FLAG: u32 = 1 << 4;
-    const CONFLICT_SHIFT: u32 = 5;
+    /// The row renders an unresolved-conflict placeholder.
+    ///
+    /// kdiff3 reads the `?`, the conflict color and the placeholder string off
+    /// one field (`srcSelect`, `mergeresultwindow.cpp:1515`), so its gutter can
+    /// never disagree with its text. Our marker array is built separately and
+    /// can go stale across incremental edits, so this flag lets the row fall
+    /// back to the text's own verdict.
+    const PLACEHOLDER_FLAG: u32 = 1 << 5;
+    const CONFLICT_SHIFT: u32 = 6;
     const CONFLICT_VALUE_MASK: u32 = u32::MAX >> Self::CONFLICT_SHIFT;
 
     pub(in crate::view) fn new(
@@ -466,6 +659,30 @@ impl ResolvedOutputGutterRow {
         Self(bits)
     }
 
+    /// Mark the row as rendering an unresolved-conflict placeholder.
+    ///
+    /// Standing alone it reads as an unresolved marker that both starts and ends
+    /// on this row, which is what the fallback needs when the marker array has
+    /// no entry for it. A block wider than one row names only its first row, so
+    /// where the marker array *does* cover the row it owns the bracket ends —
+    /// otherwise a multi-row block would close its bracket on the named row.
+    #[inline(always)]
+    pub(in crate::view) fn with_unresolved_placeholder(self) -> Self {
+        Self(self.0 | Self::PLACEHOLDER_FLAG)
+    }
+
+    #[inline(always)]
+    fn is_placeholder(self) -> bool {
+        (self.0 & Self::PLACEHOLDER_FLAG) != 0
+    }
+
+    /// A placeholder row the marker array does not cover — the only case where
+    /// the row's own text has to stand in for marker bracket ends.
+    #[inline(always)]
+    fn is_unmarked_placeholder(self) -> bool {
+        self.is_placeholder() && (self.0 >> Self::CONFLICT_SHIFT) == 0
+    }
+
     #[inline(always)]
     pub(in crate::view) fn source(self) -> ResolvedLineSource {
         match self.0 & Self::SOURCE_MASK {
@@ -478,6 +695,9 @@ impl ResolvedOutputGutterRow {
 
     #[inline(always)]
     pub(in crate::view) fn badge_char(self) -> char {
+        if self.has_marker() && self.unresolved() {
+            return '?';
+        }
         match self.0 & Self::SOURCE_MASK {
             Self::SOURCE_A => 'A',
             Self::SOURCE_B => 'B',
@@ -488,7 +708,7 @@ impl ResolvedOutputGutterRow {
 
     #[inline(always)]
     pub(in crate::view) fn has_marker(self) -> bool {
-        (self.0 >> Self::CONFLICT_SHIFT) != 0
+        self.is_placeholder() || (self.0 >> Self::CONFLICT_SHIFT) != 0
     }
 
     #[inline(always)]
@@ -499,17 +719,17 @@ impl ResolvedOutputGutterRow {
 
     #[inline(always)]
     pub(in crate::view) fn is_start(self) -> bool {
-        (self.0 & Self::IS_START_FLAG) != 0
+        self.is_unmarked_placeholder() || (self.0 & Self::IS_START_FLAG) != 0
     }
 
     #[inline(always)]
     pub(in crate::view) fn is_end(self) -> bool {
-        (self.0 & Self::IS_END_FLAG) != 0
+        self.is_unmarked_placeholder() || (self.0 & Self::IS_END_FLAG) != 0
     }
 
     #[inline(always)]
     pub(in crate::view) fn unresolved(self) -> bool {
-        (self.0 & Self::UNRESOLVED_FLAG) != 0
+        self.is_placeholder() || (self.0 & Self::UNRESOLVED_FLAG) != 0
     }
 
     #[inline(always)]
@@ -628,13 +848,6 @@ pub(crate) const BLOCK_LOCAL_DIFF_CONTEXT_LINES: usize = 3;
 ///
 /// Bootstrap should stay bounded instead of diffing the entire block eagerly.
 pub(crate) const LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES: usize = 20_000;
-/// Above this merged-output line count the resolved output stays in read-only
-/// streamed mode instead of materializing the whole text into the editable
-/// `TextInput` buffer — the perf guard for whole-file conflicts. Sits above
-/// [`LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES`] (a large-but-editable output still
-/// materializes) and below the whole-file streamed fixtures at `+ 1_000`.
-pub(crate) const RESOLVED_OUTPUT_EDITABLE_MAX_LINES: usize =
-    LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES + 500;
 /// Head/tail preview rows kept for very large conflict blocks during bootstrap.
 #[cfg(any(test, feature = "benchmarks"))]
 pub(crate) const LARGE_CONFLICT_BLOCK_PREVIEW_LINES: usize = 128;
@@ -731,33 +944,84 @@ pub fn format_autosolve_trace_summary(
     }
 }
 
-/// Build the one-shot toast message pushed when a conflict file's resolver
-/// opens fresh (kdiff3-style open summary: total / auto-solved / remaining).
-pub fn format_open_summary_toast(
-    total: usize,
-    auto_solved: usize,
-    resolved: usize,
-) -> Option<String> {
-    if total == 0 {
-        return None;
-    }
-    let auto_solved = auto_solved.min(total);
-    let resolved = resolved.min(total);
-    let remaining = total.saturating_sub(resolved);
-    let noun = if total == 1 { "conflict" } else { "conflicts" };
-    Some(format!(
-        "{total} {noun}: {auto_solved} auto-solved, {remaining} remaining"
-    ))
+/// KDiff3-style accounting for a merge session.
+///
+/// Plan-backed sessions count every block classified as a conflict or delta,
+/// not just the subset that still needs a user decision. The whitespace count
+/// is optional because marker-only fallback sessions do not have KDiff3's
+/// exact aligned-row classification available.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct ConflictSummaryCounts {
+    pub total: usize,
+    pub auto_solved: usize,
+    pub unsolved: usize,
+    pub whitespace_conflicts: Option<usize>,
 }
 
-/// Total, auto-solved, and resolved region counts for the open summary.
-/// Counts come from the session rather than rendered blocks because a custom
-/// manual/auto result may materialize as plain text and disappear from the
-/// block projection.
+impl ConflictSummaryCounts {
+    fn normalized(self) -> Self {
+        let unsolved = self.unsolved.min(self.total);
+        Self {
+            auto_solved: self.auto_solved.min(self.total.saturating_sub(unsolved)),
+            unsolved,
+            whitespace_conflicts: self.whitespace_conflicts.map(|count| count.min(self.total)),
+            ..self
+        }
+    }
+}
+
+/// Format the shared total / auto-solved / unsolved report used by the toast
+/// and resolver status bar.
+pub fn format_conflict_summary(counts: ConflictSummaryCounts) -> String {
+    let counts = counts.normalized();
+    format!(
+        "Total {} / auto-solved {} / unsolved {}",
+        counts.total, counts.auto_solved, counts.unsolved
+    )
+}
+
+/// Build the one-shot toast message pushed when a conflict file's resolver
+/// opens fresh.
+pub fn format_open_summary_toast(counts: ConflictSummaryCounts) -> Option<String> {
+    if counts.total == 0 {
+        return None;
+    }
+    Some(format_conflict_summary(counts))
+}
+
+/// Count a session using KDiff3's conflict-reporting convention.
+///
+/// With a merge plan, `total` is every stable conflict-or-delta block,
+/// `unsolved` is the currently unresolved subset, and `auto_solved` is their
+/// difference. Marker-only sessions retain region-based fallback accounting.
 pub fn conflict_session_summary_counts(
     session: &gitcomet_core::conflict_session::ConflictSession,
-) -> (usize, usize, usize) {
+) -> ConflictSummaryCounts {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    if let Some(plan) = session.merge_plan.as_ref() {
+        let mut total = 0usize;
+        let mut unsolved = 0usize;
+        let mut whitespace_conflicts = 0usize;
+        for block in plan
+            .blocks
+            .iter()
+            .filter(|block| block.original_conflict || block.is_delta)
+        {
+            total += 1;
+            unsolved += usize::from(!block.is_resolved());
+            // KDiff3's status line reports the *unsolved* whitespace subset
+            // (`getNumberOfUnsolvedConflicts(&wsc)`), so the count falls as the
+            // user picks sides for them.
+            whitespace_conflicts += usize::from(block.whitespace_conflict && !block.is_resolved());
+        }
+        return ConflictSummaryCounts {
+            total,
+            auto_solved: total.saturating_sub(unsolved),
+            unsolved,
+            whitespace_conflicts: Some(whitespace_conflicts),
+        };
+    }
 
     let auto_solved = session
         .regions
@@ -769,7 +1033,12 @@ pub fn conflict_session_summary_counts(
             )
         })
         .count();
-    (session.total_regions(), auto_solved, session.solved_count())
+    ConflictSummaryCounts {
+        total: session.total_regions(),
+        auto_solved,
+        unsolved: session.unsolved_count(),
+        whitespace_conflicts: None,
+    }
 }
 
 /// Summarize the on-open autosolve pass from session region resolutions.
@@ -863,8 +1132,9 @@ pub fn parse_conflict_markers_shared(text: Arc<str>) -> Vec<ConflictSegment> {
                         .map(|range| ConflictText::shared_slice(Arc::clone(&text), range)),
                     ours: ConflictText::shared_slice(Arc::clone(&text), block.ours),
                     theirs: ConflictText::shared_slice(Arc::clone(&text), block.theirs),
-                    choice: ConflictChoice::Ours,
+                    choice: ConflictChoice::empty(),
                     resolved: false,
+                    whitespace_only: false,
                 })
             }
         })
@@ -899,6 +1169,9 @@ fn append_text_segment(segments: &mut Vec<ConflictSegment>, text: impl Into<Conf
 }
 
 fn choice_for_resolved_content(block: &ConflictBlock, content: &str) -> Option<ConflictChoice> {
+    if !block.choice.is_empty() && content_matches_block_choice(block, content) {
+        return Some(block.choice);
+    }
     if content == block.ours {
         return Some(ConflictChoice::Ours);
     }
@@ -915,54 +1188,228 @@ fn choice_for_resolved_content(block: &ConflictBlock, content: &str) -> Option<C
 }
 
 fn content_matches_block_choice(block: &ConflictBlock, content: &str) -> bool {
-    match block.choice {
-        ConflictChoice::Base => block.base.as_deref().is_some_and(|base| content == base),
-        ConflictChoice::Ours => content == block.ours,
-        ConflictChoice::Theirs => content == block.theirs,
-        ConflictChoice::Both => content
-            .strip_prefix(block.ours.as_str())
-            .is_some_and(|rest| rest == block.theirs),
+    use gitcomet_core::conflict_output::ConflictOutputSource;
+
+    let mut selected = String::new();
+    for source in block.choice.iter() {
+        match source {
+            ConflictOutputSource::Base => {
+                let Some(base) = block.base.as_deref() else {
+                    return false;
+                };
+                selected.push_str(base);
+            }
+            ConflictOutputSource::Ours => selected.push_str(&block.ours),
+            ConflictOutputSource::Theirs => selected.push_str(&block.theirs),
+        }
+    }
+    selected == content
+}
+
+fn resolution_for_choice(
+    choice: ConflictChoice,
+    has_base: bool,
+) -> gitcomet_core::conflict_session::ConflictRegionResolution {
+    use gitcomet_core::conflict_output::ConflictOutputSource;
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+    use gitcomet_core::merge::{MergeSource, OrderedSelection};
+
+    let selection = OrderedSelection::from_sources(choice.iter().filter_map(|source| {
+        match (has_base, source) {
+            (true, ConflictOutputSource::Base) => Some(MergeSource::A),
+            (true, ConflictOutputSource::Ours) => Some(MergeSource::B),
+            (true, ConflictOutputSource::Theirs) => Some(MergeSource::C),
+            (false, ConflictOutputSource::Base) => None,
+            (false, ConflictOutputSource::Ours) => Some(MergeSource::A),
+            (false, ConflictOutputSource::Theirs) => Some(MergeSource::B),
+        }
+    }));
+    if selection.is_empty() {
+        ConflictRegionResolution::Unresolved
+    } else {
+        ConflictRegionResolution::Sources(selection)
     }
 }
 
-fn extract_block_contents_from_output(
-    segments: &[ConflictSegment],
-    output_text: &str,
-) -> Option<Vec<String>> {
-    let mut cursor = 0usize;
-    let mut block_contents = Vec::new();
+pub(in crate::view) fn choice_for_selection(
+    selection: &gitcomet_core::merge::OrderedSelection,
+    has_base: bool,
+) -> Option<ConflictChoice> {
+    use gitcomet_core::conflict_output::{ConflictOutputChoice, ConflictOutputSource};
+    use gitcomet_core::merge::MergeSource;
 
-    for (seg_ix, seg) in segments.iter().enumerate() {
-        match seg {
-            ConflictSegment::Text(text) => {
-                let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(text.as_str()) {
-                    return None;
+    let mut choice = ConflictOutputChoice::empty();
+    for source in selection.iter() {
+        let output_source = match (has_base, source) {
+            (true, MergeSource::A) => ConflictOutputSource::Base,
+            (true, MergeSource::B) => ConflictOutputSource::Ours,
+            (true, MergeSource::C) => ConflictOutputSource::Theirs,
+            (false, MergeSource::A) => ConflictOutputSource::Ours,
+            (false, MergeSource::B) => ConflictOutputSource::Theirs,
+            (false, MergeSource::C) => return None,
+        };
+        choice.append(output_source);
+    }
+    Some(choice)
+}
+
+/// Byte ownership for the editable output of each displayed conflict block.
+///
+/// The editor text is authoritative; these ranges only decide which bytes
+/// belong to which conflict when deriving session resolutions.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(crate) struct ResolvedOutputBlockMap {
+    ranges: Vec<Range<usize>>,
+    text_len: usize,
+}
+
+impl ResolvedOutputBlockMap {
+    pub(in crate::view) fn from_segments(segments: &[ConflictSegment]) -> Self {
+        let mut ranges = Vec::with_capacity(conflict_count(segments));
+        let mut cursor = 0usize;
+        for segment in segments {
+            match segment {
+                ConflictSegment::Text(text) => {
+                    cursor = cursor.saturating_add(text.len());
                 }
-                cursor = cursor.saturating_add(text.len());
-            }
-            ConflictSegment::Block(_) => {
-                let next_anchor = segments[seg_ix + 1..].iter().find_map(|next| match next {
-                    ConflictSegment::Text(text) if !text.is_empty() => Some(text.as_str()),
-                    _ => None,
-                });
-                let end = match next_anchor {
-                    Some(anchor) => {
-                        let rel = output_text.get(cursor..)?.find(anchor)?;
-                        cursor.saturating_add(rel)
-                    }
-                    None => output_text.len(),
-                };
-                if end < cursor {
-                    return None;
+                ConflictSegment::Block(block) => {
+                    let start = cursor;
+                    cursor = cursor.saturating_add(editable_conflict_block_len(block));
+                    ranges.push(start..cursor);
                 }
-                block_contents.push(output_text[cursor..end].to_string());
-                cursor = end;
             }
+        }
+        Self {
+            ranges,
+            text_len: cursor,
         }
     }
 
-    (cursor == output_text.len()).then_some(block_contents)
+    pub(in crate::view) fn ranges(&self) -> &[Range<usize>] {
+        &self.ranges
+    }
+
+    pub(in crate::view) fn is_valid_for(
+        &self,
+        segments: &[ConflictSegment],
+        output_text: &(impl ResolvedOutputSource + ?Sized),
+    ) -> bool {
+        self.text_len == output_text.len()
+            && self.ranges.len() == conflict_count(segments)
+            && self.ranges.iter().all(|range| {
+                range.start <= range.end
+                    && range.end <= output_text.len()
+                    && output_text.is_char_boundary(range.start)
+                    && output_text.is_char_boundary(range.end)
+            })
+            && self
+                .ranges
+                .windows(2)
+                .all(|ranges| ranges[0].end <= ranges[1].start)
+    }
+
+    pub(in crate::view) fn block_slice<'a>(
+        &self,
+        segments: &[ConflictSegment],
+        output_text: &'a str,
+        block_index: usize,
+    ) -> Option<&'a str> {
+        self.is_valid_for(segments, output_text).then_some(())?;
+        output_text.get(self.ranges.get(block_index)?.clone())
+    }
+
+    fn owner_for_edit_start(&self, start: usize) -> Option<usize> {
+        self.ranges
+            .iter()
+            .position(|range| range.start <= start && start < range.end)
+            .or_else(|| {
+                self.ranges
+                    .iter()
+                    .position(|range| range.is_empty() && range.start == start)
+            })
+    }
+
+    pub(in crate::view) fn apply_edit_delta(
+        &mut self,
+        old_range: Range<usize>,
+        new_range: Range<usize>,
+    ) -> bool {
+        if old_range.start > old_range.end
+            || old_range.end > self.text_len
+            || new_range.start != old_range.start
+            || new_range.start > new_range.end
+        {
+            return false;
+        }
+
+        let owner = self.owner_for_edit_start(old_range.start);
+        let shift = new_range.len() as isize - old_range.len() as isize;
+        let shift_offset = |offset: usize| {
+            if shift >= 0 {
+                offset.saturating_add(shift as usize)
+            } else {
+                offset.saturating_sub((-shift) as usize)
+            }
+        };
+
+        for (block_index, range) in self.ranges.iter_mut().enumerate() {
+            let previous = range.clone();
+            if owner == Some(block_index) {
+                let start = if previous.start < old_range.start {
+                    previous.start
+                } else {
+                    old_range.start
+                };
+                let end = if previous.end > old_range.end {
+                    shift_offset(previous.end)
+                } else {
+                    new_range.end
+                };
+                *range = start..end.max(start);
+                continue;
+            }
+
+            if previous.end <= old_range.start {
+                continue;
+            }
+            if previous.start >= old_range.end {
+                *range = shift_offset(previous.start)..shift_offset(previous.end);
+                continue;
+            }
+
+            let keeps_left = previous.start < old_range.start;
+            let keeps_right = previous.end > old_range.end;
+            *range = match (keeps_left, keeps_right) {
+                (true, true) => previous.start..shift_offset(previous.end),
+                (true, false) => previous.start..old_range.start,
+                (false, true) => new_range.end..shift_offset(previous.end),
+                // A later block deleted by an edit owned by an earlier block
+                // collapses after the replacement, never into the owner's text.
+                (false, false) => new_range.end..new_range.end,
+            };
+        }
+
+        self.text_len = shift_offset(self.text_len);
+        self.ranges
+            .windows(2)
+            .all(|ranges| ranges[0].end <= ranges[1].start)
+            && self
+                .ranges
+                .iter()
+                .all(|range| range.start <= range.end && range.end <= self.text_len)
+    }
+
+    pub(in crate::view) fn apply_edit_deltas(
+        &mut self,
+        deltas: impl IntoIterator<Item = (Range<usize>, Range<usize>)>,
+    ) -> bool {
+        for (old_range, new_range) in deltas {
+            if !self.apply_edit_delta(old_range, new_range) {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 /// Derive per-region session resolution updates from the current resolved output.
@@ -972,6 +1419,7 @@ fn extract_block_contents_from_output(
 pub fn derive_region_resolution_updates_from_output(
     segments: &[ConflictSegment],
     block_region_indices: &[usize],
+    block_map: &ResolvedOutputBlockMap,
     output_text: &str,
 ) -> Option<
     Vec<(
@@ -981,31 +1429,35 @@ pub fn derive_region_resolution_updates_from_output(
 > {
     use gitcomet_core::conflict_session::ConflictRegionResolution as R;
 
-    let block_contents = extract_block_contents_from_output(segments, output_text)?;
-    let mut updates = Vec::with_capacity(block_contents.len());
+    if !block_map.is_valid_for(segments, output_text) {
+        return None;
+    }
+    let mut updates = Vec::with_capacity(block_map.ranges().len());
 
     let mut block_ix = 0usize;
     for seg in segments {
         let ConflictSegment::Block(block) = seg else {
             continue;
         };
-        let content = block_contents.get(block_ix)?;
+        let content = block_map.block_slice(segments, output_text, block_ix)?;
         let region_ix = block_region_indices
             .get(block_ix)
             .copied()
             .unwrap_or(block_ix);
 
-        let resolution = if !block.resolved && content_matches_block_choice(block, content) {
+        let resolution = if !block.resolved
+            && (content.contains(UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER)
+                || (!block.choice.is_empty() && content_matches_block_choice(block, content)))
+        {
             R::Unresolved
+        } else if content.is_empty() && block.choice.is_empty() {
+            // Empty bytes alone cannot prove that an empty source was chosen.
+            // Only the explicit block choice below carries that intent.
+            R::ManualEdit(String::new())
         } else if let Some(choice) = choice_for_resolved_content(block, content) {
-            match choice {
-                ConflictChoice::Base => R::PickBase,
-                ConflictChoice::Ours => R::PickOurs,
-                ConflictChoice::Theirs => R::PickTheirs,
-                ConflictChoice::Both => R::PickBoth,
-            }
+            resolution_for_choice(choice, block.base.is_some())
         } else {
-            R::ManualEdit(content.clone())
+            R::ManualEdit(content.to_string())
         };
         updates.push((region_ix, resolution));
         block_ix += 1;
@@ -1041,12 +1493,7 @@ pub fn derive_region_resolution_updates_from_segments(
         let resolution = if !block.resolved {
             R::Unresolved
         } else {
-            match block.choice {
-                ConflictChoice::Base => R::PickBase,
-                ConflictChoice::Ours => R::PickOurs,
-                ConflictChoice::Theirs => R::PickTheirs,
-                ConflictChoice::Both => R::PickBoth,
-            }
+            resolution_for_choice(block.choice, block.base.is_some())
         };
         updates.push((region_ix, resolution));
         block_ix += 1;
@@ -1061,6 +1508,77 @@ pub struct SessionRegionApplyResult {
     pub applied_regions: usize,
     /// Mapping from visible block index -> source `ConflictSession` region index.
     pub block_region_indices: Vec<usize>,
+}
+
+/// Result of applying ConflictRegion choices to a plan projection while
+/// retaining exact semantic block identities for every visible marker.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PlanSessionRegionApplyResult {
+    pub block_region_indices: Vec<usize>,
+    pub block_plan_indices: Vec<usize>,
+}
+
+/// Apply marker-backed region choices to a projection whose marker blocks are
+/// identified by merge-plan block index.
+///
+/// A plan-only automatic delta can become unresolved after a source toggle.
+/// Such a block has no ConflictRegion, so it is retained untouched and given a
+/// synthetic, out-of-range grouping key while its plan identity remains exact.
+pub fn apply_plan_session_region_resolutions_with_index_map(
+    segments: &mut Vec<ConflictSegment>,
+    session: &gitcomet_core::conflict_session::ConflictSession,
+    projected_plan_blocks: &[usize],
+) -> Option<PlanSessionRegionApplyResult> {
+    if conflict_count(segments) != projected_plan_blocks.len() {
+        return None;
+    }
+
+    let mut marker_index = 0usize;
+    let mut block_region_indices = Vec::new();
+    let mut block_plan_indices = Vec::new();
+    let mut synced = Vec::with_capacity(segments.len());
+    for segment in segments.drain(..) {
+        match segment {
+            ConflictSegment::Text(text) => append_text_segment(&mut synced, text),
+            ConflictSegment::Block(mut block) => {
+                let block_index = projected_plan_blocks[marker_index];
+                marker_index += 1;
+                // Only the plan applies kdiff3's per-row whitespace rule, so
+                // carry its verdict onto the display block here rather than
+                // re-deriving a weaker one from the block text.
+                block.whitespace_only = session
+                    .merge_plan
+                    .as_ref()
+                    .and_then(|plan| plan.blocks.get(block_index))
+                    .is_some_and(|plan_block| plan_block.whitespace_conflict);
+                let region_index = session
+                    .region_plan_blocks
+                    .iter()
+                    .position(|candidate| *candidate == block_index);
+                if let Some(region_index) = region_index
+                    && let Some(region) = session.regions.get(region_index)
+                    && let Some(materialized) =
+                        apply_region_resolution_to_block(&mut block, &region.resolution)
+                {
+                    append_text_segment(&mut synced, materialized);
+                    continue;
+                }
+
+                synced.push(ConflictSegment::Block(block));
+                block_plan_indices.push(block_index);
+                block_region_indices.push(region_index.unwrap_or_else(|| {
+                    // Real regions occupy 0..len. Plan-only keys start at len
+                    // and stay unique by semantic block index.
+                    session.regions.len().saturating_add(block_index)
+                }));
+            }
+        }
+    }
+    *segments = synced;
+    Some(PlanSessionRegionApplyResult {
+        block_region_indices,
+        block_plan_indices,
+    })
 }
 
 /// Build a default visible block -> region index mapping by position.
@@ -1084,6 +1602,7 @@ fn apply_region_resolution_to_block(
 
     match resolution {
         R::Unresolved => {
+            block.choice = ConflictChoice::empty();
             block.resolved = false;
             None
         }
@@ -1092,6 +1611,7 @@ fn apply_region_resolution_to_block(
                 block.choice = ConflictChoice::Base;
                 block.resolved = true;
             } else {
+                block.choice = ConflictChoice::empty();
                 block.resolved = false;
             }
             None
@@ -1109,6 +1629,16 @@ fn apply_region_resolution_to_block(
         R::PickBoth => {
             block.choice = ConflictChoice::Both;
             block.resolved = true;
+            None
+        }
+        R::Sources(selection) => {
+            if let Some(choice) = choice_for_selection(selection, block.base.is_some()) {
+                block.choice = choice;
+                block.resolved = !choice.is_empty();
+            } else {
+                block.choice = ConflictChoice::empty();
+                block.resolved = false;
+            }
             None
         }
         R::ManualEdit(text) => {
@@ -1238,6 +1768,125 @@ pub fn apply_session_region_resolutions_with_index_map(
     }
 }
 
+pub(in crate::view) fn conflict_nav_region_aligned_ranges(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+    fallback_ranges: &[Range<usize>],
+) -> Vec<Option<Range<usize>>> {
+    if let Some(plan) = session.merge_plan.as_ref() {
+        return (0..session.regions.len())
+            .map(|region_index| {
+                let block_index = *session.region_plan_blocks.get(region_index)?;
+                plan.blocks.get(block_index).map(|block| block.rows.clone())
+            })
+            .collect();
+    }
+
+    (0..session.regions.len())
+        .map(|region_index| fallback_ranges.get(region_index).cloned())
+        .collect()
+}
+
+pub(in crate::view) fn build_conflict_nav_targets(
+    session: Option<&gitcomet_core::conflict_session::ConflictSession>,
+    region_aligned_ranges: &[Option<Range<usize>>],
+    display_region_indices: &[usize],
+    display_aligned_ranges: &[Option<Range<usize>>],
+    segments: &[ConflictSegment],
+) -> Vec<ConflictNavTarget> {
+    let display_resolved: Vec<bool> = segments
+        .iter()
+        .filter_map(|segment| match segment {
+            ConflictSegment::Block(block) => Some(block.resolved),
+            ConflictSegment::Text(_) => None,
+        })
+        .collect();
+    let display_for_region = |region_index: usize| {
+        display_region_indices
+            .iter()
+            .position(|candidate| *candidate == region_index)
+    };
+
+    if let Some(session) = session {
+        if let Some(plan) = session.merge_plan.as_ref() {
+            let mut targets = Vec::new();
+            for (block_index, block) in plan.blocks.iter().enumerate() {
+                if !block.is_delta && !block.original_conflict {
+                    continue;
+                }
+                let region_index = session
+                    .region_plan_blocks
+                    .iter()
+                    .position(|candidate| *candidate == block_index);
+                // `display_conflict_index` addresses a *rendered marker block*
+                // — it becomes `active_conflict`, which the rest of the UI uses
+                // as `conflict_ix`. Only the region mapping can produce it: a
+                // plan block's position among the plan's blocks is a different
+                // index space, and blocks that render no marker (automatically
+                // selected deltas) are absent from the displayed space entirely.
+                let display_conflict_index = region_index.and_then(display_for_region);
+                // Prefer the displayed block's own verdict where the block is
+                // rendered, since an in-progress edit can resolve a marker
+                // ahead of the plan; otherwise the plan block is the authority,
+                // which is what makes a plan-only delta navigable.
+                let unresolved = display_conflict_index
+                    .and_then(|index| display_resolved.get(index))
+                    .map_or_else(|| !block.is_resolved(), |resolved| !resolved);
+                targets.push(ConflictNavTarget {
+                    id: ConflictNavTargetId::PlanBlock(block.id),
+                    order: targets.len(),
+                    aligned_rows: Some(block.rows.clone()),
+                    region_index,
+                    display_conflict_index,
+                    is_delta: block.is_delta,
+                    original_conflict: block.original_conflict,
+                    unresolved,
+                });
+            }
+            return targets;
+        }
+
+        return session
+            .regions
+            .iter()
+            .enumerate()
+            .map(|(region_index, region)| {
+                let display_conflict_index = display_for_region(region_index);
+                let unresolved = display_conflict_index
+                    .and_then(|index| display_resolved.get(index))
+                    .map_or_else(|| !region.resolution.is_resolved(), |resolved| !resolved);
+                ConflictNavTarget {
+                    id: ConflictNavTargetId::Region(region_index),
+                    order: region_index,
+                    aligned_rows: region_aligned_ranges.get(region_index).cloned().flatten(),
+                    region_index: Some(region_index),
+                    display_conflict_index,
+                    is_delta: true,
+                    original_conflict: true,
+                    unresolved,
+                }
+            })
+            .collect();
+    }
+
+    display_resolved
+        .into_iter()
+        .enumerate()
+        .map(|(display_conflict_index, resolved)| ConflictNavTarget {
+            id: ConflictNavTargetId::DisplayBlock(display_conflict_index),
+            order: display_conflict_index,
+            aligned_rows: display_aligned_ranges
+                .get(display_conflict_index)
+                .cloned()
+                .flatten(),
+            region_index: display_region_indices.get(display_conflict_index).copied(),
+            display_conflict_index: Some(display_conflict_index),
+            is_delta: true,
+            original_conflict: true,
+            unresolved: !resolved,
+        })
+        .collect()
+}
+
 pub fn conflict_count(segments: &[ConflictSegment]) -> usize {
     segments
         .iter()
@@ -1273,6 +1922,7 @@ pub fn effective_conflict_counts(
 }
 
 /// Return conflict indices for currently unresolved blocks in queue order.
+#[cfg(test)]
 pub fn unresolved_conflict_indices(segments: &[ConflictSegment]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut conflict_ix = 0usize;
@@ -1319,6 +1969,7 @@ pub fn apply_choice_to_unresolved_segments(
 
 /// Find the next unresolved conflict index after `current`.
 /// Wraps around to the first unresolved conflict.
+#[cfg(test)]
 pub fn next_unresolved_conflict_index(
     segments: &[ConflictSegment],
     current: usize,
@@ -1562,8 +2213,14 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
                                     base: Some(base.into()),
                                     ours: ours.into(),
                                     theirs: theirs.into(),
-                                    choice: ConflictChoice::Ours,
+                                    choice: ConflictChoice::empty(),
                                     resolved: false,
+                                    // Every row of a whitespace-only block is
+                                    // whitespace-only, so each subchunk of it
+                                    // is too. kdiff3 clears the flag the same
+                                    // way when a split lands a real change in
+                                    // a block (MergeEditLine.h join/append).
+                                    whitespace_only: block.whitespace_only,
                                 }));
                                 new_block_region_indices.push(region_ix);
                             }
@@ -1585,10 +2242,125 @@ pub fn auto_resolve_segments_pass2_with_region_indices(
     split_count
 }
 
-pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
-    use gitcomet_core::conflict_output::GenerateResolvedTextOptions;
+/// KDiff3-compatible text shown for a merge block with no selected sources.
+pub(in crate::view) const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER: &str = "<Merge Conflict>";
 
-    generate_resolved_text_with_options(segments, GenerateResolvedTextOptions::default())
+/// Same, for a block whose sides differ only in whitespace.
+pub(in crate::view) const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER: &str =
+    "<Merge Conflict (Whitespace only)>";
+
+const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_LF: &str = "<Merge Conflict>\n";
+const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CRLF: &str = "<Merge Conflict>\r\n";
+const UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CR: &str = "<Merge Conflict>\r";
+
+const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_LF: &str = "<Merge Conflict (Whitespace only)>\n";
+const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CRLF: &str =
+    "<Merge Conflict (Whitespace only)>\r\n";
+const UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CR: &str = "<Merge Conflict (Whitespace only)>\r";
+
+/// Whether one output line is an unresolved-conflict placeholder row.
+///
+/// The resolved output is a text document, so a placeholder row is identified
+/// by its own content — the same fact the reader sees. This keeps the gutter
+/// marker in step with the text however the marker array was built, mirroring
+/// how kdiff3 derives both from a single `srcSelect`.
+pub(in crate::view) fn line_is_unresolved_conflict_placeholder(line: &str) -> bool {
+    let line = line.trim_end_matches(['\r', '\n']);
+    line == UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER
+        || line == UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER
+}
+
+/// Whether this block renders as a placeholder row rather than as text.
+///
+/// An unresolved block with no side picked has nothing to show, so the output
+/// carries one `<Merge Conflict>` row in its place.
+fn uses_unresolved_merge_conflict_placeholder(block: &ConflictBlock) -> bool {
+    !block.resolved && block.choice.is_empty()
+}
+
+/// The single `<Merge Conflict>` row an unresolved block occupies, kdiff3's
+/// `MergeBlockList::buildFromDiff3` (one `MergeEditLine` per block).
+///
+/// A block that spans several aligned source rows still collapses to this one
+/// row, so the output's line numbers count the output's own lines rather than
+/// the source columns'.
+fn unresolved_merge_conflict_placeholder_text(block: &ConflictBlock) -> &'static str {
+    use gitcomet_core::conflict_output::{
+        ConflictOutputBlockRef, detect_conflict_block_line_ending,
+    };
+
+    let line_ending = detect_conflict_block_line_ending(ConflictOutputBlockRef {
+        base: block.base.as_deref(),
+        ours: &block.ours,
+        theirs: &block.theirs,
+        choice: block.choice,
+        resolved: block.resolved,
+    });
+    // kdiff3 mergeresultwindow.cpp: a block whose sides differ only in
+    // whitespace names itself, so the trivial ones can be told apart from real
+    // clashes without opening them.
+    if block.whitespace_only {
+        return match line_ending {
+            "\r\n" => UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CRLF,
+            "\r" => UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_CR,
+            _ => UNRESOLVED_WHITESPACE_CONFLICT_PLACEHOLDER_LF,
+        };
+    }
+    match line_ending {
+        "\r\n" => UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CRLF,
+        "\r" => UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_CR,
+        _ => UNRESOLVED_MERGE_CONFLICT_PLACEHOLDER_LF,
+    }
+}
+
+fn editable_conflict_block_len(block: &ConflictBlock) -> usize {
+    use gitcomet_core::conflict_output::ConflictOutputSource;
+
+    if uses_unresolved_merge_conflict_placeholder(block) {
+        return unresolved_merge_conflict_placeholder_text(block).len();
+    }
+    block.choice.iter().fold(0usize, |len, source| {
+        len.saturating_add(match source {
+            ConflictOutputSource::Base => block.base.as_ref().map_or(0, ConflictText::len),
+            ConflictOutputSource::Ours => block.ours.len(),
+            ConflictOutputSource::Theirs => block.theirs.len(),
+        })
+    })
+}
+
+/// Generate the editable merge-output projection.
+///
+/// A truly unresolved block has no selected sources and occupies one named
+/// KDiff3-style placeholder row, however many aligned rows it spans in the
+/// source columns. Resolved blocks retain their ordered source selection, while
+/// marker-preserving save/export use [`generate_resolved_text_with_options`]
+/// directly.
+pub fn generate_resolved_text(segments: &[ConflictSegment]) -> String {
+    use gitcomet_core::conflict_output::ConflictOutputSource;
+
+    let mut output = String::new();
+    for segment in segments {
+        match segment {
+            ConflictSegment::Text(text) => output.push_str(text),
+            ConflictSegment::Block(block) if uses_unresolved_merge_conflict_placeholder(block) => {
+                output.push_str(unresolved_merge_conflict_placeholder_text(block));
+            }
+            ConflictSegment::Block(block) => {
+                for source in block.choice.iter() {
+                    match source {
+                        ConflictOutputSource::Base => {
+                            if let Some(base) = block.base.as_deref() {
+                                output.push_str(base);
+                            }
+                        }
+                        ConflictOutputSource::Ours => output.push_str(&block.ours),
+                        ConflictOutputSource::Theirs => output.push_str(&block.theirs),
+                    }
+                }
+            }
+        }
+    }
+    output
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1640,18 +2412,9 @@ pub fn generate_resolved_text_with_options(
     options: gitcomet_core::conflict_output::GenerateResolvedTextOptions<'_>,
 ) -> String {
     use gitcomet_core::conflict_output::{
-        ConflictOutputBlockRef, ConflictOutputChoice, ConflictOutputSegmentRef,
+        ConflictOutputBlockRef, ConflictOutputSegmentRef,
         generate_resolved_text as generate_core_resolved_text,
     };
-
-    fn map_choice(choice: ConflictChoice) -> ConflictOutputChoice {
-        match choice {
-            ConflictChoice::Base => ConflictOutputChoice::Base,
-            ConflictChoice::Ours => ConflictOutputChoice::Ours,
-            ConflictChoice::Theirs => ConflictOutputChoice::Theirs,
-            ConflictChoice::Both => ConflictOutputChoice::Both,
-        }
-    }
 
     let core_segments: Vec<ConflictOutputSegmentRef<'_>> = segments
         .iter()
@@ -1662,7 +2425,7 @@ pub fn generate_resolved_text_with_options(
                     base: block.base.as_deref(),
                     ours: &block.ours,
                     theirs: &block.theirs,
-                    choice: map_choice(block.choice),
+                    choice: block.choice,
                     resolved: block.resolved,
                 })
             }
@@ -1678,6 +2441,30 @@ enum ResolvedOutputFragmentSource {
     BlockBase { segment_ix: usize },
     BlockOurs { segment_ix: usize },
     BlockTheirs { segment_ix: usize },
+    UnresolvedPlaceholder { text: &'static str },
+}
+
+fn resolved_output_block_source_fragment(
+    segment_ix: usize,
+    block: &ConflictBlock,
+    source: gitcomet_core::conflict_output::ConflictOutputSource,
+) -> Option<(ResolvedOutputFragmentSource, &str)> {
+    use gitcomet_core::conflict_output::ConflictOutputSource;
+
+    match source {
+        ConflictOutputSource::Base => block
+            .base
+            .as_deref()
+            .map(|base| (ResolvedOutputFragmentSource::BlockBase { segment_ix }, base)),
+        ConflictOutputSource::Ours => Some((
+            ResolvedOutputFragmentSource::BlockOurs { segment_ix },
+            block.ours.as_str(),
+        )),
+        ConflictOutputSource::Theirs => Some((
+            ResolvedOutputFragmentSource::BlockTheirs { segment_ix },
+            block.theirs.as_str(),
+        )),
+    }
 }
 
 const RESOLVED_OUTPUT_SPARSE_LINE_INDEX_MIN_LINES: usize = LARGE_CONFLICT_BLOCK_DIFF_MAX_LINES;
@@ -1783,6 +2570,7 @@ impl ResolvedOutputFragment {
                     _ => None,
                 }
             }
+            ResolvedOutputFragmentSource::UnresolvedPlaceholder { text } => Some(text),
         }
     }
 
@@ -2220,15 +3008,26 @@ impl ResolvedOutputProjection {
             .iter()
             .map(|segment| match segment {
                 ConflictSegment::Text(text) => usize::from(!text.is_empty()),
-                ConflictSegment::Block(block) => match block.choice {
-                    ConflictChoice::Base => {
-                        usize::from(block.base.as_ref().is_some_and(|base| !base.is_empty()))
-                    }
-                    ConflictChoice::Ours => usize::from(!block.ours.is_empty()),
-                    ConflictChoice::Theirs => usize::from(!block.theirs.is_empty()),
-                    ConflictChoice::Both => usize::from(!block.ours.is_empty())
-                        .saturating_add(usize::from(!block.theirs.is_empty())),
-                },
+                ConflictSegment::Block(block)
+                    if uses_unresolved_merge_conflict_placeholder(block) =>
+                {
+                    1
+                }
+                ConflictSegment::Block(block) => block
+                    .choice
+                    .iter()
+                    .filter(|source| match source {
+                        gitcomet_core::conflict_output::ConflictOutputSource::Base => {
+                            block.base.as_ref().is_some_and(|base| !base.is_empty())
+                        }
+                        gitcomet_core::conflict_output::ConflictOutputSource::Ours => {
+                            !block.ours.is_empty()
+                        }
+                        gitcomet_core::conflict_output::ConflictOutputSource::Theirs => {
+                            !block.theirs.is_empty()
+                        }
+                    })
+                    .count(),
             })
             .sum();
         let mut conflict_ranges: Vec<Option<std::ops::Range<usize>>> = vec![None; conflict_total];
@@ -2362,40 +3161,24 @@ impl ResolvedOutputProjection {
                         *anchor = visible_line;
                     }
 
-                    let fragment_sources = match block.choice {
-                        ConflictChoice::Base => [
-                            block.base.as_deref().map(|base| {
-                                (ResolvedOutputFragmentSource::BlockBase { segment_ix }, base)
-                            }),
-                            None,
-                        ],
-                        ConflictChoice::Ours => [
-                            Some((
-                                ResolvedOutputFragmentSource::BlockOurs { segment_ix },
-                                block.ours.as_str(),
-                            )),
-                            None,
-                        ],
-                        ConflictChoice::Theirs => [
-                            Some((
-                                ResolvedOutputFragmentSource::BlockTheirs { segment_ix },
-                                block.theirs.as_str(),
-                            )),
-                            None,
-                        ],
-                        ConflictChoice::Both => [
-                            Some((
-                                ResolvedOutputFragmentSource::BlockOurs { segment_ix },
-                                block.ours.as_str(),
-                            )),
-                            Some((
-                                ResolvedOutputFragmentSource::BlockTheirs { segment_ix },
-                                block.theirs.as_str(),
-                            )),
-                        ],
-                    };
+                    let fragment_sources: Vec<_> =
+                        if uses_unresolved_merge_conflict_placeholder(block) {
+                            let text = unresolved_merge_conflict_placeholder_text(block);
+                            vec![(
+                                ResolvedOutputFragmentSource::UnresolvedPlaceholder { text },
+                                text,
+                            )]
+                        } else {
+                            block
+                                .choice
+                                .iter()
+                                .filter_map(|source| {
+                                    resolved_output_block_source_fragment(segment_ix, block, source)
+                                })
+                                .collect()
+                        };
 
-                    for (source, text) in fragment_sources.into_iter().flatten() {
+                    for (source, text) in fragment_sources {
                         let Some(fragment_ix) = push_fragment(&mut fragments, source, text) else {
                             continue;
                         };
@@ -2769,29 +3552,12 @@ fn should_use_large_conflict_block_preview(block: &ConflictBlock) -> bool {
 /// large ones only when each side still shares a reasonable fraction of its
 /// lines with base.
 pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) -> bool {
-    const ALWAYS_ALIGN_TOTAL_LINES: usize = 2_000;
-    const MAX_TOTAL_LINES: usize = 100_000;
-
-    let base_count = base.lines().count();
-    let ours_count = ours.lines().count();
-    let theirs_count = theirs.lines().count();
-    let total = base_count + ours_count + theirs_count;
-    if total > MAX_TOTAL_LINES {
-        return false;
-    }
-    if total <= ALWAYS_ALIGN_TOTAL_LINES {
-        return true;
-    }
-
-    let base_set: std::collections::HashSet<&str> = base.lines().collect();
-    let shared_enough = |side: &str, side_count: usize| {
-        if side_count == 0 {
-            return true;
-        }
-        let common = side.lines().filter(|line| base_set.contains(line)).count();
-        common.saturating_mul(4) >= side_count
-    };
-    shared_enough(ours, ours_count) && shared_enough(theirs, theirs_count)
+    gitcomet_core::merge::interactive_merge_plan_is_practical(
+        Some(base),
+        ours,
+        theirs,
+        gitcomet_core::merge::InteractiveMergePlanBudget::default(),
+    )
 }
 
 /// Whether computing the direct two-way alignment is practical (section 30 aligned
@@ -2799,28 +3565,12 @@ pub fn three_way_alignment_is_practical(base: &str, ours: &str, theirs: &str) ->
 /// [`three_way_alignment_is_practical`], with ours standing in for the base
 /// as the similarity anchor.
 pub fn two_way_alignment_is_practical(ours: &str, theirs: &str) -> bool {
-    const ALWAYS_ALIGN_TOTAL_LINES: usize = 2_000;
-    const MAX_TOTAL_LINES: usize = 100_000;
-
-    let ours_count = ours.lines().count();
-    let theirs_count = theirs.lines().count();
-    let total = ours_count + theirs_count;
-    if total > MAX_TOTAL_LINES {
-        return false;
-    }
-    if total <= ALWAYS_ALIGN_TOTAL_LINES {
-        return true;
-    }
-
-    if theirs_count == 0 {
-        return true;
-    }
-    let ours_set: std::collections::HashSet<&str> = ours.lines().collect();
-    let common = theirs
-        .lines()
-        .filter(|line| ours_set.contains(line))
-        .count();
-    common.saturating_mul(4) >= theirs_count
+    gitcomet_core::merge::interactive_merge_plan_is_practical(
+        None,
+        ours,
+        theirs,
+        gitcomet_core::merge::InteractiveMergePlanBudget::default(),
+    )
 }
 
 pub fn select_conflict_rendering_mode(
@@ -3584,6 +4334,80 @@ pub struct ThreeWayConflictMaps {
     pub conflict_resolved: Vec<bool>,
 }
 
+/// Project marker-region ranges into the shared aligned source-row space.
+///
+/// This is the legacy/current-only fallback used when a merge plan is not
+/// available. Callers may retain the result before resolved regions are
+/// materialized into plain text so every original region remains navigable.
+pub(in crate::view) fn project_conflict_ranges_to_aligned_rows(
+    segments: &[ConflictSegment],
+    aligned: &ThreeWayAlignedMap,
+    side_line_counts: [usize; 3],
+) -> Vec<Range<usize>> {
+    let maps = build_three_way_conflict_maps_without_line_maps(
+        segments,
+        side_line_counts[0],
+        side_line_counts[1],
+        side_line_counts[2],
+    );
+    let block_count = maps.conflict_ranges[1].len();
+    let mut aligned_ranges: Vec<Range<usize>> = Vec::with_capacity(block_count);
+    for block_ix in 0..block_count {
+        let mut start = usize::MAX;
+        let mut end = 0usize;
+        for side in 0..3 {
+            let side_range = &maps.conflict_ranges[side][block_ix];
+            if side_range.is_empty() {
+                continue;
+            }
+            let mapped = aligned.aligned_range_for_side_range(side, side_range.clone());
+            start = start.min(mapped.start);
+            end = end.max(mapped.end);
+        }
+        if start == usize::MAX {
+            start = end;
+        }
+        if let Some(previous) = aligned_ranges.last() {
+            start = start.max(previous.end);
+            end = end.max(start);
+        }
+        aligned_ranges.push(start..end);
+    }
+    aligned_ranges
+}
+
+/// Resolve visible marker blocks back to their exact aligned merge-plan rows.
+///
+/// Marker text is an output projection. Text between unresolved blocks can
+/// come from only one source, so advancing every source offset by that text's
+/// line count can merge adjacent conflict highlights or move later highlights
+/// past their real rows. Full text sessions retain the authoritative mapping
+/// from marker regions to merge-plan blocks; use it whenever it is available.
+pub(super) fn merge_plan_aligned_conflict_ranges(
+    session: &gitcomet_core::conflict_session::ConflictSession,
+    visible_region_indices: &[usize],
+    visible_plan_block_indices: &[usize],
+) -> Option<Vec<Range<usize>>> {
+    let plan = session.merge_plan.as_ref()?;
+    if !visible_plan_block_indices.is_empty() {
+        return visible_plan_block_indices
+            .iter()
+            .map(|block_index| {
+                plan.blocks
+                    .get(*block_index)
+                    .map(|block| block.rows.clone())
+            })
+            .collect();
+    }
+    visible_region_indices
+        .iter()
+        .map(|region_index| {
+            let block_index = *session.region_plan_blocks.get(*region_index)?;
+            plan.blocks.get(block_index).map(|block| block.rows.clone())
+        })
+        .collect()
+}
+
 /// Binary search on sorted, non-overlapping ranges to find which conflict a line belongs to.
 ///
 /// Returns `Some(conflict_index)` if the line falls within a range, `None` otherwise.
@@ -3893,6 +4717,7 @@ struct AlignedMapRun {
     rows: usize,
     starts: [usize; 3],
     lens: [usize; 3],
+    kind: gitcomet_core::merge::AlignedRunKind,
 }
 
 impl ThreeWayAlignedMap {
@@ -3907,6 +4732,7 @@ impl ThreeWayAlignedMap {
                 rows,
                 starts: [run.base.start, run.ours.start, run.theirs.start],
                 lens: [run.base.len(), run.ours.len(), run.theirs.len()],
+                kind: run.kind,
             });
             aligned_start += rows;
         }
@@ -4384,8 +5210,174 @@ impl ThreeWayVisibleProjection {
     }
 }
 
-#[cfg(any(test, feature = "benchmarks"))]
-fn resolved_conflict_flags_from_segments(segments: &[ConflictSegment]) -> Vec<bool> {
+/// Blank rows appended below the last line of the source diff lists so the
+/// tail of the file can be scrolled up into a comfortable reading position.
+pub const CONFLICT_BOTTOM_OVERSCROLL_ROWS: usize = 10;
+
+/// Number of bands the minimap column is quantized into.
+///
+/// kdiff3 paints one band per line; bounding the band count keeps paint cost
+/// independent of file size while staying far finer than any column height.
+pub const MINIMAP_BAND_COUNT: usize = 2048;
+
+/// Build the minimap column's bands for the current three-way projection.
+///
+/// The result is in *visible* row space so the painted column lines up with
+/// what the panes actually show: rows hidden by hide-resolved or collapsed
+/// context are folded into their summary row's band, exactly as they are in
+/// the lists. Returns an empty vector when the map carries no classification
+/// (the identity fallback used for unaligned/giant files), which callers treat
+/// as "no minimap available".
+///
+/// `conflict_ranges` and `conflict_resolved` are the aligned conflict ranges
+/// and their resolution state, in step: a conflict the user has settled is
+/// repainted in the resolved color so the bands that stay red are the work
+/// that is left.
+///
+/// `trailing_rows` are the blank overscroll rows the lists append below the
+/// last line. They carry no changes but do take up scroll range, so the bands
+/// have to cover them for the viewport frame to line up with the panes.
+pub fn build_minimap_bands(
+    aligned: &ThreeWayAlignedMap,
+    projection: &ThreeWayVisibleProjection,
+    conflict_ranges: &[Range<usize>],
+    conflict_resolved: &[bool],
+    trailing_rows: usize,
+) -> Vec<gitcomet_core::merge::MinimapRowKind> {
+    use gitcomet_core::merge::MinimapRowKind;
+
+    if aligned.is_identity() || projection.len() == 0 {
+        return Vec::new();
+    }
+    let visible_len = projection.len() + trailing_rows;
+
+    let band_count = MINIMAP_BAND_COUNT.min(visible_len);
+    let mut bands = vec![MinimapRowKind::Unchanged; band_count];
+    let band_span = |visible: std::ops::Range<usize>| {
+        let first = visible.start.min(visible_len - 1) * band_count / visible_len;
+        let last = (visible.end - 1).min(visible_len - 1) * band_count / visible_len;
+        first..=last.min(band_count - 1)
+    };
+    let mut paint = |visible: std::ops::Range<usize>, kind: MinimapRowKind| {
+        if kind == MinimapRowKind::Unchanged || visible.is_empty() {
+            return;
+        }
+        for band in &mut bands[band_span(visible)] {
+            *band = band.merge(kind);
+        }
+    };
+
+    // Walk the visible spans and, for each, the aligned runs it covers. A
+    // collapsed span shows several aligned rows on one visible row, so every
+    // run it hides merges into that row's band.
+    let spans = projection.spans();
+    let runs = &aligned.runs;
+    let aligned_len = aligned.aligned_len();
+    let span_source_start = |span: &ThreeWayVisibleSpan| match *span {
+        ThreeWayVisibleSpan::Lines {
+            source_line_start, ..
+        }
+        | ThreeWayVisibleSpan::CollapsedContext {
+            source_line_start, ..
+        } => Some(source_line_start),
+        // A collapsed conflict block carries no source range of its own.
+        ThreeWayVisibleSpan::CollapsedResolvedBlock { .. } => None,
+    };
+
+    let mut covered = 0usize;
+    for (span_ix, span) in spans.iter().enumerate() {
+        let (source, visible_start, collapsed) = match *span {
+            ThreeWayVisibleSpan::Lines {
+                visible_start,
+                source_line_start,
+                len,
+            } => (
+                source_line_start..source_line_start + len,
+                visible_start,
+                false,
+            ),
+            ThreeWayVisibleSpan::CollapsedContext {
+                visible_index,
+                source_line_start,
+                len,
+                ..
+            } => (
+                source_line_start..source_line_start + len,
+                visible_index,
+                true,
+            ),
+            ThreeWayVisibleSpan::CollapsedResolvedBlock { visible_index, .. } => {
+                // The hidden rows are everything between the previous span and
+                // the next one that names a source line.
+                let next = spans[span_ix + 1..]
+                    .iter()
+                    .find_map(span_source_start)
+                    .unwrap_or(aligned_len);
+                (covered..next.max(covered), visible_index, true)
+            }
+        };
+        covered = covered.max(source.end);
+        if source.is_empty() {
+            continue;
+        }
+
+        let mut run_ix = runs.partition_point(|run| run.aligned_start + run.rows <= source.start);
+        while let Some(run) = runs
+            .get(run_ix)
+            .filter(|run| run.aligned_start < source.end)
+        {
+            run_ix += 1;
+            let kind = gitcomet_core::merge::minimap_row_kind(run.kind);
+            if kind == MinimapRowKind::Unchanged {
+                continue;
+            }
+            if collapsed {
+                paint(visible_start..visible_start + 1, kind);
+                continue;
+            }
+            let start = run.aligned_start.max(source.start);
+            let end = (run.aligned_start + run.rows).min(source.end);
+            paint(
+                visible_start + (start - source.start)..visible_start + (end - source.start),
+                kind,
+            );
+        }
+    }
+
+    // Second pass: a conflict the user has settled recedes to the resolved
+    // color. Only bands the first pass classified as an open conflict change,
+    // so a one-sided change sharing a band keeps its own side's color.
+    for (range_ix, range) in conflict_ranges.iter().enumerate() {
+        if range.is_empty() || !conflict_resolved.get(range_ix).copied().unwrap_or(false) {
+            continue;
+        }
+        // A block hidden behind hide-resolved has no visible rows of its own;
+        // its summary row is the one to repaint.
+        let visible = match (
+            projection.visible_index_for_source_line(range.start),
+            projection.visible_index_for_source_line(range.end - 1),
+        ) {
+            (Some(first), Some(last)) if last >= first => first..last + 1,
+            _ => match projection.visible_index_for_conflict(conflict_ranges, range_ix) {
+                Some(row) => row..row + 1,
+                None => continue,
+            },
+        };
+        for band in &mut bands[band_span(visible)] {
+            if *band == MinimapRowKind::Conflict {
+                *band = band.resolved();
+            }
+        }
+    }
+
+    bands
+}
+
+/// One `resolved` flag per marker block, in display order — the state the
+/// minimap and the visible projection classify conflicts with.
+pub(in crate::view) fn resolved_conflict_flags_from_segments(
+    segments: &[ConflictSegment],
+) -> Vec<bool> {
     segments
         .iter()
         .filter_map(|segment| match segment {
@@ -4807,10 +5799,30 @@ pub fn populate_block_bases_from_shared_ancestor(
     populate_block_bases_from_ancestor_impl(segments, ancestor_text.as_ref(), Some(&ancestor_text));
 }
 
-/// Check whether the given text still contains git conflict markers.
-/// Used as a safety gate before "Save & stage" to warn the user about unresolved conflicts.
+/// Check whether the given text still contains a complete git conflict-marker
+/// block. Marker-looking content on its own (for example a Markdown `=======`
+/// Setext underline) is not enough to block Save.
 pub fn text_contains_conflict_markers(text: &str) -> bool {
-    gitcomet_core::services::validate_conflict_resolution_text(text).has_conflict_markers
+    #[derive(Clone, Copy)]
+    enum MarkerState {
+        Outside,
+        Ours,
+        Theirs,
+    }
+
+    let mut state = MarkerState::Outside;
+    for line in text.lines() {
+        if line.starts_with("<<<<<<<") {
+            state = MarkerState::Ours;
+            continue;
+        }
+        state = match (state, line) {
+            (MarkerState::Ours, line) if line.starts_with("=======") => MarkerState::Theirs,
+            (MarkerState::Theirs, line) if line.starts_with(">>>>>>>") => return true,
+            (current, _) => current,
+        };
+    }
+    false
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -4820,7 +5832,7 @@ pub struct ConflictStageSafetyCheck {
 }
 
 impl ConflictStageSafetyCheck {
-    pub fn requires_confirmation(self) -> bool {
+    pub fn blocks_save(self) -> bool {
         self.has_conflict_markers || self.unresolved_blocks > 0
     }
 }
@@ -4828,22 +5840,225 @@ impl ConflictStageSafetyCheck {
 /// Compute stage-safety status for the current conflict resolver output/state.
 ///
 /// This gate is stricter than marker-only checks: unresolved conflict blocks
-/// should still require explicit confirmation even if the current output text
-/// no longer contains marker lines.
+/// still block the save even if the current output text no longer contains
+/// marker lines.
 pub fn conflict_stage_safety_check(
     output_text: &str,
     segments: &[ConflictSegment],
+    block_map: &ResolvedOutputBlockMap,
 ) -> ConflictStageSafetyCheck {
-    let total_blocks = conflict_count(segments);
-    let resolved_blocks = resolved_conflict_count(segments);
+    use gitcomet_core::conflict_session::ConflictRegionResolution;
+
+    // The editor is intentionally not synchronized into session state on
+    // every keystroke. Derive the effective resolutions from its current
+    // contents so a manual replacement can enable Save, which then performs
+    // the actual synchronization.
+    let unresolved_blocks =
+        derive_region_resolution_updates_from_output(segments, &[], block_map, output_text)
+            .map(|updates| {
+                updates
+                    .iter()
+                    .filter(|(_, resolution)| {
+                        matches!(resolution, ConflictRegionResolution::Unresolved)
+                    })
+                    .count()
+            })
+            .unwrap_or_else(|| {
+                // Ownership validation failed. Treat every displayed block as
+                // unresolved so Save fails closed instead of guessing from
+                // repeated context anchors.
+                conflict_count(segments)
+            });
     ConflictStageSafetyCheck {
         has_conflict_markers: text_contains_conflict_markers(output_text),
-        unresolved_blocks: total_blocks.saturating_sub(resolved_blocks),
+        unresolved_blocks,
     }
 }
 
-/// Count logical resolved-output rows while preserving a trailing empty row
-/// after a final newline.
+/// What the resolved-output analysis needs to read from the buffer.
+///
+/// Implemented for `str` and for [`Rope`], so the same code serves callers that
+/// already hold a materialized string (a freshly generated output, a test
+/// fixture) and the editable buffer, which must not be flattened just to be
+/// scanned. Implementing it on `str` rather than `&str` is what keeps every
+/// existing caller compiling unchanged.
+pub(in crate::view) trait ResolvedOutputSource {
+    fn len(&self) -> usize;
+    fn is_char_boundary(&self, offset: usize) -> bool;
+    /// Whether the text at `offset` begins with `needle`.
+    fn starts_with_at(&self, offset: usize, needle: &str) -> bool;
+    fn byte_at(&self, offset: usize) -> Option<u8>;
+    fn count_newlines_in(&self, range: Range<usize>) -> usize;
+    /// Rows, counting the empty one a trailing newline leaves behind.
+    fn row_count(&self) -> usize {
+        self.count_newlines_in(0..self.len()).saturating_add(1)
+    }
+
+    /// Visit every row as `(byte range including its terminator, text)`.
+    ///
+    /// One pass over the text, so a scan for marker rows costs the document
+    /// once rather than a seek per row.
+    fn for_each_row_with_terminator(&self, visit: &mut dyn FnMut(Range<usize>, &str));
+}
+
+impl ResolvedOutputSource for str {
+    fn len(&self) -> usize {
+        str::len(self)
+    }
+
+    fn is_char_boundary(&self, offset: usize) -> bool {
+        str::is_char_boundary(self, offset)
+    }
+
+    fn starts_with_at(&self, offset: usize, needle: &str) -> bool {
+        self.get(offset..)
+            .is_some_and(|tail| tail.starts_with(needle))
+    }
+
+    fn byte_at(&self, offset: usize) -> Option<u8> {
+        self.as_bytes().get(offset).copied()
+    }
+
+    fn count_newlines_in(&self, range: Range<usize>) -> usize {
+        // Clamped rather than `get(range)`, which answers `None` — and so 0 —
+        // for a span that runs past the end or starts inside a character. Zero
+        // is the dangerous answer: callers feed this into block line ranges, so
+        // "no newlines here" silently places conflict markers on the wrong
+        // rows. [`Rope`] clamps and counts what is really there; the two
+        // implementations are used against the same buffers and have to agree.
+        let len = str::len(self);
+        let mut start = range.start.min(len);
+        let mut end = range.end.min(len).max(start);
+        // Widening to character boundaries cannot change the count: a newline
+        // is ASCII, so it never sits inside a multi-byte character.
+        while start > 0 && !self.is_char_boundary(start) {
+            start -= 1;
+        }
+        while end < len && !self.is_char_boundary(end) {
+            end += 1;
+        }
+        memchr::memchr_iter(b'\n', &self.as_bytes()[start..end]).count()
+    }
+
+    fn for_each_row_with_terminator(&self, visit: &mut dyn FnMut(Range<usize>, &str)) {
+        let mut start = 0usize;
+        for newline in memchr::memchr_iter(b'\n', self.as_bytes()) {
+            let end = newline + 1;
+            visit(start..end, &self[start..end]);
+            start = end;
+        }
+        if start <= str::len(self) {
+            visit(start..str::len(self), &self[start..]);
+        }
+    }
+}
+
+impl ResolvedOutputSource for crate::kit::rope::Rope {
+    fn len(&self) -> usize {
+        crate::kit::rope::Rope::len(self)
+    }
+
+    fn is_char_boundary(&self, offset: usize) -> bool {
+        crate::kit::rope::Rope::is_char_boundary(self, offset)
+    }
+
+    fn starts_with_at(&self, offset: usize, needle: &str) -> bool {
+        let end = offset.saturating_add(needle.len());
+        if end > self.len() {
+            return false;
+        }
+        // Compared as bytes, and over a boundary-widened chunk range, because
+        // this is asked precisely when the buffer may have diverged from the
+        // segments: `offset` or `end` can land inside a multi-byte character
+        // the user typed. A `&str` comparison would panic there instead of
+        // reporting the mismatch this exists to find.
+        let mut rest = needle.as_bytes();
+        let mut skip = offset - self.clip_offset(offset, gpui::sum_tree::Bias::Left);
+        for chunk in self.chunks_in_range(offset..end) {
+            let bytes = chunk.as_bytes();
+            let bytes = if skip >= bytes.len() {
+                skip -= bytes.len();
+                continue;
+            } else {
+                let tail = &bytes[skip..];
+                skip = 0;
+                tail
+            };
+            let take = bytes.len().min(rest.len());
+            if rest[..take] != bytes[..take] {
+                return false;
+            }
+            rest = &rest[take..];
+            if rest.is_empty() {
+                return true;
+            }
+        }
+        rest.is_empty()
+    }
+
+    fn byte_at(&self, offset: usize) -> Option<u8> {
+        if offset >= self.len() {
+            return None;
+        }
+        // A byte read is well defined at every offset, including inside a
+        // multi-byte character — trimming a `\r` off a row end lands there
+        // whenever the row's last character is not ASCII. Widen to the
+        // enclosing character and index the bytes, rather than slicing a `&str`
+        // at `offset`, which would panic.
+        let start = self.clip_offset(offset, gpui::sum_tree::Bias::Left);
+        self.chunks_in_range(
+            start..self.clip_offset(offset.saturating_add(1), gpui::sum_tree::Bias::Right),
+        )
+        .next()
+        .and_then(|chunk| chunk.as_bytes().get(offset - start).copied())
+    }
+
+    fn count_newlines_in(&self, range: Range<usize>) -> usize {
+        // Two summary descents rather than a scan.
+        let start = self.offset_to_point(range.start).row;
+        let end = self.offset_to_point(range.end.max(range.start)).row;
+        end.saturating_sub(start) as usize
+    }
+
+    fn row_count(&self) -> usize {
+        crate::kit::rope::Rope::line_count(self) as usize
+    }
+
+    fn for_each_row_with_terminator(&self, visit: &mut dyn FnMut(Range<usize>, &str)) {
+        // One walk over the chunks. A row that straddles a chunk boundary is
+        // assembled into `carry` — at most one per chunk, so this allocates in
+        // proportion to the chunk count, not the row count.
+        let mut row_start = 0usize;
+        let mut base = 0usize;
+        let mut carry = String::new();
+        for chunk in self.chunks() {
+            let mut search = 0usize;
+            while let Some(found) = memchr::memchr(b'\n', &chunk.as_bytes()[search..]) {
+                let newline = search + found;
+                let row_end = base + newline + 1;
+                if carry.is_empty() {
+                    visit(row_start..row_end, &chunk[search..=newline]);
+                } else {
+                    carry.push_str(&chunk[search..=newline]);
+                    visit(row_start..row_end, &carry);
+                    carry.clear();
+                }
+                row_start = row_end;
+                search = newline + 1;
+            }
+            if search < chunk.len() {
+                carry.push_str(&chunk[search..]);
+            }
+            base += chunk.len();
+        }
+        visit(row_start..base, &carry);
+    }
+}
+
+/// Row count for a materialized output. Production reads this off
+/// [`ResolvedOutputSource::row_count`] instead, which the rope answers from its
+/// summary; this remains for tests and benchmarks that hold a `String`.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn resolved_output_outline_line_count(output: &str) -> usize {
     memchr::memchr_iter(b'\n', output.as_bytes())
         .count()

@@ -133,6 +133,65 @@ fn build_three_way_conflict_maps_without_line_maps_keeps_only_compact_metadata()
 }
 
 #[test]
+fn merge_plan_ranges_keep_three_two_input_conflicts_separate() {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+    use gitcomet_core::domain::FileConflictKind;
+
+    let local = concat!(
+        "pub fn stage_ingest(input: &[u8]) -> Vec<u8> {\n",
+        "    let cfg = Stage { name: \"ingest\", batch: 64, retries: 0 };\n",
+        "    let mut out = Vec::with_capacity(input.len());\n",
+        "    for chunk in input.chunks(cfg.batch) {\n",
+        "        out.extend_from_slice(chunk);\n",
+        "        out.push(0 as u8);\n",
+        "    }\n",
+        "    out\n",
+        "}\n",
+    );
+    let remote = concat!(
+        "pub fn stage_ingest(input: &[u8]) -> Vec<u8> {\n",
+        "    let cfg = Stage { name: \"ingest\", batch: 128, retries: 3 };\n",
+        "    let mut out = Vec::new();\n",
+        "    for (seq, chunk) in input.chunks(cfg.batch).enumerate() {\n",
+        "        out.push(seq as u8);\n",
+        "        out.extend_from_slice(chunk);\n",
+        "    }\n",
+        "    out.push(cfg.retries as u8);\n",
+        "    out\n",
+        "}\n",
+    );
+    let session = ConflictSession::from_stage_inputs(
+        "pipeline.rs".into(),
+        FileConflictKind::BothAdded,
+        ConflictPayload::Absent,
+        ConflictPayload::Text(local.into()),
+        ConflictPayload::Text(remote.into()),
+    );
+
+    assert_eq!(
+        session.regions.len(),
+        3,
+        "the equal extend/close lines separate three conflict regions"
+    );
+    let visible_regions = [0, 1, 2];
+    let ranges = merge_plan_aligned_conflict_ranges(&session, &visible_regions, &[])
+        .expect("full text sessions carry exact merge-plan ranges");
+    let plan = session.merge_plan.as_ref().expect("merge plan");
+    let expected: Vec<_> = session
+        .region_plan_blocks
+        .iter()
+        .map(|block_index| plan.blocks[*block_index].rows.clone())
+        .collect();
+
+    assert_eq!(ranges, expected);
+    assert_eq!(ranges.len(), 3);
+    assert!(
+        ranges.windows(2).all(|pair| pair[0].end < pair[1].start),
+        "each active highlight must leave the equal separator row unhighlighted"
+    );
+}
+
+#[test]
 fn two_way_visible_indices_hide_only_resolved_conflict_rows() {
     let segments = vec![
         ConflictSegment::Text("a\n".into()),
@@ -142,6 +201,7 @@ fn two_way_visible_indices_hide_only_resolved_conflict_rows() {
             theirs: "B\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -150,6 +210,7 @@ fn two_way_visible_indices_hide_only_resolved_conflict_rows() {
             theirs: "C\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let row_conflict_map = vec![None, Some(0), Some(0), None, Some(1), Some(1)];
@@ -215,6 +276,7 @@ fn visible_map_identity_when_not_hiding() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("d\ne\n".into()),
     ];
@@ -236,6 +298,7 @@ fn visible_map_collapses_resolved_block() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true, // resolved
+            whitespace_only: false,
         }),
         ConflictSegment::Text("d\ne\n".into()),
     ];
@@ -258,6 +321,7 @@ fn visible_map_keeps_unresolved_blocks_expanded() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false, // unresolved — keep expanded
+            whitespace_only: false,
         }),
         ConflictSegment::Text("c\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -266,6 +330,7 @@ fn visible_map_keeps_unresolved_blocks_expanded() {
             theirs: "z\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true, // resolved — collapse
+            whitespace_only: false,
         }),
     ];
     let ranges = vec![0..2, 3..4];
@@ -289,6 +354,7 @@ fn visible_map_matches_legacy_scan_with_empty_and_trailing_ranges() {
             theirs: "A\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Block(ConflictBlock {
             base: None,
@@ -296,6 +362,7 @@ fn visible_map_matches_legacy_scan_with_empty_and_trailing_ranges() {
             theirs: "B\nC\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Block(ConflictBlock {
             base: None,
@@ -303,6 +370,7 @@ fn visible_map_matches_legacy_scan_with_empty_and_trailing_ranges() {
             theirs: "D\nE\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         }),
     ];
     let ranges = vec![0..0, 1..3, 4..6, 7..9];
@@ -344,6 +412,7 @@ fn visible_map_linear_walk_outpaces_legacy_scan() {
                 theirs: "theirs\n".into(),
                 choice: ConflictChoice::Ours,
                 resolved: ix % 3 != 0,
+                whitespace_only: false,
             })
         })
         .collect();
@@ -394,6 +463,7 @@ fn visible_index_for_conflict_finds_collapsed() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("d\n".into()),
     ];
@@ -414,6 +484,7 @@ fn visible_index_for_conflict_finds_expanded() {
             theirs: "x\ny\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
     let ranges = [1..3];
@@ -761,6 +832,7 @@ fn bulk_pick_then_two_way_visible_indices_hides_all_resolved() {
             theirs: "a\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -769,6 +841,7 @@ fn bulk_pick_then_two_way_visible_indices_hides_all_resolved() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -876,6 +949,7 @@ fn resolved_counter_consistent_with_visible_map_after_incremental_picks() {
             theirs: "a\na2\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -884,6 +958,7 @@ fn resolved_counter_consistent_with_visible_map_after_incremental_picks() {
             theirs: "b\nb2\nb3\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".into()),
     ];
@@ -935,6 +1010,7 @@ fn large_unresolved_three_way_visible_map_shows_all_lines() {
             theirs: "theirs\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".into()),
     ];
@@ -968,6 +1044,7 @@ fn three_way_projection_exposes_full_large_unresolved_block() {
             theirs: "theirs\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("post\n".into()),
     ];
@@ -1101,6 +1178,7 @@ fn split_and_inline_hide_resolved_filter_same_conflicts() {
             theirs: "a\nb\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true, // resolved
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1109,6 +1187,7 @@ fn split_and_inline_hide_resolved_filter_same_conflicts() {
             theirs: "c\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false, // unresolved
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -1161,6 +1240,7 @@ fn unresolved_conflict_indices_match_queue_order() {
             theirs: "a\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Block(ConflictBlock {
             base: None,
@@ -1168,6 +1248,7 @@ fn unresolved_conflict_indices_match_queue_order() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1176,6 +1257,7 @@ fn unresolved_conflict_indices_match_queue_order() {
             theirs: "c\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
     ];
 
@@ -1192,6 +1274,7 @@ fn visible_index_for_two_way_conflict_respects_hide_resolved_filter() {
             theirs: "a\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1200,6 +1283,7 @@ fn visible_index_for_two_way_conflict_respects_hide_resolved_filter() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -1241,6 +1325,7 @@ fn unresolved_visible_nav_entries_for_three_way_skip_resolved_blocks_even_when_v
             theirs: "theirs-a\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1249,6 +1334,7 @@ fn unresolved_visible_nav_entries_for_three_way_skip_resolved_blocks_even_when_v
             theirs: "theirs-b\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("tail\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1257,6 +1343,7 @@ fn unresolved_visible_nav_entries_for_three_way_skip_resolved_blocks_even_when_v
             theirs: "theirs-c\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -1280,6 +1367,7 @@ fn unresolved_visible_nav_entries_for_two_way_skip_resolved_conflicts() {
             theirs: "a\n".into(),
             choice: ConflictChoice::Ours,
             resolved: true,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1288,6 +1376,7 @@ fn unresolved_visible_nav_entries_for_two_way_skip_resolved_conflicts() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];
@@ -1319,6 +1408,7 @@ fn two_way_conflict_index_for_visible_row_maps_back_to_conflict() {
             theirs: "a\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("mid\n".into()),
         ConflictSegment::Block(ConflictBlock {
@@ -1327,6 +1417,7 @@ fn two_way_conflict_index_for_visible_row_maps_back_to_conflict() {
             theirs: "b\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         }),
         ConflictSegment::Text("end\n".into()),
     ];

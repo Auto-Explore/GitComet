@@ -1,4 +1,3 @@
-<<<<<<<
 this file is changed in master
 this file is automergeable
 this file is automergeable
@@ -7,15 +6,8 @@ this file is automergeable
 this file is automergeable
 this file is automergeable
 this file is automergeable
+<<<<<<<
 this file is automergeable
 =======
-this file is changed in master
-this file is automergeable
-this file is automergeable
-this file is automergeable
-this file is automergeable
-this file is automergeable
-this file is automergeable
-this file is automergeable
 this file is similarly added in an unrelated branch
 >>>>>>>

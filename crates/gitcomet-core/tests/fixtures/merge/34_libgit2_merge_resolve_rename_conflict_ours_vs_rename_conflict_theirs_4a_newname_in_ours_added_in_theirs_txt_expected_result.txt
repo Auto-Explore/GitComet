@@ -2,23 +2,47 @@
 this will be renamed in ours
 and a file with the same name
 will be independently added
+=======
+this file was rewritten in
+theirs and will appear as an
+independent add of a file
+>>>>>>>
 in theirs
 
+<<<<<<<
 this will be renamed in ours
 and a file with the same name
 will be independently added
+=======
+this file was rewritten in
+theirs and will appear as an
+independent add of a file
+>>>>>>>
 in theirs
 
+<<<<<<<
 this will be renamed in ours
 and a file with the same name
 will be independently added
+=======
+this file was rewritten in
+theirs and will appear as an
+independent add of a file
+>>>>>>>
 in theirs
 
+<<<<<<<
 this will be renamed in ours
 and a file with the same name
 will be independently added
+=======
+this file was rewritten in
+theirs and will appear as an
+independent add of a file
+>>>>>>>
 in theirs
 
+<<<<<<<
 this will be renamed in ours
 and a file with the same name
 will be independently added
@@ -28,23 +52,7 @@ this file was rewritten in
 theirs and will appear as an
 independent add of a file
 
-this file was rewritten in
-theirs and will appear as an
-independent add of a file
-
-this file was rewritten in
-theirs and will appear as an
-independent add of a file
-
-this file was rewritten in
-theirs and will appear as an
-independent add of a file
-
-this file was rewritten in
-theirs and will appear as an
-independent add of a file
-
-this file was rewritten in
-theirs and will appear as an
-independent add of a file
 >>>>>>>
+this file was rewritten in
+theirs and will appear as an
+independent add of a file

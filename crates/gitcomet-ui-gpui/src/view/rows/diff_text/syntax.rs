@@ -191,7 +191,9 @@ fn with_ts_parser_parse_result<R>(
     result
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+// `Ord` so injection layers can be sorted by (range, language) and deduped;
+// the order itself carries no meaning beyond being total and stable.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(in crate::view) enum DiffSyntaxLanguage {
     Markdown,
     MarkdownInline,
@@ -337,6 +339,7 @@ pub(super) enum PrepareTreesitterDocumentResult {
 
 mod heuristic;
 mod language;
+mod live;
 mod prepared;
 
 use heuristic::*;
@@ -350,13 +353,17 @@ pub(super) use language::syntax_tokens_for_line_shared;
 pub(in crate::view) use language::{
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
 };
+pub(in crate::view) use live::{
+    LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_reparse,
+};
+#[cfg(any(test, feature = "benchmarks"))]
+pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
 #[cfg(test)]
 pub(super) use prepared::syntax_tokens_for_prepared_document_line;
 pub(super) use prepared::{
     PreparedSyntaxLineTokensRequest, drain_completed_prepared_syntax_chunk_builds,
     drain_completed_prepared_syntax_chunk_builds_for_document,
-    has_pending_prepared_syntax_chunk_builds,
-    has_pending_prepared_syntax_chunk_builds_for_document, inject_prepared_document_data,
+    has_pending_prepared_syntax_chunk_builds, inject_prepared_document_data,
     prepare_treesitter_document_in_background_text_with_reparse_seed,
     prepare_treesitter_document_with_budget_reuse_text, prepared_document_reparse_seed,
     request_syntax_tokens_for_prepared_document_line,

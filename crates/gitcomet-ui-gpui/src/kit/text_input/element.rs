@@ -16,6 +16,11 @@ pub(super) struct PrepaintState {
     wrap_cache: Option<WrapCache>,
     scroll_x: Pixels,
     visible_line_range: Range<usize>,
+    /// Whether any resolved highlight asks for a background. `ShapedLine::paint`
+    /// draws glyphs only — run backgrounds need the separate `paint_background`
+    /// pass — and walking every visible line for it is wasted work on the
+    /// overwhelmingly common input that has no background highlight at all.
+    has_background_runs: bool,
 }
 
 impl IntoElement for TextElement {
@@ -108,53 +113,63 @@ impl Element for TextElement {
             let style = window.text_style();
             let has_content = !content.is_empty();
 
-            let (display_text, text_color) = if content.is_empty() {
-                (input.placeholder.clone(), style_colors.placeholder)
+            // A placeholder or masked rendering is a synthesized string that is
+            // not the document; everything else reads through the model.
+            let substitute_text: Option<SharedString> = if content.is_empty() {
+                Some(input.placeholder.clone())
             } else if input.masked {
-                (
-                    mask_text_for_display(content.as_ref()).into(),
-                    style_colors.text,
-                )
+                Some(mask_text_for_display(content.as_ref()).into())
             } else {
-                (content.as_shared_string(), style_colors.text)
+                None
+            };
+            let text_color = if content.is_empty() {
+                style_colors.placeholder
+            } else {
+                style_colors.text
             };
 
             let font_size = style.font_size.to_pixels(window.rem_size());
             let line_height = input.effective_line_height(window);
             let base_font = style.font();
 
-            let display_text_str = display_text.as_ref();
-            let line_starts: Arc<[usize]> = if has_content && !input.masked {
-                content.shared_line_starts()
-            } else {
-                compute_line_starts(display_text_str).into()
+            let line_starts: Arc<[usize]> = match substitute_text.as_ref() {
+                Some(text) => compute_line_starts(text).into(),
+                None => content.shared_line_starts(),
             };
+            let display_len = substitute_text
+                .as_ref()
+                .map(|text| text.len())
+                .unwrap_or_else(|| content.len());
             let line_count = line_starts.len().max(1);
             let (visible_top, visible_bottom) =
                 visible_vertical_window(bounds, input.interaction.vertical_scroll_handle.as_ref());
 
-            // Resolve highlights: use the provider path for large documents,
-            // otherwise use the pre-materialized highlight vector.
+            // Resolve highlights for the visible window in the buffer's own
+            // coordinates, interpolating across any edits the highlight source
+            // has not caught up with yet.
             let highlights = if !has_content {
                 None
-            } else if input.highlight.provider.is_some() {
+            } else {
                 let byte_range = provider_prefetch_byte_range_for_visible_window(
                     line_starts.as_ref(),
-                    display_text_str.len(),
+                    display_len,
                     line_count,
                     line_height,
                     visible_top,
                     visible_bottom,
                 );
-                let resolved = input.resolve_provider_highlights(byte_range.start, byte_range.end);
+                let resolved = input.effective_highlights_for_window(byte_range);
                 if resolved.pending {
                     input.ensure_highlight_provider_poll(cx);
                 }
                 Some(resolved.highlights)
-            } else {
-                Some(Arc::clone(&input.highlight.highlights))
             };
             let highlight_slice = highlights.as_ref().map(|h| h.as_slice());
+            let has_background_runs = highlight_slice.is_some_and(|highlights| {
+                highlights
+                    .iter()
+                    .any(|(_, style)| style.background_color.is_some())
+            });
             let shape_style = TextShapeStyle {
                 base_font: &base_font,
                 text_color,
@@ -171,11 +186,14 @@ impl Element for TextElement {
                 {
                     let mut base_text_style = style.clone();
                     base_text_style.color = text_color;
+                    // Single line by construction, so materializing it is the
+                    // row, not the document.
+                    let single_line = content.as_shared_string();
                     let truncated_line = shape_truncated_line_cached(
                         window,
                         cx,
                         &base_text_style,
-                        &display_text,
+                        &single_line,
                         Some(bounds.size.width.max(px(0.0))),
                         input
                             .display_truncation
@@ -231,6 +249,7 @@ impl Element for TextElement {
                         wrap_cache: None,
                         scroll_x: px(0.0),
                         visible_line_range: 0..1,
+                        has_background_runs,
                     };
                 }
 
@@ -239,7 +258,6 @@ impl Element for TextElement {
                 } else {
                     input.layout.scroll_x
                 };
-                let mut lines = vec![ShapedLine::default(); line_count];
                 let mut visible_line_range = if input.multiline {
                     visible_plain_line_range(
                         line_count,
@@ -254,13 +272,45 @@ impl Element for TextElement {
                 if visible_line_range.is_empty() {
                     visible_line_range = 0..line_count.min(1);
                 }
+
+                let cursor_line_ix =
+                    line_index_for_offset(line_starts.as_ref(), cursor, line_count);
+                // The rows this frame will shape: the viewport, plus the caret's
+                // row when it has scrolled out of it. Every *text* read below
+                // goes through this, so shaping costs the viewport.
+                //
+                // The frame as a whole is not yet free of the document:
+                // `line_starts` above is still the whole-document array, and an
+                // edit drops that cache, so each post-edit frame rebuilds it
+                // (~1.6ms at 100k rows). Closing that means giving the handful
+                // of `line_starts` readers in prepaint and paint a windowed
+                // equivalent.
+                let line_source = match substitute_text.as_ref() {
+                    Some(text) => LineTextSource::Whole {
+                        text,
+                        starts: line_starts.as_ref(),
+                    },
+                    None => LineTextSource::window(
+                        &content,
+                        visible_line_range.clone(),
+                        (cursor_line_ix < line_count).then_some(cursor_line_ix),
+                    ),
+                };
+
                 let streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
-                    display_text_str,
+                    &line_source,
                     line_starts.as_ref(),
                     visible_line_range.clone(),
                     &shape_style,
                 );
 
+                // Only the visible window is shaped, so only the visible window
+                // is stored: see `PlainLineLayouts`.
+                let mut lines = PlainLineLayouts::new(
+                    line_count,
+                    visible_line_range.start,
+                    visible_line_range.len(),
+                );
                 for line_ix in visible_line_range.clone() {
                     let precomputed_runs = visible_window_runs_for_line_ix(
                         streamed_line_runs.as_deref(),
@@ -271,23 +321,15 @@ impl Element for TextElement {
                         LineShapeInput {
                             line_ix,
                             line_start: line_starts.get(line_ix).copied().unwrap_or(0),
-                            line_text: line_text_for_index(
-                                display_text_str,
-                                line_starts.as_ref(),
-                                line_ix,
-                            ),
+                            line_text: line_source.line_text(line_ix),
                         },
                         precomputed_runs,
                         &shape_style,
                         window,
                     );
-                    if let Some(slot) = lines.get_mut(line_ix) {
-                        *slot = shaped;
-                    }
+                    lines.push(shaped);
                 }
 
-                let cursor_line_ix =
-                    line_index_for_offset(line_starts.as_ref(), cursor, line_count);
                 if cursor_line_ix < line_count
                     && (cursor_line_ix < visible_line_range.start
                         || cursor_line_ix >= visible_line_range.end)
@@ -296,27 +338,27 @@ impl Element for TextElement {
                         LineShapeInput {
                             line_ix: cursor_line_ix,
                             line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
-                            line_text: line_text_for_index(
-                                display_text_str,
-                                line_starts.as_ref(),
-                                cursor_line_ix,
-                            ),
+                            line_text: line_source.line_text(cursor_line_ix),
                         },
                         None,
                         &shape_style,
                         window,
                     );
-                    if let Some(slot) = lines.get_mut(cursor_line_ix) {
-                        *slot = shaped;
-                    }
+                    lines.set_stray(cursor_line_ix, shaped);
                 }
 
-                if !input.multiline && !lines.is_empty() {
+                let single_line_cursor = if !input.multiline && !lines.is_empty() {
+                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
+                    lines
+                        .get(line_ix)
+                        .map(|line| (line.x_for_index(local_ix), line.width))
+                } else {
+                    None
+                };
+                if let Some((cursor_x, line_w)) = single_line_cursor {
                     let viewport_w = bounds.size.width.max(px(0.0));
                     let pad = px(8.0).min(viewport_w / 4.0);
-                    let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
-                    let cursor_x = lines[line_ix].x_for_index(local_ix);
-                    let max_scroll_x = (lines[line_ix].width - viewport_w).max(px(0.0));
+                    let max_scroll_x = (line_w - viewport_w).max(px(0.0));
 
                     let left = scroll_x;
                     let right = scroll_x + viewport_w;
@@ -335,7 +377,11 @@ impl Element for TextElement {
                     let control_height =
                         crate::ui_scale::design_px_from_window(SINGLE_LINE_INPUT_HEIGHT_PX, window);
                     let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
-                    let x = lines[line_ix].x_for_index(local_ix) - scroll_x;
+                    let x = lines
+                        .get(line_ix)
+                        .map(|line| line.x_for_index(local_ix))
+                        .unwrap_or(px(0.0))
+                        - scroll_x;
                     let caret_inset_y = px(3.0);
                     let caret_h = if !input.multiline && !input.chromeless {
                         // Cap caret to fit within the fixed-height container
@@ -352,13 +398,12 @@ impl Element for TextElement {
                     ))
                 } else {
                     for ix in visible_line_range.clone() {
+                        let Some(line) = lines.get(ix) else {
+                            continue;
+                        };
                         let start = line_starts.get(ix).copied().unwrap_or(0);
-                        let next_start = line_starts
-                            .get(ix + 1)
-                            .copied()
-                            .unwrap_or(display_text.len());
-                        let line_len = lines[ix].len();
-                        let line_end = start + line_len;
+                        let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
+                        let line_end = start + line.len();
 
                         let seg_start = selected_range.start.max(start);
                         let seg_end = selected_range.end.min(next_start);
@@ -369,8 +414,8 @@ impl Element for TextElement {
                         let local_start = seg_start.min(line_end) - start;
                         let local_end = seg_end.min(line_end) - start;
 
-                        let x0 = lines[ix].x_for_index(local_start) - scroll_x;
-                        let x1 = lines[ix].x_for_index(local_end) - scroll_x;
+                        let x0 = line.x_for_index(local_start) - scroll_x;
+                        let x1 = line.x_for_index(local_end) - scroll_x;
                         let top = bounds.top() + line_height * ix as f32;
                         selections.push(fill(
                             Bounds::from_corners(
@@ -391,8 +436,21 @@ impl Element for TextElement {
                     wrap_cache: None,
                     scroll_x,
                     visible_line_range,
+                    has_background_runs,
                 };
             }
+
+            // The soft-wrap arm still works over the whole document: its row
+            // counts, y-offset prefix sum and wrap job are all document-wide, so
+            // windowing the text alone would buy nothing. Soft wrap is only ever
+            // enabled on small inputs today (commit messages, toasts, details
+            // panes) — windowing this arm is the prerequisite for offering it on
+            // a large file, and is deliberately not attempted here.
+            let display_text: SharedString = match substitute_text.as_ref() {
+                Some(text) => text.clone(),
+                None => content.as_shared_string(),
+            };
+            let display_text_str = display_text.as_ref();
 
             let wrap_width = bounds.size.width.max(px(0.0));
             let rounded_wrap_width = wrap_width.round();
@@ -450,8 +508,12 @@ impl Element for TextElement {
                 line_count,
                 !started_wrap_job,
             );
+            let wrapped_line_source = LineTextSource::Whole {
+                text: display_text_str,
+                starts: line_starts.as_ref(),
+            };
             let mut streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
-                display_text_str,
+                &wrapped_line_source,
                 line_starts.as_ref(),
                 visible_line_range.clone(),
                 &shape_style,
@@ -463,7 +525,7 @@ impl Element for TextElement {
                     visible_line_range.start,
                     line_ix,
                 );
-                let wrapped = input.shape_wrapped_line_cached(
+                let wrapped = shape_wrapped_line(
                     LineShapeInput {
                         line_ix,
                         line_start: line_starts.get(line_ix).copied().unwrap_or(0),
@@ -508,7 +570,7 @@ impl Element for TextElement {
                 && (cursor_line_ix < visible_line_range.start
                     || cursor_line_ix >= visible_line_range.end)
             {
-                let wrapped = input.shape_wrapped_line_cached(
+                let wrapped = shape_wrapped_line(
                     LineShapeInput {
                         line_ix: cursor_line_ix,
                         line_start: line_starts.get(cursor_line_ix).copied().unwrap_or(0),
@@ -568,7 +630,7 @@ impl Element for TextElement {
                     TEXT_INPUT_GUARD_ROWS,
                 );
                 streamed_line_runs = input.streamed_highlight_runs_for_visible_window(
-                    display_text_str,
+                    &wrapped_line_source,
                     line_starts.as_ref(),
                     visible_line_range.clone(),
                     &shape_style,
@@ -582,7 +644,7 @@ impl Element for TextElement {
                         visible_line_range.start,
                         line_ix,
                     );
-                    let wrapped = input.shape_wrapped_line_cached(
+                    let wrapped = shape_wrapped_line(
                         LineShapeInput {
                             line_ix,
                             line_start: line_starts.get(line_ix).copied().unwrap_or(0),
@@ -644,10 +706,7 @@ impl Element for TextElement {
             } else {
                 for ix in visible_line_range.clone() {
                     let start = line_starts.get(ix).copied().unwrap_or(0);
-                    let next_start = line_starts
-                        .get(ix + 1)
-                        .copied()
-                        .unwrap_or(display_text.len());
+                    let next_start = line_starts.get(ix + 1).copied().unwrap_or(display_len);
                     let line_len = lines[ix].len();
                     let line_end = start + line_len;
 
@@ -705,6 +764,7 @@ impl Element for TextElement {
                 wrap_cache,
                 scroll_x: px(0.0),
                 visible_line_range,
+                has_background_runs,
             }
         })
     }
@@ -758,17 +818,22 @@ impl Element for TextElement {
                         let Some(line) = lines.get(ix) else {
                             continue;
                         };
-                        let painted = line.paint(
-                            point(
-                                bounds.origin.x - prepaint.scroll_x,
-                                bounds.origin.y + line_height * ix as f32,
-                            ),
-                            line_height,
-                            TextAlign::Left,
-                            None,
-                            window,
-                            cx,
+                        let origin = point(
+                            bounds.origin.x - prepaint.scroll_x,
+                            bounds.origin.y + line_height * ix as f32,
                         );
+                        if prepaint.has_background_runs {
+                            let _ = line.paint_background(
+                                origin,
+                                line_height,
+                                TextAlign::Left,
+                                None,
+                                window,
+                                cx,
+                            );
+                        }
+                        let painted =
+                            line.paint(origin, line_height, TextAlign::Left, None, window, cx);
                         debug_assert!(
                             painted.is_ok(),
                             "TextInput plain line paint failed at line index {ix}"
@@ -803,8 +868,19 @@ impl Element for TextElement {
                             continue;
                         };
                         let y = y_offsets.get(ix).copied().unwrap_or(Pixels::ZERO);
+                        let origin = point(bounds.origin.x, bounds.origin.y + y);
+                        if prepaint.has_background_runs {
+                            let _ = line.paint_background(
+                                origin,
+                                line_height,
+                                TextAlign::Left,
+                                Some(bounds),
+                                window,
+                                cx,
+                            );
+                        }
                         let _ = line.paint(
-                            point(bounds.origin.x, bounds.origin.y + y),
+                            origin,
                             line_height,
                             TextAlign::Left,
                             Some(bounds),

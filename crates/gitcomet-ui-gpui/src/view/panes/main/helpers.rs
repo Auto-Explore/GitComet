@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
@@ -6,6 +7,40 @@ use crate::view::conflict_resolver::ConflictSegment;
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
 const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
+/// Height of one resolved-output gutter row. The row space navigation scrolls
+/// through is measured in these, so anything computing an output scroll offset
+/// by hand has to agree with what the gutter actually lays out.
+pub(in crate::view) const RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
+
+/// The scroll offset a `uniform_list` would land on to reveal `row_ix`, or
+/// `None` when the row is already fully visible and the list would not move.
+///
+/// Mirrors `uniform_list`'s own non-strict `ScrollStrategy::Center` arithmetic —
+/// centre the row's midpoint in the viewport, clamp into the scrollable range,
+/// and leave an already-visible row alone. Kept here so the editable resolved
+/// output, which is a `TextInput` rather than a list, can be placed on exactly
+/// the offset its gutter list is about to compute.
+pub(in crate::view) fn centered_reveal_scroll_y(
+    row_ix: usize,
+    row_height: Pixels,
+    viewport_height: Pixels,
+    max_offset_y: Pixels,
+    current_y: Pixels,
+) -> Option<Pixels> {
+    if row_height <= px(0.0) || viewport_height <= px(0.0) {
+        return None;
+    }
+    let row_top = row_height * row_ix as f32;
+    let row_bottom = row_top + row_height;
+    let scroll_top = -current_y;
+    let above = row_top < scroll_top;
+    let below = row_bottom > scroll_top + viewport_height;
+    if !above && !below {
+        return None;
+    }
+    let target_top = (row_top + row_height / 2.0) - viewport_height / 2.0;
+    Some(-target_top.clamp(px(0.0), max_offset_y.max(px(0.0))))
+}
 
 #[inline]
 fn scaled_diff_px(value: f32, ui_scale_percent: u32) -> Pixels {
@@ -27,199 +62,243 @@ pub(in crate::view) fn diff_hunk_header_height_for_ui_scale(ui_scale_percent: u3
     scaled_diff_px(DIFF_HUNK_HEADER_HEIGHT_PX, ui_scale_percent)
 }
 
-#[derive(Default)]
-pub(super) struct ResolvedOutputSyntaxState {
-    /// Fallback highlights used when full-document syntax is unsupported.
-    pub(super) highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
-    pub(super) prepared_document: Option<rows::PreparedDiffSyntaxDocument>,
-    /// Lazy provider backed by a prepared document.
-    pub(super) highlight_provider: Option<HighlightProvider>,
-    /// When true, render plain text for now and continue parsing in the background.
-    pub(super) needs_background_prepare: bool,
-}
-
-fn build_resolved_output_syntax_fallback_highlights(
+/// Heuristic highlights for the rows overlapping `byte_range`.
+///
+/// Windowing this is *exact*, not an approximation: the heuristic tokenizer is
+/// line-local, so a row's tokens do not depend on anything above it. (A
+/// tree-sitter query is the opposite — it needs the enclosing tree, which is why
+/// that path queries a range of a whole-document parse instead.)
+///
+/// Reading rows through the rope keeps the cost proportional to the viewport.
+/// The previous shape tokenized the entire document and handed the result to
+/// `set_highlights` on every keystroke, which is the one thing this arm — the
+/// arm reached by the *largest* buffers — could least afford.
+pub(super) fn resolved_output_heuristic_highlights_for_range(
     theme: AppTheme,
-    output_text: &str,
+    output_text: &Rope,
     language: rows::DiffSyntaxLanguage,
-    syntax_mode: rows::DiffSyntaxMode,
+    byte_range: Range<usize>,
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    let line_starts = build_line_starts(output_text);
-    let text_len = output_text.len();
+    let len = output_text.len();
+    let start = byte_range.start.min(len);
+    let end = byte_range.end.min(len).max(start);
+    if start == end {
+        return Vec::new();
+    }
+
+    let first_row = output_text.offset_to_point(start).row;
+    let last_row = output_text.offset_to_point(end).row;
     let mut highlights = Vec::new();
-    for (line_ix, &line_start) in line_starts.iter().enumerate() {
-        let line_end = line_starts
-            .get(line_ix + 1)
-            .map(|s| s.saturating_sub(1)) // exclude '\n'
-            .unwrap_or(text_len);
-        let line = &output_text[line_start..line_end];
-        for (range, style) in rows::syntax_highlights_for_line(theme, line, language, syntax_mode) {
-            highlights.push(((line_start + range.start)..(line_start + range.end), style));
+    for row in first_row..=last_row {
+        let line_range = output_text.line_range(row);
+        if line_range.start >= len && row > first_row {
+            break;
+        }
+        let line = output_text.line_text(row);
+        for (range, style) in rows::syntax_highlights_for_line(
+            theme,
+            &line,
+            language,
+            rows::DiffSyntaxMode::HeuristicOnly,
+        ) {
+            highlights.push((
+                (line_range.start + range.start)..(line_range.start + range.end),
+                style,
+            ));
         }
     }
     highlights
 }
 
-fn resolved_output_highlight_provider(
+/// The fallback counterpart to [`resolved_output_live_highlight_provider`], for
+/// buffers with no live tree — no wired grammar, or past the parse ceiling.
+///
+/// Same contract: answers whatever window the input asks for, never reports
+/// pending, and carries the unresolved-conflict overlay on top.
+pub(super) fn resolved_output_heuristic_highlight_provider(
     theme: AppTheme,
-    output_text: SharedString,
-    line_starts: Arc<[usize]>,
-    language: rows::DiffSyntaxLanguage,
-    document: rows::PreparedDiffSyntaxDocument,
+    output_text: Rope,
+    language: Option<rows::DiffSyntaxLanguage>,
+    unresolved_spans: ResolvedOutputUnresolvedSpans,
 ) -> HighlightProvider {
-    let shared_text: Arc<str> = output_text.into();
+    let unresolved_style = resolved_output_unresolved_highlight_style(theme);
+    let active_unresolved_style = resolved_output_active_unresolved_highlight_style(theme);
     HighlightProvider::with_pending(
-        move |byte_range: Range<usize>| {
-            rows::request_syntax_highlights_for_prepared_document_byte_range(
-                theme,
-                &shared_text,
-                line_starts.as_ref(),
-                document,
-                language,
+        move |byte_range: Range<usize>| HighlightProviderResult {
+            highlights: apply_resolved_output_unresolved_highlights(
+                language
+                    .map(|language| {
+                        resolved_output_heuristic_highlights_for_range(
+                            theme,
+                            &output_text,
+                            language,
+                            byte_range.clone(),
+                        )
+                    })
+                    .unwrap_or_default(),
+                &unresolved_spans,
                 byte_range,
-            )
-            .map(|result| HighlightProviderResult {
-                highlights: result.highlights,
-                pending: result.pending,
-            })
-            .unwrap_or_default()
-        },
-        move || rows::drain_completed_prepared_diff_syntax_chunk_builds_for_document(document),
-        move || rows::has_pending_prepared_diff_syntax_chunk_builds_for_document(document),
-    )
-}
-
-fn pending_resolved_output_syntax_state(
-    theme: AppTheme,
-    output_text: SharedString,
-    line_starts: Arc<[usize]>,
-    language: rows::DiffSyntaxLanguage,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-) -> ResolvedOutputSyntaxState {
-    ResolvedOutputSyntaxState {
-        highlights: Vec::new(),
-        prepared_document: old_document,
-        highlight_provider: old_document.map(|document| {
-            resolved_output_highlight_provider(theme, output_text, line_starts, language, document)
-        }),
-        needs_background_prepare: true,
-    }
-}
-
-fn build_resolved_output_syntax_state_with_source(
-    theme: AppTheme,
-    output_text: SharedString,
-    line_starts: Arc<[usize]>,
-    language: Option<rows::DiffSyntaxLanguage>,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-    edit_hint: Option<rows::DiffSyntaxEdit>,
-    budget: rows::DiffSyntaxBudget,
-) -> ResolvedOutputSyntaxState {
-    let Some(language) = language else {
-        return ResolvedOutputSyntaxState::default();
-    };
-    if output_text.is_empty() {
-        return ResolvedOutputSyntaxState::default();
-    }
-
-    // Large outputs skip foreground syntax entirely — render plain, then let the
-    // background pass upgrade — matching the streamed path and the diff view's
-    // `MAX_LINES_FOR_SYNTAX_HIGHLIGHTING` gate. Without this a big editable
-    // output could shape syntax on the UI thread during a recompute.
-    if line_starts.len() > rows::MAX_LINES_FOR_SYNTAX_HIGHLIGHTING {
-        return pending_resolved_output_syntax_state(
-            theme,
-            output_text,
-            line_starts,
-            language,
-            old_document,
-        );
-    }
-
-    match rows::prepare_diff_syntax_document_with_budget_reuse_text(
-        language,
-        rows::DiffSyntaxMode::Auto,
-        output_text.clone(),
-        line_starts.clone(),
-        budget,
-        old_document,
-        edit_hint,
-    ) {
-        rows::PrepareDiffSyntaxDocumentResult::Ready(document) => ResolvedOutputSyntaxState {
-            highlights: Vec::new(),
-            prepared_document: Some(document),
-            highlight_provider: Some(resolved_output_highlight_provider(
-                theme,
-                output_text,
-                line_starts,
-                language,
-                document,
-            )),
-            needs_background_prepare: false,
-        },
-        rows::PrepareDiffSyntaxDocumentResult::TimedOut => pending_resolved_output_syntax_state(
-            theme,
-            output_text,
-            line_starts,
-            language,
-            old_document,
-        ),
-        rows::PrepareDiffSyntaxDocumentResult::Unsupported => ResolvedOutputSyntaxState {
-            highlights: build_resolved_output_syntax_fallback_highlights(
-                theme,
-                output_text.as_ref(),
-                language,
-                rows::DiffSyntaxMode::HeuristicOnly,
+                unresolved_style,
+                active_unresolved_style,
             ),
-            prepared_document: None,
-            highlight_provider: None,
-            needs_background_prepare: false,
+            pending: false,
         },
+        || 0,
+        || false,
+    )
+}
+
+/// Binding key for the heuristic provider.
+///
+/// The live provider keys on its tree's version; this one has no tree, so it
+/// keys on the buffer revision the closure captured, plus the theme and the
+/// overlay. Distinct from the live key space so the two can never collide on a
+/// buffer that switches arms.
+pub(super) fn resolved_output_heuristic_provider_binding_key(
+    revision: ResolvedOutputSourceRevision,
+    theme_epoch: u64,
+    unresolved_spans: &ResolvedOutputUnresolvedSpans,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    "heuristic".hash(&mut hasher);
+    revision.model_id.hash(&mut hasher);
+    revision.revision.hash(&mut hasher);
+    theme_epoch.hash(&mut hasher);
+    unresolved_spans.all.hash(&mut hasher);
+    unresolved_spans.active.hash(&mut hasher);
+    hasher.finish()
+}
+
+pub(super) fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        color: Some(theme.colors.danger.into()),
+        ..gpui::HighlightStyle::default()
     }
 }
 
-#[cfg(test)]
-pub(super) fn build_resolved_output_syntax_state_for_snapshot(
+/// The unresolved treatment for the conflict the resolver is parked on: the same
+/// danger text over a yellow wash, so the output says which of several open
+/// `<Merge Conflict>` rows the picks and the source columns are about.
+pub(super) fn resolved_output_active_unresolved_highlight_style(
     theme: AppTheme,
-    output_snapshot: &TextModelSnapshot,
-    language: Option<rows::DiffSyntaxLanguage>,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-    edit_hint: Option<rows::DiffSyntaxEdit>,
-) -> ResolvedOutputSyntaxState {
-    build_resolved_output_syntax_state_with_source(
-        theme,
-        output_snapshot.as_shared_string(),
-        output_snapshot.shared_line_starts(),
-        language,
-        old_document,
-        edit_hint,
-        rows::DiffSyntaxBudget::default(),
+) -> gpui::HighlightStyle {
+    gpui::HighlightStyle {
+        background_color: Some(resolved_output_active_conflict_background(theme).into()),
+        ..resolved_output_unresolved_highlight_style(theme)
+    }
+}
+
+/// The yellow the active conflict's row is washed with, shared by the editable
+/// output's text highlight, its gutter row and the streamed read-only rows so
+/// one row reads as one band across all three.
+pub(in crate::view) fn resolved_output_active_conflict_background(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(
+        theme.colors.warning,
+        if theme.is_dark { 0.30 } else { 0.34 },
     )
 }
 
-pub(super) fn build_resolved_output_syntax_state_for_snapshot_with_budget(
-    theme: AppTheme,
-    output_snapshot: &TextModelSnapshot,
-    language: Option<rows::DiffSyntaxLanguage>,
-    old_document: Option<rows::PreparedDiffSyntaxDocument>,
-    edit_hint: Option<rows::DiffSyntaxEdit>,
-    budget: rows::DiffSyntaxBudget,
-) -> ResolvedOutputSyntaxState {
-    build_resolved_output_syntax_state_with_source(
-        theme,
-        output_snapshot.as_shared_string(),
-        output_snapshot.shared_line_starts(),
-        language,
-        old_document,
-        edit_hint,
-        budget,
-    )
+/// The still-unresolved output rows, split into every one of them and the subset
+/// belonging to the conflict the resolver is parked on.
+///
+/// Both are derived in one pass because this runs on the keystroke path, and
+/// `active` is always a subset of `all` — the two can never disagree about where
+/// a row starts and ends.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(in crate::view) struct ResolvedOutputUnresolvedSpans {
+    pub(in crate::view) all: Arc<[Range<usize>]>,
+    pub(in crate::view) active: Arc<[Range<usize>]>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::view) struct ResolvedOutputSyntaxBackgroundKey {
-    pub(in crate::view) source_revision: ResolvedOutputSourceRevision,
-    pub(in crate::view) language: rows::DiffSyntaxLanguage,
+impl ResolvedOutputUnresolvedSpans {
+    fn is_active(&self, range: &Range<usize>) -> bool {
+        self.active.iter().any(|active| active == range)
+    }
+}
+
+/// Replace syntax styles inside unresolved output ranges with one plain danger
+/// style — the active conflict's rows with the washed variant of it. The
+/// returned ranges are non-overlapping with the unresolved spans, so the text
+/// input's later-highlight precedence cannot reveal syntax colours through the
+/// conflict treatment.
+pub(super) fn apply_resolved_output_unresolved_highlights(
+    mut syntax_highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    unresolved_spans: &ResolvedOutputUnresolvedSpans,
+    requested_range: Range<usize>,
+    unresolved_style: gpui::HighlightStyle,
+    active_unresolved_style: gpui::HighlightStyle,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    let unresolved_ranges = unresolved_spans.all.as_ref();
+    if unresolved_ranges.is_empty() || requested_range.is_empty() {
+        return syntax_highlights;
+    }
+
+    let mut highlights = Vec::with_capacity(
+        syntax_highlights
+            .len()
+            .saturating_add(unresolved_ranges.len()),
+    );
+    for (syntax_range, style) in syntax_highlights.drain(..) {
+        if syntax_range.is_empty() {
+            continue;
+        }
+
+        let mut cursor = syntax_range.start;
+        let first_unresolved =
+            unresolved_ranges.partition_point(|range| range.end <= syntax_range.start);
+        for unresolved in unresolved_ranges.iter().skip(first_unresolved) {
+            let unresolved_start = unresolved.start.max(requested_range.start);
+            let unresolved_end = unresolved.end.min(requested_range.end);
+            if unresolved_start >= syntax_range.end {
+                break;
+            }
+            if unresolved_end <= cursor || unresolved_start >= unresolved_end {
+                continue;
+            }
+            if cursor < unresolved_start {
+                highlights.push((cursor..unresolved_start.min(syntax_range.end), style));
+            }
+            cursor = cursor.max(unresolved_end);
+            if cursor >= syntax_range.end {
+                break;
+            }
+        }
+        if cursor < syntax_range.end {
+            highlights.push((cursor..syntax_range.end, style));
+        }
+    }
+
+    for unresolved in unresolved_ranges {
+        let start = unresolved.start.max(requested_range.start);
+        let end = unresolved.end.min(requested_range.end);
+        if start < end {
+            let style = if unresolved_spans.is_active(unresolved) {
+                active_unresolved_style
+            } else {
+                unresolved_style
+            };
+            highlights.push((start..end, style));
+        }
+    }
+    highlights.sort_by(|(left, _), (right, _)| {
+        left.start.cmp(&right.start).then(left.end.cmp(&right.end))
+    });
+
+    let mut merged: Vec<(Range<usize>, gpui::HighlightStyle)> =
+        Vec::with_capacity(highlights.len());
+    for (range, style) in highlights {
+        if let Some((previous_range, previous_style)) = merged.last_mut()
+            && previous_range.end == range.start
+            && *previous_style == style
+        {
+            previous_range.end = range.end;
+        } else {
+            merged.push((range, style));
+        }
+    }
+    merged
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -242,6 +321,54 @@ pub(super) fn resolved_output_snapshot_is_modified(
     current: &TextModelSnapshot,
 ) -> bool {
     saved.is_some_and(|saved| current != saved)
+}
+
+/// Whether the worktree payload must be kept as opaque user output instead of
+/// replacing it with the stage-derived marker projection.
+///
+/// Git's ordinary marker document often differs byte-for-byte from our
+/// projection (labels and marker style are common examples). It is still safe
+/// to use the projection when reconstructing its two sides exactly reproduces
+/// the immutable stage payloads and the projection can render the document's
+/// line endings. Any other difference may contain a partial or complete manual
+/// resolution, or terminators the projection would normalize, and must be
+/// preserved until the user explicitly resets it.
+pub(super) fn worktree_output_requires_protection(
+    current: Option<&str>,
+    marker_projection: Option<&str>,
+    ours: Option<&str>,
+    theirs: Option<&str>,
+) -> bool {
+    let Some(current) = current else {
+        return false;
+    };
+    if marker_projection == Some(current) {
+        return false;
+    }
+    // The projection renders every line with one detected ending, so a document
+    // that mixes CRLF and LF cannot be reproduced from it even when its two
+    // reconstructed sides match the stages exactly. Keep the worktree bytes
+    // rather than rewriting terminators the user never touched.
+    if gitcomet_core::text_utils::text_has_mixed_line_endings(current) {
+        return true;
+    }
+
+    let (Some(ours), Some(theirs)) = (ours, theirs) else {
+        return true;
+    };
+    let marker_ranges = gitcomet_core::conflict_session::parse_conflict_marker_ranges(current);
+    if !marker_ranges.iter().any(|segment| {
+        matches!(
+            segment,
+            gitcomet_core::conflict_session::ParsedConflictSegmentRanges::Conflict(_)
+        )
+    }) {
+        return true;
+    }
+
+    let (current_ours, current_theirs) =
+        gitcomet_core::conflict_session::reconstruct_conflict_marker_sides(current);
+    current_ours != ours || current_theirs != theirs
 }
 
 #[derive(Clone, Debug)]
@@ -323,14 +450,6 @@ pub(in crate::view) fn versioned_query_cached_diff_styled_text_is_current(
     let entry = entry?;
     (entry.syntax_epoch == syntax_epoch && entry.query_generation == query_generation)
         .then_some(&entry.styled)
-}
-
-pub(super) fn split_text_lines_owned(text: &str) -> Vec<String> {
-    if text.is_empty() {
-        Vec::new()
-    } else {
-        text.split('\n').map(|line| line.to_string()).collect()
-    }
 }
 
 pub(super) fn count_newlines(text: &str) -> usize {
@@ -680,24 +799,6 @@ pub(super) fn shifted_line_index(ix: usize, delta: isize) -> usize {
     }
 }
 
-pub(super) fn remap_line_keyed_cache_for_delta<T>(
-    cache: &mut HashMap<usize, T>,
-    old_range: Range<usize>,
-    new_range: Range<usize>,
-) {
-    let shift = new_range.len() as isize - old_range.len() as isize;
-    let previous = std::mem::take(cache);
-    for (line_ix, value) in previous {
-        if line_ix < old_range.start {
-            cache.insert(line_ix, value);
-            continue;
-        }
-        if line_ix >= old_range.end {
-            cache.insert(shifted_line_index(line_ix, shift), value);
-        }
-    }
-}
-
 pub(super) fn remap_resolved_output_conflict_block_ranges_for_delta(
     old_block_ranges: &[Range<usize>],
     old_range: Range<usize>,
@@ -734,15 +835,17 @@ pub(super) fn remap_resolved_output_conflict_block_ranges_for_delta(
 
 pub(super) fn resolved_output_conflict_block_ranges_in_text(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
 ) -> Option<Vec<Range<usize>>> {
-    fn is_line_boundary(text: &str, byte_ix: usize) -> bool {
+    fn is_line_boundary(
+        text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+        byte_ix: usize,
+    ) -> bool {
         if byte_ix == 0 || byte_ix == text.len() {
             return true;
         }
-        text.as_bytes()
-            .get(byte_ix.saturating_sub(1))
-            .is_some_and(|b| *b == b'\n')
+        text.byte_at(byte_ix.saturating_sub(1))
+            .is_some_and(|b| b == b'\n')
     }
 
     let mut ranges = Vec::new();
@@ -751,8 +854,7 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
     for seg in marker_segments {
         match seg {
             conflict_resolver::ConflictSegment::Text(text) => {
-                let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(text.as_str()) {
+                if !output_text.starts_with_at(cursor, text.as_str()) {
                     return None;
                 }
                 cursor = cursor.saturating_add(text.len());
@@ -762,8 +864,7 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
                 let expected = conflict_resolver::generate_resolved_text(&[
                     conflict_resolver::ConflictSegment::Block(block.clone()),
                 ]);
-                let tail = output_text.get(cursor..)?;
-                if !tail.starts_with(&expected) {
+                if !output_text.starts_with_at(cursor, &expected) {
                     return None;
                 }
                 let end = cursor.saturating_add(expected.len());
@@ -775,7 +876,14 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
                 }
                 let start_line = line_offset;
                 let mut end_line = line_offset.saturating_add(count_newlines(&expected));
-                if end == output_text.len() && !expected.is_empty() {
+                // A block that ends the file without a trailing newline still
+                // occupies its last line, which no newline accounts for. Only
+                // that case needs the extra row: when the block *is* newline
+                // terminated, the outline still keeps an empty row after the
+                // final newline (`resolved_output_outline_line_count`), and
+                // claiming it would put this block's `?` gutter and conflict
+                // bracket on a row that belongs to no conflict.
+                if end == output_text.len() && !expected.is_empty() && !expected.ends_with('\n') {
                     end_line = end_line.saturating_add(1);
                 }
                 ranges.push(start_line..end_line);
@@ -788,10 +896,72 @@ pub(super) fn resolved_output_conflict_block_ranges_in_text(
     Some(ranges)
 }
 
+/// Line ranges for the displayed conflict blocks, tolerating manual edits.
+///
+/// The walk above only reports ranges while the buffer still reads back exactly
+/// as the segments render, so one keystroke anywhere in the output drops every
+/// marker at once — placeholders lose their conflict color, their bracket and
+/// their chunk menu. `ResolvedOutputBlockMap` carries block byte ownership
+/// through edits, so fall back to it and convert its ranges into line space.
+pub(super) fn resolved_output_conflict_block_line_ranges(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
+) -> Option<Vec<Range<usize>>> {
+    resolved_output_conflict_block_ranges_in_text(marker_segments, output_text).or_else(|| {
+        conflict_block_line_ranges_from_block_map(marker_segments, output_text, block_map)
+    })
+}
+
+fn conflict_block_line_ranges_from_block_map(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
+) -> Option<Vec<Range<usize>>> {
+    if !block_map.is_valid_for(marker_segments, output_text) {
+        return None;
+    }
+
+    let byte_ranges = block_map.ranges();
+    let mut line_ranges = Vec::with_capacity(byte_ranges.len());
+    // The map keeps its ranges sorted and disjoint, so one forward pass counts
+    // every newline exactly once instead of rescanning the prefix per block.
+    let mut cursor = 0usize;
+    let mut line = 0usize;
+    for range in byte_ranges {
+        let start_line = line.saturating_add(output_text.count_newlines_in(cursor..range.start));
+        let body_newlines = output_text.count_newlines_in(range.clone());
+        let mut end_line = start_line.saturating_add(body_newlines);
+        // A block that ends the file without a trailing newline still occupies
+        // its last row, which no newline accounts for — matching the strict
+        // walk. The carried `line` below must not include this adjustment: it
+        // counts newlines actually seen, and the next block's start is measured
+        // from those.
+        let body_is_empty = range.start == range.end;
+        let body_ends_with_newline = range
+            .end
+            .checked_sub(1)
+            .and_then(|last| output_text.byte_at(last))
+            .is_some_and(|byte| byte == b'\n');
+        if range.end == output_text.len() && !body_is_empty && !body_ends_with_newline {
+            end_line = end_line.saturating_add(1);
+        }
+        line_ranges.push(start_line..end_line);
+        line = start_line.saturating_add(body_newlines);
+        cursor = range.end;
+    }
+
+    Some(line_ranges)
+}
+
 pub(super) fn conflict_marker_ranges_for_block(
     block: &conflict_resolver::ConflictBlock,
     line_range: Range<usize>,
 ) -> Vec<Range<usize>> {
+    if !block.resolved && block.choice.is_empty() {
+        return vec![line_range];
+    }
+
     let mut marker_ranges = Vec::new();
     if !block.resolved
         && let Some(relative_subranges) = unresolved_decision_ranges_for_block(block)
@@ -874,17 +1044,17 @@ pub(super) fn conflict_fragment_text_for_choice(
     theirs: &str,
     choice: conflict_resolver::ConflictChoice,
 ) -> String {
-    match choice {
-        conflict_resolver::ConflictChoice::Base => base.to_string(),
-        conflict_resolver::ConflictChoice::Ours => ours.to_string(),
-        conflict_resolver::ConflictChoice::Theirs => theirs.to_string(),
-        conflict_resolver::ConflictChoice::Both => {
-            let mut out = String::with_capacity(ours.len().saturating_add(theirs.len()));
-            out.push_str(ours);
-            out.push_str(theirs);
-            out
+    use gitcomet_core::conflict_output::ConflictOutputSource;
+
+    let mut out = String::new();
+    for source in choice.iter() {
+        match source {
+            ConflictOutputSource::Base => out.push_str(base),
+            ConflictOutputSource::Ours => out.push_str(ours),
+            ConflictOutputSource::Theirs => out.push_str(theirs),
         }
     }
+    out
 }
 
 pub(super) fn unresolved_subchunk_conflict_ranges_for_block(
@@ -1039,11 +1209,12 @@ pub(super) fn unresolved_decision_ranges_for_block(
 
 pub(super) fn build_resolved_output_conflict_markers(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
     output_line_count: usize,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
     let Some(block_ranges) =
-        resolved_output_conflict_block_ranges_in_text(marker_segments, output_text)
+        resolved_output_conflict_block_line_ranges(marker_segments, output_text, block_map)
     else {
         return vec![None; output_line_count];
     };
@@ -1133,18 +1304,349 @@ pub(super) fn push_conflict_text_segment(
 
 pub(super) fn resolved_output_markers_for_text(
     marker_segments: &[conflict_resolver::ConflictSegment],
-    output_text: &str,
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Vec<Option<ResolvedOutputConflictMarker>> {
-    let output_line_count = conflict_resolver::resolved_output_outline_line_count(output_text);
-    build_resolved_output_conflict_markers(marker_segments, output_text, output_line_count)
+    let output_line_count = output_text.row_count();
+    build_resolved_output_conflict_markers(
+        marker_segments,
+        output_text,
+        output_line_count,
+        block_map,
+    )
+}
+
+/// Byte ranges whose output rows are still unresolved, and the subset of them
+/// owned by `active_conflict`. Derive these from the current segments instead of
+/// the asynchronously refreshed outline so syntax styling never briefly wins
+/// while outline metadata catches up.
+/// Unresolved output rows and the conflict each belongs to.
+pub(in crate::view) type UnresolvedRows = Arc<[(Range<usize>, usize)]>;
+
+/// [`UnresolvedRows`] paired with the state they were scanned from.
+pub(in crate::view) type CachedUnresolvedRows = (ResolvedOutputKey, UnresolvedRows);
+
+/// What the unresolved rows actually depend on: the buffer *and* which blocks
+/// are still open.
+///
+/// The revision alone is not enough. A pick can leave the output byte-identical
+/// — choosing the side already displayed, or resolving a whitespace-only block —
+/// so the buffer never bumps its revision while the answer changes. Keying on
+/// the revision alone leaves the yellow wash painted on a block the user just
+/// resolved.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct ResolvedOutputKey {
+    pub(in crate::view) revision: ResolvedOutputSourceRevision,
+    pub(in crate::view) resolution: u64,
+    pub(in crate::view) block_map: u64,
+}
+
+impl ResolvedOutputKey {
+    pub(in crate::view) fn new(
+        snapshot: &TextModelSnapshot,
+        marker_segments: &[conflict_resolver::ConflictSegment],
+        block_map: &conflict_resolver::ResolvedOutputBlockMap,
+    ) -> Self {
+        Self {
+            revision: ResolvedOutputSourceRevision::from_snapshot(snapshot),
+            resolution: resolution_fingerprint(marker_segments),
+            block_map: block_map_fingerprint(block_map),
+        }
+    }
+}
+
+/// O(conflicts) digest of the block map's byte ranges.
+///
+/// The rows fall back to the map for block geometry whenever the strict walk
+/// fails — which is exactly once the user has edited the buffer. The map can be
+/// rebuilt or reset without the text revision or any block's resolution moving,
+/// and rows computed against the old geometry then land on the wrong lines.
+fn block_map_fingerprint(block_map: &conflict_resolver::ResolvedOutputBlockMap) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    let ranges = block_map.ranges();
+    ranges.len().hash(&mut hasher);
+    for range in ranges {
+        range.start.hash(&mut hasher);
+        range.end.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// O(conflicts) digest of which blocks are resolved. Not a hash of the text —
+/// the revision already covers that.
+fn resolution_fingerprint(marker_segments: &[conflict_resolver::ConflictSegment]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = rustc_hash::FxHasher::default();
+    for segment in marker_segments {
+        match segment {
+            conflict_resolver::ConflictSegment::Block(block) => {
+                block.resolved.hash(&mut hasher);
+                block.choice.hash(&mut hasher);
+            }
+            conflict_resolver::ConflictSegment::Text(_) => 0u8.hash(&mut hasher),
+        }
+    }
+    hasher.finish()
+}
+
+/// Every still-unresolved output row, tagged with the conflict it belongs to.
+///
+/// Depends only on the *text*. Selecting a different conflict does not change
+/// it, which is what lets the caller cache it across navigation.
+///
+/// Takes the rope rather than a materialized document plus a line-start array:
+/// the rows wanted are the marker rows of unresolved blocks, and the rope
+/// answers "byte range of row N" in O(log n), so this never has to build an
+/// index proportional to the document.
+pub(super) fn resolved_output_unresolved_rows(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &crate::kit::rope::Rope,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
+) -> UnresolvedRows {
+    if !marker_segments.iter().any(|segment| {
+        matches!(segment, conflict_resolver::ConflictSegment::Block(block) if !block.resolved)
+    }) {
+        return Arc::default();
+    }
+    let Some(block_ranges) =
+        resolved_output_conflict_block_line_ranges(marker_segments, output_text, block_map)
+    else {
+        return Arc::default();
+    };
+
+    // Walk the unresolved blocks rather than building a marker entry for every
+    // row and filtering it. The per-line array is proportional to the document;
+    // this is proportional to the conflicts, which is what the caller actually
+    // asked about.
+    let mut rows = Vec::new();
+    for (conflict_ix, (block, line_range)) in marker_segments
+        .iter()
+        .filter_map(|segment| match segment {
+            conflict_resolver::ConflictSegment::Block(block) => Some(block),
+            conflict_resolver::ConflictSegment::Text(_) => None,
+        })
+        .zip(block_ranges.iter().cloned())
+        .enumerate()
+    {
+        if block.resolved {
+            continue;
+        }
+        for marker_range in conflict_marker_ranges_for_block(block, line_range) {
+            for line_ix in marker_range.start..marker_range.end {
+                let Ok(row) = u32::try_from(line_ix) else {
+                    continue;
+                };
+                if row >= output_text.line_count() {
+                    continue;
+                }
+                let mut range = output_text.line_range(row);
+                while range.end > range.start
+                    && conflict_resolver::ResolvedOutputSource::byte_at(output_text, range.end - 1)
+                        == Some(b'\r')
+                {
+                    range.end -= 1;
+                }
+                if !range.is_empty() {
+                    rows.push((range, conflict_ix));
+                }
+            }
+        }
+    }
+    rows.sort_by_key(|(range, _)| (range.start, range.end));
+    rows.into()
+}
+
+/// Split cached rows into "every unresolved row" and "the selected conflict's".
+///
+/// O(unresolved rows), so moving the wash between conflicts costs nothing that
+/// scales with the document.
+pub(super) fn resolved_output_unresolved_spans_for_active(
+    rows: &[(Range<usize>, usize)],
+    active_conflict: Option<usize>,
+) -> ResolvedOutputUnresolvedSpans {
+    let mut all = Vec::with_capacity(rows.len());
+    let mut active = Vec::new();
+    for (range, conflict_ix) in rows {
+        if active_conflict == Some(*conflict_ix) {
+            active.push(range.clone());
+        }
+        all.push(range.clone());
+    }
+    ResolvedOutputUnresolvedSpans {
+        all: all.into(),
+        active: active.into(),
+    }
+}
+
+/// Scan and select in one call. Production splits the two so navigation can
+/// reuse the scan; this stays for tests that only care about the result.
+#[cfg(test)]
+pub(super) fn resolved_output_unresolved_byte_ranges(
+    marker_segments: &[conflict_resolver::ConflictSegment],
+    output_text: &str,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
+    active_conflict: Option<usize>,
+) -> ResolvedOutputUnresolvedSpans {
+    let rope = crate::kit::rope::Rope::from_str(output_text);
+    let rows = resolved_output_unresolved_rows(marker_segments, &rope, block_map);
+    resolved_output_unresolved_spans_for_active(rows.as_ref(), active_conflict)
+}
+
+/// Byte spans of the unresolved-conflict placeholder rows, terminator included.
+///
+/// A `<Merge Conflict>` row is a drawing of an open decision, not text the file
+/// will ever contain, so the buffer refuses to edit these spans however the
+/// rest of the output has been rewritten by hand. Rows are identified by their
+/// own content, which keeps the protection standing even once the marker
+/// segments no longer line up with the buffer.
+pub(super) fn resolved_output_placeholder_protected_ranges(
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+) -> Arc<[Range<usize>]> {
+    let mut ranges: Vec<Range<usize>> = Vec::new();
+    output_text.for_each_row_with_terminator(&mut |range, line| {
+        if conflict_resolver::line_is_unresolved_conflict_placeholder(line) {
+            ranges.push(range);
+        }
+    });
+    ranges.into()
+}
+
+/// The placeholder spans as tree-sitter should see them: the protected rows
+/// minus their line terminator.
+///
+/// Keeping the `\n` real is deliberate. It guarantees the lines either side of a
+/// masked row cannot lex as one token, and it keeps every row index — and so
+/// every `Point` the incremental edit path computes — aligned with the text.
+///
+/// Derived from the same spans the buffer protects from editing, so the mask and
+/// the protection can never drift apart.
+pub(super) fn resolved_output_live_syntax_mask(
+    protected_ranges: &[Range<usize>],
+    output_text: &(impl conflict_resolver::ResolvedOutputSource + ?Sized),
+) -> Arc<[Range<usize>]> {
+    if protected_ranges.is_empty() {
+        return Arc::default();
+    }
+    let mut mask = Vec::with_capacity(protected_ranges.len());
+    for range in protected_ranges {
+        let mut end = range.end.min(output_text.len());
+        if end > range.start && output_text.byte_at(end - 1) == Some(b'\n') {
+            end -= 1;
+        }
+        if end > range.start && output_text.byte_at(end - 1) == Some(b'\r') {
+            end -= 1;
+        }
+        if end > range.start {
+            mask.push(range.start..end);
+        }
+    }
+    mask.into()
+}
+
+/// Identity of everything the resolved-output highlight provider closes over.
+///
+/// This has to be *stable* when nothing changed, not merely unique. Installing a
+/// provider notifies the input, which re-enters the `cx.observe` that installed
+/// it; an always-fresh key would rebind on that re-entry, notify again, and spin
+/// forever. `set_highlight_provider_with_key` early-returns on an unchanged key
+/// without notifying, which is what terminates the cycle.
+///
+/// The document version covers the text and the tree; the theme and the
+/// unresolved-conflict spans are the other two things baked into the closure.
+pub(super) fn resolved_output_live_provider_binding_key(
+    document_version: u64,
+    theme_epoch: u64,
+    unresolved_spans: &ResolvedOutputUnresolvedSpans,
+) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    document_version.hash(&mut hasher);
+    theme_epoch.hash(&mut hasher);
+    unresolved_spans.all.hash(&mut hasher);
+    // Navigating between conflicts moves only this half, and it is what decides
+    // which row wears the active wash — leave it out and the provider stays
+    // bound to the previous conflict's highlight.
+    unresolved_spans.active.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// Highlights for the resolved output, straight off the live tree.
+///
+/// Unlike the prepared-document provider this replaced, it is always exact for
+/// the text it was built over and so never reports `pending`: the document is
+/// re-synced on the keystroke and the provider rebound with it. That is what
+/// keeps `TextInput`'s interpolation and superseded-source machinery dormant
+/// here — they exist to cover a recompute lag this path does not have.
+pub(super) fn resolved_output_live_highlight_provider(
+    theme: AppTheme,
+    snapshot: rows::LiveSyntaxSnapshot,
+    unresolved_spans: ResolvedOutputUnresolvedSpans,
+) -> HighlightProvider {
+    let unresolved_style = resolved_output_unresolved_highlight_style(theme);
+    let active_unresolved_style = resolved_output_active_unresolved_highlight_style(theme);
+    HighlightProvider::with_pending(
+        move |byte_range: Range<usize>| HighlightProviderResult {
+            highlights: apply_resolved_output_unresolved_highlights(
+                snapshot.highlights_for_byte_range(byte_range.clone()),
+                &unresolved_spans,
+                byte_range,
+                unresolved_style,
+                active_unresolved_style,
+            ),
+            pending: false,
+        },
+        || 0,
+        || false,
+    )
+}
+
+/// Fold a batch of edits into the single `(replaced, inserted)` span that covers
+/// them all, in the coordinates `LiveSyntaxDocument::sync` expects.
+///
+/// Each delta is expressed against the buffer as it stood when that delta was
+/// applied, and only the final line starts survive to this point, so translating
+/// them individually would compute positions against the wrong text. One wider
+/// edit is always sound — it just reparses a little more than strictly needed —
+/// and GPUI coalesces notifications, so in practice the batch is one delta.
+///
+/// Mirrors the union arithmetic in `HighlightInterpolation::record_edit`.
+pub(super) fn coalesce_resolved_output_edit_deltas(
+    deltas: &[(Range<usize>, Range<usize>)],
+) -> Option<(Range<usize>, Range<usize>)> {
+    let mut folded: Option<(usize, usize, usize)> = None; // (start, old_len, new_len)
+    for (replaced, inserted) in deltas {
+        folded = Some(match folded {
+            None => (
+                replaced.start,
+                replaced.end.saturating_sub(replaced.start),
+                inserted.end.saturating_sub(inserted.start),
+            ),
+            Some((start, old_len, new_len)) => {
+                let union_start = start.min(replaced.start);
+                let union_right = start.saturating_add(new_len).max(replaced.end);
+                let source_right = union_right - new_len + old_len;
+                let live_right =
+                    union_right - (replaced.end - replaced.start) + (inserted.end - inserted.start);
+                (
+                    union_start,
+                    source_right.saturating_sub(union_start),
+                    live_right.saturating_sub(union_start),
+                )
+            }
+        });
+    }
+    folded.map(|(start, old_len, new_len)| (start..start + old_len, start..start + new_len))
 }
 
 pub(super) fn resolved_output_marker_for_line(
     marker_segments: &[conflict_resolver::ConflictSegment],
     output_text: &str,
     output_line_ix: usize,
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
 ) -> Option<ResolvedOutputConflictMarker> {
-    resolved_output_markers_for_text(marker_segments, output_text)
+    resolved_output_markers_for_text(marker_segments, output_text, block_map)
         .get(output_line_ix)
         .copied()
         .flatten()
@@ -1161,6 +1663,7 @@ pub(super) fn first_output_marker_line_for_conflict(
     })
 }
 
+#[cfg(test)]
 pub(super) fn conflict_marker_nav_entries_from_markers(
     markers: &[Option<ResolvedOutputConflictMarker>],
 ) -> Vec<usize> {
@@ -1235,7 +1738,10 @@ pub(super) fn split_target_conflict_block_into_subchunks(
 
     enum SplitMode {
         Subchunks(Vec<Subchunk>),
-        DecisionRanges(Vec<UnresolvedDecisionRegion>),
+        DecisionRanges {
+            regions: Vec<UnresolvedDecisionRegion>,
+            choice_is_ours: bool,
+        },
     }
     let split_mode = if let Some(base) = target_block.base.as_deref() {
         split_conflict_into_subchunks(base, &target_block.ours, &target_block.theirs).and_then(
@@ -1251,8 +1757,24 @@ pub(super) fn split_target_conflict_block_into_subchunks(
         None
     }
     .or_else(|| {
-        unresolved_decision_regions_for_block(&target_block)
-            .and_then(|regions| (regions.len() > 1).then_some(SplitMode::DecisionRanges(regions)))
+        let (analysis_block, choice_is_ours) =
+            if target_block.choice == conflict_resolver::ConflictChoice::Ours {
+                (target_block.clone(), true)
+            } else if target_block.choice == conflict_resolver::ConflictChoice::Theirs {
+                (target_block.clone(), false)
+            } else if target_block.choice.is_empty() {
+                let mut analysis_block = target_block.clone();
+                analysis_block.choice = conflict_resolver::ConflictChoice::Ours;
+                (analysis_block, true)
+            } else {
+                return None;
+            };
+        unresolved_decision_regions_for_block(&analysis_block).and_then(|regions| {
+            (regions.len() > 1).then_some(SplitMode::DecisionRanges {
+                regions,
+                choice_is_ours,
+            })
+        })
     });
     let Some(split_mode) = split_mode else {
         return false;
@@ -1289,6 +1811,9 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                                     theirs: theirs.clone().into(),
                                                     choice: target_block.choice,
                                                     resolved: false,
+                                                    // Subchunks of a whitespace-only
+                                                    // block are whitespace-only too.
+                                                    whitespace_only: target_block.whitespace_only,
                                                 },
                                             ),
                                         );
@@ -1297,19 +1822,15 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                 }
                             }
                         }
-                        SplitMode::DecisionRanges(regions) => {
-                            let (selected_text, alternate_text, choice_is_ours) =
-                                match target_block.choice {
-                                    conflict_resolver::ConflictChoice::Ours => {
-                                        (&target_block.ours, &target_block.theirs, true)
-                                    }
-                                    conflict_resolver::ConflictChoice::Theirs => {
-                                        (&target_block.theirs, &target_block.ours, false)
-                                    }
-                                    _ => {
-                                        return false;
-                                    }
-                                };
+                        SplitMode::DecisionRanges {
+                            regions,
+                            choice_is_ours,
+                        } => {
+                            let (selected_text, alternate_text) = if *choice_is_ours {
+                                (&target_block.ours, &target_block.theirs)
+                            } else {
+                                (&target_block.theirs, &target_block.ours)
+                            };
                             let selected_total_lines = source_line_count(selected_text);
                             let mut selected_cursor = 0usize;
                             for region in regions {
@@ -1327,7 +1848,7 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                     alternate_text,
                                     region.alternate_line_range.clone(),
                                 );
-                                let (ours, theirs) = if choice_is_ours {
+                                let (ours, theirs) = if *choice_is_ours {
                                     (selected_fragment, alternate_fragment)
                                 } else {
                                     (alternate_fragment, selected_fragment)
@@ -1339,6 +1860,7 @@ pub(super) fn split_target_conflict_block_into_subchunks(
                                         theirs: theirs.into(),
                                         choice: target_block.choice,
                                         resolved: false,
+                                        whitespace_only: target_block.whitespace_only,
                                     },
                                 ));
                                 next_region_indices.push(region_ix);
@@ -1366,17 +1888,6 @@ pub(super) fn split_target_conflict_block_into_subchunks(
     *marker_segments = next_segments;
     *conflict_region_indices = next_region_indices;
     true
-}
-
-impl From<conflict_resolver::ConflictChoice> for gitcomet_state::msg::ConflictRegionChoice {
-    fn from(choice: conflict_resolver::ConflictChoice) -> Self {
-        match choice {
-            conflict_resolver::ConflictChoice::Base => Self::Base,
-            conflict_resolver::ConflictChoice::Ours => Self::Ours,
-            conflict_resolver::ConflictChoice::Theirs => Self::Theirs,
-            conflict_resolver::ConflictChoice::Both => Self::Both,
-        }
-    }
 }
 
 pub(super) fn conflict_region_index_is_unique(
@@ -1503,15 +2014,10 @@ pub(super) fn conflict_group_selected_choices_for_ix(
         if !block.resolved {
             continue;
         }
-        match block.choice {
-            conflict_resolver::ConflictChoice::Base => has_base = true,
-            conflict_resolver::ConflictChoice::Ours => has_ours = true,
-            conflict_resolver::ConflictChoice::Theirs => has_theirs = true,
-            conflict_resolver::ConflictChoice::Both => {
-                has_ours = true;
-                has_theirs = true;
-            }
-        }
+        use gitcomet_core::conflict_output::ConflictOutputSource;
+        has_base |= block.choice.contains(ConflictOutputSource::Base);
+        has_ours |= block.choice.contains(ConflictOutputSource::Ours);
+        has_theirs |= block.choice.contains(ConflictOutputSource::Theirs);
     }
 
     let mut selected = Vec::with_capacity(3);
@@ -1556,26 +2062,19 @@ pub(super) fn conflict_group_indices_for_choice(
                 return false;
             }
             match choice {
-                conflict_resolver::ConflictChoice::Base => {
-                    block.choice == conflict_resolver::ConflictChoice::Base
-                }
-                conflict_resolver::ConflictChoice::Ours => {
-                    matches!(
-                        block.choice,
-                        conflict_resolver::ConflictChoice::Ours
-                            | conflict_resolver::ConflictChoice::Both
-                    )
-                }
-                conflict_resolver::ConflictChoice::Theirs => {
-                    matches!(
-                        block.choice,
-                        conflict_resolver::ConflictChoice::Theirs
-                            | conflict_resolver::ConflictChoice::Both
-                    )
-                }
+                conflict_resolver::ConflictChoice::Base => block
+                    .choice
+                    .contains(gitcomet_core::conflict_output::ConflictOutputSource::Base),
+                conflict_resolver::ConflictChoice::Ours => block
+                    .choice
+                    .contains(gitcomet_core::conflict_output::ConflictOutputSource::Ours),
+                conflict_resolver::ConflictChoice::Theirs => block
+                    .choice
+                    .contains(gitcomet_core::conflict_output::ConflictOutputSource::Theirs),
                 conflict_resolver::ConflictChoice::Both => {
                     block.choice == conflict_resolver::ConflictChoice::Both
                 }
+                _ => block.choice == choice,
             }
         })
         .collect()
@@ -1641,8 +2140,9 @@ pub(super) fn reset_conflict_block_selection(
                 return false;
             }
             block.resolved = false;
-            // Unpicked state should return to the default local-side choice.
-            block.choice = conflict_resolver::ConflictChoice::Ours;
+            // A genuinely unpicked block has no implicit source. The output
+            // projection renders its dedicated merge-conflict placeholder.
+            block.choice = conflict_resolver::ConflictChoice::empty();
             return true;
         }
         seen_conflict_ix = seen_conflict_ix.saturating_add(1);
@@ -1782,83 +2282,39 @@ pub(super) fn apply_three_way_empty_base_provenance_hints(
                         block_ix,
                     )
                 {
-                    match block.choice {
-                        conflict_resolver::ConflictChoice::Base => {}
-                        conflict_resolver::ConflictChoice::Ours => {
-                            let take = usize::min(
-                                range.end.saturating_sub(range.start),
-                                usize::try_from(b_count).unwrap_or(0),
-                            );
-                            for off in 0..take {
-                                if let Some(m) = meta.get_mut(range.start + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::B;
-                                    m.input_line = Some(
-                                        b_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
+                    let mut output_offset = 0usize;
+                    for source in block.choice.iter() {
+                        let (source_count, resolved_source, input_line) = match source {
+                            gitcomet_core::conflict_output::ConflictOutputSource::Base => {
+                                (a_count, conflict_resolver::ResolvedLineSource::A, a_line)
+                            }
+                            gitcomet_core::conflict_output::ConflictOutputSource::Ours => {
+                                (b_count, conflict_resolver::ResolvedLineSource::B, b_line)
+                            }
+                            gitcomet_core::conflict_output::ConflictOutputSource::Theirs => {
+                                (c_count, conflict_resolver::ResolvedLineSource::C, c_line)
+                            }
+                        };
+                        let remaining = range
+                            .end
+                            .saturating_sub(range.start.saturating_add(output_offset));
+                        let take =
+                            usize::min(remaining, usize::try_from(source_count).unwrap_or(0));
+                        for off in 0..take {
+                            if let Some(m) = meta.get_mut(range.start + output_offset + off)
+                                && matches!(
+                                    m.source,
+                                    conflict_resolver::ResolvedLineSource::A
+                                        | conflict_resolver::ResolvedLineSource::Manual
+                                )
+                            {
+                                m.source = resolved_source;
+                                m.input_line = Some(
+                                    input_line.saturating_add(u32::try_from(off).unwrap_or(0)),
+                                );
                             }
                         }
-                        conflict_resolver::ConflictChoice::Theirs => {
-                            let take = usize::min(
-                                range.end.saturating_sub(range.start),
-                                usize::try_from(c_count).unwrap_or(0),
-                            );
-                            for off in 0..take {
-                                if let Some(m) = meta.get_mut(range.start + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::C;
-                                    m.input_line = Some(
-                                        c_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
-                            }
-                        }
-                        conflict_resolver::ConflictChoice::Both => {
-                            let total = range.end.saturating_sub(range.start);
-                            let ours_take =
-                                usize::min(total, usize::try_from(b_count).unwrap_or(0));
-                            for off in 0..ours_take {
-                                if let Some(m) = meta.get_mut(range.start + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::B;
-                                    m.input_line = Some(
-                                        b_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
-                            }
-
-                            let theirs_take = total.saturating_sub(ours_take);
-                            for off in 0..theirs_take {
-                                if let Some(m) = meta.get_mut(range.start + ours_take + off)
-                                    && matches!(
-                                        m.source,
-                                        conflict_resolver::ResolvedLineSource::A
-                                            | conflict_resolver::ResolvedLineSource::Manual
-                                    )
-                                {
-                                    m.source = conflict_resolver::ResolvedLineSource::C;
-                                    m.input_line = Some(
-                                        c_line.saturating_add(u32::try_from(off).unwrap_or(0)),
-                                    );
-                                }
-                            }
-                        }
+                        output_offset = output_offset.saturating_add(take);
                     }
                 }
 
@@ -1954,101 +2410,116 @@ pub(super) fn apply_conflict_choice_provenance_hints_for_ranges(
                 };
 
                 if let Some(range) = block_ranges.get(block_ix).cloned() {
-                    match (view_mode, block.choice) {
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Base,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::A,
-                                a_line,
-                                a_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Ours,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Theirs,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::C,
-                                c_line,
-                                c_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::ThreeWay,
-                            conflict_resolver::ConflictChoice::Both,
-                        ) => {
-                            assign_both_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                                conflict_resolver::ResolvedLineSource::C,
-                                c_line,
-                                c_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Theirs,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                            );
-                        }
-                        (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Both,
-                        ) => {
-                            assign_both_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::A,
-                                a_line,
-                                a_count,
-                                conflict_resolver::ResolvedLineSource::B,
-                                b_line,
-                                b_count,
-                            );
-                        }
-                        // In two-way mode, Base falls back to local-side semantics.
-                        (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Base,
-                        )
-                        | (
-                            ConflictResolverViewMode::TwoWayDiff,
-                            conflict_resolver::ConflictChoice::Ours,
-                        ) => {
-                            assign_range(
-                                meta,
-                                range,
-                                conflict_resolver::ResolvedLineSource::A,
-                                a_line,
-                                a_count,
-                            );
+                    if !block.resolved && block.choice.is_empty() {
+                        assign_range(
+                            meta,
+                            range,
+                            conflict_resolver::ResolvedLineSource::Manual,
+                            0,
+                            0,
+                        );
+                    } else {
+                        match (view_mode, block.choice) {
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Base,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::A,
+                                    a_line,
+                                    a_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Ours,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Theirs,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::C,
+                                    c_line,
+                                    c_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::ThreeWay,
+                                conflict_resolver::ConflictChoice::Both,
+                            ) => {
+                                assign_both_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                    conflict_resolver::ResolvedLineSource::C,
+                                    c_line,
+                                    c_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Theirs,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                );
+                            }
+                            (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Both,
+                            ) => {
+                                assign_both_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::A,
+                                    a_line,
+                                    a_count,
+                                    conflict_resolver::ResolvedLineSource::B,
+                                    b_line,
+                                    b_count,
+                                );
+                            }
+                            // In two-way mode, Base falls back to local-side semantics.
+                            (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Base,
+                            )
+                            | (
+                                ConflictResolverViewMode::TwoWayDiff,
+                                conflict_resolver::ConflictChoice::Ours,
+                            ) => {
+                                assign_range(
+                                    meta,
+                                    range,
+                                    conflict_resolver::ResolvedLineSource::A,
+                                    a_line,
+                                    a_count,
+                                );
+                            }
+                            _ => {
+                                // Arbitrary ordered combinations are rendered
+                                // correctly; this compact hint table treats their
+                                // mixed provenance as manual.
+                            }
                         }
                     }
                 }
@@ -2085,44 +2556,6 @@ pub(super) fn apply_conflict_choice_provenance_hints(
         block_ranges.as_slice(),
         view_mode,
     );
-}
-
-pub(super) fn replacement_lines_for_conflict_block(
-    block: &conflict_resolver::ConflictBlock,
-    choice: conflict_resolver::ConflictChoice,
-) -> Option<Vec<String>> {
-    match choice {
-        conflict_resolver::ConflictChoice::Base => {
-            Some(split_text_lines_owned(block.base.as_deref()?))
-        }
-        conflict_resolver::ConflictChoice::Ours => Some(split_text_lines_owned(&block.ours)),
-        conflict_resolver::ConflictChoice::Theirs => Some(split_text_lines_owned(&block.theirs)),
-        conflict_resolver::ConflictChoice::Both => {
-            let mut resolved_block = block.clone();
-            resolved_block.choice = conflict_resolver::ConflictChoice::Both;
-            resolved_block.resolved = true;
-            let merged = conflict_resolver::generate_resolved_text(&[
-                conflict_resolver::ConflictSegment::Block(resolved_block),
-            ]);
-            Some(split_text_lines_owned(&merged))
-        }
-    }
-}
-
-pub(super) fn replace_output_lines_in_range(
-    output: &str,
-    range: Range<usize>,
-    replacement_lines: &[String],
-) -> String {
-    let mut lines: Vec<String> = if output.is_empty() {
-        Vec::new()
-    } else {
-        output.split('\n').map(|line| line.to_string()).collect()
-    };
-    let start = range.start.min(lines.len());
-    let end = range.end.min(lines.len()).max(start);
-    lines.splice(start..end, replacement_lines.iter().cloned());
-    lines.join("\n")
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -2200,6 +2633,7 @@ pub(super) struct FocusedMergetoolSavePayload {
 pub(super) fn build_focused_mergetool_save_payload(
     marker_segments: &[ConflictSegment],
     block_region_indices: &[usize],
+    block_map: &conflict_resolver::ResolvedOutputBlockMap,
     materialized_output_text: Option<&str>,
     labels: gitcomet_core::conflict_output::ConflictMarkerLabels<'_>,
 ) -> FocusedMergetoolSavePayload {
@@ -2219,6 +2653,7 @@ pub(super) fn build_focused_mergetool_save_payload(
         if let Some(updates) = conflict_resolver::derive_region_resolution_updates_from_output(
             marker_segments,
             block_region_indices,
+            block_map,
             output_text,
         ) {
             let mut save_segments = marker_segments.to_vec();
@@ -2230,8 +2665,31 @@ pub(super) fn build_focused_mergetool_save_payload(
                 &mut save_segments,
                 &ordered_resolutions,
             );
+            let mut output = output_text.to_string();
+            let blocks: Vec<_> = marker_segments
+                .iter()
+                .filter_map(|segment| match segment {
+                    ConflictSegment::Block(block) => Some(block),
+                    ConflictSegment::Text(_) => None,
+                })
+                .collect();
+            for ((block, range), resolution) in blocks
+                .into_iter()
+                .zip(block_map.ranges())
+                .zip(&ordered_resolutions)
+                .rev()
+            {
+                if matches!(
+                    resolution,
+                    gitcomet_core::conflict_session::ConflictRegionResolution::Unresolved
+                ) {
+                    let marker_text =
+                        render_preserve_markers(&[ConflictSegment::Block(block.clone())]);
+                    output.replace_range(range.clone(), &marker_text);
+                }
+            }
             return FocusedMergetoolSavePayload {
-                output: render_preserve_markers(&save_segments),
+                output,
                 total_conflicts: conflict_resolver::conflict_count(&save_segments),
                 resolved_conflicts: conflict_resolver::resolved_conflict_count(&save_segments),
             };
@@ -2706,20 +3164,64 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolved_output_modified: bool,
     pub(in crate::view) conflict_resolved_output_projection:
         Option<conflict_resolver::ResolvedOutputProjection>,
+    /// Byte ownership for displayed conflict blocks in the live output.
+    pub(in crate::view) conflict_resolved_output_block_map:
+        conflict_resolver::ResolvedOutputBlockMap,
     pub(in crate::view) conflict_resolved_preview_text: TextModelSnapshot,
     pub(in crate::view) conflict_resolved_preview_syntax_language: Option<rows::DiffSyntaxLanguage>,
-    pub(in crate::view) conflict_resolved_preview_highlight_provider_theme_epoch: u64,
-    pub(in crate::view) conflict_resolved_preview_style_cache_epoch: u64,
-    pub(in crate::view) conflict_resolved_preview_prepared_syntax_document:
-        Option<rows::PreparedDiffSyntaxDocument>,
-    pub(in crate::view) conflict_resolved_preview_syntax_inflight:
-        Option<ResolvedOutputSyntaxBackgroundKey>,
     pub(in crate::view) conflict_resolved_preview_line_count: usize,
     pub(in crate::view) conflict_resolved_preview_line_starts: Arc<[usize]>,
+    /// The editable resolved output's tree-sitter document. Owned here rather
+    /// than in the shared thread-local cache because there is exactly one of
+    /// them at a time and it must survive every keystroke — which is precisely
+    /// what a content-hash-keyed cache cannot do.
+    pub(in crate::view) conflict_resolved_output_live_syntax: Option<rows::LiveSyntaxDocument>,
+    /// In-flight reparse for an edit that outran the foreground budget.
+    pub(in crate::view) conflict_resolved_output_live_syntax_reparse: Option<gpui::Task<()>>,
+    /// What the live tree was last built for: the buffer revision and the
+    /// placeholder mask. Both must be unchanged for a refresh to be a no-op.
+    ///
+    /// Deliberately not pointer identity on the text. `SharedString` can be
+    /// `Borrowed`, and `Arc<str>::from(&str)` then allocates afresh on every
+    /// call, so a pointer check would never match — turning every refresh into a
+    /// reparse and, because installing a provider notifies the input that
+    /// triggered the refresh, into an unbreakable loop.
+    pub(in crate::view) conflict_resolved_output_live_syntax_source:
+        Option<(ResolvedOutputSourceRevision, Arc<[Range<usize>]>)>,
+    /// Bumped on every theme change. The syntax palette is baked into
+    /// `LiveSyntaxSnapshot`, so a new theme needs a new provider -- and the
+    /// binding key is the only thing that makes `TextInput` adopt one.
+    /// Hashing theme *colours* into the key instead is not enough: two dark
+    /// themes can agree on the few colours sampled and still differ on the
+    /// syntax palette, leaving stale colours installed.
+    pub(in crate::view) conflict_resolved_output_provider_theme_epoch: u64,
+    /// Which conflict the installed output highlights wash yellow. Conflict
+    /// navigation moves no text and touches no tree, so none of the refresh
+    /// paths fire on it; this is what tells the render pass the active row moved
+    /// and the provider has to be rebuilt.
+    pub(in crate::view) conflict_resolved_output_highlighted_conflict: Option<usize>,
+    /// Unresolved output rows and their conflict, cached for the buffer
+    /// revision they were computed from.
+    ///
+    /// Conflict navigation moves the yellow wash but changes no text, so
+    /// recomputing these would rescan the whole document on every jump — which
+    /// is exactly what made F3 cost tens of milliseconds on a large file.
+    pub(in crate::view) conflict_resolved_output_unresolved_rows: Option<CachedUnresolvedRows>,
+    /// How many times the resolved output's syntax refresh has gone past its
+    /// early-out and rescanned the document. Only an edit should do that;
+    /// navigation must not.
+    #[cfg(test)]
+    pub(in crate::view) conflict_resolved_output_full_scans: usize,
+    /// Revision an off-thread first parse is currently running for, so repeated
+    /// refreshes over the same text do not pile up duplicate builds.
+    pub(in crate::view) conflict_resolved_output_live_syntax_building:
+        Option<ResolvedOutputSourceRevision>,
+    /// In-flight *first* parse. Kept apart from the reparse slot: that one is
+    /// cleared whenever there is no document to reparse, which is exactly the
+    /// state a first parse runs in -- sharing the slot would cancel it.
+    pub(in crate::view) conflict_resolved_output_live_syntax_build: Option<gpui::Task<()>>,
     pub(in crate::view) conflict_resolved_output_measure_row: usize,
     pub(in crate::view) conflict_resolved_outline_stash: Option<StashedResolvedOutlineState>,
-    pub(in crate::view) conflict_resolved_preview_segments_cache:
-        HashMap<usize, VersionedCachedDiffStyledText>,
     #[cfg(test)]
     pub(in crate::view) conflict_resolved_outline_background_delay_override:
         Option<std::time::Duration>,
@@ -2876,6 +3378,7 @@ mod tests {
             theirs: "added line\n".into(),
             choice: conflict_resolver::ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         };
 
         let regions =

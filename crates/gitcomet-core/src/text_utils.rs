@@ -87,6 +87,22 @@ where
     }
 }
 
+/// Whether `text` mixes more than one line-terminator style.
+///
+/// Renderers that rebuild a document line by line emit a single detected
+/// ending for every line, so a mixed document cannot survive that round trip.
+/// Callers use this to keep the original bytes instead of normalizing them.
+pub fn text_has_mixed_line_endings(text: &str) -> bool {
+    let crlf = text.matches("\r\n").count();
+    let bare_lf = text.matches('\n').count().saturating_sub(crlf);
+    let bare_cr = text.matches('\r').count().saturating_sub(crlf);
+    [crlf, bare_lf, bare_cr]
+        .into_iter()
+        .filter(|count| *count > 0)
+        .count()
+        > 1
+}
+
 /// Validation error for sync-point-constrained matching.
 #[cfg(test)]
 #[derive(Clone, Debug, Eq, PartialEq)]

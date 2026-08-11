@@ -30,6 +30,68 @@ pub enum ParsedConflictSegmentRanges {
     Conflict(ParsedConflictBlockRanges),
 }
 
+/// Reconstruct the contributor files represented by a marker document.
+///
+/// Ordinary context belongs to both contributors; each conflict contributes
+/// its corresponding side. This is useful for proving that provisional marker
+/// coordinates still describe the immutable stages loaded later.
+pub fn reconstruct_conflict_marker_sides(text: &str) -> (String, String) {
+    let mut ours = String::new();
+    let mut theirs = String::new();
+    for segment in parse_conflict_marker_ranges(text) {
+        match segment {
+            ParsedConflictSegmentRanges::Text(range) => {
+                let context = text_for_range(text, &range);
+                ours.push_str(context);
+                theirs.push_str(context);
+            }
+            ParsedConflictSegmentRanges::Conflict(block) => {
+                ours.push_str(text_for_range(text, &block.ours));
+                theirs.push_str(text_for_range(text, &block.theirs));
+            }
+        }
+    }
+    (ours, theirs)
+}
+
+pub(super) fn marker_region_source_ranges(text: &str) -> Vec<super::ConflictRegionSourceRanges> {
+    let mut ours_cursor = 0usize;
+    let mut theirs_cursor = 0usize;
+    let mut base_cursor = 0usize;
+    let mut ranges = Vec::new();
+    let line_count = |fragment: &str| fragment.lines().count();
+
+    for segment in parse_conflict_marker_ranges(text) {
+        match segment {
+            ParsedConflictSegmentRanges::Text(range) => {
+                let count = line_count(text_for_range(text, &range));
+                ours_cursor = ours_cursor.saturating_add(count);
+                theirs_cursor = theirs_cursor.saturating_add(count);
+                base_cursor = base_cursor.saturating_add(count);
+            }
+            ParsedConflictSegmentRanges::Conflict(block) => {
+                let ours_count = line_count(text_for_range(text, &block.ours));
+                let theirs_count = line_count(text_for_range(text, &block.theirs));
+                let base_count = block
+                    .base
+                    .as_ref()
+                    .map(|range| line_count(text_for_range(text, range)));
+                ranges.push(super::ConflictRegionSourceRanges {
+                    base: base_count.map(|count| base_cursor..base_cursor.saturating_add(count)),
+                    ours: ours_cursor..ours_cursor.saturating_add(ours_count),
+                    theirs: theirs_cursor..theirs_cursor.saturating_add(theirs_count),
+                });
+                ours_cursor = ours_cursor.saturating_add(ours_count);
+                theirs_cursor = theirs_cursor.saturating_add(theirs_count);
+                if let Some(base_count) = base_count {
+                    base_cursor = base_cursor.saturating_add(base_count);
+                }
+            }
+        }
+    }
+    ranges
+}
+
 fn text_for_range<'a>(text: &'a str, range: &Range<usize>) -> &'a str {
     text.get(range.clone())
         .expect("conflict marker parser produced invalid byte range")

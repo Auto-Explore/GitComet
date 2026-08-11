@@ -124,6 +124,11 @@ These shortcuts apply in the main diff panel, including conflict resolution view
 | Select all diff text | `Cmd-A` | `Ctrl-A` | File preview and text-selection flows. |
 | Copy selected diff text | `Cmd-C` | `Ctrl-C` | File preview and text-selection flows. |
 | Pick conflict result `Base / Ours / Theirs / Both` | `A`, `B`, `C`, `D` | `A`, `B`, `C`, `D` | Conflict resolver only. |
+| Previous unresolved conflict | `Shift-F2` | `Shift-F2` | Conflict resolver only. Skips conflicts you have already resolved; works while the resolved-output editor has focus. |
+| Next unresolved conflict | `Shift-F3` | `Shift-F3` | Conflict resolver only. Skips conflicts you have already resolved; works while the resolved-output editor has focus. |
+| First / last delta | `Cmd-Home` / `Cmd-End` | `Ctrl-Home` / `Ctrl-End` | Conflict resolver only. Not active while the resolved-output editor has focus, which keeps them for cursor movement. |
+| Align selected lines manually | `Cmd-Y` | `Ctrl-Y` | Conflict resolver only (kdiff3 manual diff help). |
+| Clear all manual alignments | `Cmd-Shift-Y` | `Ctrl-Shift-Y` | Conflict resolver only. |
 
 Preview-mode note:
 - Rendered markdown preview hides the raw diff navigation controls and ignores the raw-diff-only view toggles, whitespace toggle, and conflict navigation hotkeys until you return to source mode.

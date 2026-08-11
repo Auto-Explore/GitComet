@@ -427,8 +427,9 @@ fn t6403_merge_zealous_coalesces_adjacent_conflict_lines() {
 }
 
 #[test]
-fn t6403_merge_zealous_alnum_coalesces_across_blank_separator() {
-    // Two conflict regions separated only by blank context are coalesced.
+fn kdiff3_grouping_keeps_blank_separated_conflicts_split() {
+    // KDiff3 groups adjacent rows of the same merge kind. Even blank,
+    // unchanged context therefore remains outside the surrounding conflicts.
     let base = "alpha\n\nbeta\ngamma\n";
     let ours = "ALPHA\n\nBETA_OURS\ngamma\n";
     let theirs = "ALPHA_THEIRS\n\nBETA_THEIRS\ngamma\n";
@@ -437,9 +438,18 @@ fn t6403_merge_zealous_alnum_coalesces_across_blank_separator() {
     assert!(!result.is_clean());
     assert_eq!(
         marker_count(&result.output, "======="),
-        1,
-        "blank-only context should be absorbed into a single zealous conflict block:\n{}",
+        2,
+        "unchanged blank context should separate KDiff3 merge blocks:\n{}",
         result.output
+    );
+    let first_close = result.output.find(">>>>>>>").expect("first close marker");
+    let second_open = result.output[first_close..]
+        .find("<<<<<<<")
+        .map(|offset| first_close + offset)
+        .expect("second open marker");
+    assert!(
+        result.output[first_close..second_open].contains("\n\n"),
+        "the unchanged blank separator should remain between conflicts"
     );
 }
 
@@ -669,32 +679,52 @@ fn t6427_zdiff3_basic() {
     let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
     let ours = "1\n2\n3\n4\nA\nB\nC\nD\nE\n7\n8\n9\n";
     let theirs = "1\n2\n3\n4\nA\nX\nC\nY\nE\n7\n8\n9\n";
-    let opts = opts_zdiff3_with_labels("HEAD", "base", "right");
+    let mut opts = opts_zdiff3_with_labels("HEAD", "base", "right");
+    opts.align_contributors = true;
     let result = merge_file(base, ours, theirs, &opts);
 
     assert!(!result.is_clean());
-    assert_eq!(result.conflict_count, 1);
+    assert_eq!(
+        result.conflict_count, 2,
+        "the shared contributor line C should split the two KDiff3 conflicts"
+    );
 
-    // Common prefix "A" and suffix "E" should be OUTSIDE the conflict markers.
-    let marker_start = result
+    // Common A/C/E anchors should be outside the two conflict blocks.
+    let first_marker_start = result
         .output
         .find("<<<<<<< HEAD")
-        .expect("should have ours marker");
-    let marker_end = result
+        .expect("should have first ours marker");
+    let first_marker_end = result
         .output
         .find(">>>>>>> right")
-        .expect("should have theirs marker");
+        .expect("should have first theirs marker");
+    let second_marker_start = result.output[first_marker_end..]
+        .find("<<<<<<< HEAD")
+        .map(|offset| first_marker_end + offset)
+        .expect("should have second ours marker");
+    let second_marker_end = result.output[second_marker_start..]
+        .find(">>>>>>> right")
+        .map(|offset| second_marker_start + offset)
+        .expect("should have second theirs marker");
 
     // "A\n" should appear before the opening marker.
-    let before_markers = &result.output[..marker_start];
+    let before_markers = &result.output[..first_marker_start];
     assert!(
         before_markers.ends_with("A\n"),
         "common prefix 'A' should be extracted before conflict markers.\nBefore markers: {:?}",
         before_markers
     );
 
-    // "E\n" should appear after the closing marker.
-    let after_marker_line_end = result.output[marker_end..].find('\n').unwrap() + marker_end + 1;
+    let first_marker_line_end =
+        result.output[first_marker_end..].find('\n').unwrap() + first_marker_end + 1;
+    assert!(
+        result.output[first_marker_line_end..second_marker_start].contains("C\n"),
+        "shared contributor anchor C should remain between the conflicts"
+    );
+
+    // "E\n" should appear after the final closing marker.
+    let after_marker_line_end =
+        result.output[second_marker_end..].find('\n').unwrap() + second_marker_end + 1;
     let after_markers = &result.output[after_marker_line_end..];
     assert!(
         after_markers.starts_with("E\n"),
@@ -702,15 +732,16 @@ fn t6427_zdiff3_basic() {
         after_markers
     );
 
-    // The conflict region should contain the differing middle parts.
-    let conflict_region = &result.output[marker_start..after_marker_line_end];
+    // The two conflict regions should contain their respective differing rows.
+    let first_conflict = &result.output[first_marker_start..first_marker_line_end];
     assert!(
-        conflict_region.contains("B\nC\nD"),
-        "ours conflict should contain B/C/D"
+        first_conflict.contains("B\n") && first_conflict.contains("X\n"),
+        "first conflict should contain B/X"
     );
+    let second_conflict = &result.output[second_marker_start..after_marker_line_end];
     assert!(
-        conflict_region.contains("X\nC\nY"),
-        "theirs conflict should contain X/C/Y"
+        second_conflict.contains("D\n") && second_conflict.contains("Y\n"),
+        "second conflict should contain D/Y"
     );
 }
 
@@ -747,54 +778,113 @@ fn t6427_zdiff3_middle_common() {
 
 #[test]
 fn t6427_zdiff3_interesting() {
-    // Left adds D/E/F then G/H/I/J; right adds 5/6 then G/H/I/J.
+    // Both contributors add the same surrounding lines, while only ours
+    // replaces the ancestor's 5/6 with D/E/F. KDiff3 recognizes this as a
+    // one-sided change and resolves it without a conflict.
     let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
     let ours = "1\n2\n3\n4\nA\nB\nC\nD\nE\nF\nG\nH\nI\nJ\n7\n8\n9\n";
     let theirs = "1\n2\n3\n4\nA\nB\nC\n5\n6\nG\nH\nI\nJ\n7\n8\n9\n";
-    let opts = opts_zdiff3_with_labels("HEAD", "base", "right");
+    let mut opts = opts_zdiff3_with_labels("HEAD", "base", "right");
+    opts.align_contributors = true;
     let result = merge_file(base, ours, theirs, &opts);
 
-    assert!(!result.is_clean());
-
-    // Common prefix "A\nB\nC\n" should be extracted.
-    let marker_start = result.output.find("<<<<<<< HEAD").unwrap();
-    let before = &result.output[..marker_start];
-    assert!(
-        before.contains("A\nB\nC\n"),
-        "common prefix A/B/C should be before markers"
-    );
-
-    // Common suffix "G\nH\nI\nJ\n" should be extracted.
-    let marker_end_line = result.output.find(">>>>>>> right").unwrap();
-    let line_end = result.output[marker_end_line..].find('\n').unwrap() + marker_end_line + 1;
-    let after = &result.output[line_end..];
-    assert!(
-        after.starts_with("G\nH\nI\nJ\n"),
-        "common suffix G/H/I/J should be after markers.\nActual after: {:?}",
-        &after[..after.len().min(40)]
-    );
+    assert!(result.is_clean());
+    assert_eq!(result.output, ours);
 }
 
 #[test]
 fn t6427_zdiff3_evil() {
-    // Tricky case with common trailing "B\nC\n".
+    // Contributor alignment exposes the full common A/B/C run after the X/Y
+    // conflict; the second B/C pair is a remote-only addition.
     let base = "1\n2\n3\n4\n5\n6\n7\n8\n9\n";
     let ours = "1\n2\n3\n4\nX\nA\nB\nC\n7\n8\n9\n";
     let theirs = "1\n2\n3\n4\nY\nA\nB\nC\nB\nC\n7\n8\n9\n";
-    let opts = opts_zdiff3_with_labels("HEAD", "base", "right");
+    let mut opts = opts_zdiff3_with_labels("HEAD", "base", "right");
+    opts.align_contributors = true;
     let result = merge_file(base, ours, theirs, &opts);
 
     assert!(!result.is_clean());
 
-    // "B\nC\n" should appear after the conflict markers as common suffix.
+    // The shared A/B/C anchor and remote-only B/C addition should both appear
+    // after the conflict rather than being swallowed by its marker range.
     let marker_end_line = result.output.find(">>>>>>> right").unwrap();
     let line_end = result.output[marker_end_line..].find('\n').unwrap() + marker_end_line + 1;
     let after = &result.output[line_end..];
     assert!(
-        after.starts_with("B\nC\n"),
-        "common suffix B/C should be extracted after markers.\nActual after: {:?}",
+        after.starts_with("A\nB\nC\nB\nC\n"),
+        "aligned common and remote-only suffixes should follow the marker.\nActual after: {:?}",
         &after[..after.len().min(40)]
     );
+}
+
+/// Contributor alignment is not a nicety, it is what keeps the planner from
+/// emitting a line twice, so it has to hold under the *default* options.
+///
+/// Base `aaa` matches ours' `    aaa` whitespace-insensitively and theirs'
+/// `aaa` exactly, so the two base-relative diffs claim different contributor
+/// lines for the same base line. With nothing to reconcile them, theirs'
+/// leftover `    aaa` becomes a one-sided add and lands in the output on top of
+/// ours' copy — a duplicated line in a merge reported as clean.
+#[test]
+fn merge_contributor_alignment_does_not_duplicate_shared_lines() {
+    let result = merge_file("aaa\n", "bbb\n    aaa\n", "aaa\n    aaa\n", &default_opts());
+
+    assert!(result.is_clean(), "output: {:?}", result.output);
+    assert_eq!(result.output, "bbb\n    aaa\n");
+    assert_eq!(
+        result.output.matches("    aaa").count(),
+        1,
+        "the shared indented line must be emitted once: {:?}",
+        result.output
+    );
+}
+
+/// The same hazard with a whole added block: both sides add `same in b and c`
+/// and `again same in b and c`, and only ours adds `only in b` between them.
+#[test]
+fn merge_contributor_alignment_pairs_shared_added_lines() {
+    let result = merge_file(
+        "same everywhere\n",
+        "same in b and c\nonly in b\nagain same in b and c\nsame everywhere\n",
+        "same in b and c\nagain same in b and c\nsame everywhere\n",
+        &default_opts(),
+    );
+
+    assert!(result.is_clean(), "output: {:?}", result.output);
+    assert_eq!(
+        result.output,
+        "same in b and c\nonly in b\nagain same in b and c\nsame everywhere\n"
+    );
+}
+
+/// A one-sided change must merge identically however the flag is set: the pass
+/// is skipped whenever any two inputs are equal, so it cannot reach these.
+#[test]
+fn merge_contributor_alignment_leaves_one_sided_merges_alone() {
+    let base = "1\n2\n3\n4\n";
+    let cases = [
+        // Only ours changed.
+        (base, "1\nX\n3\n4\n", base),
+        // Only theirs changed.
+        (base, base, "1\n2\nY\n4\n"),
+        // Both sides made the identical change.
+        (base, "1\nZ\n3\n4\n", "1\nZ\n3\n4\n"),
+    ];
+
+    for (base, ours, theirs) in cases {
+        let mut aligned = default_opts();
+        aligned.align_contributors = true;
+        let mut unaligned = default_opts();
+        unaligned.align_contributors = false;
+
+        let with_pass = merge_file(base, ours, theirs, &aligned);
+        let without_pass = merge_file(base, ours, theirs, &unaligned);
+        assert_eq!(
+            with_pass.output, without_pass.output,
+            "one-sided merge of {ours:?} / {theirs:?} must not depend on the pass"
+        );
+        assert!(with_pass.is_clean(), "output: {:?}", with_pass.output);
+    }
 }
 
 // ===========================================================================

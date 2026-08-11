@@ -1,11 +1,105 @@
 use crate::text_utils::{LineEndingDetectionMode, detect_line_ending_from_texts};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConflictOutputChoice {
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum ConflictOutputSource {
     Base,
     Ours,
     Theirs,
-    Both,
+}
+
+/// A unique ordered set of conflict-output sources.
+///
+/// The associated constants preserve the original single-choice API while
+/// allowing arbitrary A/B/C toggle order without allocation.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub struct ConflictOutputChoice {
+    sources: [Option<ConflictOutputSource>; 3],
+    len: u8,
+}
+
+#[allow(non_upper_case_globals)]
+impl ConflictOutputChoice {
+    pub const Base: Self = Self::from_source_const(ConflictOutputSource::Base);
+    pub const Ours: Self = Self::from_source_const(ConflictOutputSource::Ours);
+    pub const Theirs: Self = Self::from_source_const(ConflictOutputSource::Theirs);
+    pub const Both: Self = Self {
+        sources: [
+            Some(ConflictOutputSource::Ours),
+            Some(ConflictOutputSource::Theirs),
+            None,
+        ],
+        len: 2,
+    };
+
+    const fn from_source_const(source: ConflictOutputSource) -> Self {
+        Self {
+            sources: [Some(source), None, None],
+            len: 1,
+        }
+    }
+
+    pub const fn empty() -> Self {
+        Self {
+            sources: [None, None, None],
+            len: 0,
+        }
+    }
+
+    pub fn from_sources(sources: impl IntoIterator<Item = ConflictOutputSource>) -> Self {
+        let mut choice = Self::empty();
+        for source in sources {
+            choice.append(source);
+        }
+        choice
+    }
+
+    pub fn iter(self) -> impl Iterator<Item = ConflictOutputSource> {
+        self.sources
+            .into_iter()
+            .take(usize::from(self.len))
+            .flatten()
+    }
+
+    pub fn contains(self, source: ConflictOutputSource) -> bool {
+        self.iter().any(|candidate| candidate == source)
+    }
+
+    pub fn first(self) -> Option<ConflictOutputSource> {
+        self.iter().next()
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.len == 0
+    }
+
+    pub fn len(self) -> usize {
+        usize::from(self.len)
+    }
+
+    pub fn append(&mut self, source: ConflictOutputSource) {
+        if self.contains(source) || self.len() == self.sources.len() {
+            return;
+        }
+        self.sources[self.len()] = Some(source);
+        self.len += 1;
+    }
+
+    pub fn toggle(&mut self, source: ConflictOutputSource) {
+        let Some(index) = self.iter().position(|candidate| candidate == source) else {
+            self.append(source);
+            return;
+        };
+        let len = self.len();
+        self.sources.copy_within(index + 1..len, index);
+        self.sources[len - 1] = None;
+        self.len -= 1;
+    }
+}
+
+impl Default for ConflictOutputChoice {
+    fn default() -> Self {
+        Self::Ours
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -119,17 +213,15 @@ pub fn generate_resolved_text(
 }
 
 fn append_chosen_block_text(output: &mut String, block: ConflictOutputBlockRef<'_>) {
-    match block.choice {
-        ConflictOutputChoice::Base => {
-            if let Some(base) = block.base {
-                output.push_str(base);
+    for source in block.choice.iter() {
+        match source {
+            ConflictOutputSource::Base => {
+                if let Some(base) = block.base {
+                    output.push_str(base);
+                }
             }
-        }
-        ConflictOutputChoice::Ours => output.push_str(block.ours),
-        ConflictOutputChoice::Theirs => output.push_str(block.theirs),
-        ConflictOutputChoice::Both => {
-            output.push_str(block.ours);
-            output.push_str(block.theirs);
+            ConflictOutputSource::Ours => output.push_str(block.ours),
+            ConflictOutputSource::Theirs => output.push_str(block.theirs),
         }
     }
 }
