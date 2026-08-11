@@ -2260,6 +2260,18 @@ impl PopoverHost {
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
                 self.close_popover(cx);
             }
+            Some(PopoverKind::BranchPicker {
+                purpose: BranchPickerPurpose::RebaseOnto,
+            }) => {
+                self.open_popover_centered(
+                    PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name,
+                    },
+                    window,
+                    cx,
+                );
+            }
             _ => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                 self.close_popover(cx);
