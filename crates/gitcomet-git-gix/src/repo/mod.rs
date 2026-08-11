@@ -282,7 +282,13 @@ impl GitRepository for GixRepo {
         cancellation: &CancellationToken,
     ) -> Result<LogPage> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
-        self.log_history_mode_page_filtered_cancellable_impl(mode, author, limit, cursor, cancellation)
+        self.log_history_mode_page_filtered_cancellable_impl(
+            mode,
+            author,
+            limit,
+            cursor,
+            cancellation,
+        )
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage> {

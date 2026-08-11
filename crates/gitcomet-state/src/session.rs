@@ -361,9 +361,7 @@ pub(crate) fn load_repo_session_preferences_from_path(
             .into_iter()
             .map(|(k, v)| (k, v.into()))
             .collect(),
-        repo_history_author_filters: file
-            .repo_history_author_filters
-            .unwrap_or_default(),
+        repo_history_author_filters: file.repo_history_author_filters.unwrap_or_default(),
         repo_fetch_prune_deleted_remote_tracking_branches: file
             .repo_fetch_prune_deleted_remote_tracking_branches
             .unwrap_or_default(),

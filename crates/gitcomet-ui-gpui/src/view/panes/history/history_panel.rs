@@ -548,92 +548,6 @@ impl HistoryView {
                                         crate::view::history_mode::HISTORY_MODE_TOOLTIP_TEXT.into(),
                                     ),
                             ),
-                    )
-                    .child(
-                        div()
-                            .on_children_prepainted(move |children_bounds, _w, _cx| {
-                                if let Some(bounds) = children_bounds.first() {
-                                    *author_anchor_bounds_for_prepaint.borrow_mut() = Some(*bounds);
-                                }
-                            })
-                            .child(
-                                div()
-                                    .id("history_author_filter_header")
-                                    .flex()
-                                    .items_center()
-                                    .gap_1()
-                                    .flex_shrink_0()
-                                    .px_1()
-                                    .h(scaled_px(18.0))
-                                    .line_height(scaled_px(18.0))
-                                    .rounded(px(theme.radii.row))
-                                    .when(author_active, |d| d.bg(theme.colors.active))
-                                    .hover(move |s| {
-                                        if author_active {
-                                            s.bg(theme.colors.active)
-                                        } else {
-                                            s.bg(with_alpha(theme.colors.hover, 0.55))
-                                        }
-                                    })
-                                    .active(move |s| s.bg(theme.colors.active))
-                                    .cursor(CursorStyle::PointingHand)
-                                    .child(
-                                        div()
-                                            .max_w(px(90.0))
-                                            .line_clamp(1)
-                                            .whitespace_nowrap()
-                                            .when(author_filter_active, |d| {
-                                                d.text_color(theme.colors.accent)
-                                            })
-                                            .when(!author_filter_active, |d| {
-                                                d.text_color(theme.colors.text_muted)
-                                            })
-                                            .child(author_label.clone()),
-                                    )
-                                    .child(svg_icon(
-                                        "icons/chevron_down.svg",
-                                        icon_muted,
-                                        scaled_px(12.0),
-                                    ))
-                                    .when_some(scope_repo_id, |this, repo_id| {
-                                        let author_invoker = author_invoker.clone();
-                                        let author_anchor_bounds_for_click =
-                                            Rc::clone(&author_anchor_bounds_for_click);
-                                        this.on_click(cx.listener(
-                                            move |this, e: &ClickEvent, window, cx| {
-                                                this.activate_context_menu_invoker(
-                                                    author_invoker.clone(),
-                                                    cx,
-                                                );
-                                                if let Some(bounds) =
-                                                    *author_anchor_bounds_for_click.borrow()
-                                                {
-                                                    this.open_popover_for_bounds(
-                                                        PopoverKind::HistoryAuthorFilter {
-                                                            repo_id,
-                                                        },
-                                                        bounds,
-                                                        window,
-                                                        cx,
-                                                    );
-                                                } else {
-                                                    this.open_popover_at(
-                                                        PopoverKind::HistoryAuthorFilter {
-                                                            repo_id,
-                                                        },
-                                                        e.position(),
-                                                        window,
-                                                        cx,
-                                                    );
-                                                }
-                                            },
-                                        ))
-                                    })
-                                    .when(scope_repo_id.is_none(), |this| {
-                                        this.opacity(0.6).cursor(CursorStyle::Arrow)
-                                    })
-                                    .gitcomet_tooltip(theme, author_tooltip),
-                            ),
                     ),
             )
             .when(show_graph, |header| {
@@ -674,7 +588,92 @@ impl HistoryView {
                         .pr(cell_pad)
                         .whitespace_nowrap()
                         .overflow_hidden()
-                        .child("AUTHOR"),
+                        .child(
+                            div()
+                                .on_children_prepainted(move |children_bounds, _w, _cx| {
+                                    if let Some(bounds) = children_bounds.first() {
+                                        *author_anchor_bounds_for_prepaint.borrow_mut() =
+                                            Some(*bounds);
+                                    }
+                                })
+                                .child(
+                                    div()
+                                        .id("history_author_filter_header")
+                                        .flex()
+                                        .items_center()
+                                        .gap_1()
+                                        .px_1()
+                                        .h(scaled_px(18.0))
+                                        .line_height(scaled_px(18.0))
+                                        .rounded(px(theme.radii.row))
+                                        .when(author_active, |d| d.bg(theme.colors.active))
+                                        .hover(move |s| {
+                                            if author_active {
+                                                s.bg(theme.colors.active)
+                                            } else {
+                                                s.bg(with_alpha(theme.colors.hover, 0.55))
+                                            }
+                                        })
+                                        .active(move |s| s.bg(theme.colors.active))
+                                        .cursor(CursorStyle::PointingHand)
+                                        .child(
+                                            div()
+                                                .min_w(px(0.0))
+                                                .line_clamp(1)
+                                                .whitespace_nowrap()
+                                                .when(author_filter_active, |d| {
+                                                    d.text_color(theme.colors.accent)
+                                                })
+                                                .when(!author_filter_active, |d| {
+                                                    d.text_color(theme.colors.text_muted)
+                                                })
+                                                .child(author_label.clone()),
+                                        )
+                                        .child(svg_icon(
+                                            "icons/chevron_down.svg",
+                                            icon_muted,
+                                            scaled_px(12.0),
+                                        ))
+                                        .when_some(scope_repo_id, |this, repo_id| {
+                                            let author_invoker = author_invoker.clone();
+                                            let author_anchor_bounds_for_click =
+                                                Rc::clone(&author_anchor_bounds_for_click);
+                                            this.on_click(cx.listener(
+                                                move |this, e: &ClickEvent, window, cx| {
+                                                    this.activate_context_menu_invoker(
+                                                        author_invoker.clone(),
+                                                        cx,
+                                                    );
+                                                    if let Some(bounds) =
+                                                        *author_anchor_bounds_for_click.borrow()
+                                                    {
+                                                        this.open_popover_for_bounds(
+                                                            PopoverKind::HistoryAuthorFilter {
+                                                                repo_id,
+                                                            },
+                                                            bounds,
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    } else {
+                                                        this.open_popover_at(
+                                                            PopoverKind::HistoryAuthorFilter {
+                                                                repo_id,
+                                                            },
+                                                            e.position(),
+                                                            window,
+                                                            cx,
+                                                        );
+                                                    }
+                                                },
+                                            ))
+                                        })
+                                        .when(scope_repo_id.is_none(), |this| {
+                                            this.opacity(0.6).cursor(CursorStyle::Arrow)
+                                        })
+                                        .gitcomet_tooltip(theme, author_tooltip),
+                                ),
+                        ),
                 )
             });
 

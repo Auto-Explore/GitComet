@@ -26,7 +26,7 @@ fn collect_author_suggestions(commits: &[gitcomet_core::domain::Commit]) -> Vec<
             authors.push(name);
         }
     }
-    authors.sort_by(|a, b| a.to_lowercase().cmp(&b.to_lowercase()));
+    authors.sort_by_key(|a| a.to_lowercase());
     authors
 }
 
@@ -34,8 +34,7 @@ fn model_for(repo_id: RepoId, current: Option<String>, authors: Vec<String>) -> 
     let mut items = vec![
         ContextMenuItem::Header("Author filter".into()),
         ContextMenuItem::Description(
-            "Show commits by a single author. Suggestions come from the loaded history."
-                .into(),
+            "Show commits by a single author. Suggestions come from the loaded history.".into(),
         ),
         ContextMenuItem::Entry {
             label: "All authors".into(),
@@ -73,9 +72,7 @@ fn model_for(repo_id: RepoId, current: Option<String>, authors: Vec<String>) -> 
 mod tests {
     use super::*;
 
-    fn entry_labels_and_icons(
-        model: &ContextMenuModel,
-    ) -> Vec<(String, Option<String>)> {
+    fn entry_labels_and_icons(model: &ContextMenuModel) -> Vec<(String, Option<String>)> {
         model
             .items
             .iter()

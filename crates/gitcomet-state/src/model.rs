@@ -2237,7 +2237,8 @@ mod tests {
                 resume_from: None,
                 resume_token: None,
             }),
-        ));        assert!(!loads.request_log(LogScope::NoMerges, None, 20, None));
+        ));
+        assert!(!loads.request_log(LogScope::NoMerges, None, 20, None));
 
         assert_eq!(
             loads.finish_log(),
@@ -2260,12 +2261,7 @@ mod tests {
         };
 
         assert!(loads.request_log(LogScope::MergesOnly, None, 20, None));
-        assert!(!loads.request_log(
-            LogScope::MergesOnly,
-            None,
-            20,
-            Some(cursor.clone())
-        ));
+        assert!(!loads.request_log(LogScope::MergesOnly, None, 20, Some(cursor.clone())));
         assert!(!loads.request_log(LogScope::MergesOnly, None, 20, None));
 
         assert_eq!(
@@ -2290,12 +2286,7 @@ mod tests {
 
         assert!(loads.request_log(LogScope::MergesOnly, None, 20, None));
         // A pagination request for the same scope+author is kept pending.
-        assert!(!loads.request_log(
-            LogScope::MergesOnly,
-            None,
-            20,
-            Some(cursor.clone())
-        ));
+        assert!(!loads.request_log(LogScope::MergesOnly, None, 20, Some(cursor.clone())));
         // Switching the author invalidates the pending pagination entirely.
         assert!(!loads.request_log(LogScope::MergesOnly, Some("alice".into()), 20, None));
 

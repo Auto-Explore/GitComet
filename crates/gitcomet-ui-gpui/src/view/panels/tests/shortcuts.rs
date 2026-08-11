@@ -940,11 +940,7 @@ fn history_author_filter_menu_suggests_authors_from_loaded_log(cx: &mut gpui::Te
         "gitcomet_ui_test_{}_author_filter",
         std::process::id()
     ));
-    let mut repo = shortcut_fixture_repo(
-        repo_id,
-        &workdir,
-        &CommitId("deadbeefdeadbeef".into()),
-    );
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &CommitId("deadbeefdeadbeef".into()));
     let log_page: Loadable<std::sync::Arc<gitcomet_core::domain::LogPage>> = Loadable::Ready(
         gitcomet_core::domain::LogPage {
             commits: vec![
@@ -984,7 +980,11 @@ fn history_author_filter_menu_suggests_authors_from_loaded_log(cx: &mut gpui::Te
                 icon,
                 action,
                 ..
-            } => Some((label.to_string(), icon.as_ref().map(|i| i.to_string()), action.clone())),
+            } => Some((
+                label.to_string(),
+                icon.as_ref().map(|i| i.to_string()),
+                action.clone(),
+            )),
             _ => None,
         })
         .collect();
