@@ -2,7 +2,7 @@
 //!
 //! Turns a repository's `origin` remote URL (SSH or HTTPS) into a web URL for
 //! a specific commit or file on the hosting forge (GitHub, GitLab, Bitbucket,
-//! or any GitHub-style forge such as Gitea/Codeberg).
+//! Azure DevOps, or any GitHub-style forge such as Gitea/Codeberg).
 
 use gitcomet_core::domain::Remote;
 
@@ -12,6 +12,10 @@ enum ForgeKind {
     GitHub,
     GitLab,
     Bitbucket,
+    /// Azure DevOps (`dev.azure.com` and the legacy `*.visualstudio.com`
+    /// hosts). Unlike the other forges, files are addressed with a `path`
+    /// query parameter instead of a `blob` path segment.
+    AzureDevOps,
     /// Any other host; GitHub-style `/{owner}/{repo}/…` paths are the
     /// de-facto standard shared by Gitea, Codeberg, and friends.
     Generic,
@@ -47,11 +51,13 @@ pub(super) fn commit_permalink(remotes: &[Remote], sha: &str) -> Option<String> 
         }
         ForgeKind::GitLab => format!("{}/-/commit/{sha}", base.web_root),
         ForgeKind::Bitbucket => format!("{}/commits/{sha}", base.web_root),
+        ForgeKind::AzureDevOps => format!("{}/commit/{sha}", base.web_root),
     })
 }
 
 /// Web permalink for a file at a given reference (commit sha or branch name),
-/// e.g. `https://github.com/Auto-Explore/GitComet/blob/<ref>/src/main.rs`.
+/// e.g. `https://github.com/Auto-Explore/GitComet/blob/<ref>/src/main.rs` or
+/// `https://dev.azure.com/…/_git/repo?path=/src/main.rs&version=GB<ref>`.
 /// The path must be repository-relative; backslashes and URL-unsafe characters
 /// are normalized/percent-encoded.
 pub(super) fn file_permalink(remotes: &[Remote], reference: &str, path: &str) -> Option<String> {
@@ -69,6 +75,20 @@ pub(super) fn file_permalink(remotes: &[Remote], reference: &str, path: &str) ->
         ForgeKind::GitLab => format!("{}/-/blob/{reference}/{encoded_path}", base.web_root),
         ForgeKind::Bitbucket => {
             format!("{}/src/{reference}/{encoded_path}", base.web_root)
+        }
+        ForgeKind::AzureDevOps => {
+            // Azure DevOps addresses the version in a query parameter and
+            // needs to know whether the reference is a branch or a commit.
+            let encoded_ref = encode_path(reference);
+            let version = if is_full_sha(reference) {
+                format!("GC{encoded_ref}")
+            } else {
+                format!("GB{encoded_ref}")
+            };
+            format!(
+                "{}?path=/{encoded_path}&version={version}&_a=contents",
+                base.web_root
+            )
         }
     })
 }
@@ -99,7 +119,10 @@ fn parse_remote_url(url: &str) -> Option<ForgeWebBase> {
     // Scheme URLs: https://, http://, git://, ssh://, git+ssh://.
     let (scheme, rest) = url.split_once("://")?;
     let scheme = scheme.to_ascii_lowercase();
-    if !matches!(scheme.as_str(), "https" | "http" | "git" | "ssh" | "git+ssh") {
+    if !matches!(
+        scheme.as_str(),
+        "https" | "http" | "git" | "ssh" | "git+ssh"
+    ) {
         return None;
     }
     // Strip userinfo (`git@`) and any port before the path.
@@ -115,10 +138,13 @@ fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
     if host.is_empty() || (host != "localhost" && !host.contains('.')) {
         return None;
     }
-    let owner_repo = path
-        .strip_suffix(".git")
-        .unwrap_or(path)
-        .trim_matches('/');
+    // Azure DevOps remotes use a different web-root shape than the
+    // GitHub-style `/{owner}/{repo}` layout, so they are handled exclusively
+    // here and never fall through to the generic path.
+    if is_azure_devops_host(&host) {
+        return azure_devops_base(&host, path);
+    }
+    let owner_repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
     if owner_repo.is_empty() || !owner_repo.contains('/') {
         return None;
     }
@@ -139,6 +165,51 @@ fn build_base(host: &str, path: &str, scheme: &str) -> Option<ForgeWebBase> {
         kind,
         web_root: format!("{scheme}://{host}/{owner_repo}"),
     })
+}
+
+/// The hosts that host Azure DevOps git repositories: the current
+/// `dev.azure.com` (with the SSH-only `ssh.dev.azure.com`) and the legacy
+/// `*.visualstudio.com` accounts (with their `vs-ssh.visualstudio.com` SSH
+/// host).
+fn is_azure_devops_host(host: &str) -> bool {
+    host == "dev.azure.com"
+        || host == "ssh.dev.azure.com"
+        || host == "vs-ssh.visualstudio.com"
+        || host.ends_with(".visualstudio.com")
+}
+
+/// Web root for an Azure DevOps remote. HTTPS remotes carry the same
+/// `/{org}/{project}/_git/{repo}` path as the web UI, while SSH remotes use a
+/// `v3/{org}/{project}/{repo}` path and the legacy `*.visualstudio.com` hosts
+/// keep the organization in the hostname.
+fn azure_devops_base(host: &str, path: &str) -> Option<ForgeWebBase> {
+    let owner_repo = path.strip_suffix(".git").unwrap_or(path).trim_matches('/');
+    let parts: Vec<&str> = owner_repo.split('/').collect();
+    let web_root = match (host, parts.as_slice()) {
+        ("dev.azure.com", [org, project, "_git", repo]) => {
+            format!("https://dev.azure.com/{org}/{project}/_git/{repo}")
+        }
+        ("ssh.dev.azure.com", ["v3", org, project, repo]) => {
+            format!("https://dev.azure.com/{org}/{project}/_git/{repo}")
+        }
+        ("vs-ssh.visualstudio.com", ["v3", org, project, repo]) => {
+            format!("https://{org}.visualstudio.com/{project}/_git/{repo}")
+        }
+        (legacy_host, [project, "_git", repo]) if legacy_host.ends_with(".visualstudio.com") => {
+            format!("https://{legacy_host}/{project}/_git/{repo}")
+        }
+        _ => return None,
+    };
+    Some(ForgeWebBase {
+        kind: ForgeKind::AzureDevOps,
+        web_root,
+    })
+}
+
+/// Whether a reference is a full 40-hex-digit git commit id. Azure DevOps
+/// version descriptors distinguish branches (`GB`) from commits (`GC`).
+fn is_full_sha(reference: &str) -> bool {
+    reference.len() == 40 && reference.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 /// Percent-encode every character outside the RFC 3986 unreserved set (plus
@@ -236,7 +307,10 @@ mod tests {
 
     #[test]
     fn commit_permalink_for_self_hosted_forge_uses_github_paths() {
-        let remotes = [remote("origin", "ssh://git@git.example.com:2222/org/repo.git")];
+        let remotes = [remote(
+            "origin",
+            "ssh://git@git.example.com:2222/org/repo.git",
+        )];
         assert_eq!(
             commit_permalink(&remotes, "abc123").as_deref(),
             Some("https://git.example.com/org/repo/commit/abc123")
@@ -282,6 +356,103 @@ mod tests {
             file_permalink(&bitbucket, "main", "a/b.txt").as_deref(),
             Some("https://bitbucket.org/team/repo/src/main/a/b.txt")
         );
+    }
+
+    #[test]
+    fn commit_permalink_for_azure_devops_https_remote() {
+        let remotes = [remote(
+            "origin",
+            "https://org@dev.azure.com/org/project/_git/repo",
+        )];
+        assert_eq!(
+            commit_permalink(&remotes, "abc123").as_deref(),
+            Some("https://dev.azure.com/org/project/_git/repo/commit/abc123")
+        );
+    }
+
+    #[test]
+    fn commit_permalink_for_azure_devops_ssh_remote() {
+        let remotes = [remote(
+            "origin",
+            "git@ssh.dev.azure.com:v3/org/project/repo",
+        )];
+        assert_eq!(
+            commit_permalink(&remotes, "abc123").as_deref(),
+            Some("https://dev.azure.com/org/project/_git/repo/commit/abc123")
+        );
+    }
+
+    #[test]
+    fn commit_permalink_for_legacy_visualstudio_remotes() {
+        let https = [remote(
+            "origin",
+            "https://org.visualstudio.com/project/_git/repo",
+        )];
+        assert_eq!(
+            commit_permalink(&https, "abc123").as_deref(),
+            Some("https://org.visualstudio.com/project/_git/repo/commit/abc123")
+        );
+        let ssh = [remote(
+            "origin",
+            "git@vs-ssh.visualstudio.com:v3/org/project/repo",
+        )];
+        assert_eq!(
+            commit_permalink(&ssh, "abc123").as_deref(),
+            Some("https://org.visualstudio.com/project/_git/repo/commit/abc123")
+        );
+    }
+
+    #[test]
+    fn file_permalink_for_azure_devops_branch_reference() {
+        let remotes = [remote(
+            "origin",
+            "git@ssh.dev.azure.com:v3/org/project/repo",
+        )];
+        assert_eq!(
+            file_permalink(&remotes, "main", "src/main.rs").as_deref(),
+            Some(
+                "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GBmain&_a=contents"
+            )
+        );
+    }
+
+    #[test]
+    fn file_permalink_for_azure_devops_commit_reference() {
+        let remotes = [remote(
+            "origin",
+            "https://dev.azure.com/org/project/_git/repo",
+        )];
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        assert_eq!(
+            file_permalink(&remotes, sha, "src/main.rs").as_deref(),
+            Some(
+                "https://dev.azure.com/org/project/_git/repo?path=/src/main.rs&version=GC0123456789abcdef0123456789abcdef01234567&_a=contents"
+            )
+        );
+    }
+
+    #[test]
+    fn file_permalink_for_azure_devops_encodes_path() {
+        let remotes = [remote(
+            "origin",
+            "https://org.visualstudio.com/project/_git/repo",
+        )];
+        assert_eq!(
+            file_permalink(&remotes, "feature/x", "src/my file#1.rs").as_deref(),
+            Some(
+                "https://org.visualstudio.com/project/_git/repo?path=/src/my%20file%231.rs&version=GBfeature/x&_a=contents"
+            )
+        );
+    }
+
+    #[test]
+    fn azure_devops_remotes_with_unexpected_shapes_are_rejected() {
+        // Missing the `_git` segment means the remote is not an Azure DevOps
+        // repo, so no permalink should be produced instead of a broken one.
+        let remotes = [remote("origin", "https://dev.azure.com/org/project/repo")];
+        assert_eq!(commit_permalink(&remotes, "abc123"), None);
+        let ssh = [remote("origin", "git@ssh.dev.azure.com:v3/org/repo")];
+        assert_eq!(commit_permalink(&ssh, "abc123"), None);
     }
 
     #[test]
