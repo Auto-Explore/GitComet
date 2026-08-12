@@ -38,7 +38,8 @@ pub use diff_stat::diff_stat;
 pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
 pub use modal::{modal_scrim, modal_surface};
 pub use picker_prompt::{
-    PickerPrompt, PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, picker_prompt_layout,
+    PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptGeometry, PickerPromptItem,
+    PickerPromptItemPart, PickerPromptLayout, picker_prompt_layout,
 };
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
@@ -53,7 +54,7 @@ pub use text_fade::{FadingText, trailing_fade};
 pub use toast::{ToastKind, toast};
 pub use tokens::*;
 pub(crate) use truncated_text::{
-    PathTruncationAlignmentGroup, TruncatedText, TruncatedTextTooltipMode,
+    PathTruncationAlignmentGroup, TruncatedText, TruncatedTextFlex, TruncatedTextTooltipMode,
 };
 
 pub(crate) use crate::kit::text_truncation::TextTruncationProfile;

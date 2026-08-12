@@ -2599,11 +2599,9 @@ fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
         &mut state,
         Msg::LoadRefMetadata { repo_id },
     );
-    assert!(
-        effects.iter().any(
-            |effect| matches!(effect, Effect::LoadRefMetadata { repo_id: rid } if *rid == repo_id)
-        )
-    );
+    assert!(effects.iter().any(
+        |effect| matches!(effect, Effect::LoadRefMetadata { repo_id: rid } if *rid == repo_id)
+    ));
     assert!(state.repos[0].ref_metadata.is_loading());
 
     reduce(

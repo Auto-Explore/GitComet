@@ -1,4 +1,5 @@
 use super::*;
+use std::rc::Rc;
 
 /// What activating a row in the workspace picker does.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -47,18 +48,13 @@ pub(super) fn suggested_worktree_path(repo: &RepoState, query: &str) -> String {
     }
 }
 
-pub(super) fn rows(this: &PopoverHost, repo_id: RepoId, query: &str) -> WorkspaceRows {
+/// Takes the repository rather than the host so the result is a pure function of
+/// its inputs, which is what lets [`rows_cache`](super::rows_cache) memoise it
+/// across frames.
+pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
     let mut items = Vec::new();
     let mut rows = Vec::new();
     let mut marked_index = None;
-
-    let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
-        return WorkspaceRows {
-            items,
-            rows,
-            marked_index,
-        };
-    };
 
     // Create row first, mirroring the placeholder's "select or type to create".
     // Its searchable text is the query itself, so it survives any filter —
@@ -73,12 +69,14 @@ pub(super) fn rows(this: &PopoverHost, repo_id: RepoId, query: &str) -> Workspac
             "Create new worktree",
         )
         .flexible(false)
-        .searchable(false)])
+        .searchable(false)
+        .tooltip(false)])
     } else {
         components::PickerPromptItem::from_parts([
             components::PickerPromptItemPart::new("Create worktree ")
                 .flexible(false)
-                .searchable(false),
+                .searchable(false)
+                .tooltip(false),
             components::PickerPromptItemPart::new(query.to_string()).flexible(false),
         ])
     };
@@ -123,7 +121,8 @@ pub(super) fn rows(this: &PopoverHost, repo_id: RepoId, query: &str) -> Workspac
                 components::PickerPromptItemPart::new("detached")
                     .flexible(false)
                     .searchable(false)
-                    .dim(),
+                    .dim()
+                    .tooltip(false),
             );
         }
 
@@ -135,7 +134,9 @@ pub(super) fn rows(this: &PopoverHost, repo_id: RepoId, query: &str) -> Workspac
             secondary.push(
                 components::PickerPromptItemPart::new(sha.get(0..8).unwrap_or(sha).to_string())
                     .flexible(false)
-                    .searchable(false),
+                    .searchable(false)
+                    // Eight characters wide and never squeezed: nothing to reveal.
+                    .tooltip(false),
             );
             secondary.push(components::PickerPromptItemPart::separator("  •  "));
         }
@@ -161,26 +162,28 @@ pub(super) fn rows(this: &PopoverHost, repo_id: RepoId, query: &str) -> Workspac
     }
 }
 
-/// Payloads for the rows surviving `query`, in the order the picker renders
-/// them, alongside the scroll-child index of each (section-free here, but the
-/// layout helper is what keeps nav and render in lockstep).
-pub(super) fn filtered_layout(
+/// The cached rows for `query`: the items, the filtered layout, and the payload
+/// behind each row. Every caller goes through this, so a frame that only
+/// repaints reuses the rows instead of rebuilding them.
+pub(super) fn cached(
     this: &PopoverHost,
     repo_id: RepoId,
     query: &str,
-) -> (Vec<WorkspaceRow>, components::PickerPromptLayout) {
-    let built = rows(this, repo_id, query);
-    let layout = components::picker_prompt_layout(&built.items, query);
-    let targets = layout
-        .item_indices
-        .iter()
-        .filter_map(|ix| built.rows.get(*ix).cloned())
-        .collect();
-    (targets, layout)
+) -> Rc<super::rows_cache::CachedRows<WorkspaceRow>> {
+    let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
+        return super::rows_cache::CachedRows::empty();
+    };
+    let key = super::rows_cache::RowsCacheKey::for_workspace(repo, query);
+    super::rows_cache::get_or_build(&this.workspace_picker_rows_cache, key, |_now| {
+        let built = rows(repo, query);
+        (built.items, built.rows, built.marked_index)
+    })
 }
 
+/// Payloads for the rows surviving `query`, in the order the picker renders them
+/// — the list keyboard navigation walks.
 pub(super) fn nav_targets(this: &PopoverHost, repo_id: RepoId, query: &str) -> Vec<WorkspaceRow> {
-    filtered_layout(this, repo_id, query).0
+    cached(this, repo_id, query).filtered_payloads()
 }
 
 /// Activates a row: opens the worktree, or hands the query to the Add dialog.
@@ -254,18 +257,24 @@ pub(super) fn panel(
     // Read the query from the same input `PickerPrompt::render` filters with,
     // so the rows built here match the rows it displays.
     let query = search.read_with(cx, |input, _| input.text().trim().to_string());
-    let built = rows(this, repo_id, &query);
-    let row_payloads = built.rows.clone();
+    let built = cached(this, repo_id, &query);
+    let row_payloads = Rc::clone(&built.payloads);
 
     components::context_menu(
         theme,
         components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-            .items(built.items)
+            // Prebuilt items and layout: the cache already filtered and sorted
+            // them, so `render` must not repeat that work.
+            .prebuilt_items(Rc::clone(&built.items), Rc::clone(&built.layout))
+            // Long ref lists render only what is on screen; keyboard
+            // navigation scrolls by the row geometry to match
+            // (`scroll_picker_prompt_to_row`).
+            .windowed_rows()
             .tooltip_host(this.tooltip_host.clone())
             // Only reachable when the repo is gone: the create row always
             // matches, so a present repo never yields an empty list.
             .empty_text("No repository")
-            .max_height(scaled_px(300.0))
+            .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
             .selected_index(this.workspace_picker_selected_index)
             .marked_index(built.marked_index)
             .render(

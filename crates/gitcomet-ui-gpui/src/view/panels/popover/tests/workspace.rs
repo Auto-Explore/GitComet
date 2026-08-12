@@ -109,8 +109,8 @@ fn workspace_picker_lists_every_worktree_and_marks_the_current_one(cx: &mut gpui
 
     let built = cx.update(|_window, app| {
         let host = view.read(app).popover_host.read(app);
-        let built = workspace_picker::rows(host, repo_id, "");
-        (built.rows, built.marked_index)
+        let built = workspace_picker::cached(host, repo_id, "");
+        (built.payloads.to_vec(), built.marked_index)
     });
     let (rows, marked_index) = built;
 
@@ -173,12 +173,12 @@ fn workspace_picker_nav_targets_follow_the_rendered_row_order(cx: &mut gpui::Tes
         let query = "feat";
         let targets = workspace_picker::nav_targets(host, repo_id, query);
         // What the panel renders, resolved exactly the way PickerPrompt does.
-        let built = workspace_picker::rows(host, repo_id, query);
+        let built = workspace_picker::cached(host, repo_id, query);
         let layout = crate::view::components::picker_prompt_layout(&built.items, query);
         let rendered: Vec<_> = layout
             .item_indices
             .iter()
-            .map(|ix| built.rows[*ix].clone())
+            .map(|ix| built.payloads[*ix].clone())
             .collect();
         (targets, rendered)
     });

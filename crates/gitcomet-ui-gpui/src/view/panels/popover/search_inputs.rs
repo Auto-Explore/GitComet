@@ -47,6 +47,27 @@ impl PopoverHost {
         self.picker_prompt_scroll.scroll_to_item(sel);
     }
 
+    /// Scrolls the badge pickers' row list so the selected row is in view.
+    ///
+    /// These two lists are windowed once they grow past a couple of viewports, so
+    /// a row further down has no element for `ScrollHandle::scroll_to_item` to
+    /// find; the row geometry says where it would be instead.
+    fn scroll_picker_prompt_to_row(
+        &self,
+        items: &[components::PickerPromptItem],
+        layout: &components::PickerPromptLayout,
+        sel: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let ui_scale = super::popover_ui_scale(cx);
+        let geometry = components::PickerPromptGeometry::new(items, layout, ui_scale);
+        let viewport = ui_scale.px(components::PICKER_LIST_MAX_HEIGHT_PX);
+        let current = -self.picker_prompt_scroll.offset().y;
+        let offset = geometry.reveal_offset(sel, viewport, current);
+        self.picker_prompt_scroll
+            .set_offset(point(px(0.0), -offset));
+    }
+
     /// Shared keyboard-navigation subscription for picker search inputs.
     ///
     /// `is_active` gates the subscription to the picker's popover kind.
@@ -208,6 +229,7 @@ impl PopoverHost {
                             purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto
                         })
                     );
+                    let with_refs = branch_picker_offers_refs(this);
                     let repo = this.active_repo()?;
                     let Loadable::Ready(branches) = &repo.branches else {
                         return None;
@@ -250,15 +272,8 @@ impl PopoverHost {
                         .as_ref()
                         .map(|input| input.read(cx).text().trim().to_string())
                         .unwrap_or_default();
-                    // Section headers occupy scroll children too, so scroll to
-                    // the row's child slot rather than its selection index.
-                    let child_ix = branch_picker::filtered_layout(this, &query)
-                        .1
-                        .child_indices
-                        .get(sel)
-                        .copied()
-                        .unwrap_or(sel);
-                    this.picker_prompt_scroll.scroll_to_item(child_ix);
+                    let rows = branch_picker::cached(this, &query);
+                    this.scroll_picker_prompt_to_row(&rows.items, &rows.layout, sel, cx);
                 },
                 |this, payload, query, window, cx| {
                     let Some(repo_id) = this.active_repo().map(|repo| repo.id) else {
@@ -411,15 +426,8 @@ impl PopoverHost {
                             .as_ref()
                             .map(|input| input.read(cx).text().trim().to_string())
                             .unwrap_or_default();
-                        // Any section header would occupy a scroll child too, so
-                        // scroll to the row's child slot rather than its index.
-                        let child_ix = workspace_picker::filtered_layout(this, repo_id, &query)
-                            .1
-                            .child_indices
-                            .get(sel)
-                            .copied()
-                            .unwrap_or(sel);
-                        this.picker_prompt_scroll.scroll_to_item(child_ix);
+                        let rows = workspace_picker::cached(this, repo_id, &query);
+                        this.scroll_picker_prompt_to_row(&rows.items, &rows.layout, sel, cx);
                     },
                     |this, payload, query, window, cx| {
                         let Some(repo_id) = workspace_picker_state(this) else {

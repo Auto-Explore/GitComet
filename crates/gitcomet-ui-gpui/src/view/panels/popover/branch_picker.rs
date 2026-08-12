@@ -1,4 +1,5 @@
 use super::*;
+use std::rc::Rc;
 
 const LOCAL_SECTION: &str = "Local Branches";
 const REMOTE_SECTION: &str = "Remote Branches";
@@ -62,7 +63,11 @@ fn metadata_parts(
         // Metadata did load and this ref simply has none: say so rather than
         // dropping the line, so one branch does not leave a short row in a list
         // of tall ones.
-        return vec![components::PickerPromptItemPart::new("No commits found").searchable(false)];
+        return vec![
+            components::PickerPromptItemPart::new("No commits found")
+                .searchable(false)
+                .tooltip(false),
+        ];
     };
 
     let mut parts = Vec::new();
@@ -73,10 +78,13 @@ fn metadata_parts(
         if !parts.is_empty() {
             parts.push(components::PickerPromptItemPart::separator("  •  "));
         }
+        // Fixed-width and never squeezed, so there is no truncation for a
+        // tooltip to reveal.
         parts.push(
             components::PickerPromptItemPart::new(text)
                 .searchable(false)
-                .flexible(false),
+                .flexible(false)
+                .tooltip(false),
         );
     };
 
@@ -125,26 +133,22 @@ fn branch_row(
 /// Rows for the checkout picker: local branches, remote branches, and a create
 /// row. Both the panel and keyboard navigation go through this, so the rendered
 /// list and the list Enter walks can never disagree.
-pub(super) fn rows(this: &PopoverHost, query: &str) -> BranchRows {
+///
+/// Takes the repository rather than the host so the result is a pure function of
+/// its inputs: [`rows_cache`](super::rows_cache) memoises it across frames, and
+/// benchmarks build it without a popover. `now` is passed in for the same reason
+/// — the relative dates on the detail line would otherwise make every call
+/// distinct.
+pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) -> BranchRows {
     let mut items = Vec::new();
     let mut rows = Vec::new();
     let mut marked_index = None;
-
-    let Some(repo) = this.active_repo() else {
-        return BranchRows {
-            items,
-            rows,
-            marked_index,
-        };
-    };
 
     let head_branch = match &repo.head_branch {
         Loadable::Ready(head) if head != "HEAD" => Some(head.as_str()),
         _ => None,
     };
 
-    // Read the clock once for the whole list rather than per row.
-    let now = std::time::SystemTime::now();
     let mut local_names: Vec<&str> = Vec::new();
     let branches_ready = matches!(repo.branches, Loadable::Ready(_));
     if let Loadable::Ready(branches) = &repo.branches {
@@ -211,7 +215,8 @@ pub(super) fn rows(this: &PopoverHost, query: &str) -> BranchRows {
             components::PickerPromptItem::from_parts([
                 components::PickerPromptItemPart::new("Create branch ")
                     .flexible(false)
-                    .searchable(false),
+                    .searchable(false)
+                    .tooltip(false),
                 components::PickerPromptItemPart::new(query.to_string()).flexible(false),
             ])
             .secondary_parts([
@@ -230,22 +235,28 @@ pub(super) fn rows(this: &PopoverHost, query: &str) -> BranchRows {
     }
 }
 
-pub(super) fn filtered_layout(
+/// The cached view of the rows for `query`: the items, the filtered layout, and
+/// the payload of every row that survived the filter.
+///
+/// Every caller goes through the cache, so a frame that only repaints (a hover
+/// moving between rows is the common one) reuses the rows instead of rebuilding
+/// every branch label.
+pub(super) fn cached(
     this: &PopoverHost,
     query: &str,
-) -> (Vec<BranchPickerNavTarget>, components::PickerPromptLayout) {
-    let built = rows(this, query);
-    let layout = components::picker_prompt_layout(&built.items, query);
-    let targets = layout
-        .item_indices
-        .iter()
-        .filter_map(|ix| built.rows.get(*ix).cloned())
-        .collect();
-    (targets, layout)
+) -> Rc<super::rows_cache::CachedRows<BranchPickerNavTarget>> {
+    let Some(repo) = this.active_repo() else {
+        return super::rows_cache::CachedRows::empty();
+    };
+    let key = super::rows_cache::RowsCacheKey::for_branch_checkout(repo, query);
+    super::rows_cache::get_or_build(&this.branch_picker_rows_cache, key, |now| {
+        let built = rows(repo, query, now);
+        (built.items, built.rows, built.marked_index)
+    })
 }
 
 pub(super) fn nav_targets(this: &PopoverHost, query: &str) -> Vec<BranchPickerNavTarget> {
-    filtered_layout(this, query).0
+    cached(this, query).filtered_payloads()
 }
 
 /// Activates a checkout-picker row.
@@ -341,8 +352,8 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         // Read the query from the same input PickerPrompt filters with, so the
         // rows built here are the rows it displays.
         let query = search.read_with(cx, |input, _| input.text().trim().to_string());
-        let built = rows(this, &query);
-        let row_payloads = built.rows.clone();
+        let built = cached(this, &query);
+        let row_payloads = Rc::clone(&built.payloads);
         let empty_text = match this.active_repo().map(|repo| &repo.branches) {
             Some(Loadable::Loading) | Some(Loadable::NotLoaded) => "Loading",
             Some(Loadable::Error(_)) => "Could not list branches",
@@ -351,10 +362,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
 
         menu = menu.child(
             components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-                .items(built.items)
+                // Prebuilt items and layout: the cache already filtered and
+                // sorted them, so `render` must not repeat that work.
+                .prebuilt_items(Rc::clone(&built.items), Rc::clone(&built.layout))
+                // Long ref lists render only what is on screen; keyboard
+                // navigation scrolls by the row geometry to match
+                // (`scroll_picker_prompt_to_row`).
+                .windowed_rows()
                 .tooltip_host(this.tooltip_host.clone())
                 .empty_text(empty_text)
-                .max_height(scaled_px(300.0))
+                .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
                 .selected_index(this.branch_picker_selected_index)
                 .marked_index(built.marked_index)
                 .render(

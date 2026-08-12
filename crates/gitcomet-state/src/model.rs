@@ -1280,7 +1280,8 @@ impl RepoState {
             .loads_in_flight
             .is_in_flight(RepoLoadsInFlight::REF_METADATA)
         {
-            self.loads_in_flight.request(RepoLoadsInFlight::REF_METADATA);
+            self.loads_in_flight
+                .request(RepoLoadsInFlight::REF_METADATA);
         }
         if matches!(self.ref_metadata, Loadable::NotLoaded) {
             return;

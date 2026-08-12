@@ -718,7 +718,8 @@ mod tests {
     #[test]
     fn parse_ref_metadata_for_each_ref_keeps_nul_bytes_inside_the_subject() {
         // `splitn(4, ..)` means a stray NUL in the subject cannot shift fields.
-        let entries = parse_ref_metadata_for_each_ref("main\x00Sampo\x001754870400\x00odd\x00subject\n");
+        let entries =
+            parse_ref_metadata_for_each_ref("main\x00Sampo\x001754870400\x00odd\x00subject\n");
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].1.summary, "odd\x00subject");

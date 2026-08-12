@@ -1091,8 +1091,8 @@ mod checkout_picker {
 
         let (rows, marked_index) = cx.update(|_window, app| {
             let host = view.read(app).popover_host.read(app);
-            let built = branch_picker::rows(host, "");
-            (built.rows, built.marked_index)
+            let built = branch_picker::cached(host, "");
+            (built.payloads.to_vec(), built.marked_index)
         });
 
         assert_eq!(
@@ -1131,7 +1131,7 @@ mod checkout_picker {
 
         let (with_metadata, without_metadata) = cx.update(|_window, app| {
             let host = view.read(app).popover_host.read(app);
-            let built = branch_picker::rows(host, "");
+            let built = branch_picker::cached(host, "");
             (
                 built.items[0].debug_secondary_text(),
                 built.items[1].debug_secondary_text(),
@@ -1179,7 +1179,7 @@ mod checkout_picker {
 
         let details = cx.update(|_window, app| {
             let host = view.read(app).popover_host.read(app);
-            branch_picker::rows(host, "")
+            branch_picker::cached(host, "")
                 .items
                 .iter()
                 .map(|item| item.debug_secondary_text())
@@ -1226,12 +1226,13 @@ mod checkout_picker {
             let host = view.read(app).popover_host.read(app);
             let query = "main";
             let targets = branch_picker::nav_targets(host, query);
-            let built = branch_picker::rows(host, query);
+            let built = branch_picker::cached(host, query);
+            // What the panel renders, resolved independently of the cached layout.
             let layout = crate::view::components::picker_prompt_layout(&built.items, query);
             let rendered: Vec<_> = layout
                 .item_indices
                 .iter()
-                .map(|ix| built.rows[*ix].clone())
+                .map(|ix| built.payloads[*ix].clone())
                 .collect();
             (targets, rendered)
         });
@@ -1360,6 +1361,135 @@ mod checkout_picker {
         );
     }
 
+    /// A repo with enough branches that the list scrolls several viewports.
+    fn repo_with_many_branches(repo_id: RepoId, branches: usize) -> RepoState {
+        let mut repo = repo_with_branches(repo_id);
+        let mut locals = vec![local("main")];
+        locals.extend((0..branches).map(|ix| local(&format!("feat/topic-{ix:04}"))));
+        repo.branches = Loadable::Ready(Arc::new(locals));
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo
+    }
+
+    /// The windowed list stands spacers in for the rows it does not render, sized
+    /// from the geometry alone. If that arithmetic drifted from what rows really
+    /// paint at, scrolling would drift with it — so this pins one against the
+    /// other.
+    #[gpui::test]
+    fn row_geometry_matches_the_height_rows_actually_paint_at(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+        redraw(cx);
+
+        let geometry = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            let rows = branch_picker::cached(host, "");
+            components::PickerPromptGeometry::new(&rows.items, &rows.layout, 100u32)
+        });
+
+        let first = cx
+            .debug_bounds("picker_prompt_item_0")
+            .expect("expected the first row to render");
+        let second = cx
+            .debug_bounds("picker_prompt_item_1")
+            .expect("expected the second row to render");
+
+        assert_eq!(
+            first.size.height,
+            geometry.row_height(0),
+            "a painted row must be exactly as tall as the geometry says"
+        );
+        assert_eq!(
+            second.origin.y - first.origin.y,
+            geometry.row_top(1) - geometry.row_top(0),
+            "the stride between rows must match the geometry"
+        );
+    }
+
+    #[gpui::test]
+    fn a_long_branch_list_renders_only_the_rows_in_view(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_many_branches(repo_id, 200), repo_id);
+        redraw(cx);
+
+        let matched = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::cached(host, "").layout.item_indices.len()
+        });
+
+        assert!(matched > 200, "expected a long list, matched {matched}");
+        assert!(
+            cx.debug_bounds("picker_prompt_item_0").is_some(),
+            "the first row is in view"
+        );
+        assert!(
+            cx.debug_bounds("picker_prompt_item_150").is_none(),
+            "a row 150 places down must not be built until it is scrolled to"
+        );
+    }
+
+    /// Windowing must be invisible until you scroll: the spacer standing in for
+    /// the rows above the window covers those rows only, not the list's own
+    /// padding. Counting the padding twice would nudge every row down and grow
+    /// the scrollable height the moment a list got long enough to be windowed.
+    #[gpui::test]
+    fn windowing_does_not_move_the_first_row(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (_view, cx) = open_checkout_picker(cx, repo_with_many_branches(repo_id, 200), repo_id);
+        redraw(cx);
+        let windowed = cx
+            .debug_bounds("picker_prompt_item_0")
+            .expect("expected the first row of the long list to render");
+
+        let (_view, cx) = open_checkout_picker(cx, repo_with_many_branches(repo_id, 2), repo_id);
+        redraw(cx);
+        let short = cx
+            .debug_bounds("picker_prompt_item_0")
+            .expect("expected the first row of the short list to render");
+
+        assert_eq!(
+            windowed.origin, short.origin,
+            "a windowed list must start its rows where an unwindowed one does"
+        );
+        assert_eq!(windowed.size.height, short.size.height);
+    }
+
+    /// Arrow-up on a freshly opened picker selects the last row. It is far
+    /// outside the window, so it only comes into view if navigation scrolls by
+    /// the row geometry rather than by a scroll child that does not exist.
+    #[gpui::test]
+    fn keyboard_navigation_reaches_a_row_outside_the_window(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_many_branches(repo_id, 200), repo_id);
+        redraw(cx);
+
+        simulate_key_press(cx, "up");
+        redraw(cx);
+
+        let (selected, row_count, last_item_index) = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            let rows = branch_picker::cached(host, "");
+            (
+                host.branch_picker_selected_index,
+                rows.layout.item_indices.len(),
+                rows.layout.item_indices.last().copied().unwrap_or_default(),
+            )
+        });
+
+        assert_eq!(
+            selected,
+            Some(row_count - 1),
+            "arrow-up from an unopened selection lands on the last row"
+        );
+        // "main" sorts first on name length, then the 200 topics in order, so the
+        // last row is the last item that was built.
+        assert_eq!(last_item_index, 200);
+        assert!(
+            cx.debug_bounds("picker_prompt_item_200").is_some(),
+            "the selected last row must be scrolled into view and rendered"
+        );
+    }
+
     #[gpui::test]
     fn rows_render_without_metadata_before_it_loads(cx: &mut gpui::TestAppContext) {
         let repo_id = RepoId(1);
@@ -1369,7 +1499,7 @@ mod checkout_picker {
 
         let rows = cx.update(|_window, app| {
             let host = view.read(app).popover_host.read(app);
-            branch_picker::rows(host, "").rows
+            branch_picker::cached(host, "").payloads.to_vec()
         });
 
         assert_eq!(rows.len(), 3, "picker must be usable before metadata lands");

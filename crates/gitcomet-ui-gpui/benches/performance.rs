@@ -172,6 +172,7 @@ exact_filtered_target!(
     bench_patch_diff_search_query_update_selected => bench_patch_diff_search_query_update
 );
 exact_filtered_target!(bench_patch_diff_paged_rows_selected => bench_patch_diff_paged_rows);
+exact_filtered_target!(bench_picker_prompt_selected => bench_picker_prompt);
 exact_filtered_target!(
     bench_diff_open_patch_first_window_selected => bench_diff_open_patch_first_window
 );
@@ -293,6 +294,7 @@ criterion_group! {
         bench_conflict_search_query_update_selected,
         bench_patch_diff_search_query_update_selected,
         bench_patch_diff_paged_rows_selected,
+        bench_picker_prompt_selected,
         bench_diff_open_patch_first_window_selected,
         bench_diff_open_file_split_first_window_selected,
         bench_diff_open_file_inline_first_window_selected,
