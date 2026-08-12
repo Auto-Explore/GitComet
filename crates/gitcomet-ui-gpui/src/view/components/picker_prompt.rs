@@ -9,6 +9,7 @@ use gpui::{
     ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
+use std::collections::BTreeSet;
 use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -42,6 +43,19 @@ pub struct PickerPrompt {
     query_row_trailing: Option<gpui::AnyElement>,
     list_override: Option<gpui::AnyElement>,
     remove_tooltip: Option<SharedString>,
+    collapsed_sections: BTreeSet<SharedString>,
+    on_toggle_section: Option<Rc<OnToggleSectionFn>>,
+    on_context_menu: Option<Rc<OnContextMenuFn>>,
+}
+
+/// Which row a right-click landed on, in both index spaces, and where the
+/// pointer was — a menu needs the pre-filter index to name the item, the
+/// display index to highlight the row, and the position to anchor itself.
+#[derive(Clone, Debug)]
+pub struct PickerPromptContextMenuEvent {
+    pub original_index: usize,
+    pub display_index: usize,
+    pub position: gpui::Point<Pixels>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -107,6 +121,21 @@ const WINDOW_OVERDRAW_ROWS: usize = 4;
 /// viewport they are working in.
 pub const PICKER_LIST_MAX_HEIGHT_PX: f32 = 300.0;
 
+/// One section header in a resolved layout.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PickerPromptHeader {
+    pub label: SharedString,
+    /// True when the section's rows are folded away. Its rows are absent from
+    /// [`PickerPromptLayout::item_indices`], so keyboard navigation skips them
+    /// without knowing anything about collapse.
+    pub collapsed: bool,
+    /// Rows this section matched that collapse is hiding, shown as a count on
+    /// the header so a folded section still says how much it holds.
+    pub hidden_count: usize,
+    /// The first header of a list draws no rule above it.
+    pub is_first: bool,
+}
+
 /// Where a filtered picker list ends up on screen: which items survived the
 /// query, in render order, which scroll child each one is (section headers take
 /// child slots too, so `scroll_to_item` needs the translated index), and where
@@ -118,23 +147,71 @@ pub struct PickerPromptLayout {
     /// Match span, in the item's match-text coordinates, for the row's
     /// highlight. Parallel to `item_indices`; `None` for an empty query.
     pub match_ranges: Vec<Option<Range<usize>>>,
+    /// Section headers in render order, each tagged with the display row it is
+    /// drawn before. A slot of `item_indices.len()` means the header trails the
+    /// last row, which is where a section whose rows are all collapsed away
+    /// ends up.
+    ///
+    /// Sparse — one entry per header, not per row — because these layouts are
+    /// cached per query for lists of tens of thousands of rows, where a slot
+    /// vector would cost more than the headers it describes.
+    ///
+    /// Placing headers here rather than rediscovering them while rendering is
+    /// what lets a collapsed section keep its header after its rows are gone,
+    /// and lets a windowed list start mid-list without replaying the sections
+    /// above it.
+    pub headers: Vec<(usize, PickerPromptHeader)>,
 }
 
 /// Resolve the display layout the same way [`PickerPrompt::render`] does, so
 /// keyboard navigation over a filtered list stays in lockstep with the rows the
 /// user sees.
 pub fn picker_prompt_layout(items: &[PickerPromptItem], query: &str) -> PickerPromptLayout {
+    picker_prompt_layout_with_collapsed(items, query, &BTreeSet::new())
+}
+
+/// [`picker_prompt_layout`] with sections folded away: a section named in
+/// `collapsed` keeps its header and drops its rows.
+///
+/// The panel and its keyboard navigation must call this with the same collapsed
+/// set, or Enter activates a different row than the one highlighted.
+pub fn picker_prompt_layout_with_collapsed(
+    items: &[PickerPromptItem],
+    query: &str,
+    collapsed: &BTreeSet<SharedString>,
+) -> PickerPromptLayout {
     let matches = match_items(items, &section_groups(items), query);
     let mut layout = PickerPromptLayout {
         item_indices: Vec::with_capacity(matches.len()),
         child_indices: Vec::with_capacity(matches.len()),
         match_ranges: Vec::with_capacity(matches.len()),
+        headers: Vec::new(),
     };
     let mut child_ix = 0usize;
     let mut sections = SectionRun::default();
     for m in &matches {
-        if sections.starts_new_section(items[m.index].section.as_ref()) {
+        let section = items[m.index].section.as_ref();
+        let is_collapsed = section.is_some_and(|section| collapsed.contains(section));
+        if sections.starts_new_section(section)
+            && let Some(label) = section.cloned()
+        {
+            // A header is drawn before the row this loop has not pushed yet.
+            layout.headers.push((
+                layout.item_indices.len(),
+                PickerPromptHeader {
+                    label,
+                    collapsed: is_collapsed,
+                    hidden_count: 0,
+                    is_first: child_ix == 0,
+                },
+            ));
             child_ix += 1;
+        }
+        if is_collapsed {
+            if let Some((_, header)) = layout.headers.last_mut() {
+                header.hidden_count += 1;
+            }
+            continue;
         }
         layout.item_indices.push(m.index);
         layout.child_indices.push(child_ix);
@@ -160,10 +237,14 @@ pub struct PickerPromptGeometry {
     tops: Vec<Pixels>,
     /// Height of each displayed row, excluding any section header above it.
     heights: Vec<Pixels>,
-    /// Height of the header that precedes a row, or zero.
+    /// Height of the header(s) that precede a row, or zero.
     header_heights: Vec<Pixels>,
     /// Height of every row and header together.
     rows_height: Pixels,
+    /// Height of the headers that follow the last row — collapsed sections with
+    /// no rows left to introduce. Counted in `rows_height`, and held separately
+    /// so a window that renders them does not also reserve a spacer for them.
+    trailing_header_height: Pixels,
     /// The list's vertical padding, above the first row and below the last.
     pad: Pixels,
 }
@@ -181,20 +262,31 @@ impl PickerPromptGeometry {
             heights: Vec::with_capacity(row_count),
             header_heights: Vec::with_capacity(row_count),
             rows_height: px(0.0),
+            trailing_header_height: px(0.0),
             pad: ui_scale.px(LIST_PAD_PX),
         };
 
+        // The headers are sorted by slot and this walks the slots in order, so
+        // one cursor covers them all rather than rescanning per row.
+        let mut next_header = 0usize;
+        let mut take_headers = |slot: usize| {
+            let mut height = px(0.0);
+            while let Some((header_slot, header)) = layout.headers.get(next_header) {
+                if *header_slot > slot {
+                    break;
+                }
+                height += section_header_height(ui_scale, header.is_first);
+                next_header += 1;
+            }
+            height
+        };
+
         let mut y = px(0.0);
-        let mut sections = SectionRun::default();
         for (display_ix, item_ix) in layout.item_indices.iter().enumerate() {
             let Some(item) = items.get(*item_ix) else {
                 continue;
             };
-            let header = if sections.starts_new_section(item.section.as_ref()) {
-                section_header_height(ui_scale, display_ix == 0)
-            } else {
-                px(0.0)
-            };
+            let header = take_headers(display_ix);
             let height = row_height(ui_scale, !item.secondary.is_empty());
             geometry.header_heights.push(header);
             geometry.tops.push(y + header);
@@ -202,7 +294,8 @@ impl PickerPromptGeometry {
             y += header + height;
         }
 
-        geometry.rows_height = y;
+        geometry.trailing_header_height = take_headers(usize::MAX);
+        geometry.rows_height = y + geometry.trailing_header_height;
         geometry
     }
 
@@ -229,7 +322,7 @@ impl PickerPromptGeometry {
     /// after them occupy.
     fn window(&self, offset: Pixels, viewport: Pixels) -> PickerPromptWindow {
         let row_count = self.tops.len();
-        if !self.is_windowed(viewport) {
+        if row_count == 0 || !self.is_windowed(viewport) {
             return PickerPromptWindow::everything(row_count);
         }
 
@@ -253,7 +346,12 @@ impl PickerPromptGeometry {
         // and the scroll offset must not move when the window does. They cover
         // the rows only: the list's own padding is still the list's.
         let space_before = self.tops[first] - self.header_heights[first];
-        let space_after = self.rows_height - (self.tops[last] + self.heights[last]);
+        let mut space_after = self.rows_height - (self.tops[last] + self.heights[last]);
+        if last + 1 == row_count {
+            // The window reaches the end, so the trailing headers are drawn
+            // rather than stood in for.
+            space_after -= self.trailing_header_height;
+        }
         PickerPromptWindow {
             rows: first..(last + 1),
             space_before,
@@ -368,6 +466,12 @@ pub struct PickerPromptItemPart {
 type OnSelectFn<V> =
     dyn Fn(&mut V, usize, &ClickEvent, &mut Window, &mut gpui::Context<V>) + 'static;
 type OnRemoveFn<V> = dyn Fn(&mut V, usize, &mut Window, &mut gpui::Context<V>) + 'static;
+/// Section-header and right-click handlers are supplied as ready-made
+/// `cx.listener` closures rather than as `render` arguments, so they can be
+/// stored on the (view-agnostic) builder instead of widening every `render`
+/// signature.
+type OnToggleSectionFn = dyn Fn(&SharedString, &mut Window, &mut gpui::App) + 'static;
+type OnContextMenuFn = dyn Fn(&PickerPromptContextMenuEvent, &mut Window, &mut gpui::App) + 'static;
 
 impl PickerPrompt {
     pub fn new(query_input: Entity<TextInput>, scroll_handle: ScrollHandle) -> Self {
@@ -391,6 +495,9 @@ impl PickerPrompt {
             query_row_trailing: None,
             list_override: None,
             remove_tooltip: None,
+            collapsed_sections: BTreeSet::new(),
+            on_toggle_section: None,
+            on_context_menu: None,
         }
     }
 
@@ -510,6 +617,35 @@ impl PickerPrompt {
         self
     }
 
+    /// Sections whose rows are folded away. Only consulted when this picker
+    /// resolves its own layout; a caller passing [`Self::prebuilt_items`] must
+    /// have built that layout with `picker_prompt_layout_with_collapsed` and the
+    /// same set.
+    pub fn collapsed_sections(mut self, sections: BTreeSet<SharedString>) -> Self {
+        self.collapsed_sections = sections;
+        self
+    }
+
+    /// Makes section headers interactive: a disclosure chevron plus a click that
+    /// hands back the section's label. Pass a `cx.listener(...)`.
+    pub fn on_toggle_section(
+        mut self,
+        handler: impl Fn(&SharedString, &mut Window, &mut gpui::App) + 'static,
+    ) -> Self {
+        self.on_toggle_section = Some(Rc::new(handler));
+        self
+    }
+
+    /// Right-click on a row. Pass a `cx.listener(...)`; the event carries both
+    /// index spaces and the pointer position.
+    pub fn on_context_menu(
+        mut self,
+        handler: impl Fn(&PickerPromptContextMenuEvent, &mut Window, &mut gpui::App) + 'static,
+    ) -> Self {
+        self.on_context_menu = Some(Rc::new(handler));
+        self
+    }
+
     pub fn render<V: 'static>(
         self,
         theme: AppTheme,
@@ -551,10 +687,16 @@ impl PickerPrompt {
                 let query = self
                     .query_input
                     .read_with(cx, |input, _| input.text().trim().to_string());
-                Rc::new(picker_prompt_layout(&self.items, &query))
+                Rc::new(picker_prompt_layout_with_collapsed(
+                    &self.items,
+                    &query,
+                    &self.collapsed_sections,
+                ))
             }
         };
         let row_count = layout.item_indices.len();
+        let on_toggle_section = self.on_toggle_section;
+        let on_context_menu = self.on_context_menu;
 
         let selected_index = self.selected_index.and_then(|ix| {
             if row_count == 0 {
@@ -618,7 +760,9 @@ impl PickerPrompt {
             .track_scroll(&scroll_handle);
         list = restrict_scroll_to_vertical_axis(list);
 
-        if row_count == 0 {
+        // A list whose every section is collapsed has no rows but is not empty:
+        // its headers are the only way back to the rows, so they must still draw.
+        if row_count == 0 && layout.headers.is_empty() {
             list = list.child(
                 div()
                     .h(control_height_md(ui_scale))
@@ -645,13 +789,23 @@ impl PickerPrompt {
             if window.space_before > px(0.0) {
                 list = list.child(div().flex_shrink_0().w_full().h(window.space_before));
             }
-            let mut sections = SectionRun::default();
-            // The run has to start where the window does, or the first rendered
-            // row of a section that began off-screen would repeat its header.
-            for skipped in 0..window.rows.start {
-                let item_ix = layout.item_indices[skipped];
-                sections.starts_new_section(self.items[item_ix].section.as_ref());
-            }
+            // Scanned rather than walked with a cursor because a windowed list
+            // starts partway down: only the rendered rows ask for headers, and
+            // a list has a handful of them at most.
+            let section_header = |list: gpui::Stateful<Div>, slot: usize| {
+                layout
+                    .headers
+                    .iter()
+                    .filter(|(header_slot, _)| *header_slot == slot)
+                    .fold(list, |list, (_, header)| {
+                        list.child(section_header_row(
+                            theme,
+                            ui_scale,
+                            header,
+                            on_toggle_section.clone(),
+                        ))
+                    })
+            };
             for display_ix in window.rows.clone() {
                 let original_index = layout.item_indices[display_ix];
                 let match_range = layout
@@ -659,16 +813,7 @@ impl PickerPrompt {
                     .get(display_ix)
                     .cloned()
                     .unwrap_or_default();
-                if sections.starts_new_section(self.items[original_index].section.as_ref())
-                    && let Some(section) = self.items[original_index].section.clone()
-                {
-                    list = list.child(section_header_row(
-                        theme,
-                        ui_scale,
-                        section,
-                        display_ix == 0,
-                    ));
-                }
+                list = section_header(list, display_ix);
                 let label = picker_item_label(
                     theme,
                     &self.items[original_index],
@@ -811,6 +956,23 @@ impl PickerPrompt {
                         (on_select)(this, original_index, event, window, cx);
                     }));
                 }
+                if let Some(on_context_menu) = on_context_menu.clone() {
+                    row = row.on_mouse_down(
+                        MouseButton::Right,
+                        move |event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            (on_context_menu)(
+                                &PickerPromptContextMenuEvent {
+                                    original_index,
+                                    display_index: display_ix,
+                                    position: event.position,
+                                },
+                                window,
+                                cx,
+                            );
+                        },
+                    );
+                }
                 // Text-alpha overlays keep the highlight visible on the
                 // elevated popover surface, unlike the canvas-tuned tokens.
                 let hover_overlay = theme.hover_overlay();
@@ -834,6 +996,11 @@ impl PickerPrompt {
                     .hover(move |s| s.bg(hover_overlay))
                     .active(move |s| s.bg(active_overlay));
                 list = list.child(row);
+            }
+            if window.rows.end == row_count {
+                // Sections whose rows are all folded away sit after the last
+                // row, so they are only reached once the window ends the list.
+                list = section_header(list, row_count);
             }
             if window.space_after > px(0.0) {
                 list = list.child(div().flex_shrink_0().w_full().h(window.space_after));
@@ -934,6 +1101,11 @@ impl PickerPromptItem {
     pub fn section(mut self, section: impl Into<SharedString>) -> Self {
         self.section = Some(section.into());
         self
+    }
+
+    /// The section label this item was grouped under, if any.
+    pub fn section_label(&self) -> Option<&SharedString> {
+        self.section.as_ref()
     }
 
     fn display_text(&self) -> &str {
@@ -1215,37 +1387,93 @@ fn row_leading_icon(
 /// A group label above a run of rows. Plain muted text rather than a heavier
 /// treatment, and every section after the first is introduced by a rule, so the
 /// groups separate without the labels having to shout.
+///
+/// With a toggle handler the label gains the sidebar's disclosure chevron and
+/// becomes clickable; a folded section also says how many rows it is hiding.
 fn section_header_row(
     theme: AppTheme,
     ui_scale: UiScale,
-    label: SharedString,
-    is_first: bool,
+    header: &PickerPromptHeader,
+    on_toggle: Option<Rc<OnToggleSectionFn>>,
 ) -> Div {
     let scaled_px = |value| ui_scale.px(value);
-    div()
+    let label = header.label.clone();
+    let collapsed = header.collapsed;
+
+    let mut label_row = div()
+        .h(scaled_px(SECTION_HEADER_HEIGHT_PX))
+        .w_full()
+        .flex()
+        .items_center()
+        .gap(scaled_px(4.0))
+        .px(scaled_px(ROW_PAD_X_PX))
+        .text_xs()
+        .text_color(theme.colors.text_muted)
+        .whitespace_nowrap()
+        .overflow_hidden();
+
+    if on_toggle.is_some() {
+        // Same disclosure treatment as the branch sidebar's section headers, in
+        // a fixed-width slot so the labels stay aligned either way.
+        label_row = label_row.child(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .w(scaled_px(12.0))
+                .child(crate::view::icons::svg_icon(
+                    if collapsed {
+                        "icons/arrow_right.svg"
+                    } else {
+                        "icons/chevron_down.svg"
+                    },
+                    theme.colors.text_muted,
+                    scaled_px(10.0),
+                )),
+        );
+    }
+    label_row = label_row.child(label.clone());
+    if collapsed && header.hidden_count > 0 {
+        label_row = label_row.child(
+            div()
+                .text_color(with_alpha(theme.colors.text_muted, 0.7))
+                .child(SharedString::from(header.hidden_count.to_string())),
+        );
+    }
+
+    let mut row = div()
         .w_full()
         .flex_shrink_0()
-        .when(!is_first, |header| {
+        .when(!header.is_first, |header| {
             header
                 .mt(scaled_px(4.0))
                 .border_t_1()
                 .border_color(theme.colors.border_variant)
         })
         .pt(scaled_px(6.0))
-        .pb(scaled_px(4.0))
-        .child(
-            div()
-                .h(scaled_px(SECTION_HEADER_HEIGHT_PX))
-                .w_full()
-                .flex()
-                .items_center()
-                .px(scaled_px(ROW_PAD_X_PX))
-                .text_xs()
-                .text_color(theme.colors.text_muted)
-                .whitespace_nowrap()
-                .overflow_hidden()
-                .child(label),
-        )
+        .pb(scaled_px(4.0));
+
+    let Some(on_toggle) = on_toggle else {
+        return row.child(label_row);
+    };
+
+    let debug_label = label.clone();
+    row = row.child(
+        div()
+            .id(SharedString::from(format!("picker_prompt_section_{label}")))
+            .debug_selector(move || format!("picker_prompt_section_{debug_label}"))
+            .w_full()
+            .rounded(scaled_px(ROW_CORNER_PX))
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| s.bg(theme.hover_overlay()))
+            .active(move |s| s.bg(theme.active_overlay()))
+            .child(label_row)
+            .on_click(move |_event: &ClickEvent, window, cx| {
+                (on_toggle)(&label, window, cx);
+            }),
+    );
+    row
 }
 
 fn picker_item_label<V: 'static>(
@@ -1502,6 +1730,126 @@ fn find_ascii_case_insensitive_precomputed(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn sectioned_items() -> Vec<PickerPromptItem> {
+        vec![
+            PickerPromptItem::plain("pinned-repo").section("Pinned"),
+            PickerPromptItem::plain("open-repo").section("Open Repositories"),
+            PickerPromptItem::plain("closed-one").section("Recently Closed"),
+            PickerPromptItem::plain("closed-two").section("Recently Closed"),
+        ]
+    }
+
+    fn header_labels(layout: &PickerPromptLayout) -> Vec<(usize, &str, bool, usize)> {
+        layout
+            .headers
+            .iter()
+            .map(|(slot, header)| {
+                (
+                    *slot,
+                    header.label.as_ref(),
+                    header.collapsed,
+                    header.hidden_count,
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn an_uncollapsed_layout_places_one_header_before_each_sections_first_row() {
+        let items = sectioned_items();
+        let layout = picker_prompt_layout(&items, "");
+
+        assert_eq!(layout.item_indices, vec![0, 1, 2, 3]);
+        // Every header takes a scroll child slot ahead of its first row.
+        assert_eq!(layout.child_indices, vec![1, 3, 5, 6]);
+        assert_eq!(
+            header_labels(&layout),
+            vec![
+                (0, "Pinned", false, 0),
+                (1, "Open Repositories", false, 0),
+                (2, "Recently Closed", false, 0),
+            ]
+        );
+        assert!(
+            layout
+                .headers
+                .iter()
+                .all(|(slot, _)| *slot < layout.item_indices.len()),
+            "with nothing collapsed every header still introduces a row"
+        );
+    }
+
+    #[test]
+    fn a_collapsed_section_keeps_its_header_and_drops_its_rows() {
+        let items = sectioned_items();
+        let collapsed = BTreeSet::from([SharedString::from("Recently Closed")]);
+        let layout = picker_prompt_layout_with_collapsed(&items, "", &collapsed);
+
+        assert_eq!(
+            layout.item_indices,
+            vec![0, 1],
+            "the collapsed section's rows are gone, so keyboard navigation skips them"
+        );
+        assert_eq!(layout.child_indices, vec![1, 3]);
+        assert_eq!(
+            header_labels(&layout),
+            vec![
+                (0, "Pinned", false, 0),
+                (1, "Open Repositories", false, 0),
+                // Its rows are gone, so the header trails the last visible row.
+                (2, "Recently Closed", true, 2),
+            ]
+        );
+    }
+
+    #[test]
+    fn collapsing_every_section_leaves_the_headers_as_the_only_rows() {
+        let items = sectioned_items();
+        let collapsed = BTreeSet::from([
+            SharedString::from("Pinned"),
+            SharedString::from("Open Repositories"),
+            SharedString::from("Recently Closed"),
+        ]);
+        let layout = picker_prompt_layout_with_collapsed(&items, "", &collapsed);
+
+        assert!(layout.item_indices.is_empty());
+        assert_eq!(
+            header_labels(&layout),
+            vec![
+                (0, "Pinned", true, 1),
+                (0, "Open Repositories", true, 1),
+                (0, "Recently Closed", true, 2),
+            ],
+            "with no rows at all every header trails slot 0"
+        );
+        assert!(
+            layout
+                .headers
+                .first()
+                .is_some_and(|(_, header)| header.is_first),
+            "only the first header skips the rule above it"
+        );
+        assert!(
+            layout.headers[1..]
+                .iter()
+                .all(|(_, header)| !header.is_first)
+        );
+    }
+
+    #[test]
+    fn a_collapsed_section_still_counts_only_the_rows_the_query_matched() {
+        let items = sectioned_items();
+        let collapsed = BTreeSet::from([SharedString::from("Recently Closed")]);
+        let layout = picker_prompt_layout_with_collapsed(&items, "closed-one", &collapsed);
+
+        assert!(layout.item_indices.is_empty());
+        assert_eq!(
+            header_labels(&layout),
+            vec![(0, "Recently Closed", true, 1)],
+            "sections with no matches contribute no header, and the count is of matches"
+        );
+    }
 
     #[test]
     fn match_items_skips_queries_longer_than_candidate_labels() {

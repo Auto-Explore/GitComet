@@ -160,7 +160,7 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
 }
 
 impl PopoverHost {
-    fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
+    pub(super) fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
         self.state
             .repos
             .iter()

@@ -197,8 +197,16 @@ pub(in super::super) struct PopoverHost {
     /// Session recent repositories snapshotted when a repository picker opens,
     /// so the list can't shift under the user mid-interaction.
     cached_recent_repos: Vec<std::path::PathBuf>,
+    /// Session pins snapshotted alongside `cached_recent_repos`. Held apart from
+    /// the recents so a pin outlives the recents cap.
+    cached_pinned_repos: Vec<std::path::PathBuf>,
+    /// Storage keys of the repository picker sections the user folded away.
+    cached_collapsed_picker_sections: std::collections::BTreeSet<String>,
     repo_picker_sort: repo_picker::RepoPickerSort,
     repo_picker_sort_menu_open: bool,
+    /// Repository row whose context menu floats over the picker, and the window
+    /// position it was invoked at. The picker stays open underneath it.
+    repo_picker_row_menu: Option<repo_picker::RepoPickerRowMenu>,
     branch_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
     workspace_picker_selected_index: Option<usize>,
@@ -1564,8 +1572,11 @@ impl PopoverHost {
             context_menu_selected_ix: None,
             repo_picker_selected_index: None,
             cached_recent_repos: Vec::new(),
+            cached_pinned_repos: Vec::new(),
+            cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
+            repo_picker_row_menu: None,
             branch_picker_selected_index: None,
             worktree_picker_selected_index: None,
             workspace_picker_selected_index: None,
@@ -1735,6 +1746,7 @@ impl PopoverHost {
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
+        self.repo_picker_row_menu = None;
         self.menu_invoker_focus = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
@@ -2871,6 +2883,10 @@ impl PopoverHost {
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
         self.repo_picker_selected_index = None;
+        // Belongs with the reset above, not with the RepoPicker arm below: every
+        // popover kind draws `row_menu_layer`, so a menu left over from a closed
+        // picker would spread its occluding scrim over an unrelated popover.
+        self.repo_picker_row_menu = None;
         self.branch_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
         self.workspace_picker_selected_index = None;
@@ -2895,6 +2911,9 @@ impl PopoverHost {
                     let ui_session = session::load();
                     self.repo_picker_sort = repo_picker::sort_from_session(&ui_session);
                     self.cached_recent_repos = ui_session.recent_repos;
+                    self.cached_pinned_repos = ui_session.pinned_repos;
+                    self.cached_collapsed_picker_sections =
+                        ui_session.repo_picker_collapsed_sections;
                     self.repo_picker_sort_menu_open = false;
                     let _ = self.ensure_repo_picker_search_input(window, cx);
                 }
@@ -3595,7 +3614,14 @@ impl Render for PopoverHost {
                 .on_any_mouse_down(close);
             layer = layer.child(scrim);
         }
-        layer.child(popover).into_any_element()
+        layer = layer.child(popover);
+        // Painted after the popover, so it hit-tests above the picker it floats
+        // over and its own scrim intercepts the click that would otherwise
+        // reach `popover_scrim` and close the whole picker.
+        if let Some(row_menu) = repo_picker::row_menu_layer(self, cx) {
+            layer = layer.child(row_menu);
+        }
+        layer.into_any_element()
     }
 }
 impl PopoverHost {
@@ -4257,13 +4283,7 @@ impl PopoverHost {
         let popover_surface = if is_centered {
             components::modal_surface(theme)
         } else {
-            div()
-                .bg(theme.colors.surface_bg_elevated)
-                .border_1()
-                .border_color(popover_border_color)
-                .rounded(px(theme.radii.popover))
-                .shadow(crate::theme::shadow_popover(theme))
-                .overflow_hidden()
+            components::popover_surface(theme).border_color(popover_border_color)
         };
         let mut popover_container = popover_surface
             .id("app_popover")

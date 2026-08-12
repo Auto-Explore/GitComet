@@ -159,7 +159,10 @@ impl PopoverHost {
                 |this, query, _cx| Some(repo_picker::nav_targets(this, query)),
                 repo_picker::dismiss,
                 |this, sel, cx| {
-                    if this.repo_picker_sort_menu_open {
+                    // Both of these replace the repository rows as the arrow
+                    // keys' target, so the selection is not a row index to
+                    // scroll to.
+                    if this.repo_picker_sort_menu_open || this.repo_picker_row_menu.is_some() {
                         return;
                     }
                     let query = this
@@ -177,9 +180,9 @@ impl PopoverHost {
                         .unwrap_or(sel);
                     this.picker_prompt_scroll.scroll_to_item(child_ix);
                 },
-                |this, payload, _query, _window, cx| {
+                |this, payload, _query, window, cx| {
                     if let Some(target) = payload {
-                        repo_picker::activate_nav_target(this, target, cx);
+                        repo_picker::activate_nav_target(this, target, window, cx);
                     }
                 },
             ));

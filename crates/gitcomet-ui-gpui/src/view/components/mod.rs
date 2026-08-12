@@ -36,10 +36,11 @@ pub use context_menu::{
 };
 pub use diff_stat::diff_stat;
 pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
-pub use modal::{modal_scrim, modal_surface};
+pub use modal::{modal_scrim, modal_surface, popover_surface};
 pub use picker_prompt::{
-    PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptGeometry, PickerPromptItem,
-    PickerPromptItemPart, PickerPromptLayout, picker_prompt_layout,
+    PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent, PickerPromptGeometry,
+    PickerPromptItem, PickerPromptItemPart, PickerPromptLayout, picker_prompt_layout,
+    picker_prompt_layout_with_collapsed,
 };
 pub use repository_badge::{
     REPOSITORY_BADGE_SIZE_PX, repository_initials, repository_initials_box,
