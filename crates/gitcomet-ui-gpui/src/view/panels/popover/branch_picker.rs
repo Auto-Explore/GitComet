@@ -1,11 +1,307 @@
 use super::*;
 
+const LOCAL_SECTION: &str = "Local Branches";
+const REMOTE_SECTION: &str = "Remote Branches";
+
+/// What activating a row in the branch picker does. Shared with the branch
+/// search input, whose subscription is generic over a single payload type and
+/// also serves the delete picker, the create-branch source field and the
+/// worktree-add ref field — those always produce [`Ref`](Self::Ref).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) enum BranchPickerNavTarget {
+    /// A ref name: check it out, or fill in the field that asked for a ref.
+    Ref(String),
+    /// A remote-tracking branch; checking it out needs a local branch name.
+    RemoteBranch { remote: String, branch: String },
+    /// Create (and check out) a branch with this name.
+    CreateBranch(String),
+}
+
+pub(super) struct BranchRows {
+    pub(super) items: Vec<components::PickerPromptItem>,
+    pub(super) rows: Vec<BranchPickerNavTarget>,
+    /// Index of the checked-out branch **before filtering** — `PickerPrompt`
+    /// compares `marked_index` against the pre-filter index.
+    pub(super) marked_index: Option<usize>,
+}
+
+/// True for the action-bar branch badge's checkout picker, which renders
+/// sectioned rows with metadata and a create row rather than a plain list.
+/// Shared with the keyboard side so the rendered list and the Enter list are
+/// gated by the very same condition.
+pub(super) fn is_checkout_picker(this: &PopoverHost) -> bool {
+    matches!(
+        this.popover,
+        Some(PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::Checkout
+        })
+    )
+}
+
+/// Author / relative date / summary parts for `refname`, when ref metadata has
+/// loaded. These form the row's secondary line. All non-searchable: filtering is
+/// by branch name, so typing an author name must not pull in unrelated branches.
+fn metadata_parts(
+    repo: &RepoState,
+    refname: &str,
+    now: std::time::SystemTime,
+) -> Vec<components::PickerPromptItemPart> {
+    let Loadable::Ready(metadata) = &repo.ref_metadata else {
+        // Still loading: no detail line yet rather than a placeholder that would
+        // be replaced a moment later.
+        return Vec::new();
+    };
+    let Some(entry) = metadata.get(refname) else {
+        if metadata.is_empty() {
+            // A backend without ref metadata latches an empty map rather than an
+            // error (`ref_metadata_loaded`), and the trait documents that callers
+            // fall back to name-only rows. Every row claiming "no commits" would
+            // be a worse answer than no detail line at all.
+            return Vec::new();
+        }
+        // Metadata did load and this ref simply has none: say so rather than
+        // dropping the line, so one branch does not leave a short row in a list
+        // of tall ones.
+        return vec![components::PickerPromptItemPart::new("No commits found").searchable(false)];
+    };
+
+    let mut parts = Vec::new();
+    let mut push = |text: String| {
+        if text.is_empty() {
+            return;
+        }
+        if !parts.is_empty() {
+            parts.push(components::PickerPromptItemPart::separator("  •  "));
+        }
+        parts.push(
+            components::PickerPromptItemPart::new(text)
+                .searchable(false)
+                .flexible(false),
+        );
+    };
+
+    push(entry.author.clone());
+    push(crate::view::date_time::format_relative_time(
+        entry.committed_at,
+        now,
+    ));
+
+    if !entry.summary.is_empty() {
+        if !parts.is_empty() {
+            parts.push(components::PickerPromptItemPart::separator("  •  "));
+        }
+        // Last and flexible, so the summary is what gives way when the row is
+        // narrower than the whole detail line.
+        parts.push(
+            components::PickerPromptItemPart::new(entry.summary.clone())
+                .searchable(false)
+                .profile(components::TextTruncationProfile::End),
+        );
+    }
+
+    parts
+}
+
+fn branch_row(
+    repo: &RepoState,
+    display_name: String,
+    lookup_name: &str,
+    icon: &'static str,
+    section: &'static str,
+    now: std::time::SystemTime,
+) -> components::PickerPromptItem {
+    // The ref name is the row's title; who touched it last and what they said is
+    // supporting detail on a second, quieter line.
+    let item = components::PickerPromptItem::from_parts([components::PickerPromptItemPart::new(
+        display_name,
+    )
+    .profile(components::TextTruncationProfile::End)
+    .flexible(false)])
+    .icon(icon)
+    .section(section);
+    item.secondary_parts(metadata_parts(repo, lookup_name, now))
+}
+
+/// Rows for the checkout picker: local branches, remote branches, and a create
+/// row. Both the panel and keyboard navigation go through this, so the rendered
+/// list and the list Enter walks can never disagree.
+pub(super) fn rows(this: &PopoverHost, query: &str) -> BranchRows {
+    let mut items = Vec::new();
+    let mut rows = Vec::new();
+    let mut marked_index = None;
+
+    let Some(repo) = this.active_repo() else {
+        return BranchRows {
+            items,
+            rows,
+            marked_index,
+        };
+    };
+
+    let head_branch = match &repo.head_branch {
+        Loadable::Ready(head) if head != "HEAD" => Some(head.as_str()),
+        _ => None,
+    };
+
+    // Read the clock once for the whole list rather than per row.
+    let now = std::time::SystemTime::now();
+    let mut local_names: Vec<&str> = Vec::new();
+    let branches_ready = matches!(repo.branches, Loadable::Ready(_));
+    if let Loadable::Ready(branches) = &repo.branches {
+        for branch in branches.iter() {
+            local_names.push(branch.name.as_str());
+            if head_branch == Some(branch.name.as_str()) {
+                marked_index = Some(items.len());
+            }
+            items.push(branch_row(
+                repo,
+                branch.name.clone(),
+                &branch.name,
+                "icons/git_branch.svg",
+                LOCAL_SECTION,
+                now,
+            ));
+            rows.push(BranchPickerNavTarget::Ref(branch.name.clone()));
+        }
+    }
+
+    if let Loadable::Ready(remote_branches) = &repo.remote_branches {
+        for remote_branch in remote_branches.iter() {
+            // `refs/remotes/<remote>/HEAD` is a symref, not a branch anyone
+            // checks out by that name.
+            if remote_branch.name == "HEAD" {
+                continue;
+            }
+            let display = format!("{}/{}", remote_branch.remote, remote_branch.name);
+            items.push(branch_row(
+                repo,
+                display.clone(),
+                &display,
+                "icons/cloud.svg",
+                REMOTE_SECTION,
+                now,
+            ));
+            rows.push(BranchPickerNavTarget::RemoteBranch {
+                remote: remote_branch.remote.clone(),
+                branch: remote_branch.name.clone(),
+            });
+        }
+    }
+
+    // Offer creation whenever the typed name is not already a local branch —
+    // not merely when nothing matched, since a query hitting only a remote
+    // branch still leaves creating a local branch of that name legal.
+    //
+    // Gated on the branch list being loaded: with an empty `local_names` an
+    // in-flight (or failed) load would turn "switch to main" into "create main",
+    // which git then rejects. The comparison is case-insensitive to match how
+    // `match_items` filters, so `MAIN` does not offer to create a near-duplicate
+    // of `main` (a hard failure on case-insensitive filesystems).
+    let query = query.trim();
+    let already_exists = local_names
+        .iter()
+        .any(|name| name.eq_ignore_ascii_case(query));
+    if branches_ready && !query.is_empty() && !already_exists {
+        // Section-less, so it renders last with no header. Its searchable text
+        // is the query itself, so no filter can drop it. The base ref sits on a
+        // detail line, which also keeps this row the same height as the branch
+        // rows above it.
+        let base = head_branch.unwrap_or("HEAD");
+        items.push(
+            components::PickerPromptItem::from_parts([
+                components::PickerPromptItemPart::new("Create branch ")
+                    .flexible(false)
+                    .searchable(false),
+                components::PickerPromptItemPart::new(query.to_string()).flexible(false),
+            ])
+            .secondary_parts([
+                components::PickerPromptItemPart::new(format!("Based off {base}"))
+                    .searchable(false),
+            ])
+            .icon("icons/plus.svg"),
+        );
+        rows.push(BranchPickerNavTarget::CreateBranch(query.to_string()));
+    }
+
+    BranchRows {
+        items,
+        rows,
+        marked_index,
+    }
+}
+
+pub(super) fn filtered_layout(
+    this: &PopoverHost,
+    query: &str,
+) -> (Vec<BranchPickerNavTarget>, components::PickerPromptLayout) {
+    let built = rows(this, query);
+    let layout = components::picker_prompt_layout(&built.items, query);
+    let targets = layout
+        .item_indices
+        .iter()
+        .filter_map(|ix| built.rows.get(*ix).cloned())
+        .collect();
+    (targets, layout)
+}
+
+pub(super) fn nav_targets(this: &PopoverHost, query: &str) -> Vec<BranchPickerNavTarget> {
+    filtered_layout(this, query).0
+}
+
+/// Activates a checkout-picker row.
+pub(super) fn activate(
+    this: &mut PopoverHost,
+    repo_id: RepoId,
+    target: BranchPickerNavTarget,
+    window: &mut Window,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    match target {
+        BranchPickerNavTarget::Ref(name) => {
+            this.handle_inline_branch_picker_select(name, repo_id, window, cx);
+        }
+        BranchPickerNavTarget::RemoteBranch { remote, branch } => {
+            // Hand off to the existing prompt, which names the local branch and
+            // already guards against colliding with an existing one.
+            this.open_popover_centered(
+                PopoverKind::CheckoutRemoteBranchPrompt {
+                    repo_id,
+                    remote,
+                    branch,
+                },
+                window,
+                cx,
+            );
+        }
+        BranchPickerNavTarget::CreateBranch(name) => {
+            let target = this
+                .active_repo()
+                .and_then(|repo| match &repo.head_branch {
+                    Loadable::Ready(head) => Some(head.clone()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "HEAD".to_string());
+            this.store.dispatch(Msg::CreateBranchAndCheckout {
+                repo_id,
+                name,
+                target,
+            });
+            this.close_popover(cx);
+        }
+    }
+}
+
 pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> gpui::Div {
     let theme = this.theme;
     let ui_scale = super::popover_ui_scale(cx);
     let ui_scale_percent = ui_scale.percent();
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
-    let width = super::PICKER_WIDTH;
+    let is_checkout = is_checkout_picker(this);
+    let width = if is_checkout {
+        super::LARGE_PICKER_WIDTH
+    } else {
+        super::PICKER_WIDTH
+    };
     let is_delete = matches!(
         this.popover,
         Some(PopoverKind::BranchPicker {
@@ -25,6 +321,51 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .max_w(width.max_px(ui_scale))
         .child(popover_title(title))
         .child(div().border_t_1().border_color(theme.colors.border));
+
+    // The checkout picker renders sectioned, metadata-bearing rows and a create
+    // row, so it drives PickerPrompt directly rather than through
+    // BranchRefPicker (which only builds plain single-part rows).
+    if is_checkout {
+        let Some(search) = this.branch_picker_search_input.clone() else {
+            return components::context_menu(theme, menu).w(width.preferred_px(ui_scale));
+        };
+        let repo_id = this.active_repo().map(|repo| repo.id);
+        // Read the query from the same input PickerPrompt filters with, so the
+        // rows built here are the rows it displays.
+        let query = search.read_with(cx, |input, _| input.text().trim().to_string());
+        let built = rows(this, &query);
+        let row_payloads = built.rows.clone();
+        let empty_text = match this.active_repo().map(|repo| &repo.branches) {
+            Some(Loadable::Loading) | Some(Loadable::NotLoaded) => "Loading",
+            Some(Loadable::Error(_)) => "Could not list branches",
+            _ => "No branches",
+        };
+
+        menu = menu.child(
+            components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
+                .items(built.items)
+                .tooltip_host(this.tooltip_host.clone())
+                .empty_text(empty_text)
+                .max_height(scaled_px(300.0))
+                .selected_index(this.branch_picker_selected_index)
+                .marked_index(built.marked_index)
+                .render(
+                    theme,
+                    ui_scale_percent,
+                    cx,
+                    move |this, ix, _e, window, cx| {
+                        let (Some(repo_id), Some(target)) =
+                            (repo_id, row_payloads.get(ix).cloned())
+                        else {
+                            return;
+                        };
+                        activate(this, repo_id, target, window, cx);
+                    },
+                ),
+        );
+
+        return components::context_menu(theme, menu).w(width.preferred_px(ui_scale));
+    }
 
     if let Some(repo) = this.active_repo() {
         match &repo.branches {

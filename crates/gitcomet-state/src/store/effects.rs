@@ -341,6 +341,12 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::LoadRefMetadata { repo_id } => {
+            send(Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+                repo_id,
+                result: Err(git_unavailable_error(runtime)),
+            }))
+        }
         Effect::LoadSubmodules { repo_id } => {
             send(Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded {
                 repo_id,
@@ -1592,6 +1598,19 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_load_worktrees(
                     repo_load_executor,
+                    repos,
+                    msg_tx,
+                    repo_id,
+                    cancellation,
+                );
+            }
+        }
+        Effect::LoadRefMetadata { repo_id } => {
+            if let Some((msg_tx, cancellation)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_ref_metadata(
+                    metadata_executor,
                     repos,
                     msg_tx,
                     repo_id,

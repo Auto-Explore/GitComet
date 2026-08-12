@@ -109,6 +109,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
+            | Msg::LoadRefMetadata { .. }
             | Msg::LoadSubmodules { .. }
             | Msg::LoadSubmodule { .. }
             | Msg::LoadTags { .. }
@@ -990,6 +991,7 @@ fn reduce_inner(
             source,
         } => effects::load_blame(state, repo_id, path, source),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
+        Msg::LoadRefMetadata { repo_id } => effects::load_ref_metadata(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
         Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
         Msg::LoadRemoteTags { repo_id } => effects::load_remote_tags(state, repo_id),
@@ -1875,6 +1877,9 @@ fn reduce_inner(
         }) => effects::conflict_file_loaded(state, repo_id, path, *result, conflict_session),
         Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
             effects::worktrees_loaded(state, repo_id, result)
+        }
+        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded { repo_id, result }) => {
+            effects::ref_metadata_loaded(state, repo_id, result)
         }
         Msg::Internal(crate::msg::InternalMsg::SubmodulesLoaded { repo_id, result }) => {
             effects::submodules_loaded(state, repo_id, result)

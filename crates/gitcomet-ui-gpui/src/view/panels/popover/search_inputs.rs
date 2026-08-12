@@ -95,7 +95,15 @@ impl PopoverHost {
                     return;
                 }
                 PickerNavOutcome::Enter => {
-                    let payload = (*selected_index(this)).and_then(|sel| list.get(sel).cloned());
+                    // Clamp exactly the way `PickerPrompt::render` does. Typing
+                    // can shrink the filtered list below a previously chosen
+                    // index; without this the highlighted row (clamped) and the
+                    // Enter target (unclamped) disagree and Enter silently
+                    // does nothing.
+                    let payload = (*selected_index(this))
+                        .filter(|_| !list.is_empty())
+                        .map(|sel| sel.min(list.len() - 1))
+                        .and_then(|sel| list.get(sel).cloned());
                     on_enter(this, payload, query, window, cx);
                 }
                 PickerNavOutcome::Idle => {}
@@ -182,6 +190,16 @@ impl PopoverHost {
                 |this| this.inline_branch_picker_active(),
                 |this| &mut this.branch_picker_selected_index,
                 |this, query, _cx| {
+                    // The checkout picker renders sectioned, multi-part rows, so
+                    // its nav order must come from the picker's own layout over
+                    // the very same items. `match_branches` sorts differently
+                    // (no section term, name length rather than row length) and
+                    // would make Enter check out a branch other than the
+                    // highlighted one.
+                    if branch_picker::is_checkout_picker(this) {
+                        return Some(branch_picker::nav_targets(this, query));
+                    }
+
                     let is_delete = matches!(
                         this.popover,
                         Some(PopoverKind::BranchPicker {
@@ -213,16 +231,61 @@ impl PopoverHost {
                             names.extend(tags.iter().map(|t| t.name.clone()));
                         }
                     }
-                    Some(match_branches(&names, query))
+                    Some(
+                        match_branches(&names, query)
+                            .into_iter()
+                            .map(branch_picker::BranchPickerNavTarget::Ref)
+                            .collect(),
+                    )
                 },
                 |this, cx| this.handle_inline_branch_picker_escape(cx),
-                Self::scroll_picker_prompt_to_item,
+                |this, sel, cx| {
+                    if !branch_picker::is_checkout_picker(this) {
+                        this.picker_prompt_scroll.scroll_to_item(sel);
+                        return;
+                    }
+                    let query = this
+                        .branch_picker_search_input
+                        .as_ref()
+                        .map(|input| input.read(cx).text().trim().to_string())
+                        .unwrap_or_default();
+                    // Section headers occupy scroll children too, so scroll to
+                    // the row's child slot rather than its selection index.
+                    let child_ix = branch_picker::filtered_layout(this, &query)
+                        .1
+                        .child_indices
+                        .get(sel)
+                        .copied()
+                        .unwrap_or(sel);
+                    this.picker_prompt_scroll.scroll_to_item(child_ix);
+                },
                 |this, payload, query, window, cx| {
                     let Some(repo_id) = this.active_repo().map(|repo| repo.id) else {
                         return;
                     };
+                    if branch_picker::is_checkout_picker(this) {
+                        // Same as the workspace picker: a typed query plus Enter
+                        // must reach the top row (often "Create branch <name>")
+                        // without arrowing to it first.
+                        let target = payload.or_else(|| {
+                            (!query.trim().is_empty())
+                                .then(|| {
+                                    branch_picker::nav_targets(this, query.trim())
+                                        .into_iter()
+                                        .next()
+                                })
+                                .flatten()
+                        });
+                        if let Some(target) = target {
+                            branch_picker::activate(this, repo_id, target, window, cx);
+                        }
+                        return;
+                    }
                     if branch_picker_offers_refs(this) {
-                        let name = payload.unwrap_or(query);
+                        let name = match payload {
+                            Some(branch_picker::BranchPickerNavTarget::Ref(name)) => name,
+                            _ => query,
+                        };
                         if !name.is_empty() {
                             if matches!(
                                 this.popover,
@@ -235,7 +298,7 @@ impl PopoverHost {
                             }
                             this.handle_inline_branch_picker_select(name, repo_id, window, cx);
                         }
-                    } else if let Some(name) = payload {
+                    } else if let Some(branch_picker::BranchPickerNavTarget::Ref(name)) = payload {
                         this.handle_inline_branch_picker_select(name, repo_id, window, cx);
                     }
                 },
@@ -305,6 +368,79 @@ impl PopoverHost {
                             this.store.dispatch(Msg::OpenRepo(path));
                             this.close_popover(cx);
                         }
+                    },
+                ));
+        }
+        self.reset_picker_search_input(&input, window, cx);
+        input
+    }
+
+    pub(super) fn ensure_workspace_picker_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<components::TextInput> {
+        let input = Self::ensure_search_input_entity(
+            &mut self.workspace_picker_search_input,
+            "Select or type to create a worktree",
+            window,
+            cx,
+        );
+        if self._workspace_picker_search_input_subscription.is_none() {
+            self._workspace_picker_search_input_subscription =
+                Some(Self::picker_search_subscription(
+                    &input,
+                    window,
+                    cx,
+                    |this| workspace_picker_state(this).is_some(),
+                    |this| &mut this.workspace_picker_selected_index,
+                    |this, query, _cx| {
+                        let repo_id = workspace_picker_state(this)?;
+                        // Layout-driven so Enter can never land on a different
+                        // row than the highlighted one.
+                        Some(workspace_picker::nav_targets(this, repo_id, query))
+                    },
+                    |this, cx| this.close_popover(cx),
+                    |this, sel, cx| {
+                        let Some(repo_id) = workspace_picker_state(this) else {
+                            return;
+                        };
+                        let query = this
+                            .workspace_picker_search_input
+                            .as_ref()
+                            .map(|input| input.read(cx).text().trim().to_string())
+                            .unwrap_or_default();
+                        // Any section header would occupy a scroll child too, so
+                        // scroll to the row's child slot rather than its index.
+                        let child_ix = workspace_picker::filtered_layout(this, repo_id, &query)
+                            .1
+                            .child_indices
+                            .get(sel)
+                            .copied()
+                            .unwrap_or(sel);
+                        this.picker_prompt_scroll.scroll_to_item(child_ix);
+                    },
+                    |this, payload, query, window, cx| {
+                        let Some(repo_id) = workspace_picker_state(this) else {
+                            return;
+                        };
+                        // "Select or type to create a worktree": after typing,
+                        // Enter must act even though nothing was arrowed to.
+                        // Only with a query, so a stray Enter on the freshly
+                        // opened picker stays inert.
+                        let row = payload.or_else(|| {
+                            (!query.trim().is_empty())
+                                .then(|| {
+                                    workspace_picker::nav_targets(this, repo_id, query.trim())
+                                        .into_iter()
+                                        .next()
+                                })
+                                .flatten()
+                        });
+                        let Some(row) = row else {
+                            return;
+                        };
+                        workspace_picker::activate(this, repo_id, row, &query, window, cx);
                     },
                 ));
         }
@@ -534,6 +670,16 @@ fn worktree_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
                     kind @ (WorktreePopoverKind::OpenPicker | WorktreePopoverKind::RemovePicker),
                 ),
         }) => Some((*repo_id, matches!(kind, WorktreePopoverKind::RemovePicker))),
+        _ => None,
+    }
+}
+
+fn workspace_picker_state(this: &PopoverHost) -> Option<RepoId> {
+    match &this.popover {
+        Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
+        }) => Some(*repo_id),
         _ => None,
     }
 }

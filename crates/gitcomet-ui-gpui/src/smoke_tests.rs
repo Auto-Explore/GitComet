@@ -124,7 +124,7 @@ fn builds_pure_components_without_panics() {
                 .style(components::ButtonStyle::Outlined)
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
             let _ = components::SplitButton::new(left, right)
-                .style(components::SplitButtonStyle::Outlined)
+                .style(components::SplitButtonStyle::Borderless)
                 .render(theme, ui_scale::DEFAULT_UI_SCALE_PERCENT);
         });
 

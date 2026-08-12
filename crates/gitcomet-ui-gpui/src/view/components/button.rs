@@ -35,6 +35,9 @@ pub struct Button {
     disabled: bool,
     selected: bool,
     selected_bg: Option<gpui::Rgba>,
+    bg: Option<gpui::Rgba>,
+    hover_bg: Option<gpui::Rgba>,
+    text_color: Option<gpui::Rgba>,
     rounding: ButtonRounding,
     borderless: bool,
     suppress_hover_border: bool,
@@ -54,6 +57,9 @@ impl Button {
             disabled: false,
             selected: false,
             selected_bg: None,
+            bg: None,
+            hover_bg: None,
+            text_color: None,
             rounding: ButtonRounding::All,
             borderless: false,
             suppress_hover_border: false,
@@ -72,6 +78,26 @@ impl Button {
 
     pub fn selected_bg(mut self, bg: gpui::Rgba) -> Self {
         self.selected_bg = Some(bg);
+        self
+    }
+
+    /// Resting background, for a button that carries its own tint instead of
+    /// the style's neutral fill.
+    pub fn bg(mut self, bg: gpui::Rgba) -> Self {
+        self.bg = Some(bg);
+        self
+    }
+
+    /// Hover *and* pressed background. A tinted resting background needs this
+    /// too: the style's neutral overlay would otherwise read as a step *down*
+    /// from the tint under the cursor.
+    pub fn hover_bg(mut self, bg: gpui::Rgba) -> Self {
+        self.hover_bg = Some(bg);
+        self
+    }
+
+    pub fn text_color(mut self, color: gpui::Rgba) -> Self {
+        self.text_color = Some(color);
         self
     }
 
@@ -187,6 +213,9 @@ impl Button {
             disabled,
             selected,
             selected_bg,
+            bg: bg_override,
+            hover_bg: hover_bg_override,
+            text_color: text_color_override,
             rounding,
             borderless,
             suppress_hover_border,
@@ -301,6 +330,11 @@ impl Button {
                 theme.colors.text,
             ),
         };
+
+        let bg = bg_override.unwrap_or(bg);
+        let hover_bg = hover_bg_override.unwrap_or(hover_bg);
+        let active_bg = hover_bg_override.unwrap_or(active_bg);
+        let text = text_color_override.unwrap_or(text);
 
         let separator_color = with_alpha(
             theme.colors.text_muted,

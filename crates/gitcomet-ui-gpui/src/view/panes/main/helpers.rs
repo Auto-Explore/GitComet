@@ -2558,6 +2558,28 @@ pub(super) fn apply_conflict_choice_provenance_hints(
     );
 }
 
+/// Whether the content pane is showing a file's full content *at the commit the
+/// file browser is pinned to* — the state the historical browse tint marks.
+///
+/// Content-preview mode alone is not enough: a file's content can be opened from
+/// some other commit while a browse point is active, and that content is not
+/// what the browse point describes. The commit ids have to match.
+pub(super) fn historical_browse_content(
+    repo: &RepoState,
+    rendered_target: Option<&DiffTarget>,
+) -> bool {
+    if !repo.diff_state.content_preview {
+        return false;
+    }
+    let Some(browsing) = repo.browsing_commit() else {
+        return false;
+    };
+    matches!(
+        rendered_target,
+        Some(DiffTarget::Commit { commit_id, .. }) if commit_id == browsing
+    )
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum ClearDiffSelectionAction {
     ClearSelection,

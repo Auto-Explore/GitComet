@@ -39,11 +39,38 @@ pub struct PickerPromptItem {
     display_text: SharedString,
     match_text: SharedString,
     parts: Vec<PickerPromptItemPart>,
+    /// Supporting detail, rendered on a second, quieter line below `parts`.
+    /// Empty for the single-line rows most pickers use.
+    secondary: Vec<PickerPromptItemPart>,
     icon: Option<&'static str>,
     repository_initials: Option<SharedString>,
     section: Option<SharedString>,
     removable: bool,
 }
+
+/// Row and header metrics, taken from Zed's title-bar menus so the two read the
+/// same: a row's fill is inset from the popover edge rather than spanning it, and
+/// the text sits a further 6px inside that fill (10px from the edge in total).
+/// See `zed/crates/ui/src/components/list/list_item.rs` (`inset` + `Sparse`).
+const LIST_PAD_PX: f32 = 4.0;
+const ROW_PAD_X_PX: f32 = 6.0;
+/// Air above and below a row's text (Zed's `ListItemSpacing::Sparse` → `py_1`).
+///
+/// A row is otherwise exactly as tall as its own text — each line's box is its
+/// font size times the line height — so a row with a detail line grows by one
+/// line box and the whole menu keeps its proportions at any UI scale. Pinning the
+/// line boxes to scaled pixel heights instead made the lines crowd, because the
+/// rem-based font sizes did not scale with them.
+const ROW_PAD_Y_PX: f32 = 4.0;
+/// Gap between a row's leading icon and its text (Zed's `gap_2p5`).
+const ROW_ICON_GAP_PX: f32 = 10.0;
+/// Zed's rows are `rounded_sm` (`rems(0.25)`), tighter than `radii.row`, which
+/// stays as it is for the sidebar and history rows.
+const ROW_CORNER_PX: f32 = 4.0;
+/// Zed's picker query row is `h_9`.
+const QUERY_ROW_HEIGHT_PX: f32 = 36.0;
+/// Zed's `ListSubHeader` label box.
+const SECTION_HEADER_HEIGHT_PX: f32 = 20.0;
 
 /// Where a filtered picker list ends up on screen: which items survived the
 /// query, in render order, and which scroll child each one is (section headers
@@ -82,6 +109,9 @@ pub struct PickerPromptItemPart {
     profile: TextTruncationProfile,
     flexible: bool,
     searchable: bool,
+    /// Renders one step quieter than the rest of its line — the line's own base
+    /// color already differs between the primary and secondary lines.
+    dim: bool,
     match_range: Option<Range<usize>>,
 }
 
@@ -267,7 +297,7 @@ impl PickerPrompt {
                     .min_w(px(0.0))
                     .when(attached_list_surface || padded_query_row, |query_row| {
                         query_row
-                            .h(control_height_md(ui_scale))
+                            .h(scaled_px(QUERY_ROW_HEIGHT_PX))
                             .items_center()
                             .px(scaled_px(10.0))
                     })
@@ -297,6 +327,8 @@ impl PickerPrompt {
             .flex_col()
             .overflow_y_scroll()
             .max_h(self.max_height)
+            .py(scaled_px(LIST_PAD_PX))
+            .pl(scaled_px(LIST_PAD_PX))
             .track_scroll(&scroll_handle);
         list = restrict_scroll_to_vertical_axis(list);
 
@@ -307,7 +339,7 @@ impl PickerPrompt {
                     .w_full()
                     .flex()
                     .items_center()
-                    .px(scaled_px(8.0))
+                    .px(scaled_px(ROW_PAD_X_PX))
                     .text_sm()
                     .line_height(scaled_px(18.0))
                     .text_color(theme.colors.text_muted)
@@ -336,37 +368,49 @@ impl PickerPrompt {
                 let on_select = Arc::clone(&on_select);
                 let original_index = m.index;
                 let row_initials = self.items[original_index].repository_initials.clone();
-                let row_icon = row_initials
-                    .is_none()
-                    .then(|| self.items[original_index].icon.or(leading_icon))
-                    .flatten();
+                let has_initials = row_initials.is_some();
                 let is_selected = selected_index == Some(display_ix);
                 let is_marked = self.marked_index == Some(original_index);
+                let row_icon = (!has_initials)
+                    .then(|| row_leading_icon(&self.items[original_index], leading_icon, is_marked))
+                    .flatten();
                 let is_removable = self.items[original_index].removable;
                 let row_group: SharedString = format!("picker_prompt_row_{original_index}").into();
                 let mut row = div()
                     .id(("picker_prompt_item", original_index))
                     .debug_selector(move || format!("picker_prompt_item_{original_index}"))
                     .group(row_group.clone())
-                    .h(control_height_md(ui_scale))
+                    // Sized by its own text rather than pinned to a height, so a
+                    // row with a detail line grows by exactly one line box.
+                    // `flex_shrink_0` is what keeps that honest: once the rows
+                    // overflow the list's max height, a shrinkable row would be
+                    // squashed below its content and its two lines would overlap.
+                    .flex_shrink_0()
+                    .min_h(control_height_md(ui_scale))
+                    .py(scaled_px(ROW_PAD_Y_PX))
                     .w_full()
                     .relative()
                     .flex()
                     .items_center()
-                    .gap(scaled_px(7.0))
-                    .px(scaled_px(8.0))
-                    .rounded(px(theme.radii.row))
+                    .gap(scaled_px(ROW_ICON_GAP_PX))
+                    .px(scaled_px(ROW_PAD_X_PX))
+                    .rounded(scaled_px(ROW_CORNER_PX))
                     .cursor(CursorStyle::PointingHand)
                     .when_some(row_icon, |row, icon| {
-                        row.child(crate::view::icons::svg_icon(
-                            icon,
-                            if is_selected {
-                                theme.colors.accent
-                            } else {
-                                theme.colors.text_muted
-                            },
-                            scaled_px(14.0),
-                        ))
+                        row.child(
+                            crate::view::icons::svg_icon(
+                                icon,
+                                if is_marked {
+                                    theme.colors.accent
+                                } else {
+                                    theme.colors.text_muted
+                                },
+                                scaled_px(14.0),
+                            )
+                            .debug_selector(move || {
+                                format!("picker_prompt_item_icon_{original_index}")
+                            }),
+                        )
                     })
                     .when_some(row_initials, |row, initials| {
                         row.child(
@@ -382,14 +426,22 @@ impl PickerPrompt {
                         )
                     })
                     .child(div().flex_1().min_w(px(0.0)).child(label))
-                    .when(is_marked, |row| {
-                        row.child(div().flex_shrink_0().pl(scaled_px(6.0)).child(
-                            crate::view::icons::svg_icon(
-                                "icons/check.svg",
-                                theme.colors.accent,
-                                scaled_px(12.0),
-                            ),
-                        ))
+                    // Only rows with repository initials still need this: they have
+                    // no icon slot to turn into a check.
+                    .when(is_marked && has_initials, |row| {
+                        row.child(
+                            div()
+                                .flex_shrink_0()
+                                .pl(scaled_px(6.0))
+                                .debug_selector(move || {
+                                    format!("picker_prompt_item_trailing_check_{original_index}")
+                                })
+                                .child(crate::view::icons::svg_icon(
+                                    "icons/check.svg",
+                                    theme.colors.accent,
+                                    scaled_px(12.0),
+                                )),
+                        )
                     })
                     .when(is_selected, |row| {
                         row.when_some(selected_hint.clone(), |row, hint| {
@@ -472,7 +524,9 @@ impl PickerPrompt {
 
         let scrollbar_gutter =
             Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
-        let list = list.pr(scrollbar_gutter);
+        // Mirrors the list's left padding so rows stay centred in the list, with
+        // the scrollbar's own gutter added on top of it when one is showing.
+        let list = list.pr(scrollbar_gutter + scaled_px(LIST_PAD_PX));
         let scrollbar = {
             let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
             #[cfg(test)]
@@ -507,29 +561,35 @@ impl PickerPromptItem {
     {
         let mut display_text = String::new();
         let mut match_text = String::new();
-        let mut built_parts = Vec::new();
-
-        for mut part in parts {
-            display_text.push_str(part.text.as_ref());
-
-            if part.searchable {
-                let start = match_text.len();
-                match_text.push_str(part.text.as_ref());
-                part.match_range = Some(start..match_text.len());
-            }
-
-            built_parts.push(part);
-        }
+        let built_parts = accumulate_parts(parts, Some(&mut display_text), &mut match_text);
 
         Self {
             display_text: display_text.into(),
             match_text: match_text.into(),
             parts: built_parts,
+            secondary: Vec::new(),
             icon: None,
             repository_initials: None,
             section: None,
             removable: false,
         }
+    }
+
+    /// Adds a second, quieter line of supporting detail below the primary parts,
+    /// making the row two lines tall.
+    ///
+    /// Searchable secondary parts still filter and highlight — a worktree's path
+    /// finds its row from the second line just as its name does from the first.
+    /// They stay out of `display_text` on purpose: that is the picker's sort key,
+    /// which should order rows by what the eye reads first.
+    pub fn secondary_parts<I>(mut self, parts: I) -> Self
+    where
+        I: IntoIterator<Item = PickerPromptItemPart>,
+    {
+        let mut match_text = self.match_text.to_string();
+        self.secondary = accumulate_parts(parts, None, &mut match_text);
+        self.match_text = match_text.into();
+        self
     }
 
     pub fn icon(mut self, icon: &'static str) -> Self {
@@ -569,6 +629,50 @@ impl PickerPromptItem {
     fn parts(&self) -> &[PickerPromptItemPart] {
         self.parts.as_slice()
     }
+
+    fn secondary(&self) -> &[PickerPromptItemPart] {
+        self.secondary.as_slice()
+    }
+
+    /// The secondary line's text, part by part — what a row's detail line says.
+    #[cfg(test)]
+    pub(crate) fn debug_secondary_text(&self) -> String {
+        self.secondary
+            .iter()
+            .map(|part| part.text.as_ref())
+            .collect()
+    }
+}
+
+/// Appends `parts` to a row's match text — and, for the primary line, its display
+/// text — recording each searchable part's span in match-text coordinates so a
+/// query's hit can be highlighted in the part that actually contains it.
+///
+/// `display_text` is `None` for the secondary line, which stays out of the sort
+/// key by design.
+fn accumulate_parts<I>(
+    parts: I,
+    mut display_text: Option<&mut String>,
+    match_text: &mut String,
+) -> Vec<PickerPromptItemPart>
+where
+    I: IntoIterator<Item = PickerPromptItemPart>,
+{
+    let mut built = Vec::new();
+    for mut part in parts {
+        if let Some(display_text) = display_text.as_deref_mut() {
+            display_text.push_str(part.text.as_ref());
+        }
+
+        if part.searchable {
+            let start = match_text.len();
+            match_text.push_str(part.text.as_ref());
+            part.match_range = Some(start..match_text.len());
+        }
+
+        built.push(part);
+    }
+    built
 }
 
 impl PickerPromptItemPart {
@@ -578,12 +682,15 @@ impl PickerPromptItemPart {
             profile: TextTruncationProfile::End,
             flexible: true,
             searchable: true,
+            dim: false,
             match_range: None,
         }
     }
 
+    /// Punctuation and connective text between the parts that carry meaning, so
+    /// it renders one step quieter than they do.
     pub fn separator(text: impl Into<SharedString>) -> Self {
-        Self::new(text).flexible(false).searchable(false)
+        Self::new(text).flexible(false).searchable(false).dim()
     }
 
     pub fn path(text: impl Into<SharedString>) -> Self {
@@ -597,6 +704,12 @@ impl PickerPromptItemPart {
 
     pub fn flexible(mut self, flexible: bool) -> Self {
         self.flexible = flexible;
+        self
+    }
+
+    /// Renders this part one step quieter than the rest of its line.
+    pub fn dim(mut self) -> Self {
+        self.dim = true;
         self
     }
 
@@ -730,6 +843,25 @@ fn match_items(items: &[PickerPromptItem], groups: &[usize], query: &str) -> Vec
     out
 }
 
+/// The icon in a row's leading slot.
+///
+/// The marked row says "this is the current one" by turning its icon into a check
+/// rather than keeping its own icon and adding a second one at the far end — which
+/// also leaves the row's trailing edge free for its hover actions.
+fn row_leading_icon(
+    item: &PickerPromptItem,
+    leading_icon: Option<&'static str>,
+    is_marked: bool,
+) -> Option<&'static str> {
+    if is_marked {
+        return Some("icons/check.svg");
+    }
+    item.icon.or(leading_icon)
+}
+
+/// A group label above a run of rows. Plain muted text rather than a heavier
+/// treatment, and every section after the first is introduced by a rule, so the
+/// groups separate without the labels having to shout.
 fn section_header_row(
     theme: AppTheme,
     ui_scale: UiScale,
@@ -740,21 +872,109 @@ fn section_header_row(
     div()
         .w_full()
         .flex_shrink_0()
-        .px(scaled_px(8.0))
-        .pt(scaled_px(if is_first { 4.0 } else { 10.0 }))
+        .when(!is_first, |header| {
+            header
+                .mt(scaled_px(4.0))
+                .border_t_1()
+                .border_color(theme.colors.border_variant)
+        })
+        .pt(scaled_px(6.0))
         .pb(scaled_px(4.0))
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
-        .line_height(scaled_px(16.0))
-        .text_color(theme.colors.text_muted)
-        .whitespace_nowrap()
-        .overflow_hidden()
-        .child(label)
+        .child(
+            div()
+                .h(scaled_px(SECTION_HEADER_HEIGHT_PX))
+                .w_full()
+                .flex()
+                .items_center()
+                .px(scaled_px(ROW_PAD_X_PX))
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(label),
+        )
 }
 
 fn picker_item_label<V: 'static>(
     theme: AppTheme,
     item: &PickerPromptItem,
+    range: Option<Range<usize>>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    cx: &gpui::Context<V>,
+) -> Div {
+    let has_secondary = !item.secondary().is_empty();
+    // The title line stays at normal weight even with detail below it: the smaller,
+    // muted detail line supplies the contrast, so bolding the title only makes the
+    // list noisier.
+    let primary = picker_item_line(
+        theme,
+        LineRole {
+            part_id: "picker_prompt_label_part",
+            text_id: "picker_prompt_label_part_text",
+            parts: item.parts(),
+            base_color: theme.colors.text,
+            dim_color: theme.colors.text_muted,
+            text_size: gpui::rems(0.875),
+            weight: FontWeight::NORMAL,
+        },
+        range.clone(),
+        tooltip_host.clone(),
+        cx,
+    );
+
+    if !has_secondary {
+        return primary;
+    }
+
+    let secondary = picker_item_line(
+        theme,
+        LineRole {
+            part_id: "picker_prompt_secondary_part",
+            text_id: "picker_prompt_secondary_part_text",
+            parts: item.secondary(),
+            base_color: theme.colors.text_muted,
+            // Half-strength muted, the weight Zed gives the dots between a row's
+            // detail fields.
+            dim_color: with_alpha(theme.colors.text_muted, 0.5),
+            text_size: gpui::rems(0.75),
+            weight: FontWeight::NORMAL,
+        },
+        range,
+        tooltip_host,
+        cx,
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w(px(0.0))
+        .overflow_hidden()
+        .child(primary)
+        .child(secondary)
+}
+
+/// How one line of a picker row renders: which parts it holds and the type and
+/// color treatment that mark it as the title or the supporting detail.
+struct LineRole<'a> {
+    /// Element-id stems for this line's parts. Both lines of a row live under
+    /// the same parent, so their part ids must not collide.
+    part_id: &'static str,
+    text_id: &'static str,
+    parts: &'a [PickerPromptItemPart],
+    base_color: gpui::Rgba,
+    dim_color: gpui::Rgba,
+    /// Set on the line *and* on each `TruncatedText`. The latter measures itself
+    /// against the text style in effect during layout, which does not yet carry
+    /// the line's own `text_sm`/`text_xs`; leaving it to inherit reserved a line
+    /// box for 1rem text and left both lines sitting loose in it.
+    text_size: gpui::Rems,
+    weight: FontWeight,
+}
+
+fn picker_item_line<V: 'static>(
+    theme: AppTheme,
+    role: LineRole<'_>,
     range: Option<Range<usize>>,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     cx: &gpui::Context<V>,
@@ -765,16 +985,19 @@ fn picker_item_label<V: 'static>(
         ..HighlightStyle::default()
     };
 
-    let mut label = div()
+    // `TruncatedText` shapes against the inherited text style, so size and
+    // weight are set here on the line rather than per part.
+    let mut line = div()
         .flex()
         .w_full()
         .min_w(px(0.0))
         .items_center()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_sm();
+        .font_weight(role.weight)
+        .text_size(role.text_size);
 
-    for (ix, part) in item.parts().iter().enumerate() {
+    for (ix, part) in role.parts.iter().enumerate() {
         let highlight_range = part.local_match_range(range.as_ref());
         let mut container = div().min_w(px(0.0)).overflow_hidden().whitespace_nowrap();
         if part.flexible {
@@ -786,9 +1009,14 @@ fn picker_item_label<V: 'static>(
         }
 
         let mut text = TruncatedText::new(part.text.clone())
-            .id(("picker_prompt_label_part_text", ix))
+            .id((role.text_id, ix))
             .profile(part.profile)
-            .text_color(theme.colors.text);
+            .text_size(role.text_size)
+            .text_color(if part.dim {
+                role.dim_color
+            } else {
+                role.base_color
+            });
         if let Some(highlight_range) = highlight_range.clone() {
             text = text
                 .focus_range(Some(highlight_range.clone()))
@@ -798,14 +1026,10 @@ fn picker_item_label<V: 'static>(
             text = text.full_text_tooltip(tooltip_host);
         }
 
-        label = label.child(
-            container
-                .id(("picker_prompt_label_part", ix))
-                .child(text.render(cx)),
-        );
+        line = line.child(container.id((role.part_id, ix)).child(text.render(cx)));
     }
 
-    label
+    line
 }
 
 /// The trailing `x` on a removable row — drops the entry from the list the
@@ -970,6 +1194,74 @@ mod tests {
         assert_eq!(
             item.parts()[2].local_match_range(Some(&range)),
             Some(14..18)
+        );
+    }
+
+    #[test]
+    fn the_marked_row_shows_a_check_instead_of_its_own_icon() {
+        let item = PickerPromptItem::plain("main").icon("icons/git_branch.svg");
+
+        assert_eq!(
+            row_leading_icon(&item, None, true),
+            Some("icons/check.svg"),
+            "the marked row gives up its icon for the check"
+        );
+        assert_eq!(
+            row_leading_icon(&item, None, false),
+            Some("icons/git_branch.svg")
+        );
+    }
+
+    #[test]
+    fn unmarked_rows_without_an_icon_fall_back_to_the_picker_wide_one() {
+        let item = PickerPromptItem::plain("main");
+
+        assert_eq!(
+            row_leading_icon(&item, Some("icons/git_branch.svg"), false),
+            Some("icons/git_branch.svg")
+        );
+        assert_eq!(row_leading_icon(&item, None, false), None);
+    }
+
+    #[test]
+    fn secondary_parts_keep_filtering_and_highlighting_the_row() {
+        // The worktree picker moved the path onto the second line; a path query
+        // must still find the row and light up the matched span there.
+        let item =
+            PickerPromptItem::from_parts([PickerPromptItemPart::new("feature").flexible(false)])
+                .secondary_parts([PickerPromptItemPart::path("/tmp/ws/feature/src/main.rs")]);
+
+        let matches = match_items(std::slice::from_ref(&item), &[0], "src");
+        let range = matches
+            .first()
+            .and_then(|m| m.range.clone())
+            .expect("a path query must still match");
+
+        assert_eq!(item.parts()[0].local_match_range(Some(&range)), None);
+        assert_eq!(
+            item.secondary()[0].local_match_range(Some(&range)),
+            Some(16..19),
+            "the hit belongs to the secondary part that contains it"
+        );
+    }
+
+    #[test]
+    fn secondary_parts_stay_out_of_the_sort_key() {
+        // Sorting is by what the eye reads first, so a long detail line must not
+        // push a short-titled row down the list.
+        let items = vec![
+            PickerPromptItem::from_parts([PickerPromptItemPart::new("main")]).secondary_parts([
+                PickerPromptItemPart::path("/a/very/long/path/that/dwarfs/the/title"),
+            ]),
+            PickerPromptItem::from_parts([PickerPromptItemPart::new("maintenance")]),
+        ];
+
+        let matches = match_items(&items, &section_groups(&items), "main");
+
+        assert_eq!(
+            matches.iter().map(|m| m.index).collect::<Vec<_>>(),
+            vec![0, 1],
+            "the shorter title sorts first regardless of its detail line"
         );
     }
 

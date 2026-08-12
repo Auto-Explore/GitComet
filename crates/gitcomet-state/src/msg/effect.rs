@@ -101,6 +101,9 @@ pub enum Effect {
     LoadWorktrees {
         repo_id: RepoId,
     },
+    LoadRefMetadata {
+        repo_id: RepoId,
+    },
     LoadSubmodules {
         repo_id: RepoId,
     },

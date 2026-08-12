@@ -457,6 +457,17 @@ impl TextInput {
         if self.highlight.provider.is_none()
             && self.highlight.highlights.as_slice() == highlights.as_slice()
         {
+            // Republishing the same vector still describes the buffer as it
+            // stands now. A caller that rewrote the text first (a SHA field
+            // swapping one 40-char id for another, say) left an edit patch
+            // behind, and mapping these highlights through it would drop the
+            // rewritten span back to the base color — so drop the patch even
+            // though the vector itself is unchanged.
+            if !self.highlight.interpolation.is_exact() {
+                self.reset_highlight_interpolation();
+                self.invalidate_highlights(false);
+                cx.notify();
+            }
             return;
         }
         self.supersede_current_highlight_source();

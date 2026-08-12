@@ -1035,8 +1035,8 @@ impl MainPaneView {
                 }
             }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
-            // The historical-browse purple frame keys off content-preview mode, which
-            // can share a diff_target with a plain diff of the same commit+path.
+            // The historical-browse tint keys off content-preview mode, which can
+            // share a diff_target with a plain diff of the same commit+path.
             repo.diff_state.content_preview.hash(&mut hasher);
             repo.conflict_state.conflict_rev.hash(&mut hasher);
 
@@ -1059,7 +1059,7 @@ impl MainPaneView {
                 0
             };
             commit_details_rev.hash(&mut hasher);
-            // The historical-browse purple frame keys off the file browser source.
+            // The historical-browse tint keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
 
             match &repo.interactive_rebase_setup {
@@ -4051,6 +4051,16 @@ impl MainPaneView {
         self.active_inline_submodule_diff()
             .map(|inline| &inline.target)
             .or_else(|| self.active_repo()?.diff_state.diff_target.as_ref())
+    }
+
+    /// Whether the content pane is showing a file's full content *at the commit
+    /// the file browser is pinned to*, i.e. whether it earns the historical
+    /// browse tint. See [`historical_browse_content`].
+    pub(in crate::view) fn historical_browse_content_active(&self) -> bool {
+        let Some(repo) = self.active_repo() else {
+            return false;
+        };
+        historical_browse_content(repo, self.rendered_diff_target())
     }
 
     pub(in crate::view) fn rendered_patch_diff_loadable(

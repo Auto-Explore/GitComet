@@ -987,3 +987,557 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
         "expected empty input to avoid create-branch actions"
     );
 }
+
+mod checkout_picker {
+    use super::super::super::branch_picker::{self, BranchPickerNavTarget};
+    use super::*;
+    use crate::view::panels::tests::{app_state_with_repo, opening_repo_state};
+    use crate::view::test_support::{push_test_state, redraw};
+    use gitcomet_core::domain::{RefMetadata, RemoteBranch};
+    use gitcomet_state::model::{RepoId, RepoState};
+    use std::collections::HashMap;
+
+    fn commit_id(hex: &str) -> CommitId {
+        CommitId(Arc::from(hex))
+    }
+
+    fn local(name: &str) -> Branch {
+        Branch {
+            name: name.to_string(),
+            target: commit_id("399f41d0000000000000000000000000000000aa"),
+            upstream: None,
+            divergence: None,
+        }
+    }
+
+    fn remote(remote: &str, name: &str) -> RemoteBranch {
+        RemoteBranch {
+            remote: remote.to_string(),
+            name: name.to_string(),
+            target: commit_id("a12bc3d0000000000000000000000000000000bb"),
+        }
+    }
+
+    /// A repo on `main` with two local branches, two remote refs (one of which
+    /// is the `origin/HEAD` symref), and loaded ref metadata.
+    fn repo_with_branches(repo_id: RepoId) -> RepoState {
+        let mut repo = opening_repo_state(repo_id, Path::new("/tmp/branches/main"));
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![local("main"), local("feat/badges")]));
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![
+            remote("origin", "main"),
+            remote("origin", "HEAD"),
+        ]));
+        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::from([
+            (
+                "main".to_string(),
+                RefMetadata {
+                    author: "Ada Lovelace".to_string(),
+                    committed_at: 1_754_870_400,
+                    summary: "improve font loading".to_string(),
+                },
+            ),
+            (
+                "origin/main".to_string(),
+                RefMetadata {
+                    author: "Ada Lovelace".to_string(),
+                    committed_at: 1_754_870_400,
+                    summary: "improve font loading".to_string(),
+                },
+            ),
+        ])));
+        repo
+    }
+
+    fn open_checkout_picker(
+        cx: &mut gpui::TestAppContext,
+        repo: RepoState,
+        repo_id: RepoId,
+    ) -> (gpui::Entity<GitCometView>, &mut gpui::VisualTestContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            crate::app::bind_text_input_keys_for_test(app);
+            view.update(app, |this, cx| {
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+            let _ = window.draw(app);
+        });
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.open_popover_at(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Checkout,
+                        },
+                        gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
+        redraw(cx);
+
+        (view, cx)
+    }
+
+    #[gpui::test]
+    fn lists_local_and_remote_branches_and_marks_head(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let (rows, marked_index) = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            let built = branch_picker::rows(host, "");
+            (built.rows, built.marked_index)
+        });
+
+        assert_eq!(
+            rows,
+            vec![
+                BranchPickerNavTarget::Ref("main".to_string()),
+                BranchPickerNavTarget::Ref("feat/badges".to_string()),
+                BranchPickerNavTarget::RemoteBranch {
+                    remote: "origin".to_string(),
+                    branch: "main".to_string(),
+                },
+            ],
+            "origin/HEAD is a symref and must not be listed as a branch"
+        );
+        assert_eq!(
+            marked_index,
+            Some(0),
+            "the check belongs on the checked-out branch, indexed before filtering"
+        );
+
+        redraw(cx);
+        assert!(
+            cx.debug_bounds("picker_prompt_item_0").is_some(),
+            "expected branch rows to render"
+        );
+    }
+
+    /// The ref name is the row's title; who last touched it and what they said
+    /// belongs on a second, quieter line. Every branch row gets that line — one
+    /// saying "No commits found" beats a short row in a list of tall ones — so the
+    /// list keeps a single row pitch throughout.
+    #[gpui::test]
+    fn every_branch_row_carries_a_detail_line_of_the_same_height(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let (with_metadata, without_metadata) = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            let built = branch_picker::rows(host, "");
+            (
+                built.items[0].debug_secondary_text(),
+                built.items[1].debug_secondary_text(),
+            )
+        });
+
+        assert!(
+            with_metadata.contains("Ada Lovelace")
+                && with_metadata.contains("improve font loading"),
+            "author and summary belong on the detail line, got {with_metadata:?}"
+        );
+        // The fixture has metadata for `main` but not for `feat/badges`.
+        assert_eq!(
+            without_metadata, "No commits found",
+            "a branch with no metadata still gets a detail line"
+        );
+
+        redraw(cx);
+        let titled = cx
+            .debug_bounds("picker_prompt_item_0")
+            .expect("expected the branch row to render")
+            .size
+            .height;
+        let plain = cx
+            .debug_bounds("picker_prompt_item_1")
+            .expect("expected the metadata-less branch row to render")
+            .size
+            .height;
+        assert_eq!(
+            titled, plain,
+            "rows must share one height so the list does not look ragged"
+        );
+    }
+
+    /// A backend that does not implement ref metadata latches an empty map rather
+    /// than an error, and the trait's contract is that callers fall back to
+    /// name-only rows. "No commits found" on every single row would be a worse
+    /// answer than no detail line at all.
+    #[gpui::test]
+    fn rows_stay_name_only_when_the_backend_has_no_ref_metadata(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let mut repo = repo_with_branches(repo_id);
+        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::new()));
+        let (view, cx) = open_checkout_picker(cx, repo, repo_id);
+
+        let details = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::rows(host, "")
+                .items
+                .iter()
+                .map(|item| item.debug_secondary_text())
+                .collect::<Vec<_>>()
+        });
+
+        assert!(
+            details.iter().all(|detail| detail.is_empty()),
+            "an empty metadata map means the backend has none, not that every branch lacks commits: {details:?}"
+        );
+    }
+
+    /// The checked-out branch is marked by its leading icon becoming a check, so
+    /// no second check is drawn at the row's trailing edge.
+    #[gpui::test]
+    fn the_checked_out_branch_carries_its_check_in_the_icon_slot(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (_view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        redraw(cx);
+
+        // `main` is HEAD in this fixture, so row 0 is the marked one.
+        assert!(
+            cx.debug_bounds("picker_prompt_item_icon_0").is_some(),
+            "the marked row must still render an icon slot"
+        );
+        assert!(
+            cx.debug_bounds("picker_prompt_item_trailing_check_0")
+                .is_none(),
+            "a row that turned its icon into a check must not also draw a trailing one"
+        );
+        assert!(
+            cx.debug_bounds("picker_prompt_item_icon_1").is_some(),
+            "unmarked rows keep their own branch icon"
+        );
+    }
+
+    #[gpui::test]
+    fn nav_targets_follow_the_rendered_row_order(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let (targets, rendered) = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            let query = "main";
+            let targets = branch_picker::nav_targets(host, query);
+            let built = branch_picker::rows(host, query);
+            let layout = crate::view::components::picker_prompt_layout(&built.items, query);
+            let rendered: Vec<_> = layout
+                .item_indices
+                .iter()
+                .map(|ix| built.rows[*ix].clone())
+                .collect();
+            (targets, rendered)
+        });
+
+        // Sections and multi-part rows sort differently from a plain name list;
+        // if these drift, Enter checks out a branch other than the highlighted one.
+        assert_eq!(
+            targets, rendered,
+            "keyboard order must match the rendered order"
+        );
+    }
+
+    #[gpui::test]
+    fn create_row_appears_for_an_unknown_name_and_survives_filtering(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let targets = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::nav_targets(host, "brand-new")
+        });
+
+        assert_eq!(
+            targets,
+            vec![BranchPickerNavTarget::CreateBranch("brand-new".to_string())],
+            "create row must stay reachable for a name that matches nothing"
+        );
+    }
+
+    #[gpui::test]
+    fn create_row_is_offered_when_only_a_remote_branch_matches(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let mut repo = repo_with_branches(repo_id);
+        // Only a remote branch is named "release"; creating a local one is legal.
+        repo.remote_branches = Loadable::Ready(Arc::new(vec![remote("origin", "release")]));
+        let (view, cx) = open_checkout_picker(cx, repo, repo_id);
+
+        let targets = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::nav_targets(host, "release")
+        });
+
+        assert!(
+            targets.contains(&BranchPickerNavTarget::CreateBranch("release".to_string())),
+            "a query matching only a remote branch should still offer creation: {targets:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn create_row_is_hidden_when_the_query_names_an_existing_local_branch(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let targets = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::nav_targets(host, "main")
+        });
+
+        assert!(
+            !targets
+                .iter()
+                .any(|t| matches!(t, BranchPickerNavTarget::CreateBranch(_))),
+            "must not offer to create a branch that already exists: {targets:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn remote_row_hands_off_to_the_local_name_prompt(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    branch_picker::activate(
+                        host,
+                        repo_id,
+                        BranchPickerNavTarget::RemoteBranch {
+                            remote: "origin".to_string(),
+                            branch: "main".to_string(),
+                        },
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
+        redraw(cx);
+
+        let kind = cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .popover_kind_for_tests()
+        });
+        assert!(
+            matches!(
+                kind,
+                Some(PopoverKind::CheckoutRemoteBranchPrompt { ref remote, ref branch, .. })
+                    if remote == "origin" && branch == "main"
+            ),
+            "expected the remote checkout prompt, got {kind:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn metadata_columns_are_not_searchable(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let targets = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            // "Lovelace" is the author on every row; filtering is by branch
+            // name only, so it must not pull branches in.
+            branch_picker::nav_targets(host, "Lovelace")
+        });
+
+        assert_eq!(
+            targets,
+            vec![BranchPickerNavTarget::CreateBranch("Lovelace".to_string())],
+            "author/date/summary must not participate in filtering: {targets:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn rows_render_without_metadata_before_it_loads(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let mut repo = repo_with_branches(repo_id);
+        repo.ref_metadata = Loadable::NotLoaded;
+        let (view, cx) = open_checkout_picker(cx, repo, repo_id);
+
+        let rows = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::rows(host, "").rows
+        });
+
+        assert_eq!(rows.len(), 3, "picker must be usable before metadata lands");
+        redraw(cx);
+        assert!(cx.debug_bounds("picker_prompt_item_0").is_some());
+    }
+
+    #[gpui::test]
+    fn opening_the_picker_requests_ref_metadata_once(cx: &mut gpui::TestAppContext) {
+        // End-to-end: the badge's picker is what triggers the on-demand load,
+        // and a backend that cannot supply it must not raise an error banner.
+        let (store, events, _repo, _workdir) = create_tracking_store("branch-picker-ref-metadata");
+        let repo_id = store.snapshot().active_repo.expect("expected active repo");
+        let store_for_view = store.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            GitCometView::new(store_for_view, events, None, window, cx)
+        });
+
+        cx.update(|window, app| {
+            crate::app::bind_text_input_keys_for_test(app);
+            let _ = window.draw(app);
+        });
+
+        let ref_metadata_untouched = |snapshot: &Arc<gitcomet_state::model::AppState>| {
+            snapshot
+                .repos
+                .iter()
+                .find(|r| r.id == repo_id)
+                .is_some_and(|r| matches!(r.ref_metadata, Loadable::NotLoaded))
+        };
+        assert!(
+            ref_metadata_untouched(&store.snapshot()),
+            "metadata should not be fetched until a picker that shows it opens"
+        );
+        let diagnostics_before = store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .map(|r| r.diagnostics.len())
+            .unwrap_or(0);
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.open_popover_at(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Checkout,
+                        },
+                        gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
+
+        wait_until("ref metadata load to be requested", || {
+            !ref_metadata_untouched(&store.snapshot())
+        });
+
+        // TrackingRepo inherits the trait default (Unsupported), so this lands
+        // on the error path — which must stay silent.
+        let after = store.snapshot();
+        let repo_state = after
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .expect("repo state");
+        assert_eq!(
+            repo_state.diagnostics.len(),
+            diagnostics_before,
+            "an unsupported metadata backend must not push a diagnostic"
+        );
+    }
+
+    #[gpui::test]
+    fn create_row_is_suppressed_while_the_branch_list_is_still_loading(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // With an empty local list, "switch to main" would become "create main",
+        // which git rejects.
+        let repo_id = RepoId(1);
+        let mut repo = repo_with_branches(repo_id);
+        repo.branches = Loadable::Loading;
+        let (view, cx) = open_checkout_picker(cx, repo, repo_id);
+
+        let targets = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::nav_targets(host, "main")
+        });
+
+        assert!(
+            !targets
+                .iter()
+                .any(|t| matches!(t, BranchPickerNavTarget::CreateBranch(_))),
+            "must not offer creation before the branch list is known: {targets:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn create_row_is_hidden_for_a_case_variant_of_an_existing_branch(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        // `match_items` filters case-insensitively, so "MAIN" shows the `main`
+        // row; offering to create "MAIN" too would collide on case-insensitive
+        // filesystems.
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let targets = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::nav_targets(host, "MAIN")
+        });
+
+        assert!(
+            !targets
+                .iter()
+                .any(|t| matches!(t, BranchPickerNavTarget::CreateBranch(_))),
+            "must not offer to create a case-variant duplicate: {targets:?}"
+        );
+    }
+
+    #[gpui::test]
+    fn enter_reaches_the_create_row_without_arrowing(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        cx.simulate_input("brand-new");
+        simulate_key_press(cx, "enter");
+        cx.run_until_parked();
+
+        // Creating closes the picker; nothing else in this picker does that for
+        // a query matching no existing branch.
+        let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+        assert!(
+            !is_open,
+            "Enter after typing an unknown name should create and dismiss"
+        );
+    }
+
+    #[gpui::test]
+    fn delete_picker_keeps_the_plain_list(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.open_popover_at(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::Delete,
+                        },
+                        gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                        window,
+                        cx,
+                    );
+                });
+            });
+        });
+        redraw(cx);
+
+        // The delete picker must not gain remote branches or a create row.
+        let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+        assert!(is_open, "expected the delete picker to open");
+        assert!(
+            cx.debug_bounds("picker_prompt_item_0").is_some(),
+            "expected the plain delete list to render"
+        );
+    }
+}

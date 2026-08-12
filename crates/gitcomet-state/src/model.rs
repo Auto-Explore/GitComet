@@ -11,7 +11,7 @@ use gitcomet_core::services::{
     SubmoduleTrustTarget,
 };
 use serde::{Deserialize, Serialize};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -105,6 +105,7 @@ impl RepoLoadsInFlight {
     pub const REMOTE_TAGS: u32 = 1 << 13;
     pub const WORKTREES: u32 = 1 << 14;
     pub const SUBMODULES: u32 = 1 << 15;
+    pub const REF_METADATA: u32 = 1 << 16;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -1007,6 +1008,11 @@ pub struct RepoState {
     pub merge_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
+    /// Tip-commit author/date/summary per short refname, loaded on demand by
+    /// pickers that display it. Invalidated whenever the branch or
+    /// remote-branch lists change, so it never outlives the refs it describes.
+    pub ref_metadata: Loadable<Arc<HashMap<String, RefMetadata>>>,
+    pub ref_metadata_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
     pub submodule_add_in_flight: Option<SubmoduleAddProgressState>,
@@ -1111,6 +1117,8 @@ impl RepoState {
             merge_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
+            ref_metadata: Loadable::NotLoaded,
+            ref_metadata_rev: 0,
             submodules: Loadable::NotLoaded,
             submodules_rev: 0,
             submodule_add_in_flight: None,
@@ -1168,6 +1176,7 @@ impl RepoState {
         }
         self.branches = branches;
         self.branches_rev = self.branches_rev.wrapping_add(1);
+        self.invalidate_ref_metadata();
         self.bump_branch_sidebar_rev();
     }
 
@@ -1206,6 +1215,7 @@ impl RepoState {
         }
         self.remote_branches = remote_branches;
         self.remote_branches_rev = self.remote_branches_rev.wrapping_add(1);
+        self.invalidate_ref_metadata();
         self.bump_branch_sidebar_rev();
     }
 
@@ -1244,6 +1254,39 @@ impl RepoState {
         self.worktrees = worktrees;
         self.worktrees_rev = self.worktrees_rev.wrapping_add(1);
         self.bump_branch_sidebar_rev();
+    }
+
+    pub(crate) fn set_ref_metadata(
+        &mut self,
+        ref_metadata: Loadable<HashMap<String, RefMetadata>>,
+    ) {
+        let ref_metadata = loadable_into_arc(ref_metadata);
+        if self.ref_metadata == ref_metadata {
+            return;
+        }
+        self.ref_metadata = ref_metadata;
+        self.ref_metadata_rev = self.ref_metadata_rev.wrapping_add(1);
+    }
+
+    /// Drops cached ref metadata so the next picker open re-fetches it. Called
+    /// from the branch setters, which already early-return when unchanged, so
+    /// background refreshes that find no ref changes will not thrash this.
+    fn invalidate_ref_metadata(&mut self) {
+        // A load that read the *old* refs may already be in flight. Mark it
+        // pending so its result schedules a refetch; otherwise that stale map
+        // lands as `Ready` and, since callers only refetch on
+        // `NotLoaded | Error`, it would never be corrected.
+        if self
+            .loads_in_flight
+            .is_in_flight(RepoLoadsInFlight::REF_METADATA)
+        {
+            self.loads_in_flight.request(RepoLoadsInFlight::REF_METADATA);
+        }
+        if matches!(self.ref_metadata, Loadable::NotLoaded) {
+            return;
+        }
+        self.ref_metadata = Loadable::NotLoaded;
+        self.ref_metadata_rev = self.ref_metadata_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_submodules(&mut self, submodules: Loadable<Vec<Submodule>>) {
@@ -1723,7 +1766,7 @@ impl RepoState {
     }
 }
 
-fn loadable_into_arc<T>(loadable: Loadable<Vec<T>>) -> Loadable<Arc<Vec<T>>> {
+fn loadable_into_arc<T>(loadable: Loadable<T>) -> Loadable<Arc<T>> {
     match loadable {
         Loadable::Ready(v) => Loadable::Ready(Arc::new(v)),
         Loadable::Loading => Loadable::Loading,
@@ -2708,6 +2751,68 @@ mod tests {
         let rev = repo.stashes_rev;
         repo.set_stashes(Loadable::Loading);
         assert_eq!(repo.stashes_rev, rev);
+    }
+
+    #[test]
+    fn set_ref_metadata_bumps_rev_when_changed_and_not_otherwise() {
+        let mut repo = new_repo();
+        let before = repo.ref_metadata_rev;
+        repo.set_ref_metadata(Loadable::Loading);
+        assert_eq!(repo.ref_metadata_rev, before + 1);
+        repo.set_ref_metadata(Loadable::Loading);
+        assert_eq!(
+            repo.ref_metadata_rev,
+            before + 1,
+            "rev should not bump for an unchanged value"
+        );
+        repo.set_ref_metadata(Loadable::Ready(HashMap::new()));
+        assert_eq!(repo.ref_metadata_rev, before + 2);
+    }
+
+    #[test]
+    fn set_branches_invalidates_cached_ref_metadata() {
+        let mut repo = new_repo();
+        repo.set_ref_metadata(Loadable::Ready(HashMap::from([(
+            "main".to_string(),
+            RefMetadata {
+                author: "Ada".to_string(),
+                committed_at: 1,
+                summary: "first".to_string(),
+            },
+        )])));
+        assert!(matches!(repo.ref_metadata, Loadable::Ready(_)));
+
+        repo.set_branches(Loadable::Ready(vec![]));
+
+        assert!(
+            matches!(repo.ref_metadata, Loadable::NotLoaded),
+            "metadata must not outlive the ref list it describes"
+        );
+    }
+
+    #[test]
+    fn set_remote_branches_invalidates_cached_ref_metadata() {
+        let mut repo = new_repo();
+        repo.set_ref_metadata(Loadable::Ready(HashMap::new()));
+
+        repo.set_remote_branches(Loadable::Ready(vec![]));
+
+        assert!(matches!(repo.ref_metadata, Loadable::NotLoaded));
+    }
+
+    #[test]
+    fn unchanged_branches_do_not_invalidate_ref_metadata() {
+        // The branch setters early-return when nothing changed, so a background
+        // refresh that finds the same refs must leave the cache alone.
+        let mut repo = new_repo();
+        repo.set_branches(Loadable::Ready(vec![]));
+        repo.set_ref_metadata(Loadable::Ready(HashMap::new()));
+        let rev = repo.ref_metadata_rev;
+
+        repo.set_branches(Loadable::Ready(vec![]));
+
+        assert!(matches!(repo.ref_metadata, Loadable::Ready(_)));
+        assert_eq!(repo.ref_metadata_rev, rev);
     }
 
     #[test]

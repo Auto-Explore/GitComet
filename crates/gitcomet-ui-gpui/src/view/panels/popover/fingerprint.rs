@@ -210,6 +210,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.branches_rev.hash(hasher);
             repo.remote_branches_rev.hash(hasher);
             repo.tags_rev.hash(hasher);
+            // The checkout picker's rows carry each ref's author, date and
+            // summary on their detail line, so metadata landing while the picker
+            // is open has to repaint it — the rows change height, not just text.
+            repo.ref_metadata_rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -225,6 +229,11 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             ..
         } => {
             repo.worktrees_rev.hash(hasher);
+            // The badge picker's create row reads HEAD for its "Based off <ref>"
+            // line (`workspace_picker::create_base_ref`), so a checkout landing
+            // while the picker is open has to repaint it — otherwise the row keeps
+            // promising a base the Add dialog will no longer use.
+            repo.head_branch_rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -797,6 +806,10 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
             }
             WorktreePopoverKind::RemovePicker => {
                 22u8.hash(hasher);
+                repo_id.hash(hasher);
+            }
+            WorktreePopoverKind::BadgePicker => {
+                36u8.hash(hasher);
                 repo_id.hash(hasher);
             }
             WorktreePopoverKind::RemoveConfirm { path, branch } => {

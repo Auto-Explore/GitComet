@@ -2392,6 +2392,45 @@ fn set_highlights_resets_the_highlight_interpolation(cx: &mut gpui::TestAppConte
     });
 }
 
+/// The commit-details SHA fields republish a byte-identical highlight vector
+/// after rewriting the text — one 40-char id for another, always `[(0..40, link
+/// style)]`. The identical-vector fast path must still drop the edit patch
+/// `set_text` left behind, or the whole rewritten span loses its link styling.
+#[gpui::test]
+fn republishing_identical_highlights_resets_the_interpolation(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = multiline_input(cx);
+
+    cx.update(|_window, app| {
+        input.update(app, |input, cx| {
+            let link = vec![(
+                0..8,
+                gpui::HighlightStyle {
+                    color: Some(TOKEN_COLOR),
+                    ..gpui::HighlightStyle::default()
+                },
+            )];
+
+            input.set_text("aaa11aaa", cx);
+            input.set_highlights(link.clone(), cx);
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["aaa11aaa"]
+            );
+
+            // Same length, differing only in the middle: `set_text` records an
+            // edit patch over that span.
+            input.set_text("aaa22aaa", cx);
+            input.set_highlights(link, cx);
+
+            assert!(input.highlight.interpolation.is_exact());
+            assert_eq!(
+                highlighted_slices(input, 0..input.text().len()),
+                vec!["aaa22aaa"]
+            );
+        });
+    });
+}
+
 #[gpui::test]
 fn rebinding_under_a_new_key_resets_the_highlight_interpolation(cx: &mut gpui::TestAppContext) {
     // This is the contract the live syntax engine depends on. It re-syncs its

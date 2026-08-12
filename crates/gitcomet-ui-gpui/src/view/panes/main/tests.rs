@@ -10,11 +10,11 @@ use super::{
     conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
     conflict_strategy_needs_full_side_payloads, dirty_byte_range_to_line_range,
     first_output_marker_line_for_conflict, focused_mergetool_save_exit_code,
-    output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
-    parse_conflict_canvas_rows_env, remap_resolved_output_conflict_block_ranges_for_delta,
-    renderable_conflict_file, resolved_outline_delta_between_texts,
-    resolved_outline_delta_for_snapshot_transition, resolved_output_active_conflict_background,
-    resolved_output_active_unresolved_highlight_style,
+    historical_browse_content, output_line_range_for_conflict_block_in_text,
+    pane_content_width_for_layout, parse_conflict_canvas_rows_env,
+    remap_resolved_output_conflict_block_ranges_for_delta, renderable_conflict_file,
+    resolved_outline_delta_between_texts, resolved_outline_delta_for_snapshot_transition,
+    resolved_output_active_conflict_background, resolved_output_active_unresolved_highlight_style,
     resolved_output_conflict_block_ranges_in_text, resolved_output_live_highlight_provider,
     resolved_output_live_provider_binding_key, resolved_output_live_syntax_mask,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
@@ -31,7 +31,7 @@ use crate::view::conflict_resolver::{
 };
 use crate::view::rows;
 use crate::view::{ConflictResolverUiState, GitCometViewMode};
-use gitcomet_core::domain::RepoSpec;
+use gitcomet_core::domain::{CommitId, DiffTarget, FileSource, RepoSpec};
 use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -248,6 +248,72 @@ fn repo_with_conflict_file(
     repo.conflict_state.conflict_file_path = Some(target_path.to_path_buf());
     repo.conflict_state.conflict_file = conflict_file;
     repo
+}
+
+fn repo_browsing_commit(sha: &str, content_preview: bool) -> RepoState {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.file_browser.source = FileSource::Commit(CommitId(sha.into()));
+    repo.diff_state.content_preview = content_preview;
+    repo
+}
+
+fn commit_content_target(sha: &str) -> DiffTarget {
+    DiffTarget::Commit {
+        commit_id: CommitId(sha.into()),
+        path: Some(PathBuf::from("src/main.rs")),
+    }
+}
+
+#[test]
+fn historical_browse_content_matches_the_browsed_commit() {
+    let repo = repo_browsing_commit("aaaa", true);
+    assert!(historical_browse_content(
+        &repo,
+        Some(&commit_content_target("aaaa"))
+    ));
+}
+
+#[test]
+fn historical_browse_content_ignores_another_commits_content() {
+    let repo = repo_browsing_commit("aaaa", true);
+    assert!(!historical_browse_content(
+        &repo,
+        Some(&commit_content_target("bbbb"))
+    ));
+}
+
+#[test]
+fn historical_browse_content_ignores_plain_diffs_and_live_state() {
+    // Content preview off: a patch diff of the browsed commit is not the
+    // browsed file's content.
+    let no_preview = repo_browsing_commit("aaaa", false);
+    assert!(!historical_browse_content(
+        &no_preview,
+        Some(&commit_content_target("aaaa"))
+    ));
+
+    let previewing = repo_browsing_commit("aaaa", true);
+    assert!(!historical_browse_content(&previewing, None));
+    assert!(!historical_browse_content(
+        &previewing,
+        Some(&DiffTarget::WorkingTree {
+            path: PathBuf::from("src/main.rs"),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        })
+    ));
+
+    // No browse point at all.
+    let mut live = repo_browsing_commit("aaaa", true);
+    live.file_browser.source = FileSource::WorkingDirectory;
+    assert!(!historical_browse_content(
+        &live,
+        Some(&commit_content_target("aaaa"))
+    ));
 }
 
 fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {

@@ -4549,6 +4549,10 @@ pub(super) enum WorktreePopoverKind {
     AddPrompt,
     OpenPicker,
     RemovePicker,
+    /// The action bar's workspace badge picker: every worktree including the
+    /// current one, plus a create row. Distinct from `OpenPicker`, which hides
+    /// the current worktree and has no create affordance.
+    BadgePicker,
     RemoveConfirm {
         path: std::path::PathBuf,
         branch: Option<String>,

@@ -896,6 +896,40 @@ pub(super) fn schedule_load_worktrees(
     );
 }
 
+pub(super) fn schedule_load_ref_metadata(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    cancellation: CancellationToken,
+) {
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-ref-metadata",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+                    repo_id,
+                    result: repo.list_ref_metadata_cancellable(&cancellation),
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_submodules(
     executor: &TaskExecutor,
     repos: &RepoMap,

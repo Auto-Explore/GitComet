@@ -1180,6 +1180,32 @@ pub(crate) fn historical_outline(is_dark: bool) -> Rgba {
     }
 }
 
+/// `base` washed with just enough [`historical_outline`] to mark a whole content
+/// surface as off-live. Deliberately faint: it sits under body text and syntax
+/// colors, so it may tint the surface without competing with what is on it.
+pub(crate) fn historical_surface_bg(theme: AppTheme, base: Rgba) -> Rgba {
+    composite_over(
+        base,
+        with_alpha(
+            historical_outline(theme.is_dark),
+            if theme.is_dark { 0.10 } else { 0.05 },
+        ),
+    )
+}
+
+/// The same wash at header strength. A header panel carries only its own label
+/// and controls, so it can take the stronger tint that makes browse mode
+/// obvious once the frame around the content is gone.
+pub(crate) fn historical_header_bg(theme: AppTheme, base: Rgba) -> Rgba {
+    composite_over(
+        base,
+        with_alpha(
+            historical_outline(theme.is_dark),
+            if theme.is_dark { 0.24 } else { 0.20 },
+        ),
+    )
+}
+
 /// Recency "heat" border color for the blame/annotate column.
 ///
 /// `t` is the line's recency normalized to `[0, 1]` (0 = oldest commit in the
