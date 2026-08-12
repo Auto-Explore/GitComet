@@ -79,6 +79,9 @@ pub struct RepoLoadsInFlight {
     in_flight: u32,
     pending: u32,
     pending_log: Option<PendingLogLoad>,
+    /// The log load that is actually running, so replies from a walk that has
+    /// since been superseded can be told apart from the current one.
+    active_log: Option<PendingLogLoad>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -126,13 +129,19 @@ impl RepoLoadsInFlight {
         self.in_flight = 0;
         self.pending = 0;
         self.pending_log = None;
+        self.active_log = None;
     }
 
     /// Starts the common primary-refresh batch immediately when no work is already queued or
     /// running. Callers fall back to per-load request coalescing when this returns `false`.
-    pub fn request_primary_refresh_batch(&mut self) -> bool {
+    ///
+    /// The batch includes a log load, so it takes that request: replies are
+    /// matched against it by [`Self::is_active_log_reply`], and a batch that
+    /// failed to declare one would have its log page silently discarded.
+    pub fn request_primary_refresh_batch(&mut self, log: PendingLogLoad) -> bool {
         if self.in_flight == 0 && self.pending == 0 && self.pending_log.is_none() {
             self.in_flight |= Self::PRIMARY_REFRESH_FLAGS;
+            self.active_log = Some(log);
             true
         } else {
             false
@@ -165,6 +174,13 @@ impl RepoLoadsInFlight {
 
     /// For log loads: coalesce by keeping only the latest requested
     /// `(scope, author, cursor)` while a log load is already in flight.
+    ///
+    /// A request that changes the scope or the author filter is dispatched
+    /// straight away instead of being queued: on a large repository a walk runs
+    /// for tens of seconds, and the repo-load pool has one or two threads, so
+    /// waiting the old one out would stall the new filter for that whole time.
+    /// The effects layer cancels the superseded walk, and its reply is dropped
+    /// by [`Self::is_active_log_reply`].
     pub fn request_log(
         &mut self,
         scope: LogScope,
@@ -179,6 +195,15 @@ impl RepoLoadsInFlight {
                 limit,
                 cursor,
             };
+            let supersedes_active = self
+                .active_log
+                .as_ref()
+                .is_none_or(|active| active.scope != next.scope || active.author != next.author);
+            if supersedes_active {
+                self.pending_log = None;
+                self.active_log = Some(next);
+                return true;
+            }
             match &self.pending_log {
                 // Scope or author changes invalidate older pending requests
                 // (including pagination).
@@ -197,14 +222,46 @@ impl RepoLoadsInFlight {
             false
         } else {
             self.in_flight |= Self::LOG;
+            self.active_log = Some(PendingLogLoad {
+                scope,
+                author,
+                limit,
+                cursor,
+            });
             true
         }
     }
 
+    /// Whether any log load is being tracked. When nothing is, a reply cannot
+    /// be judged against a request and callers fall back to comparing it with
+    /// the state it would land in.
+    pub fn has_active_log(&self) -> bool {
+        self.active_log.is_some()
+    }
+
+    /// Whether a log reply belongs to the walk that is currently in flight,
+    /// rather than one that a newer request superseded (and that the effects
+    /// layer cancelled). Superseded replies must be dropped without touching
+    /// the in-flight bookkeeping — the walk that replaced them is still going.
+    pub fn is_active_log_reply(
+        &self,
+        scope: LogScope,
+        author: Option<&str>,
+        cursor: Option<&LogCursor>,
+    ) -> bool {
+        self.active_log.as_ref().is_some_and(|active| {
+            active.scope == scope
+                && active.author.as_deref() == author
+                && active.cursor.as_ref() == cursor
+        })
+    }
+
     pub fn finish_log(&mut self) -> Option<PendingLogLoad> {
         self.in_flight &= !Self::LOG;
+        self.active_log = None;
         if let Some(next) = self.pending_log.take() {
             self.in_flight |= Self::LOG;
+            self.active_log = Some(next.clone());
             Some(next)
         } else {
             None
@@ -686,6 +743,11 @@ pub struct HistoryState {
     pub log: Loadable<Shared<LogPage>>,
     pub retained_log_while_loading: Option<Shared<LogPage>>,
     pub log_loading_more: bool,
+    /// Commits visited so far by a walk that is still running, when it reports
+    /// progress. `None` once the page is complete. An author filter has to walk
+    /// history until it finds a full page, which on a large repository takes
+    /// seconds; this is what tells the user it is working.
+    pub log_scan_progress: Option<u64>,
     pub log_rev: u64,
     pub file_history_path: Option<PathBuf>,
     pub file_history: Loadable<Shared<LogPage>>,
@@ -738,6 +800,7 @@ impl Default for HistoryState {
             log: Loadable::NotLoaded,
             retained_log_while_loading: None,
             log_loading_more: false,
+            log_scan_progress: None,
             log_rev: 0,
             file_history_path: None,
             file_history: Loadable::NotLoaded,
@@ -1512,6 +1575,13 @@ impl RepoState {
         self.bump_log_revs();
     }
 
+    /// Records how far a running walk has scanned, or clears it when the page
+    /// is complete. Deliberately does not bump `log_rev`: the log itself has not
+    /// changed, and the rows must not be rebuilt just to move a counter.
+    pub(crate) fn set_log_scan_progress(&mut self, scanned: Option<u64>) {
+        self.history_state.log_scan_progress = scanned;
+    }
+
     pub(crate) fn set_log_scope(&mut self, scope: LogScope) {
         if self.history_state.history_scope == scope {
             return;
@@ -2198,11 +2268,20 @@ mod tests {
         }
     }
 
+    fn test_log_request() -> PendingLogLoad {
+        PendingLogLoad {
+            scope: LogScope::FullReachable,
+            author: None,
+            limit: 20,
+            cursor: None,
+        }
+    }
+
     #[test]
     fn request_primary_refresh_batch_marks_all_primary_loads_when_idle() {
         let mut loads = RepoLoadsInFlight::default();
 
-        assert!(loads.request_primary_refresh_batch());
+        assert!(loads.request_primary_refresh_batch(test_log_request()));
         assert!(loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
         assert!(loads.is_in_flight(RepoLoadsInFlight::UPSTREAM_DIVERGENCE));
         assert!(loads.is_in_flight(RepoLoadsInFlight::REBASE_STATE));
@@ -2217,18 +2296,21 @@ mod tests {
         let mut loads = RepoLoadsInFlight::default();
         assert!(loads.request(RepoLoadsInFlight::WORKTREE_STATUS));
 
-        assert!(!loads.request_primary_refresh_batch());
+        assert!(!loads.request_primary_refresh_batch(test_log_request()));
         assert!(!loads.is_in_flight(RepoLoadsInFlight::HEAD_BRANCH));
         assert!(loads.is_in_flight(RepoLoadsInFlight::WORKTREE_STATUS));
         assert!(!loads.is_in_flight(RepoLoadsInFlight::LOG));
     }
 
+    /// A scope change supersedes the walk in flight rather than queueing behind
+    /// it: on a large repository that walk runs for tens of seconds, and the
+    /// effects layer cancels it as the replacement is dispatched.
     #[test]
-    fn request_log_scope_change_replaces_pending_log_request() {
+    fn request_log_scope_change_starts_immediately() {
         let mut loads = RepoLoadsInFlight::default();
         assert!(loads.request_log(LogScope::FullReachable, None, 20, None));
 
-        assert!(!loads.request_log(
+        assert!(loads.request_log(
             LogScope::AllBranches,
             None,
             20,
@@ -2238,17 +2320,13 @@ mod tests {
                 resume_token: None,
             }),
         ));
-        assert!(!loads.request_log(LogScope::NoMerges, None, 20, None));
+        assert!(loads.request_log(LogScope::NoMerges, None, 20, None));
 
-        assert_eq!(
-            loads.finish_log(),
-            Some(PendingLogLoad {
-                scope: LogScope::NoMerges,
-                author: None,
-                limit: 20,
-                cursor: None,
-            })
-        );
+        // The superseded walks' replies are no longer the active one.
+        assert!(!loads.is_active_log_reply(LogScope::FullReachable, None, None));
+        assert!(loads.is_active_log_reply(LogScope::NoMerges, None, None));
+        // Nothing is left queued: the newest request is the one running.
+        assert_eq!(loads.finish_log(), None);
     }
 
     #[test]
@@ -2276,7 +2354,7 @@ mod tests {
     }
 
     #[test]
-    fn request_log_author_change_replaces_pending_pagination() {
+    fn request_log_author_change_starts_immediately_and_drops_pending_pagination() {
         let mut loads = RepoLoadsInFlight::default();
         let cursor = LogCursor {
             last_seen: CommitId("page-1".into()),
@@ -2286,39 +2364,28 @@ mod tests {
 
         assert!(loads.request_log(LogScope::MergesOnly, None, 20, None));
         // A pagination request for the same scope+author is kept pending.
-        assert!(!loads.request_log(LogScope::MergesOnly, None, 20, Some(cursor.clone())));
-        // Switching the author invalidates the pending pagination entirely.
-        assert!(!loads.request_log(LogScope::MergesOnly, Some("alice".into()), 20, None));
+        assert!(!loads.request_log(LogScope::MergesOnly, None, 20, Some(cursor)));
+        // Switching the author starts at once and drops that pagination, which
+        // belonged to the previous filter.
+        assert!(loads.request_log(LogScope::MergesOnly, Some("alice".into()), 20, None));
 
-        assert_eq!(
-            loads.finish_log(),
-            Some(PendingLogLoad {
-                scope: LogScope::MergesOnly,
-                author: Some("alice".into()),
-                limit: 20,
-                cursor: None,
-            })
-        );
+        assert!(loads.is_active_log_reply(LogScope::MergesOnly, Some("alice"), None));
+        assert_eq!(loads.finish_log(), None);
     }
 
+    /// Replies are matched against the walk that is actually running, so a
+    /// superseded author's page cannot be mistaken for the current one.
     #[test]
-    fn request_log_author_change_does_not_clobber_pending_pagination_of_other_author() {
+    fn superseded_author_reply_is_not_the_active_one() {
         let mut loads = RepoLoadsInFlight::default();
 
         assert!(loads.request_log(LogScope::NoMerges, Some("alice".into()), 20, None));
-        assert!(!loads.request_log(LogScope::NoMerges, Some("alice".into()), 20, None));
-        // A different author replaces the pending request (pagination reset).
-        assert!(!loads.request_log(LogScope::NoMerges, Some("bob".into()), 20, None));
+        assert!(loads.is_active_log_reply(LogScope::NoMerges, Some("alice"), None));
 
-        assert_eq!(
-            loads.finish_log(),
-            Some(PendingLogLoad {
-                scope: LogScope::NoMerges,
-                author: Some("bob".into()),
-                limit: 20,
-                cursor: None,
-            })
-        );
+        assert!(loads.request_log(LogScope::NoMerges, Some("bob".into()), 20, None));
+
+        assert!(!loads.is_active_log_reply(LogScope::NoMerges, Some("alice"), None));
+        assert!(loads.is_active_log_reply(LogScope::NoMerges, Some("bob"), None));
     }
 
     #[test]

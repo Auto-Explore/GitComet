@@ -37,6 +37,7 @@ impl HistoryView {
             .map(|cache| cache.base.visible_indices.len())
             .unwrap_or(0);
         let count = commits_count + usize::from(show_working_tree_summary_row);
+        let scan_progress = repo.and_then(|r| r.history_state.log_scan_progress);
 
         let bg = theme.colors.window_bg;
 
@@ -163,6 +164,30 @@ impl HistoryView {
                             .child(self.history_column_headers(cx)),
                     ),
             )
+            .when_some(scan_progress, |panel, scanned| {
+                // A filtered walk has to scan history until it has a full
+                // page of matches, which on a large repository takes
+                // seconds. Say so, with a count that keeps moving, rather
+                // than leaving the previous rows looking frozen.
+                panel.child(
+                    div()
+                        .w_full()
+                        .px(ui_scale::design_px_from_percent(8.0, self.ui_scale_percent))
+                        .py(ui_scale::design_px_from_percent(2.0, self.ui_scale_percent))
+                        .bg(bg)
+                        .border_b_1()
+                        .border_color(theme.colors.border_variant)
+                        .text_xs()
+                        .text_color(theme.colors.text_muted)
+                        .whitespace_nowrap()
+                        .overflow_hidden()
+                        .debug_selector(|| "history_scan_progress".to_string())
+                        .child(format!(
+                            "Scanning history… {} commits",
+                            separated_thousands(scanned)
+                        )),
+                )
+            })
             .child(
                 div()
                     .flex()
@@ -344,11 +369,17 @@ impl HistoryView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == author_invoker.as_ref());
+        // The names on offer come from the commits loaded so far, not from the
+        // whole repository, so say where they are from — otherwise an author who
+        // has not been paged in yet looks like an author who does not exist. Kept
+        // to one line: the tooltip bubble shapes its text as a single run.
         let author_tooltip: SharedString = self
             .active_repo()
             .and_then(|r| r.history_state.history_author_filter.clone())
-            .map(|name| format!("Author filter: {name}"))
-            .unwrap_or_else(|| "Filter history by author".to_string())
+            .map(|name| format!("Author filter: {name} — suggestions from loaded history"))
+            .unwrap_or_else(|| {
+                "Filter history by author — suggestions from loaded history".to_string()
+            })
             .into();
 
         let ui_scale_percent = self.ui_scale_percent;
@@ -753,5 +784,32 @@ impl HistoryView {
         }
 
         header_with_handles
+    }
+}
+
+/// `1778198` → `1 778 198`. Groups with a narrow no-break space, which reads as
+/// a separator in every locale rather than as a decimal point in some.
+fn separated_thousands(value: u64) -> String {
+    let digits = value.to_string();
+    let mut out = String::with_capacity(digits.len() + digits.len() / 3);
+    for (ix, ch) in digits.chars().enumerate() {
+        if ix > 0 && (digits.len() - ix).is_multiple_of(3) {
+            out.push('\u{202f}');
+        }
+        out.push(ch);
+    }
+    out
+}
+
+#[cfg(test)]
+mod scan_progress_tests {
+    use super::separated_thousands;
+
+    #[test]
+    fn groups_digits_in_threes() {
+        assert_eq!(separated_thousands(0), "0");
+        assert_eq!(separated_thousands(999), "999");
+        assert_eq!(separated_thousands(1_000), "1\u{202f}000");
+        assert_eq!(separated_thousands(1_778_198), "1\u{202f}778\u{202f}198");
     }
 }

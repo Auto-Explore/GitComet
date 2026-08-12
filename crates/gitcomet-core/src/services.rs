@@ -35,6 +35,17 @@ impl CancellationToken {
     }
 }
 
+/// A partially built log page, reported while a walk is still running.
+///
+/// `commits` is the page so far — every chunk is a prefix of the next one and
+/// of the final page — and `scanned` counts the commits the walk has visited,
+/// matching or not, so a filter that is finding nothing still shows progress.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LogChunk {
+    pub commits: Vec<crate::domain::Commit>,
+    pub scanned: u64,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
     pub command: String,
@@ -342,6 +353,31 @@ pub trait GitRepository: Send + Sync {
         let page = self.log_history_mode_page_filtered(mode, author, limit, cursor)?;
         cancellation.check_cancelled()?;
         Ok(page)
+    }
+
+    /// Like [`Self::log_history_mode_page_filtered_cancellable`], but reports
+    /// the page as it is built.
+    ///
+    /// An author filter has to walk history until it has found `limit` matching
+    /// commits, which for a rare author means walking all of it — over ten
+    /// seconds on a repository with a million commits. `on_chunk` lets the
+    /// caller show what has been found so far instead of nothing at all.
+    ///
+    /// Each chunk carries the whole page built up to that point, so chunks are
+    /// prefixes of each other and of the returned page, and applying one is
+    /// idempotent. The default implementation reports nothing and just returns
+    /// the finished page.
+    fn log_history_mode_page_streaming(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(LogChunk),
+    ) -> Result<LogPage> {
+        let _ = on_chunk;
+        self.log_history_mode_page_filtered_cancellable(mode, author, limit, cursor, cancellation)
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;

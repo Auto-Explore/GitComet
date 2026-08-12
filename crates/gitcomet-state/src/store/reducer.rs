@@ -1828,6 +1828,16 @@ fn reduce_inner(
             cursor,
             result,
         }) => external_and_history::log_loaded(state, repo_id, scope, author, cursor, result),
+        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+            repo_id,
+            scope,
+            author,
+            cursor,
+            commits,
+            scanned,
+        }) => external_and_history::log_chunk_loaded(
+            state, repo_id, scope, author, cursor, commits, scanned,
+        ),
         Msg::Internal(crate::msg::InternalMsg::TagsLoaded { repo_id, result }) => {
             effects::tags_loaded(state, repo_id, result)
         }

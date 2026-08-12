@@ -951,6 +951,18 @@ pub enum InternalMsg {
         cursor: Option<LogCursor>,
         result: Result<LogPage, Error>,
     },
+    /// A partially built log page, reported while the walk is still running so
+    /// an author filter on a large repository shows what it has found instead
+    /// of nothing. `commits` is the page so far — successive chunks are
+    /// prefixes of each other — and `scanned` counts commits visited.
+    LogChunkLoaded {
+        repo_id: RepoId,
+        scope: LogScope,
+        author: Option<String>,
+        cursor: Option<LogCursor>,
+        commits: Vec<Commit>,
+        scanned: u64,
+    },
     TagsLoaded {
         repo_id: RepoId,
         result: Result<Vec<Tag>, Error>,

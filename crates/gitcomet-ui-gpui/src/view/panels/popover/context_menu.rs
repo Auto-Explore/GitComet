@@ -15,7 +15,6 @@ mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
-mod history_author_filter;
 mod history_branch_filter;
 mod markdown_link;
 mod mergetool_settings;
@@ -439,9 +438,6 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 Some(history_branch_filter::model(self, *repo_id))
             }
-            PopoverKind::HistoryAuthorFilter { repo_id } => {
-                Some(history_author_filter::model(self, *repo_id))
-            }
             PopoverKind::DiffActionMenu => Some(diff_actions::model(self)),
             PopoverKind::MergetoolSettingsMenu => Some(mergetool_settings::model(self, cx)),
             PopoverKind::DiffContentModeSettings => Some(diff_content_mode_settings::model(self)),
@@ -748,10 +744,6 @@ impl PopoverHost {
             }
             ContextMenuAction::SetHistoryScope { repo_id, scope } => {
                 self.store.dispatch(Msg::SetHistoryScope { repo_id, scope });
-            }
-            ContextMenuAction::SetHistoryAuthorFilter { repo_id, author } => {
-                self.store
-                    .dispatch(Msg::SetHistoryAuthorFilter { repo_id, author });
             }
             ContextMenuAction::SetDiffContentMode { mode } => {
                 self.diff_content_mode = mode;

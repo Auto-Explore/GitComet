@@ -489,12 +489,34 @@ pub(super) fn schedule_load_log(
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
-                repo.log_history_mode_page_filtered_cancellable(
+                // Report the page as it fills in. Finding one page of a rare
+                // author means walking the whole history — over ten seconds on
+                // a repository with a million commits — and the user should not
+                // be looking at the previous filter's rows for all of it.
+                let chunk_tx = msg_tx.clone();
+                let chunk_scope = scope;
+                let chunk_author = author.clone();
+                let chunk_cursor = cursor.clone();
+                let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
+                    send_or_log(
+                        &chunk_tx,
+                        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+                            repo_id,
+                            scope: chunk_scope,
+                            author: chunk_author.clone(),
+                            cursor: chunk_cursor.clone(),
+                            commits: chunk.commits,
+                            scanned: chunk.scanned,
+                        }),
+                    );
+                };
+                repo.log_history_mode_page_streaming(
                     scope,
                     author.as_deref(),
                     limit,
                     cursor_ref,
                     &cancellation,
+                    &mut on_chunk,
                 )
             };
             send_or_log(

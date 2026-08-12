@@ -104,6 +104,22 @@ impl std::fmt::Debug for InternalMsg {
                 .field("cursor", cursor)
                 .field("result", result)
                 .finish(),
+            InternalMsg::LogChunkLoaded {
+                repo_id,
+                scope,
+                author,
+                cursor,
+                commits,
+                scanned,
+            } => f
+                .debug_struct("LogChunkLoaded")
+                .field("repo_id", repo_id)
+                .field("scope", scope)
+                .field("author", author)
+                .field("cursor", cursor)
+                .field("commits", &commits.len())
+                .field("scanned", scanned)
+                .finish(),
             InternalMsg::TagsLoaded { repo_id, result } => f
                 .debug_struct("TagsLoaded")
                 .field("repo_id", repo_id)

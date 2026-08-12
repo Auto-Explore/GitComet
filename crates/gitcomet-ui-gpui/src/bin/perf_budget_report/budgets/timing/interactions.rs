@@ -146,6 +146,16 @@ pub(crate) const PERF_BUDGETS: &[PerfBudgetSpec] = &[
         threshold_ns: 100.0 * NANOS_PER_MILLISECOND,
     },
     PerfBudgetSpec {
+        label: "git_ops/log_walk_author_filter_100k_commits",
+        estimate_path: "git_ops/log_walk_author_filter_100k_commits/new/estimates.json",
+        // A 200-commit page for an author who owns 1 commit in 2000 has to walk
+        // the whole 100k history. Measured around 470 ms with decoding spread
+        // across threads. The fixture has no commit-graph (fast-import does not
+        // write one), so this is the slower of the two shapes: on a real
+        // repository with a graph the traversal stops decoding commits twice.
+        threshold_ns: 900.0 * NANOS_PER_MILLISECOND,
+    },
+    PerfBudgetSpec {
         label: "git_ops/status_clean_10k_files",
         estimate_path: "git_ops/status_clean_10k_files/new/estimates.json",
         // Clean status on 10k tracked files — no dirty entries to collect.

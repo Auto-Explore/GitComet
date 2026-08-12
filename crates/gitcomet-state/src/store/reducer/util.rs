@@ -675,7 +675,15 @@ pub(super) fn append_refresh_primary_effects(
     let repo_id = repo_state.id;
     let scope = repo_state.history_state.history_scope;
 
-    if repo_state.loads_in_flight.request_primary_refresh_batch() {
+    if repo_state
+        .loads_in_flight
+        .request_primary_refresh_batch(crate::model::PendingLogLoad {
+            scope,
+            author: repo_state.history_state.history_author_filter.clone(),
+            limit: DEFAULT_LOG_PAGE_SIZE,
+            cursor: None,
+        })
+    {
         repo_state.set_log_loading_more(false);
         effects.push_effect(Effect::LoadHeadBranch { repo_id });
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });

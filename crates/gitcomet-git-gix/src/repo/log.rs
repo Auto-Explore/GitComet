@@ -10,7 +10,7 @@ use gitcomet_core::domain::{
     LogCursor, LogPage, RecentCommitMessage, ReflogEntry, StashEntry,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::services::{CancellationToken, Result};
+use gitcomet_core::services::{CancellationToken, LogChunk, Result};
 use gix::bstr::ByteSlice as _;
 use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
@@ -170,56 +170,108 @@ fn reference_commit_id(mut reference: gix::Reference<'_>) -> Result<Option<gix::
     }
 }
 
-fn commit_from_walk_info(
+/// Decodes the commit named by a walk's `Info`, or returns `None` when
+/// `author_filter` rejects it. See [`commit_from_walk_parts`].
+fn commit_from_walk_info_filtered(
     info: &gix::revision::walk::Info<'_>,
     decode_state: &mut CommitDecodeState,
-) -> Result<Commit> {
+    author_filter: Option<&str>,
+) -> Result<Option<Commit>> {
     let id = info.id();
-    let commit = id
-        .repo
+    commit_from_walk_parts(
+        id.repo,
+        id.as_ref(),
+        &info.parent_ids,
+        info.commit_time,
+        decode_state,
+        author_filter,
+    )
+}
+
+/// Decodes one commit, or returns `None` when `author_filter` rejects it.
+///
+/// The author is read straight off the decoded object and tested *before*
+/// anything is built from it, so a commit the filter rejects costs one object
+/// read and no allocation. On a repository the size of Chromium a filtered page
+/// visits every one of ~1.8M commits, so what the rejected ones cost is what
+/// the whole operation costs.
+///
+/// Takes the walk's fields rather than either `Info` type, because the paged
+/// walk yields `gix::traverse::commit::Info` and the plain walks yield
+/// `gix::revision::walk::Info`, and converting between them would mean cloning
+/// the parent ids of every commit visited.
+fn commit_from_walk_parts(
+    repo: &gix::Repository,
+    id: &gix::oid,
+    parent_ids: &[gix::ObjectId],
+    commit_time: Option<gix::date::SecondsSinceUnixEpoch>,
+    decode_state: &mut CommitDecodeState,
+    author_filter: Option<&str>,
+) -> Result<Option<Commit>> {
+    let commit = repo
         .objects
-        .find_commit(id.as_ref(), &mut decode_state.decode_buf)
+        .find_commit(id, &mut decode_state.decode_buf)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix commit object: {e}"))))?;
+
+    let author_name = commit.author().map(|author| author.name).ok();
+    if let Some(filter) = author_filter
+        && !author_name.is_some_and(|name| author_name_matches(name.as_ref(), filter))
+    {
+        return Ok(None);
+    }
 
     let summary_bytes = commit.message.lines().next().unwrap_or_default();
     let summary = bstr_to_arc_str(summary_bytes);
 
-    let author = match commit.author() {
-        Ok(s) => decode_state.author_cache.intern(s.name.as_ref()),
-        Err(_) => Arc::from("unknown"),
+    let author = match author_name {
+        Some(name) => decode_state.author_cache.intern(name.as_ref()),
+        None => Arc::from("unknown"),
     };
 
-    let seconds = info
-        .commit_time
-        .unwrap_or_else(|| commit.committer().map(|t| t.seconds()).unwrap_or(0));
+    let seconds =
+        commit_time.unwrap_or_else(|| commit.committer().map(|t| t.seconds()).unwrap_or(0));
     let time = unix_seconds_to_system_time_or_epoch(seconds);
 
     let commit_id = decode_state
         .next_commit_id_cache
-        .reuse_or_new(id.as_ref(), || CommitId(oid_to_arc_str(id.as_ref())));
+        .reuse_or_new(id, || CommitId(oid_to_arc_str(id)));
 
-    let mut parent_ids = CommitParentIds::new();
-    parent_ids.reserve(info.parent_ids.len());
-    if info.parent_ids.is_empty() {
+    let mut ids = CommitParentIds::new();
+    ids.reserve(parent_ids.len());
+    if parent_ids.is_empty() {
         decode_state.next_commit_id_cache.clear();
     }
-    for (index, parent_id) in info.parent_ids.iter().enumerate() {
+    for (index, parent_id) in parent_ids.iter().enumerate() {
         let parent_commit_id = CommitId(oid_to_arc_str(parent_id));
         if index == 0 {
             decode_state
                 .next_commit_id_cache
                 .remember(parent_id, &parent_commit_id);
         }
-        parent_ids.push(parent_commit_id);
+        ids.push(parent_commit_id);
     }
 
-    Ok(Commit {
+    Ok(Some(Commit {
         id: commit_id,
-        parent_ids,
+        parent_ids: ids,
         summary,
         author,
         time,
-    })
+    }))
+}
+
+/// Case-insensitive substring match of `needle` (already lowercased) against an
+/// author name, folding ASCII only — the same rule the author picker applies in
+/// the UI. Allocation-free, because this runs once per visited commit.
+fn author_name_matches(name: &[u8], needle_lowercase: &str) -> bool {
+    let needle = needle_lowercase.as_bytes();
+    if needle.is_empty() {
+        return true;
+    }
+    name.len() >= needle.len()
+        && name
+            .windows(needle.len())
+            .any(|window| window.eq_ignore_ascii_case(needle))
 }
 
 #[derive(Default)]
@@ -539,13 +591,24 @@ fn new_log_paged_walk(
     repo: &gix::ThreadSafeRepository,
     head_id: gix::ObjectId,
 ) -> Result<super::LogPagedWalkState> {
+    // Without the commit-graph the traversal decodes every commit object just to
+    // read its parents and date, and the page builder then decodes the same
+    // objects again — two inflates per commit across the whole history on a
+    // filtered walk. `repo.rev_walk(..)` wires the graph up by default; this
+    // walk is built from `Simple` directly, so it has to ask for it.
+    let commit_graph = repo
+        .to_thread_local()
+        .commit_graph_if_enabled()
+        .ok()
+        .flatten();
     let walk = gix::traverse::commit::Simple::new([head_id], log_paged_walk_handle(repo))
         .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
             CommitTimeOrder::NewestFirst,
         ))
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?
+        .commit_graph(commit_graph);
     Ok(super::LogPagedWalkState {
-        pending: None,
+        pending: std::collections::VecDeque::new(),
         walk,
     })
 }
@@ -620,12 +683,68 @@ fn paginate_commits(
     })
 }
 
+/// Reports a page as it is built, throttled so a walk that runs for seconds
+/// updates the caller a handful of times a second instead of per commit.
+pub(super) struct ChunkEmitter<'a> {
+    on_chunk: &'a mut dyn FnMut(LogChunk),
+    next_emit_at: std::time::Instant,
+    scanned: u64,
+}
+
+const CHUNK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
+/// How often the clock is consulted. Reading it per commit would cost more than
+/// the throttling saves on a million-commit walk; a few thousand commits is a
+/// couple of milliseconds of work, far below the emit interval.
+const CHUNK_CLOCK_STRIDE: u64 = 4096;
+
+impl<'a> ChunkEmitter<'a> {
+    pub(super) fn new(on_chunk: &'a mut dyn FnMut(LogChunk)) -> Self {
+        Self {
+            on_chunk,
+            next_emit_at: std::time::Instant::now() + CHUNK_INTERVAL,
+            scanned: 0,
+        }
+    }
+
+    /// Counts one visited commit and reports the page so far once the interval
+    /// has elapsed — including when nothing new matched, so a filter that is
+    /// finding nothing still shows that it is working.
+    fn visited(&mut self, commits: &[Commit]) {
+        let before = self.scanned;
+        self.scanned += 1;
+        if before / CHUNK_CLOCK_STRIDE == self.scanned / CHUNK_CLOCK_STRIDE
+            || std::time::Instant::now() < self.next_emit_at
+        {
+            return;
+        }
+        self.emit(commits);
+    }
+
+    /// Same, for a whole decoded batch at once.
+    fn visited_batch(&mut self, count: u64, commits: &[Commit]) {
+        self.scanned += count;
+        if std::time::Instant::now() < self.next_emit_at {
+            return;
+        }
+        self.emit(commits);
+    }
+
+    fn emit(&mut self, commits: &[Commit]) {
+        self.next_emit_at = std::time::Instant::now() + CHUNK_INTERVAL;
+        (self.on_chunk)(LogChunk {
+            commits: commits.to_vec(),
+            scanned: self.scanned,
+        });
+    }
+}
+
 fn log_page_from_walk<'repo, E>(
     walk: impl Iterator<Item = std::result::Result<gix::revision::walk::Info<'repo>, E>>,
     limit: usize,
     cursor: Option<&LogCursor>,
     cancellation: Option<&CancellationToken>,
     author: Option<&str>,
+    mut chunks: Option<&mut ChunkEmitter<'_>>,
 ) -> Result<LogPage>
 where
     E: std::fmt::Display,
@@ -644,13 +763,15 @@ where
         if cursor_gate.should_skip_oid(info.id().as_ref()) {
             continue;
         }
-
-        let commit = commit_from_walk_info(&info, &mut decode_state)?;
-        if let Some(author) = &author
-            && !commit.author.to_lowercase().contains(author.as_str())
-        {
-            continue;
+        if let Some(chunks) = chunks.as_deref_mut() {
+            chunks.visited(&commits);
         }
+
+        let Some(commit) =
+            commit_from_walk_info_filtered(&info, &mut decode_state, author.as_deref())?
+        else {
+            continue;
+        };
 
         if commits.len() >= limit {
             next_cursor = commits.last().map(|commit| LogCursor {
@@ -676,6 +797,7 @@ fn log_page_from_walk_filtered<'repo, E>(
     cursor: Option<&LogCursor>,
     cancellation: Option<&CancellationToken>,
     author: Option<&str>,
+    mut chunks: Option<&mut ChunkEmitter<'_>>,
     mut include: impl FnMut(&gix::revision::walk::Info<'repo>) -> bool,
 ) -> Result<LogPage>
 where
@@ -698,13 +820,15 @@ where
         if !include(&info) {
             continue;
         }
-
-        let commit = commit_from_walk_info(&info, &mut decode_state)?;
-        if let Some(author) = &author
-            && !commit.author.to_lowercase().contains(author.as_str())
-        {
-            continue;
+        if let Some(chunks) = chunks.as_deref_mut() {
+            chunks.visited(&commits);
         }
+
+        let Some(commit) =
+            commit_from_walk_info_filtered(&info, &mut decode_state, author.as_deref())?
+        else {
+            continue;
+        };
 
         if commits.len() >= limit {
             next_cursor = commits.last().map(|commit| LogCursor {
@@ -724,88 +848,187 @@ where
     })
 }
 
+/// Commits handed to one round of decoding. Starts small so a common author
+/// fills its page without decoding much more than it needs, and grows while the
+/// walk keeps coming up short, so a filter that has to scan a whole history
+/// amortizes the per-round thread setup.
+const DECODE_BATCH_MIN: usize = 256;
+const DECODE_BATCH_MAX: usize = 8_192;
+/// Decoding threads. Object inflation is what a filtered walk spends its time
+/// on, and it parallelizes cleanly; the cap leaves the machine to the rest of
+/// the app (and to other repositories loading at the same time).
+const DECODE_THREADS_MAX: usize = 8;
+
+fn decode_thread_count(batch_len: usize) -> usize {
+    if batch_len < DECODE_BATCH_MIN {
+        return 1;
+    }
+    std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(1)
+        .min(DECODE_THREADS_MAX)
+        .min(batch_len)
+        .max(1)
+}
+
+/// Decodes a batch of commits, dropping the ones `author` rejects, preserving
+/// walk order.
+///
+/// The traversal itself is cheap once it is reading a commit-graph, so the
+/// remaining cost is the object read per commit — which is what gets spread
+/// across threads here. Each thread takes its own repository handle, the way
+/// every other threaded path in this crate does.
+fn decode_batch(
+    repo: &gix::ThreadSafeRepository,
+    infos: &[gix::traverse::commit::Info],
+    author: Option<&str>,
+    out: &mut Vec<Option<Commit>>,
+) -> Result<()> {
+    out.clear();
+    out.reserve(infos.len());
+
+    let threads = decode_thread_count(infos.len());
+    if threads <= 1 {
+        let repo = repo.to_thread_local();
+        let mut decode_state = CommitDecodeState::default();
+        for info in infos {
+            out.push(commit_from_walk_parts(
+                &repo,
+                &info.id,
+                &info.parent_ids,
+                info.commit_time,
+                &mut decode_state,
+                author,
+            )?);
+        }
+        return Ok(());
+    }
+
+    let chunk_len = infos.len().div_ceil(threads);
+    let mut parts: Vec<Result<Vec<Option<Commit>>>> = Vec::with_capacity(threads);
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = infos
+            .chunks(chunk_len)
+            .map(|chunk| {
+                scope.spawn(move || {
+                    let repo = repo.to_thread_local();
+                    let mut decode_state = CommitDecodeState::default();
+                    let mut decoded = Vec::with_capacity(chunk.len());
+                    for info in chunk {
+                        decoded.push(commit_from_walk_parts(
+                            &repo,
+                            &info.id,
+                            &info.parent_ids,
+                            info.commit_time,
+                            &mut decode_state,
+                            author,
+                        )?);
+                    }
+                    Ok(decoded)
+                })
+            })
+            .collect();
+        for handle in handles {
+            parts.push(handle.join().unwrap_or_else(|_| {
+                Err(Error::new(ErrorKind::Backend(
+                    "gix commit decode worker panicked".to_string(),
+                )))
+            }));
+        }
+    });
+
+    for part in parts {
+        out.extend(part?);
+    }
+    Ok(())
+}
+
 fn log_page_from_paged_walk_state(
-    repo: &gix::Repository,
+    repo: &gix::ThreadSafeRepository,
     walk_state: &mut super::LogPagedWalkState,
     limit: usize,
     mut cursor_gate: Option<&mut CursorGate<'_>>,
     cancellation: Option<&CancellationToken>,
     author: Option<&str>,
+    mut chunks: Option<&mut ChunkEmitter<'_>>,
     mut include: impl FnMut(&gix::traverse::commit::Info) -> bool,
 ) -> Result<(Vec<Commit>, bool)> {
-    fn process_paged_walk_info(
-        repo: &gix::Repository,
-        info: gix::traverse::commit::Info,
-        limit: usize,
-        commits: &mut Vec<Commit>,
-        decode_state: &mut CommitDecodeState,
-        cursor_gate: Option<&mut CursorGate<'_>>,
-        author: &Option<String>,
-        include: &mut impl FnMut(&gix::traverse::commit::Info) -> bool,
-    ) -> Result<Option<gix::traverse::commit::Info>> {
-        if let Some(cursor_gate) = cursor_gate
-            && cursor_gate.should_skip_oid(info.id.as_ref())
-        {
-            return Ok(None);
-        }
-        if !include(&info) {
-            return Ok(None);
-        }
-        if commits.len() >= limit {
-            return Ok(Some(info));
-        }
-
-        let info = gix::revision::walk::Info::new(info, repo);
-        let commit = commit_from_walk_info(&info, decode_state)?;
-        if let Some(author) = author
-            && !commit.author.to_lowercase().contains(author.as_str())
-        {
-            return Ok(None);
-        }
-
-        commits.push(commit);
-        Ok(None)
-    }
-
     let author = author.map(str::to_lowercase);
-
-    let mut decode_state = CommitDecodeState::default();
     let mut commits = Vec::with_capacity(limit);
+    let mut batch: Vec<gix::traverse::commit::Info> = Vec::with_capacity(DECODE_BATCH_MIN);
+    let mut decoded: Vec<Option<Commit>> = Vec::with_capacity(DECODE_BATCH_MIN);
+    let mut batch_size = DECODE_BATCH_MIN;
+    let mut walk_done = false;
 
-    if let Some(info) = walk_state.pending.take()
-        && let Some(info) = process_paged_walk_info(
-            repo,
-            info,
-            limit,
-            &mut commits,
-            &mut decode_state,
-            cursor_gate.as_deref_mut(),
-            &author,
-            &mut include,
-        )?
-    {
-        walk_state.pending = Some(info);
-        return Ok((commits, true));
-    }
-
-    for result in walk_state.walk.by_ref() {
+    while !walk_done {
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }
-        let info = result.map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?;
-        if let Some(info) = process_paged_walk_info(
-            repo,
-            info,
-            limit,
-            &mut commits,
-            &mut decode_state,
-            cursor_gate.as_deref_mut(),
-            &author,
-            &mut include,
-        )? {
-            walk_state.pending = Some(info);
-            return Ok((commits, true));
+
+        // Gathering ids is the cheap half — with a commit-graph it touches no
+        // objects at all — so the gate and the mode predicate run here, before
+        // anything is handed to the decoders.
+        batch.clear();
+        while batch.len() < batch_size {
+            let Some(info) = walk_state.pending.pop_front() else {
+                match walk_state.walk.next() {
+                    None => {
+                        walk_done = true;
+                        break;
+                    }
+                    Some(result) => {
+                        let info = result.map_err(|e| {
+                            Error::new(ErrorKind::Backend(format!("gix walk: {e}")))
+                        })?;
+                        if let Some(cursor_gate) = cursor_gate.as_deref_mut()
+                            && cursor_gate.should_skip_oid(info.id.as_ref())
+                        {
+                            continue;
+                        }
+                        if !include(&info) {
+                            continue;
+                        }
+                        batch.push(info);
+                        continue;
+                    }
+                }
+            };
+            batch.push(info);
         }
+
+        if batch.is_empty() {
+            break;
+        }
+
+        decode_batch(repo, &batch, author.as_deref(), &mut decoded)?;
+        let scanned = batch.len() as u64;
+
+        for (index, commit) in decoded.drain(..).enumerate() {
+            let Some(commit) = commit else {
+                continue;
+            };
+            // The limit is checked against *matching* commits: reporting "there
+            // is more" because the next commit of any author exists would hand
+            // the caller a cursor whose page re-walks the rest of history to
+            // return nothing.
+            if commits.len() >= limit {
+                // Everything from here on is undecided; put it back for the
+                // next page, in walk order.
+                for info in batch.drain(index..).rev() {
+                    walk_state.pending.push_front(info);
+                }
+                return Ok((commits, true));
+            }
+            commits.push(commit);
+        }
+
+        // Reported after the batch lands, so a chunk always carries everything
+        // found so far rather than trailing a batch behind.
+        if let Some(chunks) = chunks.as_deref_mut() {
+            chunks.visited_batch(scanned, &commits);
+        }
+
+        batch_size = (batch_size * 2).min(DECODE_BATCH_MAX);
     }
 
     Ok((commits, false))
@@ -906,13 +1129,17 @@ impl GixRepo {
         token: &str,
         mode: HistoryMode,
         head_oid: gix::ObjectId,
+        author: Option<&str>,
     ) -> Option<super::LogPagedWalkState> {
         let mut cache = self
             .log_paged_walk_cache
             .lock()
             .expect("log paged walk cache");
         let index = cache.entries.iter().position(|entry| {
-            entry.token.as_ref() == token && entry.mode == mode && entry.head_oid == head_oid
+            entry.token.as_ref() == token
+                && entry.mode == mode
+                && entry.head_oid == head_oid
+                && entry.author.as_deref() == author
         })?;
         Some(cache.entries.remove(index).state)
     }
@@ -921,6 +1148,7 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         head_oid: gix::ObjectId,
+        author: Option<&str>,
         state: super::LogPagedWalkState,
     ) -> Arc<str> {
         let mut cache = self
@@ -936,6 +1164,7 @@ impl GixRepo {
             token: Arc::clone(&token),
             mode,
             head_oid,
+            author: author.map(str::to_owned),
             state,
         });
         token
@@ -1142,7 +1371,7 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
-        self.log_history_mode_page_impl_inner(mode, None, limit, cursor, None)
+        self.log_history_mode_page_impl_inner(mode, None, limit, cursor, None, None)
     }
 
     pub(super) fn log_history_mode_page_cancellable_impl(
@@ -1152,7 +1381,7 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<LogPage> {
-        self.log_history_mode_page_impl_inner(mode, None, limit, cursor, Some(cancellation))
+        self.log_history_mode_page_impl_inner(mode, None, limit, cursor, Some(cancellation), None)
     }
 
     pub(super) fn log_history_mode_page_filtered_impl(
@@ -1162,7 +1391,7 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
-        self.log_history_mode_page_impl_inner(mode, author, limit, cursor, None)
+        self.log_history_mode_page_impl_inner(mode, author, limit, cursor, None, None)
     }
 
     pub(super) fn log_history_mode_page_filtered_cancellable_impl(
@@ -1173,7 +1402,29 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<LogPage> {
-        self.log_history_mode_page_impl_inner(mode, author, limit, cursor, Some(cancellation))
+        self.log_history_mode_page_impl_inner(mode, author, limit, cursor, Some(cancellation), None)
+    }
+
+    /// Streaming variant: `on_chunk` sees the page as it fills in. See
+    /// [`gitcomet_core::services::GitRepository::log_history_mode_page_streaming`].
+    pub(super) fn log_history_mode_page_streaming_impl(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(LogChunk),
+    ) -> Result<LogPage> {
+        let mut chunks = ChunkEmitter::new(on_chunk);
+        self.log_history_mode_page_impl_inner(
+            mode,
+            author,
+            limit,
+            cursor,
+            Some(cancellation),
+            Some(&mut chunks),
+        )
     }
 
     fn log_history_mode_page_impl_inner(
@@ -1183,6 +1434,7 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: Option<&CancellationToken>,
+        mut chunks: Option<&mut ChunkEmitter<'_>>,
     ) -> Result<LogPage> {
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
@@ -1192,7 +1444,13 @@ impl GixRepo {
         }
 
         if mode == HistoryMode::AllBranches {
-            return self.log_all_branches_page_impl_inner(limit, cursor, cancellation, author);
+            return self.log_all_branches_page_impl_inner(
+                limit,
+                cursor,
+                cancellation,
+                author,
+                chunks.as_deref_mut(),
+            );
         }
 
         let repo = self._repo.to_thread_local();
@@ -1218,7 +1476,14 @@ impl GixRepo {
                         .map_err(|e| {
                             Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
                         })?;
-                    let mut page = log_page_from_walk(walk, limit, None, cancellation, author)?;
+                    let mut page = log_page_from_walk(
+                        walk,
+                        limit,
+                        None,
+                        cancellation,
+                        author,
+                        chunks.as_deref_mut(),
+                    )?;
                     apply_first_parent_resume_hint(&mut page);
                     page
                 } else if let Some(head_id) = head_id {
@@ -1232,7 +1497,14 @@ impl GixRepo {
                         .map_err(|e| {
                             Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
                         })?;
-                    let mut page = log_page_from_walk(walk, limit, cursor, cancellation, author)?;
+                    let mut page = log_page_from_walk(
+                        walk,
+                        limit,
+                        cursor,
+                        cancellation,
+                        author,
+                        chunks.as_deref_mut(),
+                    )?;
                     apply_first_parent_resume_hint(&mut page);
                     page
                 } else {
@@ -1254,15 +1526,21 @@ impl GixRepo {
                             Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}")))
                         })?;
                     match mode {
-                        HistoryMode::FullReachable => {
-                            log_page_from_walk(walk, limit, cursor, cancellation, author)?
-                        }
+                        HistoryMode::FullReachable => log_page_from_walk(
+                            walk,
+                            limit,
+                            cursor,
+                            cancellation,
+                            author,
+                            chunks.as_deref_mut(),
+                        )?,
                         HistoryMode::NoMerges => log_page_from_walk_filtered(
                             walk,
                             limit,
                             cursor,
                             cancellation,
                             author,
+                            chunks.as_deref_mut(),
                             |info| info.parent_ids.len() < 2,
                         )?,
                         HistoryMode::MergesOnly => log_page_from_walk_filtered(
@@ -1271,6 +1549,7 @@ impl GixRepo {
                             cursor,
                             cancellation,
                             author,
+                            chunks.as_deref_mut(),
                             |info| info.parent_ids.len() > 1,
                         )?,
                         HistoryMode::FirstParent | HistoryMode::AllBranches => unreachable!(),
@@ -1278,7 +1557,7 @@ impl GixRepo {
                 } else {
                     let cached_walk_state = cursor
                         .and_then(|cursor| cursor.resume_token.as_deref())
-                        .and_then(|token| self.take_log_paged_walk(token, mode, head_id));
+                        .and_then(|token| self.take_log_paged_walk(token, mode, head_id, author));
                     let mut cursor_gate = cursor
                         .filter(|_| cached_walk_state.is_none())
                         .map(|cursor| CursorGate::new(Some(cursor)));
@@ -1290,12 +1569,13 @@ impl GixRepo {
                         new_log_paged_walk(&self._repo, head_id)?
                     };
                     let (commits, has_more) = log_page_from_paged_walk_state(
-                        &repo,
+                        &self._repo,
                         &mut walk_state,
                         limit,
                         cursor_gate.as_mut(),
                         cancellation,
                         author,
+                        chunks,
                         |info| match mode {
                             HistoryMode::FullReachable => true,
                             HistoryMode::NoMerges => info.parent_ids.len() < 2,
@@ -1308,7 +1588,7 @@ impl GixRepo {
                             last_seen: commit.id.clone(),
                             resume_from: None,
                             resume_token: Some(
-                                self.store_log_paged_walk(mode, head_id, walk_state),
+                                self.store_log_paged_walk(mode, head_id, author, walk_state),
                             ),
                         })
                     } else {
@@ -1335,7 +1615,7 @@ impl GixRepo {
         limit: usize,
         cursor: Option<&LogCursor>,
     ) -> Result<LogPage> {
-        self.log_all_branches_page_impl_inner(limit, cursor, None, None)
+        self.log_all_branches_page_impl_inner(limit, cursor, None, None, None)
     }
 
     pub(super) fn log_all_branches_page_cancellable_impl(
@@ -1344,7 +1624,7 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: &CancellationToken,
     ) -> Result<LogPage> {
-        self.log_all_branches_page_impl_inner(limit, cursor, Some(cancellation), None)
+        self.log_all_branches_page_impl_inner(limit, cursor, Some(cancellation), None, None)
     }
 
     fn log_all_branches_page_impl_inner(
@@ -1353,6 +1633,7 @@ impl GixRepo {
         cursor: Option<&LogCursor>,
         cancellation: Option<&CancellationToken>,
         author: Option<&str>,
+        chunks: Option<&mut ChunkEmitter<'_>>,
     ) -> Result<LogPage> {
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
@@ -1421,7 +1702,7 @@ impl GixRepo {
             ))
             .all()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix rev_walk: {e}"))))?;
-        log_page_from_walk(walk, limit, cursor, cancellation, author)
+        log_page_from_walk(walk, limit, cursor, cancellation, author, chunks)
     }
 
     pub(super) fn log_file_page_impl(

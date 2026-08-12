@@ -315,6 +315,8 @@ pub(super) fn set_history_author_filter(
         repo_state.retain_log_while_loading();
         repo_state.set_log(Loadable::Loading);
         repo_state.set_log_loading_more(false);
+        // The count belongs to the walk being replaced.
+        repo_state.set_log_scan_progress(None);
         repo_state.spec.workdir.clone()
     };
     let mut effects = vec![Effect::PersistRepoHistoryAuthorFilter {
@@ -534,6 +536,47 @@ pub(super) fn merge_commit_message_loaded(
     effects
 }
 
+/// Applies a partially built page while its walk is still running.
+///
+/// Chunks are prefixes of one another, so this replaces rather than appends and
+/// applying one twice is harmless. Only a first page streams: a "load more"
+/// merges into the existing page, and a prefix cannot say where that merge
+/// starts.
+pub(super) fn log_chunk_loaded(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    scope: LogScope,
+    author: Option<String>,
+    cursor: Option<LogCursor>,
+    commits: Vec<gitcomet_core::domain::Commit>,
+    scanned: u64,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if cursor.is_some()
+        || !repo_state.loads_in_flight.is_active_log_reply(
+            scope,
+            author.as_deref(),
+            cursor.as_ref(),
+        )
+    {
+        return Vec::new();
+    }
+
+    repo_state.set_log_scan_progress(Some(scanned));
+    if commits.is_empty() {
+        // Nothing found yet: keep whatever the view is painting and just let the
+        // progress readout advance.
+        return Vec::new();
+    }
+    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits,
+        next_cursor: None,
+    })));
+    Vec::new()
+}
+
 pub(super) fn log_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
@@ -546,28 +589,36 @@ pub(super) fn log_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         let is_load_more = cursor.is_some();
 
-        // Drop replies that no longer match the requested scope or author
-        // filter; the newest pending request, if any, is replayed below.
-        if repo_state.history_state.history_scope != scope
-            || repo_state.history_state.history_author_filter.as_deref() != author.as_deref()
-        {
-            if is_load_more {
-                repo_state.set_log_loading_more(false);
-            }
-            if let Some(next) = repo_state.loads_in_flight.finish_log() {
-                repo_state.set_log_loading_more(next.cursor.is_some());
-                effects.push(Effect::LoadLog {
-                    repo_id,
-                    scope: next.scope,
-                    author: next.author,
-                    limit: next.limit,
-                    cursor: next.cursor,
-                });
-            }
+        // Drop replies from a walk that a newer request superseded. That walk
+        // was cancelled and its replacement is still running, so the in-flight
+        // bookkeeping belongs to the newer request and must not be touched here.
+        //
+        // With no request being tracked there is nothing to compare against, so
+        // fall back to checking the reply against the state it would land in —
+        // all this could do before requests were tracked.
+        let superseded = if repo_state.loads_in_flight.has_active_log() {
+            !repo_state.loads_in_flight.is_active_log_reply(
+                scope,
+                author.as_deref(),
+                cursor.as_ref(),
+            )
+        } else {
+            repo_state.history_state.history_scope != scope
+                || repo_state.history_state.history_author_filter.as_deref() != author.as_deref()
+        };
+        if superseded {
             return effects;
         }
 
+        repo_state.set_log_scan_progress(None);
         match result {
+            // A cancelled walk is not a failure: the request that replaced it
+            // owns the state now, so leave everything as the newer load found it.
+            Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) => {
+                if is_load_more {
+                    repo_state.set_log_loading_more(false);
+                }
+            }
             Ok(mut page) => {
                 if is_load_more && let Loadable::Ready(existing) = &mut repo_state.log {
                     // Drop the history_state copy first so the Arc's refcount

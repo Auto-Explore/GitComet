@@ -6,8 +6,9 @@ use crate::view::restrict_scroll_to_vertical_axis;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
-    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
-    MouseMoveEvent, ScrollHandle, SharedString, WeakEntity, Window, div, px,
+    AnyElement, ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton,
+    MouseDownEvent, MouseMoveEvent, ScrollHandle, SharedString, UniformListScrollHandle,
+    WeakEntity, Window, div, px, uniform_list,
 };
 use std::ops::Range;
 use std::sync::Arc;
@@ -32,6 +33,7 @@ pub struct PickerPrompt {
     query_row_trailing: Option<gpui::AnyElement>,
     list_override: Option<gpui::AnyElement>,
     remove_tooltip: Option<SharedString>,
+    uniform_scroll: Option<UniformListScrollHandle>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -109,6 +111,7 @@ impl PickerPrompt {
             query_row_trailing: None,
             list_override: None,
             remove_tooltip: None,
+            uniform_scroll: None,
         }
     }
 
@@ -191,6 +194,19 @@ impl PickerPrompt {
     /// list area while the query row stays put (the sort menu).
     pub fn list_override(mut self, element: impl IntoElement) -> Self {
         self.list_override = Some(element.into_any_element());
+        self
+    }
+
+    /// Draws the rows through a virtualized `uniform_list` tracked by `handle`,
+    /// building only the ones on screen instead of laying every match out on
+    /// every frame. For lists long enough that the cost shows (thousands of
+    /// authors, say); rows must be uniform height, so section headers are not
+    /// rendered on this path.
+    ///
+    /// Keyboard navigation has to scroll `handle` rather than the
+    /// [`ScrollHandle`] passed to [`Self::new`].
+    pub fn virtualized(mut self, handle: UniformListScrollHandle) -> Self {
+        self.uniform_scroll = Some(handle);
         self
     }
 
@@ -291,33 +307,99 @@ impl PickerPrompt {
             return body.child(div().w_full().min_w(px(0.0)).child(list_override));
         }
 
-        let mut list = div()
-            .id("picker_prompt_list")
-            .flex()
-            .flex_col()
-            .overflow_y_scroll()
-            .max_h(self.max_height)
-            .track_scroll(&scroll_handle);
-        list = restrict_scroll_to_vertical_axis(list);
-
         if matches.is_empty() {
-            list = list.child(
+            let list = div()
+                .id("picker_prompt_list")
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .max_h(self.max_height)
+                .track_scroll(&scroll_handle)
+                .child(
+                    div()
+                        .h(control_height_md(ui_scale))
+                        .w_full()
+                        .flex()
+                        .items_center()
+                        .px(scaled_px(8.0))
+                        .text_sm()
+                        .line_height(scaled_px(18.0))
+                        .text_color(theme.colors.text_muted)
+                        .child(self.empty_text),
+                );
+            let gutter = Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
+            let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
+            #[cfg(test)]
+            let scrollbar = scrollbar.debug_selector("picker_prompt_scrollbar");
+            return body.child(
                 div()
-                    .h(control_height_md(ui_scale))
+                    .id("picker_prompt_list_container")
+                    .relative()
                     .w_full()
-                    .flex()
-                    .items_center()
-                    .px(scaled_px(8.0))
-                    .text_sm()
-                    .line_height(scaled_px(18.0))
-                    .text_color(theme.colors.text_muted)
-                    .child(self.empty_text),
+                    .min_w(px(0.0))
+                    .child(restrict_scroll_to_vertical_axis(list).pr(gutter))
+                    .child(scrollbar.render(theme)),
             );
+        }
+
+        let rows = PickerRows {
+            theme,
+            ui_scale,
+            items: self.items,
+            matches,
+            selected_index,
+            marked_index: self.marked_index,
+            leading_icon,
+            selected_hint,
+            accent_selection,
+            select_on_mouse_down,
+            remove_tooltip,
+            tooltip_host: self.tooltip_host,
+            on_select,
+            on_remove,
+        };
+
+        let (list, scrollbar) = if let Some(uniform_scroll) = self.uniform_scroll {
+            let row_count = rows.matches.len();
+            // Fit the rows when there are few of them; the list only takes the
+            // full height once it has enough rows to fill it.
+            let list_height = (control_height_md(ui_scale) * row_count as f32).min(self.max_height);
+            let gutter = Scrollbar::visible_gutter(uniform_scroll.clone(), ScrollbarAxis::Vertical);
+            let list = uniform_list(
+                "picker_prompt_list",
+                row_count,
+                cx.processor(move |_this, range: Range<usize>, _window, cx| {
+                    range
+                        .map(|display_ix| rows.row(display_ix, cx).into_any_element())
+                        .collect::<Vec<AnyElement>>()
+                }),
+            )
+            .w_full()
+            .h(list_height)
+            .pr(gutter)
+            .track_scroll(&uniform_scroll);
+            let scrollbar = Scrollbar::new("picker_prompt_scrollbar", uniform_scroll);
+            #[cfg(test)]
+            let scrollbar = scrollbar.debug_selector("picker_prompt_scrollbar");
+            (
+                restrict_scroll_to_vertical_axis(list).into_any_element(),
+                scrollbar.render(theme),
+            )
         } else {
+            let mut list = div()
+                .id("picker_prompt_list")
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .max_h(self.max_height)
+                .track_scroll(&scroll_handle);
+            list = restrict_scroll_to_vertical_axis(list);
+
             let mut sections = SectionRun::default();
-            for (display_ix, m) in matches.iter().enumerate() {
-                if sections.starts_new_section(self.items[m.index].section.as_ref())
-                    && let Some(section) = self.items[m.index].section.clone()
+            for display_ix in 0..rows.matches.len() {
+                let item = &rows.items[rows.matches[display_ix].index];
+                if sections.starts_new_section(item.section.as_ref())
+                    && let Some(section) = item.section.clone()
                 {
                     list = list.child(section_header_row(
                         theme,
@@ -326,158 +408,14 @@ impl PickerPrompt {
                         display_ix == 0,
                     ));
                 }
-                let label = picker_item_label(
-                    theme,
-                    &self.items[m.index],
-                    m.range.clone(),
-                    self.tooltip_host.clone(),
-                    cx,
-                );
-                let on_select = Arc::clone(&on_select);
-                let original_index = m.index;
-                let row_initials = self.items[original_index].repository_initials.clone();
-                let row_icon = row_initials
-                    .is_none()
-                    .then(|| self.items[original_index].icon.or(leading_icon))
-                    .flatten();
-                let is_selected = selected_index == Some(display_ix);
-                let is_marked = self.marked_index == Some(original_index);
-                let is_removable = self.items[original_index].removable;
-                let row_group: SharedString = format!("picker_prompt_row_{original_index}").into();
-                let mut row = div()
-                    .id(("picker_prompt_item", original_index))
-                    .debug_selector(move || format!("picker_prompt_item_{original_index}"))
-                    .group(row_group.clone())
-                    .h(control_height_md(ui_scale))
-                    .w_full()
-                    .relative()
-                    .flex()
-                    .items_center()
-                    .gap(scaled_px(7.0))
-                    .px(scaled_px(8.0))
-                    .rounded(px(theme.radii.row))
-                    .cursor(CursorStyle::PointingHand)
-                    .when_some(row_icon, |row, icon| {
-                        row.child(crate::view::icons::svg_icon(
-                            icon,
-                            if is_selected {
-                                theme.colors.accent
-                            } else {
-                                theme.colors.text_muted
-                            },
-                            scaled_px(14.0),
-                        ))
-                    })
-                    .when_some(row_initials, |row, initials| {
-                        row.child(
-                            super::repository_initials_box(
-                                theme,
-                                ui_scale,
-                                initials,
-                                is_selected || is_marked,
-                            )
-                            .debug_selector(move || {
-                                format!("picker_prompt_repository_badge_{original_index}")
-                            }),
-                        )
-                    })
-                    .child(div().flex_1().min_w(px(0.0)).child(label))
-                    .when(is_marked, |row| {
-                        row.child(div().flex_shrink_0().pl(scaled_px(6.0)).child(
-                            crate::view::icons::svg_icon(
-                                "icons/check.svg",
-                                theme.colors.accent,
-                                scaled_px(12.0),
-                            ),
-                        ))
-                    })
-                    .when(is_selected, |row| {
-                        row.when_some(selected_hint.clone(), |row, hint| {
-                            row.child(
-                                div()
-                                    .flex_shrink_0()
-                                    .min_w(scaled_px(34.0))
-                                    .h(scaled_px(22.0))
-                                    .px(scaled_px(6.0))
-                                    .flex()
-                                    .items_center()
-                                    .justify_center()
-                                    .rounded(scaled_px(4.0))
-                                    .bg(with_alpha(
-                                        theme.colors.text,
-                                        if theme.is_dark { 0.06 } else { 0.035 },
-                                    ))
-                                    .font_family(
-                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
-                                    )
-                                    .text_xs()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(hint),
-                            )
-                        })
-                    })
-                    .when(is_removable, |row| {
-                        row.child(remove_row_button(
-                            theme,
-                            ui_scale,
-                            original_index,
-                            row_group.clone(),
-                            // Keyboard users never hover, so the row the
-                            // selection sits on keeps its button visible.
-                            is_selected,
-                            remove_tooltip.clone(),
-                            self.tooltip_host.clone(),
-                            Arc::clone(&on_remove),
-                            cx,
-                        ))
-                    });
-                if select_on_mouse_down {
-                    row = row.on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            (on_select)(this, original_index, &ClickEvent::default(), window, cx);
-                        }),
-                    );
-                } else {
-                    row = row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                        (on_select)(this, original_index, event, window, cx);
-                    }));
-                }
-                // Text-alpha overlays keep the highlight visible on the
-                // elevated popover surface, unlike the canvas-tuned tokens.
-                let hover_overlay = theme.hover_overlay();
-                let active_overlay = theme.active_overlay();
-                if is_selected {
-                    row = row.bg(active_overlay).when(accent_selection, |row| {
-                        row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
-                            div()
-                                .absolute()
-                                .left_0()
-                                .top_0()
-                                .bottom_0()
-                                .w(scaled_px(3.0))
-                                .rounded_tr(px(theme.radii.row))
-                                .rounded_br(px(theme.radii.row))
-                                .bg(theme.colors.accent),
-                        )
-                    });
-                }
-                row = row
-                    .hover(move |s| s.bg(hover_overlay))
-                    .active(move |s| s.bg(active_overlay));
-                list = list.child(row);
+                list = list.child(rows.row(display_ix, cx));
             }
-        }
 
-        let scrollbar_gutter =
-            Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
-        let list = list.pr(scrollbar_gutter);
-        let scrollbar = {
+            let gutter = Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
             let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
             #[cfg(test)]
             let scrollbar = scrollbar.debug_selector("picker_prompt_scrollbar");
-            scrollbar.render(theme)
+            (list.pr(gutter).into_any_element(), scrollbar.render(theme))
         };
 
         body.child(
@@ -489,6 +427,171 @@ impl PickerPrompt {
                 .child(list)
                 .child(scrollbar),
         )
+    }
+}
+
+/// Everything a result row is drawn from, kept in one place so the plain and
+/// virtualized lists build identical rows.
+struct PickerRows<V: 'static> {
+    theme: AppTheme,
+    ui_scale: UiScale,
+    items: Vec<PickerPromptItem>,
+    matches: Vec<Match>,
+    selected_index: Option<usize>,
+    marked_index: Option<usize>,
+    leading_icon: Option<&'static str>,
+    selected_hint: Option<SharedString>,
+    accent_selection: bool,
+    select_on_mouse_down: bool,
+    remove_tooltip: Option<SharedString>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    on_select: Arc<OnSelectFn<V>>,
+    on_remove: Arc<OnRemoveFn<V>>,
+}
+
+impl<V: 'static> PickerRows<V> {
+    /// `display_ix` indexes the filtered, rendered order; the callbacks and the
+    /// marked row use the item's original index.
+    fn row(&self, display_ix: usize, cx: &gpui::Context<V>) -> gpui::Stateful<Div> {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale;
+        let scaled_px = |value| ui_scale.px(value);
+        let m = &self.matches[display_ix];
+        let original_index = m.index;
+        let item = &self.items[original_index];
+
+        let label = picker_item_label(theme, item, m.range.clone(), self.tooltip_host.clone(), cx);
+        let on_select = Arc::clone(&self.on_select);
+        let row_initials = item.repository_initials.clone();
+        let row_icon = row_initials
+            .is_none()
+            .then(|| item.icon.or(self.leading_icon))
+            .flatten();
+        let is_selected = self.selected_index == Some(display_ix);
+        let is_marked = self.marked_index == Some(original_index);
+        let is_removable = item.removable;
+        let selected_hint = self.selected_hint.clone();
+        let accent_selection = self.accent_selection;
+        let row_group: SharedString = format!("picker_prompt_row_{original_index}").into();
+        let mut row = div()
+            .id(("picker_prompt_item", original_index))
+            .debug_selector(move || format!("picker_prompt_item_{original_index}"))
+            .group(row_group.clone())
+            .h(control_height_md(ui_scale))
+            .w_full()
+            .relative()
+            .flex()
+            .items_center()
+            .gap(scaled_px(7.0))
+            .px(scaled_px(8.0))
+            .rounded(px(theme.radii.row))
+            .cursor(CursorStyle::PointingHand)
+            .when_some(row_icon, |row, icon| {
+                row.child(crate::view::icons::svg_icon(
+                    icon,
+                    if is_selected {
+                        theme.colors.accent
+                    } else {
+                        theme.colors.text_muted
+                    },
+                    scaled_px(14.0),
+                ))
+            })
+            .when_some(row_initials, |row, initials| {
+                row.child(
+                    super::repository_initials_box(
+                        theme,
+                        ui_scale,
+                        initials,
+                        is_selected || is_marked,
+                    )
+                    .debug_selector(move || {
+                        format!("picker_prompt_repository_badge_{original_index}")
+                    }),
+                )
+            })
+            .child(div().flex_1().min_w(px(0.0)).child(label))
+            .when(is_marked, |row| {
+                row.child(div().flex_shrink_0().pl(scaled_px(6.0)).child(
+                    crate::view::icons::svg_icon(
+                        "icons/check.svg",
+                        theme.colors.accent,
+                        scaled_px(12.0),
+                    ),
+                ))
+            })
+            .when(is_selected, |row| {
+                row.when_some(selected_hint, |row, hint| {
+                    row.child(
+                        div()
+                            .flex_shrink_0()
+                            .min_w(scaled_px(34.0))
+                            .h(scaled_px(22.0))
+                            .px(scaled_px(6.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .rounded(scaled_px(4.0))
+                            .bg(with_alpha(
+                                theme.colors.text,
+                                if theme.is_dark { 0.06 } else { 0.035 },
+                            ))
+                            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                            .text_xs()
+                            .text_color(theme.colors.text_muted)
+                            .child(hint),
+                    )
+                })
+            })
+            .when(is_removable, |row| {
+                row.child(remove_row_button(
+                    theme,
+                    ui_scale,
+                    original_index,
+                    row_group.clone(),
+                    // Keyboard users never hover, so the row the selection sits
+                    // on keeps its button visible.
+                    is_selected,
+                    self.remove_tooltip.clone(),
+                    self.tooltip_host.clone(),
+                    Arc::clone(&self.on_remove),
+                    cx,
+                ))
+            });
+        if self.select_on_mouse_down {
+            row = row.on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                    cx.stop_propagation();
+                    (on_select)(this, original_index, &ClickEvent::default(), window, cx);
+                }),
+            );
+        } else {
+            row = row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                (on_select)(this, original_index, event, window, cx);
+            }));
+        }
+        // Text-alpha overlays keep the highlight visible on the elevated
+        // popover surface, unlike the canvas-tuned tokens.
+        let hover_overlay = theme.hover_overlay();
+        let active_overlay = theme.active_overlay();
+        if is_selected {
+            row = row.bg(active_overlay).when(accent_selection, |row| {
+                row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
+                    div()
+                        .absolute()
+                        .left_0()
+                        .top_0()
+                        .bottom_0()
+                        .w(scaled_px(3.0))
+                        .rounded_tr(px(theme.radii.row))
+                        .rounded_br(px(theme.radii.row))
+                        .bg(theme.colors.accent),
+                )
+            });
+        }
+        row.hover(move |s| s.bg(hover_overlay))
+            .active(move |s| s.bg(active_overlay))
     }
 }
 

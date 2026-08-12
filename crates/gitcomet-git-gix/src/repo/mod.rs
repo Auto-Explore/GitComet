@@ -173,7 +173,10 @@ struct LogFileFollowCacheEntry {
 type LogPagedWalk = gix::traverse::commit::Simple<gix::OdbHandleArc, fn(&gix::oid) -> bool>;
 
 struct LogPagedWalkState {
-    pending: Option<gix::traverse::commit::Info>,
+    /// Commits pulled from the walk but not yet placed on a page. Decoding runs
+    /// in batches, so a page can end mid-batch and the rest has to wait for the
+    /// next one — in walk order.
+    pending: std::collections::VecDeque<gix::traverse::commit::Info>,
     walk: LogPagedWalk,
 }
 
@@ -181,6 +184,11 @@ struct LogPagedWalkCacheEntry {
     token: Arc<str>,
     mode: HistoryMode,
     head_oid: gix::ObjectId,
+    /// Lowercased author filter the walk was started with, or `None` for the
+    /// unfiltered walk. The walk's *position* depends on the filter — every
+    /// non-matching commit was already consumed — so resuming one walk under a
+    /// different filter would silently skip whatever the first pass rejected.
+    author: Option<String>,
     state: LogPagedWalkState,
 }
 
@@ -289,6 +297,26 @@ impl GitRepository for GixRepo {
             limit,
             cursor,
             cancellation,
+        )
+    }
+
+    fn log_history_mode_page_streaming(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(gitcomet_core::services::LogChunk),
+    ) -> Result<LogPage> {
+        let _scope = git_ops_trace::scope(GitOpTraceKind::LogWalk);
+        self.log_history_mode_page_streaming_impl(
+            mode,
+            author,
+            limit,
+            cursor,
+            cancellation,
+            on_chunk,
         )
     }
 
