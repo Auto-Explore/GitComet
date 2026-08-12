@@ -1692,7 +1692,6 @@ mod tests {
         );
     }
 
-
     /// The shape of the file this was reported on: a shebang, a quoted heredoc,
     /// a `case` block and `${var:-}` expansions, over several rope chunks.
     ///

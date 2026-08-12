@@ -1431,7 +1431,10 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
     let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
     cx.update(|_window, app| {
         assert!(
-            main_pane.read(app).unsaved_file_edit_paths(repo_id).is_empty(),
+            main_pane
+                .read(app)
+                .unsaved_file_edit_paths(repo_id)
+                .is_empty(),
             "a clean buffer is not an unsaved edit"
         );
     });
@@ -1474,10 +1477,7 @@ async fn unsaved_edits_are_reported_and_discardable_per_file(cx: &mut gpui::Test
         assert!(pane.file_edits_are_unsaved_for(repo_id, &first));
         assert!(pane.file_edits_are_unsaved_for(repo_id, &second));
         assert!(
-            !pane.file_edits_are_unsaved_for(
-                gitcomet_state::model::RepoId(961),
-                &first
-            ),
+            !pane.file_edits_are_unsaved_for(gitcomet_state::model::RepoId(961), &first),
             "another repo's tab holding the same relative path is a different file"
         );
     });
@@ -1578,8 +1578,9 @@ async fn assert_editor_renders_the_engines_highlights(
         );
 
         let rendered = main_pane.update(app, |pane, cx| {
-            pane.file_editor_input
-                .update(cx, |input, _| input.debug_effective_highlights_for_range(0..contents.len()))
+            pane.file_editor_input.update(cx, |input, _| {
+                input.debug_effective_highlights_for_range(0..contents.len())
+            })
         });
         assert_eq!(
             rendered, expected,
@@ -1745,9 +1746,7 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
 /// while tests get 2 ms at `opt-level = 1`, which is why this never reproduced
 /// under `cargo test`.
 #[gpui::test]
-async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(
-    cx: &mut gpui::TestAppContext,
-) {
+async fn a_second_file_opened_in_the_same_pane_is_still_highlighted(cx: &mut gpui::TestAppContext) {
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {

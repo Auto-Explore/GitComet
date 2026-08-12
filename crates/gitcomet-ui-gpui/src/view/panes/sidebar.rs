@@ -2088,9 +2088,7 @@ impl SidebarPaneView {
                     FileBrowserVisibleRow::UnsavedHeader { count } => {
                         return Some(
                             div()
-                                .id(ElementId::Name(
-                                    format!("file_browser_row_{ix}").into(),
-                                ))
+                                .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
                                 .debug_selector(|| "file_browser_unsaved_header".to_string())
                                 .flex()
                                 .flex_row()
@@ -2107,18 +2105,13 @@ impl SidebarPaneView {
                                 .on_click(cx.listener(
                                     move |this, _e: &gpui::ClickEvent, _window, cx| {
                                         this.toggle_active_repo_collapse_key(
-                                            SharedString::from(
-                                                FILE_BROWSER_UNSAVED_SECTION_KEY,
-                                            ),
+                                            SharedString::from(FILE_BROWSER_UNSAVED_SECTION_KEY),
                                             cx,
                                         );
                                     },
                                 ))
                                 .child(chevron_slot(true, !unsaved_collapsed))
-                                .child(icon_slot_tinted(
-                                    "icons/pencil.svg",
-                                    theme.colors.warning,
-                                ))
+                                .child(icon_slot_tinted("icons/pencil.svg", theme.colors.warning))
                                 .child(
                                     div()
                                         .flex_1()
@@ -2157,132 +2150,126 @@ impl SidebarPaneView {
                 };
                 let entry = entries.get(entry_index)?;
                 let element = {
+                    let left_pad = scaled_px(6.0 + INDENT_STEP_PX * depth as f32);
+                    let store = Arc::clone(&store);
+                    let menu_invoker = (!is_directory)
+                        .then(|| SharedString::from(format!("file_browser_file_{ix}")));
+                    let context_menu_active = menu_invoker.as_ref().is_some_and(|invoker| {
+                        this.active_context_menu_invoker.as_ref() == Some(invoker)
+                    });
+                    let is_open_file = !is_directory
+                        && open_path
+                            .as_ref()
+                            .is_some_and(|open| open.as_path() == entry.path.as_path());
+                    // The pen marks the file wherever it sits in the tree, so a user
+                    // who navigated to it rather than to the pinned section still
+                    // sees that it is holding unsaved text.
+                    let has_unsaved_edits =
+                        !is_directory && unsaved_paths.contains(entry.path.as_ref());
+                    let row_state = components::InteractiveRowState::default()
+                        .selected(is_open_file, open_row_bg)
+                        .open(context_menu_active);
 
-                let left_pad = scaled_px(6.0 + INDENT_STEP_PX * depth as f32);
-                let store = Arc::clone(&store);
-                let menu_invoker = (!is_directory)
-                    .then(|| SharedString::from(format!("file_browser_file_{ix}")));
-                let context_menu_active = menu_invoker.as_ref().is_some_and(|invoker| {
-                    this.active_context_menu_invoker.as_ref() == Some(invoker)
-                });
-                let is_open_file = !is_directory
-                    && open_path
-                        .as_ref()
-                        .is_some_and(|open| open.as_path() == entry.path.as_path());
-                // The pen marks the file wherever it sits in the tree, so a user
-                // who navigated to it rather than to the pinned section still
-                // sees that it is holding unsaved text.
-                let has_unsaved_edits =
-                    !is_directory && unsaved_paths.contains(entry.path.as_ref());
-                let row_state = components::InteractiveRowState::default()
-                    .selected(is_open_file, open_row_bg)
-                    .open(context_menu_active);
+                    let mut row_div = div()
+                        .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
+                        .debug_selector(move || format!("file_browser_row_{ix}"))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
+                        .w_full()
+                        .pl(left_pad)
+                        .pr_2()
+                        .gap(scaled_px(4.0))
+                        .interactive_row(row_style, row_state);
 
-                let mut row_div = div()
-                    .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
-                    .debug_selector(move || format!("file_browser_row_{ix}"))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
-                    .w_full()
-                    .pl(left_pad)
-                    .pr_2()
-                    .gap(scaled_px(4.0))
-                    .interactive_row(row_style, row_state);
-
-                if is_directory {
-                    let path = (*entry.path).clone();
-                    row_div = row_div.on_click(cx.listener(
-                        move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                            store.dispatch(Msg::ToggleFileBrowserDir {
-                                repo_id,
-                                path: path.clone(),
-                            });
-                        },
-                    ));
-                } else {
-                    let path = (*entry.path).clone();
-                    let menu_path = path.clone();
-                    let source = repo
-                        .map(|r| r.file_browser.source.clone())
-                        .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
-                    let menu_invoker = menu_invoker.expect("file rows have a context-menu invoker");
-                    row_div = row_div
-                        .on_click(
-                            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                                // A file the editor is holding unsaved text for
-                                // opens straight back into the editor. Opening
-                                // the read-only view would show the text on
-                                // disk, which is not what the user left here.
-                                if has_unsaved_edits {
-                                    store.dispatch(Msg::OpenFileEditor {
-                                        repo_id,
-                                        path: path.clone(),
-                                    });
-                                } else {
-                                    store.dispatch(Msg::OpenFileContent {
-                                        repo_id,
-                                        source: source.clone(),
-                                        path: path.clone(),
-                                    });
-                                }
-                            }),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.activate_context_menu_invoker(menu_invoker.clone(), cx);
-                                this.open_popover_at(
-                                    PopoverKind::FileBrowserFileMenu {
-                                        repo_id,
-                                        path: menu_path.clone(),
-                                    },
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        );
-                }
-
-                row_div
-                    .child(chevron_slot(is_directory, is_expanded))
-                    .child(icon_slot(file_or_folder_icon_path(entry, is_expanded)))
-                    .child({
-                        let highlight_ranges =
-                            file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
-                        let mut label = components::TruncatedText::new(entry.name.to_string())
-                            .profile(components::TextTruncationProfile::End)
-                            .text_color(text_color)
-                            .text_sm();
-                        if !highlight_ranges.is_empty() {
-                            let style = gpui::HighlightStyle {
-                                color: Some(theme.colors.accent.into()),
-                                font_weight: Some(FontWeight::BOLD),
-                                ..gpui::HighlightStyle::default()
-                            };
-                            label = label.highlights(
-                                highlight_ranges.into_iter().map(|range| (range, style)),
+                    if is_directory {
+                        let path = (*entry.path).clone();
+                        row_div = row_div.on_click(cx.listener(
+                            move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                store.dispatch(Msg::ToggleFileBrowserDir {
+                                    repo_id,
+                                    path: path.clone(),
+                                });
+                            },
+                        ));
+                    } else {
+                        let path = (*entry.path).clone();
+                        let menu_path = path.clone();
+                        let source = repo
+                            .map(|r| r.file_browser.source.clone())
+                            .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
+                        let menu_invoker =
+                            menu_invoker.expect("file rows have a context-menu invoker");
+                        row_div = row_div
+                            .on_click(cx.listener(
+                                move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                    // A file the editor is holding unsaved text for
+                                    // opens straight back into the editor. Opening
+                                    // the read-only view would show the text on
+                                    // disk, which is not what the user left here.
+                                    if has_unsaved_edits {
+                                        store.dispatch(Msg::OpenFileEditor {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                    } else {
+                                        store.dispatch(Msg::OpenFileContent {
+                                            repo_id,
+                                            source: source.clone(),
+                                            path: path.clone(),
+                                        });
+                                    }
+                                },
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(menu_invoker.clone(), cx);
+                                    this.open_popover_at(
+                                        PopoverKind::FileBrowserFileMenu {
+                                            repo_id,
+                                            path: menu_path.clone(),
+                                        },
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }),
                             );
-                        }
-                        div().flex_1().min_w(px(0.0)).child(label.render(cx))
-                    })
-                    .when(has_unsaved_edits, |row| {
-                        row.child(
-                            div()
-                                .flex_none()
-                                .flex()
-                                .items_center()
-                                .child(svg_icon(
-                                    "icons/pencil.svg",
-                                    theme.colors.warning,
-                                    10.0,
-                                )),
-                        )
-                    })
-                    .into_any_element()
+                    }
+
+                    row_div
+                        .child(chevron_slot(is_directory, is_expanded))
+                        .child(icon_slot(file_or_folder_icon_path(entry, is_expanded)))
+                        .child({
+                            let highlight_ranges =
+                                file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
+                            let mut label = components::TruncatedText::new(entry.name.to_string())
+                                .profile(components::TextTruncationProfile::End)
+                                .text_color(text_color)
+                                .text_sm();
+                            if !highlight_ranges.is_empty() {
+                                let style = gpui::HighlightStyle {
+                                    color: Some(theme.colors.accent.into()),
+                                    font_weight: Some(FontWeight::BOLD),
+                                    ..gpui::HighlightStyle::default()
+                                };
+                                label = label.highlights(
+                                    highlight_ranges.into_iter().map(|range| (range, style)),
+                                );
+                            }
+                            div().flex_1().min_w(px(0.0)).child(label.render(cx))
+                        })
+                        .when(has_unsaved_edits, |row| {
+                            row.child(div().flex_none().flex().items_center().child(svg_icon(
+                                "icons/pencil.svg",
+                                theme.colors.warning,
+                                10.0,
+                            )))
+                        })
+                        .into_any_element()
                 };
                 Some(element)
             })
@@ -2618,12 +2605,14 @@ fn unsaved_file_row(
         // Straight into the editor, not the read-only view: every row in this
         // section has unsaved text, and the read-only view would show the file
         // on disk instead of what the user was in the middle of writing.
-        .on_click(cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-            store.dispatch(Msg::OpenFileEditor {
-                repo_id,
-                path: open_path.clone(),
-            });
-        }))
+        .on_click(
+            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                store.dispatch(Msg::OpenFileEditor {
+                    repo_id,
+                    path: open_path.clone(),
+                });
+            }),
+        )
         .child(
             div()
                 .w(icon_slot_px)

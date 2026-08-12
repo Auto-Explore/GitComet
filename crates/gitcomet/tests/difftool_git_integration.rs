@@ -8,9 +8,6 @@ use std::process::{Command, Output};
 #[cfg(windows)]
 use std::sync::OnceLock;
 
-
-
-
 fn apply_isolated_git_config_env(cmd: &mut Command) {
     // Keep integration tests deterministic by ignoring host git config.
     test_git_env::apply(cmd);

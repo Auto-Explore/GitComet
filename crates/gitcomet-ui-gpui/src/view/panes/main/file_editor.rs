@@ -810,9 +810,10 @@ impl MainPaneView {
         }
         self.file_editor_dirty
             && !self.file_editor_loading
-            && self.file_editor_key.as_ref().is_some_and(|(id, editing)| {
-                *id == repo_id && editing.as_path() == path
-            })
+            && self
+                .file_editor_key
+                .as_ref()
+                .is_some_and(|(id, editing)| *id == repo_id && editing.as_path() == path)
     }
 
     /// Throw away the unsaved edits for one file, wherever they are being held.
@@ -1448,11 +1449,7 @@ impl MainPaneView {
         // revision blame was computed for. Below the first edit, this is what
         // puts each row back on the line it came from.
         let blame_line_delta = blame_ctx.as_ref().map_or(0i64, |ctx| {
-            let buffer_lines = this
-                .file_editor_input
-                .read(cx)
-                .text_snapshot()
-                .line_count() as i64;
+            let buffer_lines = this.file_editor_input.read(cx).text_snapshot().line_count() as i64;
             buffer_lines - ctx.line_count() as i64
         });
         let entity = cx.entity();
