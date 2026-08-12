@@ -22,6 +22,19 @@ pub(super) fn model(
         (use_selection, selected_count)
     };
 
+    // A file git reports as deleted has nothing on disk to open in the editor.
+    let is_deleted = this
+        .state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .is_some_and(|repo| {
+            matches!(
+                repo.status_entry_for_path(area, path).map(|s| s.kind),
+                Some(gitcomet_core::domain::FileStatusKind::Deleted)
+            )
+        });
+
     let (is_conflicted, is_unstaged_conflicted, has_unstaged_for_path, is_staged_added) = this
         .state
         .repos
@@ -141,6 +154,34 @@ pub(super) fn model(
             path: path.to_path_buf(),
         }),
     });
+    items.push(ContextMenuItem::Entry {
+        label: "Edit file".into(),
+        icon: Some("icons/pencil.svg".into()),
+        shortcut: None,
+        disabled: is_deleted || crate::view::should_bypass_text_file_preview_for_path(path),
+        action: Box::new(ContextMenuAction::EditFile {
+            repo_id,
+            path: path.to_path_buf(),
+        }),
+    });
+    // Shown only while the editor is holding unsaved text for this file, so it
+    // cannot be mistaken for the "Discard changes" that reverts the file itself.
+    if this
+        .main_pane
+        .read(cx)
+        .file_edits_are_unsaved_for(repo_id, path)
+    {
+        items.push(ContextMenuItem::Entry {
+            label: "Discard unsaved edits".into(),
+            icon: Some("icons/undo.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::DiscardFileEdits {
+                repo_id,
+                path: path.to_path_buf(),
+            }),
+        });
+    }
     items.push(ContextMenuItem::Entry {
         label: "Open file location".into(),
         icon: Some("icons/folder.svg".into()),

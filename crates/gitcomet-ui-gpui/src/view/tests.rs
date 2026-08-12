@@ -3160,9 +3160,10 @@ fn request_close_window_or_warn_returns_false_without_terminals(cx: &mut gpui::T
     let (view, cx) =
         cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-    cx.update(|_window, app| {
+    cx.update(|window, app| {
+        let window_id = window.window_handle().window_id();
         view.update(app, |this, cx| {
-            assert!(!this.request_close_window_or_warn(cx));
+            assert!(!this.request_close_window_or_warn(window_id, cx));
         });
     });
 }
@@ -4161,4 +4162,295 @@ fn cubic_bezier_matches_a_linear_curve_for_the_identity_control_points() {
         let y = GitCometView::cubic_bezier(1.0 / 3.0, 1.0 / 3.0, 2.0 / 3.0, 2.0 / 3.0, t);
         assert!((y - t).abs() < 1e-3, "linear bezier: y({t}) = {y}");
     }
+}
+
+#[gpui::test]
+fn locate_open_file_switches_to_files_and_expands_its_folders(cx: &mut gpui::TestAppContext) {
+    // The action is reachable from a shortcut, the app menu and the palette, so
+    // it has to work with the sidebar on Branches and the folders collapsed.
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let nested = PathBuf::from("src/inner/deep.rs");
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+        FileEntry {
+            name: "src".to_string(),
+            path: Arc::new(PathBuf::from("src")),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+        },
+        FileEntry {
+            name: "inner".to_string(),
+            path: Arc::new(PathBuf::from("src/inner")),
+            kind: FileEntryKind::Directory,
+            depth: 1,
+        },
+        FileEntry {
+            name: "deep.rs".to_string(),
+            path: Arc::new(nested.clone()),
+            kind: FileEntryKind::File,
+            depth: 2,
+        },
+    ]));
+    state.repos[0].file_browser.bump_rev();
+    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: nested.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    });
+    state.repos[0].diff_state.content_preview = true;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| this.locate_open_file_in_explorer(cx));
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let state = view.read(app).store.snapshot();
+        assert_eq!(
+            state.sidebar_mode,
+            gitcomet_state::model::SidebarMode::Files,
+            "locating has to bring the tree it scrolls into view"
+        );
+        let expanded = &state.repos[0].file_browser.expanded_dirs;
+        assert!(expanded.contains(&Arc::new(PathBuf::from("src"))));
+        assert!(expanded.contains(&Arc::new(PathBuf::from("src/inner"))));
+    });
+}
+
+#[gpui::test]
+fn the_locate_button_is_present_whenever_the_files_tab_is(cx: &mut gpui::TestAppContext) {
+    // It used to be gated on a file being open as well, so the strip's contents
+    // changed as files were opened and closed — and it was simply absent for
+    // anyone who had not opened one yet.
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    sync_view_snapshot(cx, &view);
+    assert!(
+        cx.debug_bounds("sidebar_locate_open_file").is_none(),
+        "the Branches tab has no tree to locate anything in"
+    );
+
+    // Files, still with no file open: present, and disabled rather than absent.
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    store.replace_snapshot_for_test(Arc::new(state.clone()));
+    sync_view_snapshot(cx, &view);
+    assert!(
+        cx.debug_bounds("sidebar_locate_open_file").is_some(),
+        "the locate button belongs to the Files tab, open file or not"
+    );
+
+    state.repos[0].diff_state.diff_target = Some(gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("src/main.rs"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    });
+    state.repos[0].diff_state.content_preview = true;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+    assert!(cx.debug_bounds("sidebar_locate_open_file").is_some());
+}
+
+#[gpui::test]
+fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(
+        ["a.rs", "b.rs", "c.rs"]
+            .into_iter()
+            .map(|name| FileEntry {
+                name: name.to_string(),
+                path: Arc::new(PathBuf::from(name)),
+                kind: FileEntryKind::File,
+                depth: 0,
+            })
+            .collect(),
+    ));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    assert!(
+        cx.debug_bounds("file_browser_unsaved_header").is_none(),
+        "with nothing unsaved the section must take no space at all"
+    );
+
+    // Stash a dirty buffer for `b.rs` -- the case the section exists for, since
+    // a file edited and navigated away from is the one hardest to find again.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.file_editor_stash.insert(
+                    (RepoId(1), PathBuf::from("b.rs")),
+                    crate::view::panes::main::StashedFileEdit {
+                        text: SharedString::from("edited\n"),
+                        cursor: 0,
+                        text_fingerprint: 1,
+                        saved_fingerprint: 2,
+                        first_dirty_line: Some(0),
+                    },
+                );
+                pane.sync_unsaved_file_edits_rev(cx);
+            });
+        });
+    });
+    test_support::redraw(cx);
+
+    assert!(
+        cx.debug_bounds("file_browser_unsaved_header").is_some(),
+        "an unsaved buffer must pin a section at the top of the explorer"
+    );
+    let pinned = cx
+        .debug_bounds("file_browser_unsaved_1")
+        .expect("the unsaved file gets a pinned row");
+    assert!(
+        cx.debug_bounds("file_browser_unsaved_discard_1").is_some(),
+        "the pinned row carries its own discard control"
+    );
+    // Row 0 is the header and row 1 the file, so the tree starts at row 2: the
+    // pinned rows sit above the tree rather than replacing it.
+    let first_tree_row = cx
+        .debug_bounds("file_browser_row_2")
+        .expect("the tree is still listed below the pinned section");
+    assert!(
+        pinned.top() < first_tree_row.top(),
+        "pinned rows come first: pinned at {:?}, tree at {:?}",
+        pinned.top(),
+        first_tree_row.top()
+    );
+
+    // Discarding through the same entry point the row's button uses clears it.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.discard_file_edits_for(RepoId(1), &PathBuf::from("b.rs"), cx);
+            });
+        });
+    });
+    test_support::redraw(cx);
+
+    assert!(
+        cx.debug_bounds("file_browser_unsaved_header").is_none(),
+        "discarding the last unsaved buffer removes the section again"
+    );
+    assert!(
+        cx.debug_bounds("file_browser_row_0").is_some(),
+        "and the tree closes back up to the top"
+    );
+}
+
+/// Clicking a file the editor is holding unsaved text for must land back in the
+/// editor, not in the read-only view -- which would show the copy on disk and
+/// look like the edits were lost.
+#[gpui::test]
+fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(
+        ["a.rs", "b.rs"]
+            .into_iter()
+            .map(|name| FileEntry {
+                name: name.to_string(),
+                path: Arc::new(PathBuf::from(name)),
+                kind: FileEntryKind::File,
+                depth: 0,
+            })
+            .collect(),
+    ));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    // A clean tree: clicking a file opens the read-only content view.
+    click_debug_selector(cx, "file_browser_row_0");
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        let repo = &view.read(app).state.repos[0];
+        assert!(
+            repo.diff_state.content_preview && !repo.diff_state.edit_mode,
+            "a file with nothing unsaved opens read-only"
+        );
+    });
+
+    // Now give `b.rs` an unsaved buffer and click it in the tree.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.file_editor_stash.insert(
+                    (RepoId(1), PathBuf::from("b.rs")),
+                    crate::view::panes::main::StashedFileEdit {
+                        text: SharedString::from("edited\n"),
+                        cursor: 0,
+                        text_fingerprint: 1,
+                        saved_fingerprint: 2,
+                        first_dirty_line: Some(0),
+                    },
+                );
+                pane.sync_unsaved_file_edits_rev(cx);
+            });
+        });
+    });
+    test_support::redraw(cx);
+
+    // Rows 0 and 1 are now the pinned section, so `b.rs` sits at tree row 3.
+    click_debug_selector(cx, "file_browser_row_3");
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    cx.update(|_window, app| {
+        let repo = &view.read(app).state.repos[0];
+        assert!(
+            repo.diff_state.edit_mode,
+            "a file with unsaved edits opens straight into the editor"
+        );
+    });
+
+    // And the pinned row itself does the same, from a read-only starting point.
+    cx.update(|_window, app| {
+        let mut state = (*view.read(app).state).clone();
+        state.repos[0].diff_state.edit_mode = false;
+        state.repos[0].diff_state.content_preview = true;
+        store.replace_snapshot_for_test(Arc::new(state));
+    });
+    sync_view_snapshot(cx, &view);
+    click_debug_selector(cx, "file_browser_unsaved_1");
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
+    });
+    cx.update(|_window, app| {
+        assert!(
+            view.read(app).state.repos[0].diff_state.edit_mode,
+            "the pinned row opens the editor too"
+        );
+    });
 }

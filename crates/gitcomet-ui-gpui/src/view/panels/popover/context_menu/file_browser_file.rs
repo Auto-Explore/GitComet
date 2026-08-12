@@ -8,6 +8,7 @@ pub(super) fn model(
     this: &PopoverHost,
     repo_id: RepoId,
     path: &std::path::Path,
+    cx: &gpui::Context<PopoverHost>,
 ) -> ContextMenuModel {
     let source = this
         .state
@@ -52,6 +53,42 @@ pub(super) fn model(
             shortcut: None,
             disabled: false,
             action: Box::new(ContextMenuAction::SelectDiff { repo_id, target }),
+        });
+    }
+
+    items.push(ContextMenuItem::Entry {
+        label: "Edit file".into(),
+        icon: Some("icons/pencil.svg".into()),
+        shortcut: None,
+        // The editor always opens the workspace copy, so browsing a commit is
+        // no obstacle — but a branch listing has no path on disk at all, and a
+        // picture has no text to edit.
+        disabled: matches!(source, FileSource::Branch(_))
+            || crate::view::should_bypass_text_file_preview_for_path(path),
+        action: Box::new(ContextMenuAction::EditFile {
+            repo_id,
+            path: path.to_path_buf(),
+        }),
+    });
+
+    // Only offered for a file the editor is actually holding unsaved text for —
+    // an always-present "Discard changes" would read as "revert the file", which
+    // is what the status list's discard does and is a different, far more
+    // destructive thing.
+    if this
+        .main_pane
+        .read(cx)
+        .file_edits_are_unsaved_for(repo_id, path)
+    {
+        items.push(ContextMenuItem::Entry {
+            label: "Discard unsaved edits".into(),
+            icon: Some("icons/undo.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::DiscardFileEdits {
+                repo_id,
+                path: path.to_path_buf(),
+            }),
         });
     }
 

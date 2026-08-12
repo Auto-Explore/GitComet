@@ -8,6 +8,29 @@ pub(super) struct TextElement {
     pub(super) input: Entity<TextInput>,
 }
 
+/// Gap between the caret and the top/bottom of its line box.
+const CARET_INSET_Y_PX: f32 = 3.0;
+
+/// The blinking caret's height and its inset from the top of the line box.
+///
+/// Sized from the **line box**, never from the control: a single-line field is
+/// taller than its text (`SINGLE_LINE_INPUT_HEIGHT_PX` vs the line height), so
+/// deriving the caret from the control height drew a visibly taller caret in the
+/// search and filter fields than in the file editor and the merge tool's
+/// resolved output, which have no fixed control height to derive from. One rule
+/// for every input keeps them looking like the same widget.
+///
+/// A caret is never taller than its line box, so it cannot overflow a control
+/// sized to hold that line.
+fn caret_metrics(line_height: Pixels) -> (Pixels, Pixels) {
+    let inset = px(CARET_INSET_Y_PX);
+    let height = (line_height - inset * 2.0).max(px(2.0));
+    // Recovered from the height rather than assumed to be `inset`, so the
+    // `max` clamp above stays centred on a line box shorter than 8px.
+    let top_inset = (line_height - height) / 2.0;
+    (height, top_inset)
+}
+
 pub(super) struct PrepaintState {
     layout: Option<TextInputLayout>,
     cursor: Option<PaintQuad>,
@@ -203,18 +226,8 @@ impl Element for TextElement {
                     );
                     let mut selections = Vec::with_capacity(4);
                     let cursor_quad = if selected_range.is_empty() {
-                        let control_height = crate::ui_scale::design_px_from_window(
-                            SINGLE_LINE_INPUT_HEIGHT_PX,
-                            window,
-                        );
                         let x = truncated_line_x_for_source_offset(&truncated_line, cursor);
-                        let caret_inset_y = px(3.0);
-                        let caret_h = if !input.chromeless {
-                            (control_height - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
-                        } else {
-                            (line_height - caret_inset_y * 2.0).max(px(2.0))
-                        };
-                        let caret_top_inset = (line_height - caret_h) / 2.0;
+                        let (caret_h, caret_top_inset) = caret_metrics(line_height);
                         let top = bounds.top() + caret_top_inset;
                         Some(fill(
                             Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
@@ -374,23 +387,13 @@ impl Element for TextElement {
 
                 let mut selections = Vec::with_capacity(visible_line_range.len().max(1));
                 let cursor_quad = if selected_range.is_empty() {
-                    let control_height =
-                        crate::ui_scale::design_px_from_window(SINGLE_LINE_INPUT_HEIGHT_PX, window);
                     let (line_ix, local_ix) = line_for_offset(line_starts.as_ref(), &lines, cursor);
                     let x = lines
                         .get(line_ix)
                         .map(|line| line.x_for_index(local_ix))
                         .unwrap_or(px(0.0))
                         - scroll_x;
-                    let caret_inset_y = px(3.0);
-                    let caret_h = if !input.multiline && !input.chromeless {
-                        // Cap caret to fit within the fixed-height container
-                        // (SINGLE_LINE_INPUT_HEIGHT_PX minus 2px border minus insets).
-                        (control_height - px(2.0) - caret_inset_y * 2.0).max(px(2.0))
-                    } else {
-                        (line_height - caret_inset_y * 2.0).max(px(2.0))
-                    };
-                    let caret_top_inset = (line_height - caret_h) / 2.0;
+                    let (caret_h, caret_top_inset) = caret_metrics(line_height);
                     let top = bounds.top() + line_height * line_ix as f32 + caret_top_inset;
                     Some(fill(
                         Bounds::new(point(bounds.left() + x, top), size(px(1.0), caret_h)),
@@ -693,12 +696,11 @@ impl Element for TextElement {
                 let line_ix = line_index_for_offset(line_starts.as_ref(), cursor, line_count);
                 let start = line_starts.get(line_ix).copied().unwrap_or(0);
                 let local = cursor.saturating_sub(start).min(lines[line_ix].len());
-                let caret_inset_y = px(3.0);
-                let caret_h = (line_height - caret_inset_y * 2.0).max(px(2.0));
+                let (caret_h, caret_top_inset) = caret_metrics(line_height);
                 let pos = lines[line_ix]
                     .position_for_index(local, line_height)
                     .unwrap_or(point(Pixels::ZERO, Pixels::ZERO));
-                let top = bounds.top() + y_offsets[line_ix] + pos.y + caret_inset_y;
+                let top = bounds.top() + y_offsets[line_ix] + pos.y + caret_top_inset;
                 Some(fill(
                     Bounds::new(point(bounds.left() + pos.x, top), size(px(1.0), caret_h)),
                     style_colors.cursor,
@@ -945,5 +947,37 @@ impl Element for TextElement {
                 cx.notify();
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod caret_tests {
+    use super::*;
+
+    /// The caret is a property of the line box, not of the widget around it.
+    ///
+    /// Single-line fields are taller than their text, so the previous
+    /// control-height rule drew a caret ~50% taller in the search and filter
+    /// fields than in the file editor. One rule means one caret everywhere.
+    #[test]
+    fn caret_is_the_same_for_every_input_at_a_given_line_height() {
+        let line_height = px(18.0);
+        let (height, top_inset) = caret_metrics(line_height);
+        assert_eq!(height, px(12.0));
+        assert_eq!(top_inset, px(3.0));
+        // Centred: the gap above equals the gap below.
+        assert_eq!(top_inset * 2.0 + height, line_height);
+    }
+
+    #[test]
+    fn caret_stays_visible_and_centred_in_a_tiny_line_box() {
+        // Below 8px the inset would leave nothing to draw, so the height clamps
+        // and the inset has to be recovered from it or the caret would hang
+        // below its line.
+        let line_height = px(4.0);
+        let (height, top_inset) = caret_metrics(line_height);
+        assert_eq!(height, px(2.0));
+        assert_eq!(top_inset, px(1.0));
+        assert_eq!(top_inset * 2.0 + height, line_height);
     }
 }

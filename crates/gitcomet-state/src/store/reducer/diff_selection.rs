@@ -172,13 +172,34 @@ fn push_inline_submodule_diff_load_effects(
     }
 }
 
+/// What the main content pane shows for a freshly selected target. Passed
+/// through every selection path so no route can leave the two view flags on
+/// `DiffState` disagreeing — in particular so a plain diff selection always
+/// leaves edit mode behind.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ContentViewMode {
+    /// A diff of the target (or the conflict resolver, when it is conflicted).
+    Diff,
+    /// The whole file, syntax highlighted, read-only.
+    Preview,
+    /// The whole file, editable. Only reachable for `WorkingTree` targets.
+    Edit,
+}
+
+impl ContentViewMode {
+    /// Both file-content modes render the file rather than a patch.
+    fn is_content_view(self) -> bool {
+        matches!(self, Self::Preview | Self::Edit)
+    }
+}
+
 pub(super) fn select_diff(
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
 ) -> Vec<Effect> {
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, false, &mut effects);
+    fill_select_diff_inline(state, repo_id, target, ContentViewMode::Diff, &mut effects);
     effects.into_vec()
 }
 
@@ -199,8 +220,59 @@ pub(super) fn open_file_content(
             .record(ViewHistoryEntry { source, path });
     }
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, true, &mut effects);
+    fill_select_diff_inline(
+        state,
+        repo_id,
+        target,
+        ContentViewMode::Preview,
+        &mut effects,
+    );
     effects.into_vec()
+}
+
+/// Open `path` as an editable buffer over the file on disk.
+///
+/// `source` only decides which file-version history entry is recorded — the
+/// target is always the working tree, because the editor edits the workspace
+/// copy even when the action was invoked from a commit's file list. Returns no
+/// effects for sources that have no working-tree file.
+pub(super) fn open_file_editor(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: std::path::PathBuf,
+) -> Vec<Effect> {
+    let target = DiffTarget::WorkingTree {
+        path: path.clone(),
+        area: DiffArea::Unstaged,
+    };
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.view_history.record(ViewHistoryEntry {
+            source: gitcomet_core::domain::FileSource::WorkingDirectory,
+            path,
+        });
+    }
+    let mut effects = SelectDiffEffects::new();
+    fill_select_diff_inline(state, repo_id, target, ContentViewMode::Edit, &mut effects);
+    effects.into_vec()
+}
+
+/// Leave the editor, without reloading the file.
+///
+/// Lands on the read-only content view of the same file rather than on whatever
+/// the pane showed before the editor opened: the editor is a mode of the
+/// file-content view, and the diff stays one click (or one viewer-nav step)
+/// away. There is no enable counterpart — entering always goes through
+/// [`open_file_editor`], which re-targets the working tree.
+pub(super) fn exit_diff_edit_mode(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !repo_state.diff_state.edit_mode {
+        return Vec::new();
+    }
+    repo_state.diff_state.edit_mode = false;
+    repo_state.bump_diff_state_rev();
+    Vec::new()
 }
 
 /// Map a `(source, path)` content view to its `DiffTarget`. Returns `None` for
@@ -267,7 +339,13 @@ pub(super) fn viewer_nav(
         return Vec::new();
     };
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, true, &mut effects);
+    fill_select_diff_inline(
+        state,
+        repo_id,
+        target,
+        ContentViewMode::Preview,
+        &mut effects,
+    );
     effects.into_vec()
 }
 
@@ -374,13 +452,17 @@ pub(super) fn global_nav(
                 repo_state.view_history.seek_or_record(entry);
             }
             let mut inline = SelectDiffEffects::new();
-            fill_select_diff_inline(
-                state,
-                repo_id,
-                target,
-                snapshot.content_preview,
-                &mut inline,
-            );
+            // Edit mode is part of the destination, so a step can land in the
+            // editor and a step away can leave it. `edit_mode` is only ever set
+            // together with `content_preview`, so it is checked first.
+            let mode = if snapshot.edit_mode {
+                ContentViewMode::Edit
+            } else if snapshot.content_preview {
+                ContentViewMode::Preview
+            } else {
+                ContentViewMode::Diff
+            };
+            fill_select_diff_inline(state, repo_id, target, mode, &mut inline);
             effects.extend(inline.into_vec());
         }
         None => {
@@ -395,15 +477,17 @@ pub(super) fn fill_select_diff_inline(
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
-    content_preview: bool,
+    mode: ContentViewMode,
     effects: &mut SelectDiffEffects,
 ) {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return;
     };
 
+    let content_preview = mode.is_content_view();
     clear_inline_submodule_diff_state(repo_state);
     repo_state.diff_state.content_preview = content_preview;
+    repo_state.diff_state.edit_mode = mode == ContentViewMode::Edit;
 
     if !content_preview && let Some(conflict_target) = selected_conflict_target(repo_state, &target)
     {

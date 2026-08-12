@@ -151,11 +151,25 @@ fn parse_masked_tree(
 
 /// Collapse overlapping tree-sitter captures into non-overlapping styled runs.
 ///
-/// Ported from Zed's `BufferChunks::next`. `next_capture` yields captures in
-/// ascending start order; the stack holds those still open at the cursor, and
-/// the innermost — the last pushed — wins. That is what makes a `self` inside a
-/// parameter list read as a keyword rather than inheriting the enclosing
-/// function-signature capture.
+/// Ported from Zed's `BufferChunks::next`. `next_capture` yields captures in the
+/// order the query cursor emitted them, which is ascending start order; the
+/// stack holds those still open at the cursor and the last pushed wins, so **the
+/// later capture wins** — the same rule `normalize_non_overlapping_tokens`
+/// applies in the read-only panes, and the rule upstream `highlights.scm` files
+/// are written against. A `self` inside a parameter list still reads as a
+/// keyword rather than inheriting the enclosing function-signature capture,
+/// because it starts later and is therefore emitted later.
+///
+/// Resolving by *span* instead — innermost wins — is what this used to do, and
+/// it silently inverts any query that colours a node by capturing its parent
+/// afterwards. TOML's `(bare_key) @type` followed by `(pair (bare_key))
+/// @property` is the worst case: every key in the file took the `@type` colour,
+/// which in the shipped themes is the same green as `@string`, so an entire
+/// `Cargo.toml` rendered in one colour.
+///
+/// The stack tolerates a longer capture sitting on top of a shorter one — the
+/// shorter one is buried, never read, and always ends first, so the pop loop
+/// below never surfaces it while it is stale.
 ///
 /// The capture source is a closure rather than a concrete iterator so that
 /// depth-1 injections can be added by merging several layers' cursors into one
@@ -215,6 +229,20 @@ fn sweep_runs(
     }
 }
 
+/// One capture from one layer's tree, carrying everything the sweep needs to
+/// order it: the layer's `depth` and the position the cursor emitted it at.
+///
+/// `seq` is what preserves the query's own precedence. tree-sitter emits
+/// captures ordered by `(node start byte, pattern index)`, so for two patterns
+/// matching at the same offset the later pattern arrives later — and the later
+/// pattern is the one that must win. See [`sweep_runs`].
+struct LayerCapture {
+    range: Range<usize>,
+    kind: SyntaxTokenKind,
+    depth: u8,
+    seq: u32,
+}
+
 /// Captures from one layer's tree that intersect `pass`, tagged with `depth`.
 fn collect_layer_captures(
     spec: &TreesitterHighlightSpec,
@@ -223,7 +251,7 @@ fn collect_layer_captures(
     pass: Range<usize>,
     text_len: usize,
     depth: u8,
-    out: &mut Vec<(Range<usize>, SyntaxTokenKind, u8)>,
+    out: &mut Vec<LayerCapture>,
 ) {
     catch_treesitter_query_panic(|| {
         TS_CURSOR.with(|cursor| {
@@ -239,15 +267,25 @@ fn collect_layer_captures(
                 cursor.captures(&spec.query, tree.root_node(), RopeTextProvider(rope));
             tree_sitter::StreamingIterator::advance(&mut captures);
             let capture_kinds = spec.capture_kinds.as_slice();
+            // Counts every capture the cursor yields, including the ones dropped
+            // below, so the numbering is the emission order itself rather than
+            // the order of what survived.
+            let mut seq: u32 = 0;
             while let Some((m, capture_ix)) = captures.get() {
                 if let Some(capture) = m.captures.get(*capture_ix)
                     && let Some(kind) = capture_kinds.get(capture.index as usize).copied().flatten()
                 {
                     let range = clamp_to_len(capture.node.byte_range(), text_len);
                     if !range.is_empty() {
-                        out.push((range, kind, depth));
+                        out.push(LayerCapture {
+                            range,
+                            kind,
+                            depth,
+                            seq,
+                        });
                     }
                 }
+                seq = seq.saturating_add(1);
                 tree_sitter::StreamingIterator::advance(&mut captures);
             }
         });
@@ -446,6 +484,21 @@ fn parse_included_range(
     })
 }
 
+/// Whether a live document could be built for this language and size at all.
+///
+/// The two permanent reasons [`LiveSyntaxDocument::new`] returns `None` — no
+/// wired grammar, and text past the parse ceiling — are both cheap to ask
+/// directly. Callers check them up front rather than inferring them from a
+/// failed build, so a *transient* failure is never mistaken for a permanent one
+/// and latched.
+pub(in crate::view) fn live_syntax_document_supported(
+    language: DiffSyntaxLanguage,
+    len: usize,
+) -> bool {
+    len <= PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
+        && tree_sitter_highlight_spec(language).is_some()
+}
+
 /// A live tree-sitter document, owned by the view that edits it.
 pub(in crate::view) struct LiveSyntaxDocument {
     language: DiffSyntaxLanguage,
@@ -524,9 +577,17 @@ impl LiveSyntaxDocument {
     /// The version advances either way, so a caller keying a highlight provider
     /// on it always rebinds.
     ///
-    /// Returns [`LiveSyntaxSyncOutcome::Abandoned`] without touching the
-    /// document when the edit takes the buffer past the size ceiling; the
-    /// caller drops it, exactly as it would never have been built at that size.
+    /// Returns [`LiveSyntaxSyncOutcome::Abandoned`] when the document cannot be
+    /// carried forward and the caller must drop it: the edit takes the buffer
+    /// past the size ceiling (nothing is touched, exactly as if it had never
+    /// been built at that size), or the text was replaced *wholesale* —
+    /// `edit: None` — and the budgeted parse did not finish, leaving no tree
+    /// that describes the new text.
+    ///
+    /// [`LiveSyntaxSyncOutcome::Deferred`] is the softer failure and is reserved
+    /// for a **seeded** sync, where `tree.edit()` has already moved the old tree
+    /// into the new coordinates so it still paints while the background reparse
+    /// catches up.
     pub(in crate::view) fn sync(
         &mut self,
         rope: Rope,
@@ -582,6 +643,21 @@ impl LiveSyntaxDocument {
                 // background reparse finishes.
                 self.stale = dropped;
                 LiveSyntaxSyncOutcome::Reparsed
+            }
+            None if !seed => {
+                // Nothing moved this tree: `edit` was `None`, so it still
+                // describes the text that was here *before* the replacement,
+                // while `self.rope` is already the new text. Keeping it would
+                // pair a document with a tree for a different string, and every
+                // query over it answers for that other string — for a buffer
+                // replaced from empty, a tree spanning nothing and therefore no
+                // highlighting at all.
+                //
+                // Hand the document back instead. Both callers drop it and fall
+                // to heuristic tokens, then finish the parse off-thread with no
+                // budget, which is the path a blown budget was always meant to
+                // take.
+                LiveSyntaxSyncOutcome::Abandoned
             }
             None => {
                 // The root tree was edited into the new coordinates but not
@@ -753,7 +829,7 @@ impl LiveSyntaxSnapshot {
             // Collected rather than merged lazily because the query cursor is a
             // thread-local: querying a second layer inside the first's borrow
             // would re-enter it.
-            let mut hits: Vec<(Range<usize>, SyntaxTokenKind, u8)> = Vec::new();
+            let mut hits: Vec<LayerCapture> = Vec::new();
             collect_layer_captures(
                 inner.spec,
                 &inner.tree,
@@ -777,25 +853,212 @@ impl LiveSyntaxSnapshot {
                 }
             }
 
-            // Start ascending, end descending, depth ascending — so for a span
-            // an injected grammar and its host both capture, the injected one
-            // is pushed last and `sweep_runs`' innermost-wins stack picks it.
+            // Start ascending, then depth, then emission order — the order
+            // `sweep_runs` needs to make the *later* capture win.
+            //
+            // Depth ahead of `seq` is what keeps an injected grammar's capture
+            // above its host's over the same span: the two layers number their
+            // captures independently, so `seq` alone cannot rank across them.
+            // Everything below that is the query's own precedence, preserved by
+            // `seq`. Sorting by span length instead — longest first, so the
+            // innermost lands on top — is what used to invert it.
+            //
+            // Merging by start is enough to keep the stack honest because a
+            // cursor emits in start order, so within a layer `seq` is already
+            // monotone in `start`.
             hits.sort_by(|left, right| {
-                left.0
+                left.range
                     .start
-                    .cmp(&right.0.start)
-                    .then(right.0.end.cmp(&left.0.end))
-                    .then(left.2.cmp(&right.2))
+                    .cmp(&right.range.start)
+                    .then(left.depth.cmp(&right.depth))
+                    .then(left.seq.cmp(&right.seq))
             });
 
             let mut hits = hits.into_iter();
-            let next_capture = || hits.next().map(|(range, kind, _)| (range, kind));
+            let next_capture = || hits.next().map(|hit| (hit.range, hit.kind));
             sweep_runs(next_capture, &inner.palette, pass.clone(), &mut out);
 
             pass_start = pass_end;
         }
         out
     }
+
+    /// The bracket pair the caret at `offset` belongs to: the delimiter it sits
+    /// on (or immediately after), otherwise the innermost pair enclosing it.
+    ///
+    /// Read straight off the tree rather than from `brackets.scm` queries. Every
+    /// such query is a list of `("(" @open ")" @close)` patterns — the delimiters
+    /// are anonymous sibling children of one node — so the tree already carries
+    /// the fact, and taking it from there works for all 47 wired grammars without
+    /// a query file each. It is also exact where a scanner is not: a brace inside
+    /// a string or comment is a leaf *of* that string or comment, never a
+    /// delimiter, so it correctly matches nothing.
+    ///
+    /// O(tree depth) — cheap enough to run on the caret-move path.
+    pub(in crate::view) fn bracket_pair_at(
+        &self,
+        offset: usize,
+    ) -> Option<(Range<usize>, Range<usize>)> {
+        let inner = self.0.as_ref();
+        let offset = offset.min(inner.rope.len());
+        // Injected grammars first: a brace inside an interpolated region is the
+        // inner grammar's. Layer trees are parsed with `included_ranges`, so
+        // their node offsets are already document coordinates.
+        for layer in &inner.injections {
+            if layer.range.start <= offset
+                && offset <= layer.range.end
+                && let Some(pair) = bracket_pair_in_tree(&layer.tree, offset)
+            {
+                return Some(pair);
+            }
+        }
+        bracket_pair_in_tree(&inner.tree, offset)
+    }
+}
+
+/// The delimiter pairs matched by [`LiveSyntaxSnapshot::bracket_pair_at`].
+///
+/// Angle brackets are deliberately absent: `<` and `>` are comparison operators
+/// in most grammars and only sometimes delimiters, so pairing them lights up
+/// arithmetic. Quotes are absent for the same reason Zed excludes them from
+/// rainbow colouring — a matched quote pair tells the reader nothing.
+const BRACKET_PAIRS: [(&str, &str); 3] = [("(", ")"), ("[", "]"), ("{", "}")];
+
+fn close_delimiter_for(open: &str) -> Option<&'static str> {
+    BRACKET_PAIRS
+        .iter()
+        .find(|(o, _)| *o == open)
+        .map(|(_, c)| *c)
+}
+
+fn open_delimiter_for(close: &str) -> Option<&'static str> {
+    BRACKET_PAIRS
+        .iter()
+        .find(|(_, c)| *c == close)
+        .map(|(o, _)| *o)
+}
+
+/// Whether `node` is one of the delimiter tokens, as opposed to a named node
+/// that merely spans one.
+fn is_delimiter_token(node: &tree_sitter::Node<'_>) -> bool {
+    !node.is_named()
+        && (close_delimiter_for(node.kind()).is_some() || open_delimiter_for(node.kind()).is_some())
+}
+
+fn bracket_pair_in_tree(
+    tree: &tree_sitter::Tree,
+    offset: usize,
+) -> Option<(Range<usize>, Range<usize>)> {
+    let root = tree.root_node();
+    let limit = root.end_byte();
+
+    // A caret sits *between* two characters, so it touches the delimiter on
+    // either side. The one to the right wins, matching where the caret is drawn.
+    for probe in [Some(offset), offset.checked_sub(1)].into_iter().flatten() {
+        if probe >= limit {
+            continue;
+        }
+        if let Some(node) = root.descendant_for_byte_range(probe, probe + 1)
+            && is_delimiter_token(&node)
+            && let Some(pair) = partner_of_delimiter(node)
+        {
+            return Some(pair);
+        }
+    }
+
+    // Otherwise the caret is inside something: walk outward and take the first
+    // node that brackets it, which is the innermost enclosing pair.
+    let mut node = root.descendant_for_byte_range(offset.min(limit), offset.min(limit))?;
+    loop {
+        if let Some(pair) = enclosing_pair_among_children(&node, offset) {
+            return Some(pair);
+        }
+        node = node.parent()?;
+    }
+}
+
+/// The delimiter matching `node`, found among its parent's direct children.
+///
+/// Nesting is counted rather than assuming one pair per parent: a node can hold
+/// several same-kind pairs side by side (`(a)(b)` as arguments), and a deeper
+/// pair lives under a deeper node, so counting direct children is exact.
+fn partner_of_delimiter(node: tree_sitter::Node<'_>) -> Option<(Range<usize>, Range<usize>)> {
+    let parent = node.parent()?;
+    let kind = node.kind();
+    let mut cursor = parent.walk();
+    let children: Vec<tree_sitter::Node<'_>> = parent.children(&mut cursor).collect();
+    let index = children.iter().position(|child| child.id() == node.id())?;
+
+    if let Some(close) = close_delimiter_for(kind) {
+        let mut depth = 1usize;
+        for child in &children[index + 1..] {
+            if !child.is_named() && child.kind() == kind {
+                depth += 1;
+            } else if !child.is_named() && child.kind() == close {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((node.byte_range(), child.byte_range()));
+                }
+            }
+        }
+        return None;
+    }
+
+    let open = open_delimiter_for(kind)?;
+    let mut depth = 1usize;
+    for child in children[..index].iter().rev() {
+        if !child.is_named() && child.kind() == kind {
+            depth += 1;
+        } else if !child.is_named() && child.kind() == open {
+            depth -= 1;
+            if depth == 0 {
+                return Some((child.byte_range(), node.byte_range()));
+            }
+        }
+    }
+    None
+}
+
+/// The tightest delimiter pair among `node`'s direct children that contains
+/// `offset` strictly between them.
+fn enclosing_pair_among_children(
+    node: &tree_sitter::Node<'_>,
+    offset: usize,
+) -> Option<(Range<usize>, Range<usize>)> {
+    let mut cursor = node.walk();
+    let mut open_stack: Vec<tree_sitter::Node<'_>> = Vec::new();
+    let mut best: Option<(Range<usize>, Range<usize>)> = None;
+
+    for child in node.children(&mut cursor) {
+        if child.is_named() {
+            continue;
+        }
+        let kind = child.kind();
+        if close_delimiter_for(kind).is_some() {
+            open_stack.push(child);
+            continue;
+        }
+        let Some(open_kind) = open_delimiter_for(kind) else {
+            continue;
+        };
+        let Some(position) = open_stack.iter().rposition(|open| open.kind() == open_kind) else {
+            continue;
+        };
+        let open = open_stack.remove(position);
+        if open.end_byte() > offset || child.start_byte() < offset {
+            continue;
+        }
+        let candidate = (open.byte_range(), child.byte_range());
+        let span = |pair: &(Range<usize>, Range<usize>)| pair.1.end - pair.0.start;
+        if best
+            .as_ref()
+            .is_none_or(|current| span(&candidate) < span(current))
+        {
+            best = Some(candidate);
+        }
+    }
+
+    best
 }
 
 #[cfg(test)]
@@ -816,13 +1079,16 @@ mod tests {
     }
 
     fn document(text: &str, mask: Vec<Range<usize>>) -> LiveSyntaxDocument {
-        LiveSyntaxDocument::new(
-            DiffSyntaxLanguage::Rust,
-            Rope::from_str(text),
-            mask.into(),
-            None,
-        )
-        .expect("rust live document should build")
+        document_in(DiffSyntaxLanguage::Rust, text, mask)
+    }
+
+    fn document_in(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        mask: Vec<Range<usize>>,
+    ) -> LiveSyntaxDocument {
+        LiveSyntaxDocument::new(language, Rope::from_str(text), mask.into(), None)
+            .unwrap_or_else(|| panic!("{language:?} live document should build"))
     }
 
     fn styles_at(
@@ -1057,6 +1323,69 @@ mod tests {
         );
     }
 
+    /// A wholesale replacement that outruns its budget must not keep the tree.
+    ///
+    /// `Deferred` is sound only for a *seeded* sync: there `tree.edit()` has
+    /// moved the old tree into the new coordinates, so it still paints. With
+    /// `edit: None` nothing moved it, so keeping it pairs the new rope with a
+    /// tree describing text that is gone — and every query over it answers for
+    /// the wrong document. The file editor reached exactly that on a file
+    /// switch: the buffer is blanked, a document is built over the empty text,
+    /// then the file lands as a wholesale replacement whose budgeted parse
+    /// fails, leaving a full rope with a 0-byte tree and no highlighting at all.
+    #[test]
+    fn a_wholesale_replacement_that_outruns_the_budget_is_abandoned() {
+        // The empty buffer the editor blanks to before a file lands.
+        let mut doc = document("", Vec::new());
+        assert!(
+            doc.snapshot(AppTheme::gitcomet_dark())
+                .0
+                .tree
+                .root_node()
+                .end_byte()
+                == 0,
+            "the fixture must start with a tree that spans nothing"
+        );
+
+        let landed = "fn main() {\n    let value = 1;\n}\n".repeat(400);
+        let outcome = doc.sync(
+            Rope::from_str(landed.as_str()),
+            Vec::new().into(),
+            // `None` -- the text was replaced, not edited.
+            None,
+            Some(Duration::ZERO),
+        );
+
+        assert_eq!(
+            outcome,
+            LiveSyntaxSyncOutcome::Abandoned,
+            "an unseeded sync that cannot parse must hand the document back, so \
+             the caller falls back to heuristics and rebuilds off-thread"
+        );
+    }
+
+    /// The same shape as the test above, but *seeded*: this one must stay
+    /// `Deferred`, because the tree really did move with the edit.
+    #[test]
+    fn a_seeded_edit_that_outruns_the_budget_still_defers() {
+        let before = "fn main() {\n    let value = 1;\n}\n".repeat(400);
+        let mut doc = document(&before, Vec::new());
+        let inserted = "\n    let extra = 2;";
+        let at = 11usize;
+        let mut after = before.clone();
+        after.insert_str(at, inserted);
+
+        assert_eq!(
+            doc.sync(
+                Rope::from_str(after.as_str()),
+                Vec::new().into(),
+                Some((at..at, at..at + inserted.len())),
+                Some(Duration::ZERO),
+            ),
+            LiveSyntaxSyncOutcome::Deferred
+        );
+    }
+
     #[test]
     fn a_background_tree_for_a_superseded_version_is_rejected() {
         let before = "fn main() {}\n";
@@ -1148,39 +1477,45 @@ mod tests {
         );
     }
 
-    /// The merge tool's resolved output and the diff panes above it must colour
-    /// the same code the same way, and they do not share an engine: this one
-    /// sweeps a `QueryCursor` over the viewport ([`sweep_runs`]), the diff panes
-    /// materialize per-line tokens and resolve overlaps with
-    /// `normalize_non_overlapping_tokens`. Hold the tree constant and check the
-    /// two derivations agree byte for byte.
+    /// The editable buffers — the merge tool's resolved output and the file
+    /// editor — and the read-only diff panes must colour the same code the same
+    /// way, and they do not share an engine: this one sweeps a `QueryCursor`
+    /// over the viewport ([`sweep_runs`]), the diff panes materialize per-line
+    /// tokens and resolve overlaps with `normalize_non_overlapping_tokens`. Hold
+    /// the tree constant and check the two derivations agree byte for byte.
     ///
-    /// Deliberately macro-free: [`super::prepared`] also applies
-    /// `*_injections.scm` and this engine does not yet, so a `println!` body is
-    /// a known divergence rather than a regression. See the note on
-    /// [`sweep_runs`] about merging injected layers into its capture stream.
-    #[test]
-    fn the_live_engine_agrees_with_the_prepared_engine_the_diff_panes_use() {
-        let text = concat!(
-            "use std::fmt;\n",
-            "\n",
-            "/// A stage in the pipeline.\n",
-            "pub struct Stage<'a> {\n",
-            "    pub name: &'a str,\n",
-            "    pub retries: usize,\n",
-            "}\n",
-            "\n",
-            "impl Stage<'_> {\n",
-            "    pub fn bump(&mut self) -> usize {\n",
-            "        self.retries = self.retries.wrapping_add(1);\n",
-            "        self.retries\n",
-            "    }\n",
-            "}\n",
+    /// `probes` are `(needle, expected kind)` pairs asserted against the live
+    /// side first, so a fixture that stopped being tree-sitter-highlighted
+    /// cannot make the comparison pass by leaving both sides empty. They are
+    /// also where each language's *precedence* is pinned: the divergence this
+    /// guards against is a query that colours a node by capturing its parent
+    /// afterwards, which only shows up as one kind rather than another.
+    ///
+    /// Fixtures must avoid constructs that trigger `*_injections.scm`:
+    /// [`super::prepared`] is driven here with the root tree alone, while the
+    /// live snapshot merges its injected layers, so an injected region is a
+    /// known divergence rather than a regression.
+    fn assert_engines_agree(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        probes: &[(&str, SyntaxTokenKind)],
+    ) {
+        // A fixture inside one rope chunk never exercises the chunked feed this
+        // engine parses through (`masked_read` hands the parser one chunk at a
+        // time, `prepared` hands it a contiguous slice), so it compares the two
+        // engines on the one input where they cannot differ. Every fixture here
+        // used to be under 512 bytes, which is why several rounds of "the
+        // engines agree" said nothing about files the app actually opens.
+        assert!(
+            text.len() > crate::kit::rope::MAX_CHUNK_BYTES,
+            "an equivalence fixture must span more than one rope chunk \
+             ({} bytes); this one is {} bytes",
+            crate::kit::rope::MAX_CHUNK_BYTES,
+            text.len(),
         );
-
         let theme = AppTheme::gitcomet_dark();
         let palette = syntax_highlight_palette(theme);
-        let snapshot = document(text, Vec::new()).snapshot(theme);
+        let snapshot = document_in(language, text, Vec::new()).snapshot(theme);
 
         let mut live_by_byte = vec![None; text.len()];
         for (range, style) in snapshot.highlights_for_byte_range(0..text.len()) {
@@ -1192,8 +1527,8 @@ mod tests {
         // Same tree, so any disagreement below is in how the captures are turned
         // into styles -- which is exactly what differs between the two engines.
         let line_starts = line_starts_for(text);
-        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Rust)
-            .expect("rust should have a wired grammar");
+        let spec = tree_sitter_highlight_spec(language)
+            .unwrap_or_else(|| panic!("{language:?} should have a wired grammar"));
         let per_line = collect_treesitter_document_line_tokens_for_line_window(
             &snapshot.0.tree,
             spec,
@@ -1214,19 +1549,14 @@ mod tests {
             }
         }
 
-        // Guards against the comparison passing because both sides are empty.
-        for (needle, kind) in [
-            ("Stage<'a>", SyntaxTokenKind::Type),
-            ("usize", SyntaxTokenKind::TypeBuiltin),
-            ("retries: usize", SyntaxTokenKind::Property),
-            ("wrapping_add", SyntaxTokenKind::FunctionMethod),
-        ] {
+        for (needle, kind) in probes {
             let at = text.find(needle).expect("fixture should contain the probe");
             assert_eq!(
                 live_by_byte[at],
-                palette.style(kind),
-                "{needle:?} at {at} should carry {kind:?}; without these classes the \
-                 comparison below cannot tell tree-sitter from the heuristic tokenizer"
+                palette.style(*kind),
+                "{language:?}: {needle:?} at {at} should carry {kind:?}; without these \
+                 classes the comparison below cannot tell tree-sitter from the \
+                 heuristic tokenizer"
             );
         }
 
@@ -1250,9 +1580,319 @@ mod tests {
             .collect::<Vec<_>>();
         assert!(
             mismatched.is_empty(),
-            "the resolved output and the diff panes must colour identical text \
-             identically; diverging bytes:\n  {}",
+            "{language:?}: the editable buffers and the diff panes must colour \
+             identical text identically; diverging bytes:\n  {}",
             mismatched.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_live_engine_agrees_with_the_prepared_engine_the_diff_panes_use() {
+        let text = concat!(
+            "use std::fmt;\n",
+            "\n",
+            "/// A stage in the pipeline.\n",
+            "pub struct Stage<'a> {\n",
+            "    pub name: &'a str,\n",
+            "    pub retries: usize,\n",
+            "}\n",
+            "\n",
+            "impl Stage<'_> {\n",
+            "    pub fn bump(&mut self) -> usize {\n",
+            "        self.retries = self.retries.wrapping_add(1);\n",
+            "        self.retries\n",
+            "    }\n",
+            "}\n",
+        );
+
+        // Repeated so the fixture spans several rope chunks: the chunked parser
+        // feed is only exercised past 512 bytes.
+        let text = text.repeat(6);
+        let text = text.as_str();
+        assert_engines_agree(
+            DiffSyntaxLanguage::Rust,
+            text,
+            &[
+                ("Stage<'a>", SyntaxTokenKind::Type),
+                ("usize", SyntaxTokenKind::TypeBuiltin),
+                ("retries: usize", SyntaxTokenKind::Property),
+                ("wrapping_add", SyntaxTokenKind::FunctionMethod),
+            ],
+        );
+    }
+
+    /// The regression that made an entire `Cargo.toml` render in one colour.
+    ///
+    /// `tree-sitter-toml-ng` colours keys by capturing the enclosing node —
+    /// `(bare_key) @type` first, then `(pair (bare_key)) @property` — so a
+    /// resolver that prefers the innermost capture gives every key `@type`,
+    /// which is the same green as `@string` in the shipped themes. The `@property`
+    /// probe below is what pins the precedence.
+    #[test]
+    fn the_two_engines_agree_on_toml_keys() {
+        let text = concat!(
+            "[package]\n",
+            "name = \"gitcomet\"\n",
+            "version = \"0.1.16\"\n",
+            "edition = \"2024\"\n",
+            "\n",
+            "# A comment.\n",
+            "[dependencies]\n",
+            "serde = { version = \"1\", features = [\"derive\"] }\n",
+            "retries = 3\n",
+            "strict = true\n",
+        );
+
+        let text = text.repeat(6);
+        let text = text.as_str();
+        assert_engines_agree(
+            DiffSyntaxLanguage::Toml,
+            text,
+            &[
+                ("name", SyntaxTokenKind::Property),
+                ("\"gitcomet\"", SyntaxTokenKind::String),
+                ("# A comment.", SyntaxTokenKind::Comment),
+                ("3", SyntaxTokenKind::Number),
+                ("true", SyntaxTokenKind::Boolean),
+            ],
+        );
+    }
+
+    /// Python's `highlights.scm` uses the same capture-the-parent idiom for
+    /// f-string interpolations and docstrings.
+    #[test]
+    fn the_two_engines_agree_on_python() {
+        let text = concat!(
+            "import os\n",
+            "\n",
+            "\n",
+            "class Stage:\n",
+            "    \"\"\"A stage in the pipeline.\"\"\"\n",
+            "\n",
+            "    def __init__(self, name):\n",
+            "        self.name = name\n",
+            "        self.retries = 0\n",
+            "\n",
+            "    def bump(self):\n",
+            "        self.retries += 1\n",
+            "        return f\"{self.name}: {self.retries}\"\n",
+        );
+
+        let text = text.repeat(6);
+        let text = text.as_str();
+        assert_engines_agree(
+            DiffSyntaxLanguage::Python,
+            text,
+            &[
+                ("import", SyntaxTokenKind::Keyword),
+                ("Stage", SyntaxTokenKind::Type),
+                ("__init__", SyntaxTokenKind::FunctionSpecial),
+                ("0", SyntaxTokenKind::Number),
+            ],
+        );
+    }
+
+    /// The shape of the file this was reported on: a shebang, a quoted heredoc,
+    /// a `case` block and `${var:-}` expansions, over several rope chunks.
+    ///
+    /// Heredocs are the construct most likely to tell the two engines apart —
+    /// tree-sitter-bash matches the delimiter in an external scanner, which is
+    /// exactly the sort of thing that can read differently through a chunked
+    /// feed than through one contiguous slice.
+    #[test]
+    fn the_two_engines_agree_on_shell_with_heredocs() {
+        let text = concat!(
+            "#!/usr/bin/env bash\n",
+            "set -euo pipefail\n",
+            "\n",
+            "usage() {\n",
+            "  cat <<'USAGE'\n",
+            "Usage: scripts/update.sh --dir PATH --version VERSION [--verify]\n",
+            "USAGE\n",
+            "}\n",
+            "\n",
+            "dir=\"\"\n",
+            "version=\"\"\n",
+            "verify=\"false\"\n",
+            "\n",
+            "while [[ $# -gt 0 ]]; do\n",
+            "  case \"$1\" in\n",
+            "    --dir) dir=\"${2:-}\"; shift 2 ;;\n",
+            "    --version) version=\"${2:-}\"; shift 2 ;;\n",
+            "    --verify) verify=\"true\"; shift ;;\n",
+            "    *) echo \"unknown option: $1\" >&2; usage; exit 1 ;;\n",
+            "  esac\n",
+            "done\n",
+            "\n",
+            "if [[ -z \"$dir\" ]]; then\n",
+            "  echo \"--dir is required\" >&2\n",
+            "  exit 1\n",
+            "fi\n",
+        )
+        .repeat(3);
+
+        assert_engines_agree(
+            DiffSyntaxLanguage::Bash,
+            text.as_str(),
+            &[
+                ("while", SyntaxTokenKind::KeywordControl),
+                ("esac", SyntaxTokenKind::KeywordControl),
+                ("USAGE\n", SyntaxTokenKind::String),
+            ],
+        );
+    }
+
+    /// `(open, close)` as `&str` slices, so failures read as source text rather
+    /// than as byte offsets.
+    fn bracket_pair_text<'a>(
+        document: &LiveSyntaxDocument,
+        text: &'a str,
+        offset: usize,
+    ) -> Option<(&'a str, &'a str)> {
+        document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(offset)
+            .map(|(open, close)| (&text[open], &text[close]))
+    }
+
+    #[test]
+    fn bracket_pair_matches_a_delimiter_the_caret_sits_on() {
+        let text = "fn main() {\n    let value = compute(1, 2);\n}\n";
+        let document = document(text, Vec::new());
+
+        let open_paren = text.find("(1").expect("call paren");
+        assert_eq!(
+            bracket_pair_text(&document, text, open_paren),
+            Some(("(", ")")),
+            "the caret on an opening paren must find its own closer"
+        );
+
+        // Caret immediately *after* the closer: an editor caret touches the
+        // character to its left too.
+        let close_paren = text.find(");").expect("call close");
+        assert_eq!(
+            bracket_pair_text(&document, text, close_paren + 1),
+            Some(("(", ")"))
+        );
+    }
+
+    #[test]
+    fn bracket_pair_matches_the_innermost_block_around_the_caret() {
+        let text = "fn main() {\n    let value = compute(1, 2);\n}\n";
+        let document = document(text, Vec::new());
+
+        let inside_call = text.find("1, 2").expect("call args") + 2;
+        assert_eq!(
+            bracket_pair_text(&document, text, inside_call),
+            Some(("(", ")")),
+            "inside the argument list the call parens win over the block braces"
+        );
+
+        let inside_block = text.find("let").expect("statement");
+        let (open, close) = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(inside_block)
+            .expect("the body braces enclose the statement");
+        assert_eq!((&text[open.clone()], &text[close.clone()]), ("{", "}"));
+        assert_eq!(open.start, text.find('{').expect("body open"));
+    }
+
+    #[test]
+    fn bracket_pair_ignores_braces_inside_strings_and_comments() {
+        let text = "fn main() {\n    let s = \"a } b\";\n    // ) not a paren\n}\n";
+        let document = document(text, Vec::new());
+
+        // Sitting on the brace inside the string literal: it is a byte of the
+        // string node, not a delimiter, so only the enclosing body matches.
+        let in_string = text.find("} b").expect("brace in string");
+        let (open, _) = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(in_string)
+            .expect("the function body still encloses the string");
+        assert_eq!(open.start, text.find('{').expect("body open"));
+
+        let in_comment = text.find(") not").expect("paren in comment");
+        let (open, _) = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(in_comment)
+            .expect("the function body still encloses the comment");
+        assert_eq!(open.start, text.find('{').expect("body open"));
+    }
+
+    #[test]
+    fn bracket_pair_distinguishes_sibling_pairs_of_the_same_kind() {
+        let text = "fn main() {\n    f((1), (2));\n}\n";
+        let document = document(text, Vec::new());
+
+        let first_open = text.find("(1").expect("first inner");
+        let first = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(first_open)
+            .expect("first inner pair");
+        let second_open = text.find("(2").expect("second inner");
+        let second = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(second_open)
+            .expect("second inner pair");
+
+        assert_eq!(first.0.start, first_open);
+        assert_eq!(second.0.start, second_open);
+        assert_ne!(
+            first.1, second.1,
+            "two sibling pairs must not share a closer"
+        );
+    }
+
+    #[test]
+    fn bracket_pair_is_correct_after_an_incremental_edit() {
+        // The case the feature exists for: typing into the middle of the file
+        // must not leave the pair pointing at pre-edit offsets.
+        let before = "fn main() {\n    let value = 1;\n}\n";
+        let mut document = document(before, Vec::new());
+
+        let insert_at = before.find("let").expect("statement");
+        let inserted = "if x { }\n    ";
+        let after = format!(
+            "{}{}{}",
+            &before[..insert_at],
+            inserted,
+            &before[insert_at..]
+        );
+        let outcome = document.sync(
+            Rope::from_str(&after),
+            Arc::default(),
+            Some((insert_at..insert_at, insert_at..insert_at + inserted.len())),
+            None,
+        );
+        assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
+
+        let new_block_open = after.find("{ }").expect("new block");
+        let (open, close) = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(new_block_open)
+            .expect("the freshly typed block must pair");
+        assert_eq!(open.start, new_block_open);
+        assert_eq!(&after[close.clone()], "}");
+
+        // And the statement that moved down still resolves to the outer body.
+        let moved_statement = after.rfind("let").expect("moved statement");
+        let (open, _) = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .bracket_pair_at(moved_statement)
+            .expect("the body still encloses the moved statement");
+        assert_eq!(open.start, after.find('{').expect("body open"));
+    }
+
+    #[test]
+    fn bracket_pair_is_none_outside_any_pair() {
+        let text = "fn main() {\n    let value = 1;\n}\n";
+        let document = document(text, Vec::new());
+        assert_eq!(
+            document
+                .snapshot(AppTheme::gitcomet_dark())
+                .bracket_pair_at(0),
+            None,
+            "the caret before `fn` is inside nothing"
         );
     }
 }

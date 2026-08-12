@@ -2384,6 +2384,184 @@ fn open_file_content_sets_diff_target_and_content_preview() {
     );
     assert!(repo_state.diff_state.content_preview);
     assert!(repo_state.diff_state.diff_preview_text_file.is_loading());
+    // Opening a file for reading never turns editing on.
+    assert!(!repo_state.diff_state.edit_mode);
+}
+
+#[test]
+fn open_file_editor_targets_the_working_tree_from_any_source() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let path = PathBuf::from("src/main.rs");
+
+    // Start on a commit's copy of the file...
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: FileSource::Commit(CommitId("deadbeef".into())),
+            path: path.clone(),
+        },
+    );
+
+    // ...and editing still opens the file on disk, not the historical blob.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: path.clone(),
+        },
+    );
+
+    let repo_state = state.repos.first().expect("repo state to exist");
+    assert_eq!(
+        repo_state.diff_state.diff_target,
+        Some(DiffTarget::WorkingTree {
+            path: path.clone(),
+            area: DiffArea::Unstaged,
+        })
+    );
+    assert!(repo_state.diff_state.content_preview);
+    assert!(repo_state.diff_state.edit_mode);
+    assert!(effects.iter().any(|e| matches!(
+        e,
+        Effect::LoadSelectedDiff {
+            repo_id: RepoId(1),
+            ..
+        }
+    )));
+}
+
+#[test]
+fn selecting_another_view_leaves_edit_mode() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let path = PathBuf::from("src/main.rs");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: path.clone(),
+        },
+    );
+    assert!(state.repos[0].diff_state.edit_mode);
+
+    // A plain diff selection is not an editing view.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: DiffTarget::WorkingTree {
+                path: PathBuf::from("other.rs"),
+                area: DiffArea::Unstaged,
+            },
+        },
+    );
+    assert!(!state.repos[0].diff_state.edit_mode);
+    assert!(!state.repos[0].diff_state.content_preview);
+
+    // Neither is a read-only content view.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: path.clone(),
+        },
+    );
+    assert!(state.repos[0].diff_state.edit_mode);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            path,
+        },
+    );
+    assert!(!state.repos[0].diff_state.edit_mode);
+    assert!(state.repos[0].diff_state.content_preview);
+}
+
+#[test]
+fn exiting_edit_mode_keeps_the_file_on_screen() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let path = PathBuf::from("src/main.rs");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: path.clone(),
+        },
+    );
+    assert!(state.repos[0].diff_state.edit_mode);
+    let rev_before = state.repos[0].diff_state.diff_state_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExitDiffEditMode { repo_id },
+    );
+    assert!(!state.repos[0].diff_state.edit_mode);
+    assert!(
+        state.repos[0].diff_state.content_preview,
+        "leaving the editor lands on the read-only view of the same file"
+    );
+    assert_ne!(state.repos[0].diff_state.diff_state_rev, rev_before);
+
+    // Idempotent: nothing to leave, nothing to repaint.
+    let rev = state.repos[0].diff_state.diff_state_rev;
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExitDiffEditMode { repo_id },
+    );
+    assert_eq!(state.repos[0].diff_state.diff_state_rev, rev);
 }
 
 #[test]
@@ -2509,6 +2687,7 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
             commit_id: commit_y.clone(),
             path,
         }),
+        edit_mode: false,
         content_preview: false,
         selected_commit: Some(commit_y.clone()),
         range_selection: None,
@@ -2584,6 +2763,7 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
         .record(crate::model::MainViewSnapshot {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             selected_commit: None,
             range_selection: None,
         });
@@ -2592,6 +2772,7 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
         .record(crate::model::MainViewSnapshot {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             selected_commit: None,
             range_selection: Some(range.clone()),
         });
@@ -2848,4 +3029,100 @@ fn diff_file_image_loaded_drops_old_side_when_content_preview() {
         assert!(image.old.is_none());
         assert!(image.new.is_some());
     }
+}
+
+#[test]
+fn global_nav_steps_into_and_out_of_edit_mode() {
+    // Opening the editor on the file already on screen changes nothing the
+    // snapshot used to record, so it deduped away and back/forward could not
+    // cross the boundary in either direction.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let path = PathBuf::from("src/lib.rs");
+
+    // Read-only content view, then the editor on the same file, then back out.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: gitcomet_core::domain::FileSource::WorkingDirectory,
+            path: path.clone(),
+        },
+    );
+    assert!(state.repos[0].diff_state.content_preview);
+    assert!(!state.repos[0].diff_state.edit_mode);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: path.clone(),
+        },
+    );
+    assert!(
+        state.repos[0].diff_state.edit_mode,
+        "the editor is open on the file"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExitDiffEditMode { repo_id },
+    );
+    assert!(!state.repos[0].diff_state.edit_mode);
+
+    // Back returns to the editor rather than skipping over it.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id },
+    );
+    assert!(
+        state.repos[0].diff_state.edit_mode,
+        "Back from the read-only view must land in the editor it was left from"
+    );
+
+    // Back again leaves the editor for the read-only view it was entered from.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id },
+    );
+    assert!(
+        !state.repos[0].diff_state.edit_mode,
+        "Back out of the editor must return to the read-only content view"
+    );
+    assert!(
+        state.repos[0].diff_state.content_preview,
+        "and that view is the file's content, not a diff"
+    );
+
+    // Forward walks the same boundary in the other direction.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavForward { repo_id },
+    );
+    assert!(
+        state.repos[0].diff_state.edit_mode,
+        "Forward must step back into the editor"
+    );
 }
