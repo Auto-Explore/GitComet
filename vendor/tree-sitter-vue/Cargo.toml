@@ -1,0 +1,50 @@
+# Vendored from https://github.com/tree-sitter-grammars/tree-sitter-vue
+# at rev ce8011a414fdf8091f4e4071752efc376f4afb08 (MIT, see LICENSE).
+#
+# Compatibility with the workspace tree-sitter (see `tree-sitter` in the root
+# Cargo.toml) is a hard requirement, and is enforced by
+# `vendored_vue_grammar_is_abi_compatible_with_workspace_tree_sitter` and
+# `vendored_vue_grammar_parses_with_workspace_tree_sitter` in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax.rs. Depending on
+# `tree-sitter-language` rather than `tree-sitter` is what keeps that true: the
+# grammar exposes a bare `LanguageFn` and is bound to whichever tree-sitter
+# version the workspace resolves, so upgrading tree-sitter needs no change here
+# as long as those tests still pass.
+#
+# `src/` and `bindings/rust/lib.rs` are upstream verbatim. `bindings/rust/build.rs`
+# differs by rustfmt line-wrapping -- `cargo fmt --all` reaches path dependencies
+# even though this crate is excluded from the workspace -- and by a block that
+# silences the C warnings the generated scanner emits; see the comment there.
+#
+# `queries/` is deliberately not vendored. GitComet keeps its own Vue queries in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/, and leaving the
+# directory absent keeps build.rs's `with_*_query` cfgs off so the optional
+# query consts in lib.rs compile out.
+[package]
+name = "tree-sitter-vue"
+description = "vue grammar for the tree-sitter parsing library"
+version = "0.1.0"
+repository = "https://github.com/tree-sitter-grammars/tree-sitter-vue"
+authors = ["Amaan Qureshi <amaanq12@gmail.com>"]
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+cc = "1"
+
+# Upstream's dev-dependency, kept so `bindings/rust/lib.rs`'s own test module and
+# doc example still build. This crate is workspace-`exclude`d, so those only run
+# under `cargo test --manifest-path vendor/tree-sitter-vue/Cargo.toml` — which is
+# exactly the check whoever regenerates the grammar wants to be able to run. The
+# version tracks `tree-sitter` in the root Cargo.toml.
+[dev-dependencies]
+tree-sitter = "0.26.12"
