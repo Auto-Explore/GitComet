@@ -87,15 +87,65 @@ fn specialized_conflict_strategies_require_full_side_payloads() {
 }
 
 #[test]
-fn ordinary_git_markers_do_not_protect_output_when_they_reconstruct_the_stages() {
+fn ordinary_git_markers_do_not_protect_output_when_every_line_comes_from_a_stage() {
     let current = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\nafter\n";
     let projection = "before\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nafter\n";
 
     assert!(!worktree_output_requires_protection(
         Some(current),
         Some(projection),
+        None,
         Some("before\nours\nafter\n"),
         Some("before\ntheirs\nafter\n"),
+    ));
+}
+
+/// Two correct three-way merges can put their conflict boundaries in different
+/// places. Here git conflicts over `B`, while our plan anchors on `mid` and
+/// leaves `B` as one-sided context — so the documents interleave the same lines
+/// in different orders and neither reconstructs to the other's sides. Requiring
+/// such an equality is what protected every real merge and left the resolver
+/// inert.
+#[test]
+fn a_merge_whose_boundaries_disagree_with_ours_stays_interactive() {
+    let base = "head\nB\nmid\nD\n";
+    let ours = "head\nB1\nmid\nD\n";
+    let theirs = "head\nB2\nmid2\nD2\n";
+    let current = "head\n<<<<<<< HEAD\nB1\nmid\n=======\nB2\nmid2\n>>>>>>> topic\nD2\n";
+    let projection =
+        "head\n<<<<<<< ours\nB1\n||||||| base\nB\n=======\nB2\n>>>>>>> theirs\nmid2\nD2\n";
+
+    assert!(!worktree_output_requires_protection(
+        Some(current),
+        Some(projection),
+        Some(base),
+        Some(ours),
+        Some(theirs),
+    ));
+
+    // A line that belongs to no stage is a hand resolution, wherever the
+    // boundaries fall, and still holds the worktree bytes.
+    let hand_edited = "head\n<<<<<<< HEAD\nB1\nmid\n=======\nB2\nmid2\n>>>>>>> topic\nD2 edited\n";
+    assert!(worktree_output_requires_protection(
+        Some(hand_edited),
+        Some(projection),
+        Some(base),
+        Some(ours),
+        Some(theirs),
+    ));
+}
+
+/// Marker *labels* are git's, not ours, and must never count as content.
+#[test]
+fn marker_label_lines_are_not_weighed_against_the_stages() {
+    let current = "<<<<<<< HEAD\nours\n||||||| 1a2b3c4:path/to/file.rs\nbase\n=======\ntheirs\n>>>>>>> a-branch-name\n";
+
+    assert!(!worktree_output_requires_protection(
+        Some(current),
+        Some("<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n"),
+        Some("base\n"),
+        Some("ours\n"),
+        Some("theirs\n"),
     ));
 }
 
@@ -124,12 +174,14 @@ fn manually_edited_worktree_output_is_protected_from_stage_projection() {
     assert!(worktree_output_requires_protection(
         Some(partially_resolved),
         Some(projection),
+        None,
         Some("before\nours one\nours two\nafter\n"),
         Some("before\ntheirs one\ntheirs two\nafter\n"),
     ));
     assert!(worktree_output_requires_protection(
         Some("before\nmanually merged\nafter\n"),
         Some(projection),
+        None,
         Some("before\nours one\nours two\nafter\n"),
         Some("before\ntheirs one\ntheirs two\nafter\n"),
     ));
@@ -145,6 +197,7 @@ fn mixed_line_ending_worktree_output_is_protected_from_stage_projection() {
     assert!(worktree_output_requires_protection(
         Some(current),
         Some(projection),
+        None,
         Some("a\r\nx\n"),
         Some("a\r\ny\n"),
     ));
@@ -158,6 +211,7 @@ fn uniform_crlf_worktree_output_stays_interactive() {
     assert!(!worktree_output_requires_protection(
         Some(current),
         Some(projection),
+        None,
         Some("a\r\nx\r\n"),
         Some("a\r\ny\r\n"),
     ));
@@ -170,6 +224,7 @@ fn identical_current_and_projection_remain_interactive_without_stage_payloads() 
     assert!(!worktree_output_requires_protection(
         Some(markers),
         Some(markers),
+        None,
         None,
         None,
     ));

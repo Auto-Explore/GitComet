@@ -598,6 +598,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             join_next_region,
             alignment_marked_columns,
             has_manual_alignments,
+            output_is_protected,
         } => {
             59u8.hash(hasher);
             conflict_ix.hash(hasher);
@@ -610,6 +611,7 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             join_next_region.hash(hasher);
             alignment_marked_columns.hash(hasher);
             has_manual_alignments.hash(hasher);
+            output_is_protected.hash(hasher);
         }
         PopoverKind::ConflictResolverOutputMenu {
             cursor_line,

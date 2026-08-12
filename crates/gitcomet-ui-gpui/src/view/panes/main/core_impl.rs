@@ -4609,6 +4609,7 @@ impl MainPaneView {
                 join_next_region,
                 alignment_marked_columns: self.conflict_resolver_alignment_marked_columns(),
                 has_manual_alignments: self.conflict_resolver_has_manual_alignments(),
+                output_is_protected: self.conflict_resolver.output_is_protected,
             },
             anchor,
             window,

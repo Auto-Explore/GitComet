@@ -387,6 +387,50 @@ pub(in crate::view) fn next_conflict_nav_target_index(
         .map(|(index, _)| index)
 }
 
+/// The anchored target itself, when it is the only one the filter matches.
+///
+/// With one conflict left to decide — the anchored one — nothing lies strictly
+/// past it in either direction, so both `next` and `previous` went dead and both
+/// toolbar arrows greyed out while that conflict could be far off screen. Naming
+/// it as the target is what lets the keys and the buttons bring it back.
+///
+/// Deliberately narrower than wrapping: with several matches, standing on the
+/// last one still reports "nothing further this way", which is what tells the
+/// user they have reached the end.
+fn sole_matching_anchor_index(
+    targets: &[ConflictNavTarget],
+    anchor: ConflictNavAnchor,
+    filter: ConflictNavTargetFilter,
+) -> Option<usize> {
+    let index = targets.iter().position(|target| target.id == anchor.id)?;
+    let mut matches = targets
+        .iter()
+        .enumerate()
+        .filter(|(_, target)| filter.matches(target));
+    (matches.next().map(|(index, _)| index) == Some(index) && matches.next().is_none())
+        .then_some(index)
+}
+
+pub(in crate::view) fn previous_conflict_nav_target_index_or_sole_anchor(
+    targets: &[ConflictNavTarget],
+    anchor: Option<ConflictNavAnchor>,
+    filter: ConflictNavTargetFilter,
+) -> Option<usize> {
+    let anchor = anchor?;
+    previous_conflict_nav_target_index(targets, Some(anchor), filter)
+        .or_else(|| sole_matching_anchor_index(targets, anchor, filter))
+}
+
+pub(in crate::view) fn next_conflict_nav_target_index_or_sole_anchor(
+    targets: &[ConflictNavTarget],
+    anchor: Option<ConflictNavAnchor>,
+    filter: ConflictNavTargetFilter,
+) -> Option<usize> {
+    let anchor = anchor?;
+    next_conflict_nav_target_index(targets, Some(anchor), filter)
+        .or_else(|| sole_matching_anchor_index(targets, anchor, filter))
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum ConflictTextStorage {
     Owned(String),

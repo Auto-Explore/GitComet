@@ -326,16 +326,30 @@ pub(super) fn resolved_output_snapshot_is_modified(
 /// Whether the worktree payload must be kept as opaque user output instead of
 /// replacing it with the stage-derived marker projection.
 ///
-/// Git's ordinary marker document often differs byte-for-byte from our
-/// projection (labels and marker style are common examples). It is still safe
-/// to use the projection when reconstructing its two sides exactly reproduces
-/// the immutable stage payloads and the projection can render the document's
-/// line endings. Any other difference may contain a partial or complete manual
-/// resolution, or terminators the projection would normalize, and must be
-/// preserved until the user explicitly resets it.
+/// The question this answers is "would projecting throw away work someone did by
+/// hand?", and the only usable evidence is the document's own content: every
+/// line of an untouched conflict document comes from one of the three stages,
+/// because git assembled it out of them. A hand resolution types something new,
+/// and that line belongs to no stage.
+///
+/// The comparison is deliberately *not* against the projection or the stage
+/// blobs. Two correct three-way merges of the same stages may place their
+/// conflict boundaries in entirely different places — ours anchors differently
+/// than git's `xdiff` does, and the contributor-alignment pass moves boundaries
+/// again — so the two documents interleave the same lines in different orders
+/// and neither reconstructs to the other's sides nor to a whole stage blob.
+/// Demanding either equality protected essentially every real merge, which left
+/// the resolver inert: no marker geometry, every pick a silent no-op, and no way
+/// out but *Reset conflict markers*.
+///
+/// The cost of the weaker test is that a hand resolution built purely by
+/// *deleting* lines — picking a side in an editor, markers and all — reads as
+/// untouched. Nothing is lost on disk either way: the resolver only rewrites its
+/// own buffer, and the worktree file stands until an explicit Save.
 pub(super) fn worktree_output_requires_protection(
     current: Option<&str>,
     marker_projection: Option<&str>,
+    base: Option<&str>,
     ours: Option<&str>,
     theirs: Option<&str>,
 ) -> bool {
@@ -346,16 +360,13 @@ pub(super) fn worktree_output_requires_protection(
         return false;
     }
     // The projection renders every line with one detected ending, so a document
-    // that mixes CRLF and LF cannot be reproduced from it even when its two
-    // reconstructed sides match the stages exactly. Keep the worktree bytes
-    // rather than rewriting terminators the user never touched.
+    // that mixes CRLF and LF cannot be reproduced from it even when every line
+    // of it comes from a stage. Keep the worktree bytes rather than rewriting
+    // terminators the user never touched.
     if gitcomet_core::text_utils::text_has_mixed_line_endings(current) {
         return true;
     }
 
-    let (Some(ours), Some(theirs)) = (ours, theirs) else {
-        return true;
-    };
     let marker_ranges = gitcomet_core::conflict_session::parse_conflict_marker_ranges(current);
     if !marker_ranges.iter().any(|segment| {
         matches!(
@@ -366,9 +377,39 @@ pub(super) fn worktree_output_requires_protection(
         return true;
     }
 
-    let (current_ours, current_theirs) =
-        gitcomet_core::conflict_session::reconstruct_conflict_marker_sides(current);
-    current_ours != ours || current_theirs != theirs
+    let (Some(ours), Some(theirs)) = (ours, theirs) else {
+        return true;
+    };
+    let stage_lines: std::collections::HashSet<&str> = base
+        .into_iter()
+        .chain([ours, theirs])
+        .flat_map(str::lines)
+        .collect();
+    !conflict_document_content_lines(current, &marker_ranges).all(|line| stage_lines.contains(line))
+}
+
+/// The document's lines with the four marker lines left out, so a comparison
+/// against stage content is not defeated by the labels git wrote.
+fn conflict_document_content_lines<'a>(
+    current: &'a str,
+    marker_ranges: &'a [gitcomet_core::conflict_session::ParsedConflictSegmentRanges],
+) -> impl Iterator<Item = &'a str> {
+    use gitcomet_core::conflict_session::ParsedConflictSegmentRanges as Segment;
+
+    marker_ranges
+        .iter()
+        .flat_map(move |segment| {
+            let ranges = match segment {
+                Segment::Text(range) => vec![range.clone()],
+                Segment::Conflict(block) => [Some(block.ours.clone()), block.base.clone()]
+                    .into_iter()
+                    .flatten()
+                    .chain([block.theirs.clone()])
+                    .collect(),
+            };
+            ranges.into_iter()
+        })
+        .flat_map(move |range| current.get(range).unwrap_or_default().lines())
 }
 
 #[derive(Clone, Debug)]

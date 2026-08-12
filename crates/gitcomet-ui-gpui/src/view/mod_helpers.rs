@@ -1481,6 +1481,16 @@ pub(super) struct ConflictResolverUiState {
     /// The editable output contains preserved worktree text whose conflict
     /// spans could not be mapped safely onto the stage projection.
     pub(super) output_is_protected: bool,
+    /// The user asked for the stage projection anyway, via *Reset conflict
+    /// markers*, so protection stays off for this conflict however the
+    /// worktree payload reads.
+    ///
+    /// Without this the reset lasts until the next store round-trip: the resync
+    /// recomputes protection from the same unchanged worktree payload and turns
+    /// it straight back on, which is what made the button look like it did
+    /// nothing. A re-bootstrap drops the waiver, so it lasts exactly as long as
+    /// the conflict and the file content it was granted for.
+    pub(super) output_protection_waived: bool,
     /// Marker-backed geometry used for reset and source-region rendering.
     pub(super) current: Option<std::sync::Arc<str>>,
     pub(super) marker_segments: Vec<conflict_resolver::ConflictSegment>,
@@ -1618,6 +1628,7 @@ impl Default for ConflictResolverUiState {
             conflict_syntax_language: None,
             source_hash: None,
             output_is_protected: false,
+            output_protection_waived: false,
             current: None,
             marker_segments: Vec::new(),
             conflict_region_indices: Vec::new(),
@@ -4245,6 +4256,7 @@ pub(super) struct TerminalMenuContext {
 pub(super) enum BranchPickerPurpose {
     Checkout,
     Delete,
+    RebaseOnto,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -4446,6 +4458,11 @@ pub(super) enum PopoverKind {
         alignment_marked_columns: usize,
         /// Whether this file already has pinned alignments to clear.
         has_manual_alignments: bool,
+        /// Whether the merged output is the untouched worktree payload rather
+        /// than our projection. Every resolution action refuses to run in that
+        /// state, so the entries grey out instead of silently doing nothing —
+        /// the toolbar already gates the same picks this way.
+        output_is_protected: bool,
     },
     ConflictResolverOutputMenu {
         cursor_line: usize,

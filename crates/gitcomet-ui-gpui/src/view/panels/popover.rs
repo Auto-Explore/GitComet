@@ -42,8 +42,8 @@ mod submodule_remove_confirm;
 mod submodule_remove_picker;
 mod submodule_trust_confirm;
 mod terminal_shutdown_confirm;
-mod worktree_add_prompt;
 mod workspace_picker;
+mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
 mod worktree_remove_picker;
@@ -704,7 +704,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
     match kind {
         PopoverKind::RepoPicker
         | PopoverKind::BranchPicker {
-            purpose: BranchPickerPurpose::Delete,
+            purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
         } => Some(PICKER_WIDTH),
         PopoverKind::BranchPicker {
             purpose: BranchPickerPurpose::Checkout,
@@ -2291,6 +2291,18 @@ impl PopoverHost {
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
                 self.close_popover(cx);
             }
+            Some(PopoverKind::BranchPicker {
+                purpose: BranchPickerPurpose::RebaseOnto,
+            }) => {
+                self.open_popover_centered(
+                    PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name,
+                    },
+                    window,
+                    cx,
+                );
+            }
             _ => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
                 self.close_popover(cx);
@@ -3662,9 +3674,7 @@ impl PopoverHost {
                     WorktreePopoverKind::RemovePicker => {
                         worktree_remove_picker::panel(self, repo_id, cx)
                     }
-                    WorktreePopoverKind::BadgePicker => {
-                        workspace_picker::panel(self, repo_id, cx)
-                    }
+                    WorktreePopoverKind::BadgePicker => workspace_picker::panel(self, repo_id, cx),
                     WorktreePopoverKind::RemoveConfirm { path, branch } => {
                         worktree_remove_confirm::panel(self, repo_id, path, branch, cx)
                     }
@@ -3845,6 +3855,7 @@ impl PopoverHost {
                 join_next_region,
                 alignment_marked_columns,
                 has_manual_alignments,
+                output_is_protected,
             } => self.context_menu_view(
                 PopoverKind::ConflictResolverChunkMenu {
                     conflict_ix,
@@ -3857,6 +3868,7 @@ impl PopoverHost {
                     join_next_region,
                     alignment_marked_columns,
                     has_manual_alignments,
+                    output_is_protected,
                 },
                 cx,
             ),
