@@ -3124,6 +3124,69 @@ pub(crate) struct MainPaneView {
         HashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
 
+    /// The editable working-tree buffer. See `super::file_editor`.
+    pub(in crate::view) file_editor_input: Entity<components::TextInput>,
+    pub(super) _file_editor_input_subscription: gpui::Subscription,
+    /// Which repo/path the input currently holds, so a target change is one
+    /// comparison rather than a reload every frame.
+    pub(in crate::view) file_editor_key: Option<(RepoId, std::path::PathBuf)>,
+    pub(in crate::view) file_editor_language: Option<rows::DiffSyntaxLanguage>,
+    pub(in crate::view) file_editor_loading: bool,
+    /// Repo status revision the buffer was last read at. A clean buffer re-reads
+    /// when this moves, so an external write to the open file is picked up
+    /// rather than silently overwritten by the next save.
+    pub(in crate::view) file_editor_loaded_status_rev: u64,
+    pub(in crate::view) file_editor_error: Option<SharedString>,
+    pub(in crate::view) file_editor_dirty: bool,
+    /// The topmost 0-based line an unsaved edit has touched, or `None` while the
+    /// buffer matches disk.
+    ///
+    /// Blame is indexed by committed line number, so an insertion or deletion
+    /// shifts the attribution of everything under it — but only under it. This
+    /// watermark is what lets the gutter keep showing blame for the untouched
+    /// head of the file instead of blanking the whole column on the first
+    /// keystroke. Deliberately pessimistic: an edit that changed no line count
+    /// still moves it, because tracking that precisely costs more than the
+    /// attribution below it is worth.
+    pub(in crate::view) file_editor_first_dirty_line: Option<u32>,
+    /// Fingerprint of the text last known to be on disk. `None` before the
+    /// first read lands, which reads as "everything is unsaved".
+    pub(in crate::view) file_editor_saved_fingerprint: Option<u64>,
+    /// Unsaved buffers the user navigated away from, keyed by path. This is what
+    /// makes leaving a file and coming back non-destructive with auto-save off.
+    /// Keyed by repo *and* path: two repo tabs can hold the same relative path,
+    /// and one must not restore over the other's buffer.
+    pub(in crate::view) file_editor_stash:
+        HashMap<(RepoId, std::path::PathBuf), super::file_editor::StashedFileEdit>,
+    /// Bumped whenever the set of files with unsaved edits changes.
+    ///
+    /// That set lives here rather than in the store, so nothing outside this
+    /// pane can notice it moving on its own — the sidebar keys its file-row
+    /// cache off this counter and repaints on the notify that bumps it.
+    pub(in crate::view) unsaved_file_edits_rev: u64,
+    /// The pending quiet-period timer for auto-save. Dropping it cancels it, so
+    /// every keystroke simply replaces it.
+    pub(in crate::view) file_editor_autosave: Option<gpui::Task<()>>,
+    /// The editor's tree-sitter document. Owned here for the same reason the
+    /// resolved output's is: it must survive every keystroke, which is exactly
+    /// what a content-hash-keyed cache cannot do.
+    pub(in crate::view) file_editor_live_syntax: Option<rows::LiveSyntaxDocument>,
+    /// `(model_id, revision)` the live tree was last built or synced for.
+    pub(in crate::view) file_editor_live_syntax_source: Option<(u64, u64)>,
+    pub(in crate::view) file_editor_live_syntax_building: Option<(u64, u64)>,
+    /// In-flight *first* parse. Kept apart from the reparse slot, which is
+    /// cleared whenever there is no document to reparse — the state a first
+    /// parse runs in.
+    pub(in crate::view) file_editor_live_syntax_build: Option<gpui::Task<()>>,
+    pub(in crate::view) file_editor_live_syntax_reparse: Option<gpui::Task<()>>,
+    /// The delimiters currently washed as the caret's bracket pair.
+    pub(in crate::view) file_editor_bracket_match: Option<(Range<usize>, Range<usize>)>,
+    /// Bumped on every theme change: the syntax palette is baked into the
+    /// snapshot the provider closes over, so a new theme needs a new binding key.
+    pub(in crate::view) file_editor_provider_theme_epoch: u64,
+    /// Mirrors the settings window's toggle; the pane never writes it back.
+    pub(in crate::view) auto_save_file_edits: bool,
+
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,
     pub(super) _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in crate::view) conflict_resolver: ConflictResolverUiState,
@@ -3251,6 +3314,23 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolved_preview_gutter_scroll: UniformListScrollHandle,
     pub(in crate::view) conflict_resolved_preview_gutter_last_synced_y: [Pixels; 2],
     pub(in crate::view) worktree_preview_scroll: UniformListScrollHandle,
+    /// Scroll handle for the editor's `TextInput`: the input lays out at full
+    /// content size inside an `overflow_scroll` container tracking this handle,
+    /// and reads the same handle to window its line shaping.
+    pub(in crate::view) file_editor_scroll: ScrollHandle,
+    /// Gutter list, mirrored to `file_editor_scroll`'s vertical offset.
+    pub(in crate::view) file_editor_gutter_scroll: UniformListScrollHandle,
+    /// UI-scaled row height the gutter list paints at, computed by the render
+    /// pass so the virtualized row processor can read it without a scale lookup.
+    pub(in crate::view) file_editor_gutter_row_height: Pixels,
+    /// Blame for the edited file, resolved by the render pass so the virtualized
+    /// gutter rows can read it without rebuilding the context per row.
+    pub(in crate::view) file_editor_blame: Option<rows::BlameRenderCtx>,
+    pub(in crate::view) file_editor_blame_width: Pixels,
+    /// First gutter row owned by each logical line, so a wrapped line's number
+    /// sits on the first of the rows it spans. Empty when the buffer is not
+    /// wrapping. Retained to keep its allocation across frames.
+    pub(in crate::view) file_editor_wrap_row_starts: Vec<usize>,
 
     pub(super) path_display_cache: std::cell::RefCell<path_display::PathDisplayCache>,
 

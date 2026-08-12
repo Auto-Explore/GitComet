@@ -10,6 +10,7 @@ pub(in crate::view) mod diff_cache;
 pub(in crate::view) mod diff_search;
 mod diff_stage;
 mod diff_text;
+mod file_editor;
 mod helpers;
 mod interactive_rebase;
 mod preview;
@@ -19,6 +20,10 @@ mod preview;
 pub(in crate::view) use diff_search::{
     AsciiCaseInsensitiveNeedle, DiffSearchQueryReuse, diff_search_query_reuse,
 };
+// The editor's free functions are exercised directly by the panel tests; the
+// pane itself reaches them through `impl MainPaneView`.
+#[cfg(test)]
+pub(in crate::view) use file_editor::*;
 pub(crate) use helpers::*;
 
 #[cfg(not(test))]
@@ -67,6 +72,10 @@ impl Render for MainPaneView {
         ));
         self.last_window_size = window.viewport_size();
         self.sync_root_layout_snapshot(cx);
+        // The file explorer marks and pins files with unsaved buffers, and those
+        // buffers live here rather than in the store, so nothing else can notice
+        // them changing.
+        self.sync_unsaved_file_edits_rev(cx);
         let history_content_width = self.main_pane_content_width(cx);
         self.history_view.update(cx, |v, _| {
             v.set_last_window_size(self.last_window_size);

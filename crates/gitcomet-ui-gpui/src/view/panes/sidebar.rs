@@ -22,20 +22,59 @@ use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions
 
 type FileBrowserRowsCache = std::cell::RefCell<
     Option<(
-        (RepoId, u64, DiffSearchOptions),
+        (RepoId, u64, DiffSearchOptions, u64, bool),
         Rc<[FileBrowserVisibleRow]>,
     )>,
 >;
 
+/// One row of the file explorer list.
+///
+/// Most rows are tree entries, but the list is prefixed by a pinned section for
+/// files the editor is holding unsaved buffers for — those files are the ones
+/// the user is in the middle of something with, and hunting for them in a tree
+/// they may have collapsed is the opposite of what that moment needs.
+///
+/// The pinned rows are a *separate* section rather than tree entries hoisted to
+/// the top: a tree row carries a depth and a parent, and a file lifted out of
+/// its folder has neither.
 #[derive(Clone, Debug)]
-struct FileBrowserVisibleRow {
-    entry_index: usize,
-    depth: usize,
-    is_directory: bool,
-    is_expanded: bool,
+enum FileBrowserVisibleRow {
+    /// Header of the unsaved-edits section. Click toggles the section.
+    UnsavedHeader { count: usize },
+    /// A file with an unsaved editor buffer, shown by its full repo-relative
+    /// path since it is out of its folder here.
+    UnsavedFile { path: Arc<PathBuf> },
+    Entry {
+        entry_index: usize,
+        depth: usize,
+        is_directory: bool,
+        is_expanded: bool,
+    },
 }
 
+impl FileBrowserVisibleRow {
+    /// The tree entry this row points at, or `None` for the pinned section.
+    ///
+    /// Every index-space walk over the row list has to go through this: the
+    /// pinned rows share the list with the tree but not its index space, and a
+    /// position computed as if they did lands on the wrong file.
+    fn entry_index(&self) -> Option<usize> {
+        match self {
+            Self::Entry { entry_index, .. } => Some(*entry_index),
+            _ => None,
+        }
+    }
+}
+
+/// Storage key for the unsaved-edits section's collapsed state, in the same map
+/// the branch tree's sections use.
+const FILE_BROWSER_UNSAVED_SECTION_KEY: &str = "file_browser:unsaved_edits";
+
 const FILE_BROWSER_ROW_HEIGHT_PX: f32 = 22.0;
+/// How long a queued reveal may wait for the expanded rows it needs. Generous
+/// enough for the store round trip, short enough that a request the user has
+/// moved on from never fires.
+const FILE_BROWSER_REVEAL_MAX_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// A section of the sidebar that gets its own icon in the collapsed rail and,
 /// when clicked, opens in a floating popover without expanding the sidebar.
@@ -207,6 +246,12 @@ pub(in super::super) struct SidebarPaneView {
     /// section as popover content instead of the full sidebar. The root view
     /// syncs this to its `sidebar_collapsed_popover` before embedding the pane.
     collapsed_popover_section: Option<CollapsedSidebarSection>,
+    /// A file the explorer has been asked to scroll to, held until the store
+    /// snapshot with its folders expanded arrives.
+    pending_file_browser_reveal: Option<std::path::PathBuf>,
+    /// When the request was made. Bounded so an unresolvable reveal expires
+    /// instead of firing at some unrelated later moment.
+    pending_file_browser_reveal_at: Option<std::time::Instant>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -218,6 +263,10 @@ struct SidebarNotifyFingerprint {
     active_workspace_badges_count: usize,
     active_workspace_badges_hash: u64,
     file_browser_rev: u64,
+    /// The file the main pane has open. The tree highlights it, so the sidebar
+    /// has to repaint when it changes — nothing else in this fingerprint moves
+    /// when the user opens a different file.
+    diff_target_rev: u64,
 }
 
 impl SidebarNotifyFingerprint {
@@ -234,6 +283,10 @@ impl SidebarNotifyFingerprint {
             .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
             .map(|r| r.file_browser.file_browser_rev)
             .unwrap_or(0);
+        let diff_target_rev = active_repo_id
+            .and_then(|repo_id| state.repos.iter().find(|r| r.id == repo_id))
+            .map(|r| r.diff_state.diff_target_rev)
+            .unwrap_or(0);
         Self {
             active_repo_id,
             repo_fingerprint,
@@ -242,6 +295,7 @@ impl SidebarNotifyFingerprint {
             active_workspace_badges_count,
             active_workspace_badges_hash,
             file_browser_rev,
+            diff_target_rev,
         }
     }
 }
@@ -391,6 +445,8 @@ impl SidebarPaneView {
             file_browser_rows_cache: std::cell::RefCell::new(None),
             collapsed_popover_presentation: None,
             collapsed_popover_section: None,
+            pending_file_browser_reveal: None,
+            pending_file_browser_reveal_at: None,
         };
         this.dispatch_sidebar_data_request_if_needed(cx);
         // Reflect any already-active repo's stored search query on first mount.
@@ -651,6 +707,7 @@ impl SidebarPaneView {
     pub(in super::super) fn sidebar(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
 
+        self.apply_pending_file_browser_reveal(cx);
         let tab_bar = self.render_tab_bar(theme, cx);
         let mode = self.state.sidebar_mode;
         let content = match mode {
@@ -943,7 +1000,7 @@ impl SidebarPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let search_bar = self.render_file_browser_search_bar(theme, cx);
-        let visible_rows = self.file_browser_visible_rows();
+        let visible_rows = self.file_browser_visible_rows(cx);
         let body: AnyElement = if visible_rows.is_empty() {
             let message = match self.active_repo() {
                 None => "No repository selected.",
@@ -1216,6 +1273,15 @@ impl SidebarPaneView {
                 }),
             );
 
+        // Shown for the whole time the tree it scrolls is on screen — hiding it
+        // when nothing is open made the strip's contents flicker as files were
+        // opened and closed. It greys out instead.
+        let show_locate = mode == SidebarMode::Files;
+        let can_locate = self
+            .active_repo()
+            .and_then(|repo| repo.open_file_path())
+            .is_some();
+
         div()
             .flex()
             .flex_row()
@@ -1227,6 +1293,155 @@ impl SidebarPaneView {
             .bg(bg)
             .child(branches_tab)
             .child(files_tab)
+            .when(show_locate, |strip| {
+                strip.child(
+                    components::Button::new("sidebar_locate_open_file", "")
+                        .borderless()
+                        .style(components::ButtonStyle::Subtle)
+                        .disabled(!can_locate)
+                        .start_slot(crate::view::icons::svg_icon(
+                            "icons/locate.svg",
+                            if can_locate {
+                                theme.colors.text_muted
+                            } else {
+                                with_alpha(theme.colors.text_muted, 0.45)
+                            },
+                            scaled_px(13.0),
+                        ))
+                        .on_click(theme, cx, |this, _e, _window, cx| {
+                            this.locate_open_file(cx);
+                        })
+                        // Pushed to the far edge so it reads as an action on the
+                        // strip rather than a third tab.
+                        .ml_auto()
+                        .w(scaled_px(22.0))
+                        .h(scaled_px(22.0))
+                        .gitcomet_tooltip(
+                            theme,
+                            if can_locate {
+                                format!(
+                                    "Show the open file in the explorer ({})",
+                                    crate::view::shortcut_labels::secondary_shortcut("Shift+L")
+                                )
+                                .into()
+                            } else {
+                                SharedString::from("No file is open")
+                            },
+                        )
+                        .debug_selector(|| "sidebar_locate_open_file".to_string()),
+                )
+            })
+    }
+
+    /// Scroll the file explorer to the file the main pane has open, expanding
+    /// the folders on the way to it.
+    ///
+    /// Switches to the Files tab first when the sidebar is showing Branches —
+    /// the action is reachable from the menu, the palette and a shortcut, where
+    /// the user cannot be assumed to be looking at the tree already.
+    pub(in super::super) fn locate_open_file(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        let Some(path) = self
+            .active_repo()
+            .and_then(|repo| repo.open_file_path())
+            .map(std::path::Path::to_path_buf)
+        else {
+            return;
+        };
+
+        if self.state.sidebar_mode != SidebarMode::Files {
+            self.store.dispatch(Msg::SetSidebarMode {
+                mode: SidebarMode::Files,
+            });
+        }
+        self.store.dispatch(Msg::RevealFileBrowserPath {
+            repo_id,
+            path: path.clone(),
+        });
+        // The reducer clears the stored query, but the filter input keeps its
+        // text — and its `cx.observe` subscription re-dispatches that text on
+        // the next notify (the caret blink is enough), refiltering the tree and
+        // leaving the reveal permanently unresolved. Clear the input too, so the
+        // two agree before that can happen.
+        self.file_browser_search_input
+            .update(cx, |input: &mut TextInput, cx| {
+                if !input.text().is_empty() {
+                    input.set_text("", cx);
+                }
+            });
+        // The reducer runs on the store's worker thread, so the expanded set and
+        // the row list this scroll indexes into only exist a frame later.
+        self.pending_file_browser_reveal = Some(path);
+        self.pending_file_browser_reveal_at = Some(std::time::Instant::now());
+        cx.notify();
+    }
+
+    /// Consume a queued reveal once the store snapshot carrying it has arrived.
+    ///
+    /// Runs from render rather than a timer: the row list is derived from the
+    /// snapshot, so the first frame that can compute the right index is exactly
+    /// the first frame that has it.
+    fn apply_pending_file_browser_reveal(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(path) = self.pending_file_browser_reveal.clone() else {
+            return;
+        };
+        // A reveal is an answer to something the user just did. If it has not
+        // resolved shortly after — they went back to Branches, or typed into the
+        // filter again — it is stale, and firing it later would scroll the tree
+        // out from under them unasked.
+        //
+        // Expired on the clock rather than on a frame count: this runs only from
+        // `sidebar()`, so collapsing the sidebar stops the frames entirely and a
+        // counter would freeze mid-life and fire whenever it was next expanded.
+        if self
+            .pending_file_browser_reveal_at
+            .is_some_and(|at| at.elapsed() > FILE_BROWSER_REVEAL_MAX_WAIT)
+        {
+            self.pending_file_browser_reveal = None;
+            self.pending_file_browser_reveal_at = None;
+            return;
+        }
+        if self.state.sidebar_mode != SidebarMode::Files {
+            return;
+        }
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        // Still filtered, or the entries have not landed: wait for the frame
+        // that has them rather than scrolling to a row that will move.
+        if !repo.file_browser.search_query.is_empty() {
+            return;
+        }
+        let Loadable::Ready(entries) = &repo.file_browser.entries else {
+            return;
+        };
+        let Some(entry_index) = entries
+            .iter()
+            .position(|entry| entry.path.as_path() == path.as_path())
+        else {
+            // The file is not in this tree at all (browsing a commit that never
+            // had it). Drop the request rather than retrying every frame.
+            self.pending_file_browser_reveal = None;
+            self.pending_file_browser_reveal_at = None;
+            return;
+        };
+        let rows = self.file_browser_visible_rows(cx);
+        // Matched on the tree entry, not on any row that mentions the path: the
+        // pinned section can be showing this very file, and scrolling to *that*
+        // row would leave the tree exactly where it was.
+        let Some(row_ix) = rows
+            .iter()
+            .position(|row| row.entry_index() == Some(entry_index))
+        else {
+            return;
+        };
+        self.pending_file_browser_reveal = None;
+        self.pending_file_browser_reveal_at = None;
+        self.file_browser_scroll
+            .scroll_to_item(row_ix, gpui::ScrollStrategy::Center);
+        cx.notify();
     }
 
     /// A slim always-visible filter field pinned above the branch tree. It
@@ -1475,7 +1690,7 @@ impl SidebarPaneView {
     ) -> AnyElement {
         let search_bar = self.render_file_browser_search_bar(theme, cx);
 
-        let visible_rows = self.file_browser_visible_rows();
+        let visible_rows = self.file_browser_visible_rows(cx);
 
         let body: AnyElement = if visible_rows.is_empty() {
             let repo = self.active_repo();
@@ -1549,7 +1764,7 @@ impl SidebarPaneView {
             .into_any()
     }
 
-    fn file_browser_visible_rows(&self) -> Vec<FileBrowserVisibleRow> {
+    fn file_browser_visible_rows(&self, cx: &gpui::App) -> Vec<FileBrowserVisibleRow> {
         let Some(repo) = self.active_repo() else {
             return Vec::new();
         };
@@ -1557,10 +1772,17 @@ impl SidebarPaneView {
         // Key on the repo id too: file_browser_rev is a per-repo counter, so two
         // repos can share a value and collide otherwise (stale rows for the wrong
         // tree after switching repos).
+        //
+        // The unsaved revision has to be in here as well: those buffers live in
+        // the main pane, so nothing the store owns — `file_browser_rev`
+        // included — moves when one goes dirty, and the cache would keep serving
+        // rows without the pinned section.
         let cache_key = (
             repo.id,
             repo.file_browser.file_browser_rev,
             self.file_search_options,
+            self.unsaved_file_edits_rev(cx),
+            self.unsaved_section_is_collapsed(),
         );
         let mut cache = self.file_browser_rows_cache.borrow_mut();
         if let Some((cached_key, cached_rows)) = cache.as_ref()
@@ -1569,21 +1791,64 @@ impl SidebarPaneView {
             return cached_rows.to_vec();
         }
 
-        let rows = self.compute_file_browser_visible_rows(repo);
+        let rows = self.compute_file_browser_visible_rows(repo, self.unsaved_file_edit_paths(cx));
         *cache = Some((cache_key, Rc::from(rows.clone())));
         rows
     }
 
-    fn compute_file_browser_visible_rows(&self, repo: &RepoState) -> Vec<FileBrowserVisibleRow> {
-        let Loadable::Ready(entries) = &repo.file_browser.entries else {
+    /// Paths in the active repo the editor is holding unsaved buffers for.
+    ///
+    /// Read through the root view because the buffers belong to the main pane,
+    /// which is a sibling entity — the same hop the sidebar's click handlers
+    /// already make, done here at render time.
+    fn unsaved_file_edit_paths(&self, cx: &gpui::App) -> Vec<PathBuf> {
+        let Some(repo_id) = self.active_repo_id() else {
             return Vec::new();
+        };
+        let Some(root) = self.root_view.upgrade() else {
+            return Vec::new();
+        };
+        root.read(cx)
+            .main_pane
+            .read(cx)
+            .unsaved_file_edit_paths(repo_id)
+    }
+
+    fn unsaved_file_edits_rev(&self, cx: &gpui::App) -> u64 {
+        self.root_view
+            .upgrade()
+            .map(|root| root.read(cx).main_pane.read(cx).unsaved_file_edits_rev)
+            .unwrap_or(0)
+    }
+
+    /// Collapsed state rides in the same per-repo map the branch tree's sections
+    /// use, so it persists across sessions the way those do.
+    fn unsaved_section_is_collapsed(&self) -> bool {
+        self.active_repo().is_some_and(|repo| {
+            self.sidebar_collapsed_items_by_repo
+                .get(&repo.spec.workdir)
+                .is_some_and(|items| {
+                    branch_sidebar::is_collapsed(items, FILE_BROWSER_UNSAVED_SECTION_KEY)
+                })
+        })
+    }
+
+    fn compute_file_browser_visible_rows(
+        &self,
+        repo: &RepoState,
+        unsaved: Vec<PathBuf>,
+    ) -> Vec<FileBrowserVisibleRow> {
+        let Loadable::Ready(entries) = &repo.file_browser.entries else {
+            // Still worth showing the pinned section: the buffers exist whether
+            // or not the tree behind them has loaded.
+            return self.unsaved_file_edit_rows(unsaved);
         };
 
         let matchers =
             file_search_matchers(&repo.file_browser.search_query, self.file_search_options);
         let has_search = !matchers.is_empty();
 
-        if has_search {
+        let mut tree_rows: Vec<FileBrowserVisibleRow> = if has_search {
             let mut matching_entry_indices: std::collections::HashSet<usize> =
                 std::collections::HashSet::new();
             let mut ancestor_paths: std::collections::HashSet<Arc<PathBuf>> =
@@ -1614,7 +1879,7 @@ impl SidebarPaneView {
                         FileEntryKind::Directory => true,
                         FileEntryKind::File => false,
                     };
-                    FileBrowserVisibleRow {
+                    FileBrowserVisibleRow::Entry {
                         entry_index: i,
                         depth: entry.depth,
                         is_directory: entry.kind == FileEntryKind::Directory,
@@ -1632,7 +1897,7 @@ impl SidebarPaneView {
                 .map(|(i, entry)| {
                     let is_expanded = entry.kind == FileEntryKind::Directory
                         && repo.file_browser.expanded_dirs.contains(&entry.path);
-                    FileBrowserVisibleRow {
+                    FileBrowserVisibleRow::Entry {
                         entry_index: i,
                         depth: entry.depth,
                         is_directory: entry.kind == FileEntryKind::Directory,
@@ -1640,7 +1905,34 @@ impl SidebarPaneView {
                     }
                 })
                 .collect()
+        };
+
+        let mut rows = self.unsaved_file_edit_rows(unsaved);
+        rows.append(&mut tree_rows);
+        rows
+    }
+
+    /// The pinned section's rows: a header, then one row per unsaved file.
+    ///
+    /// Empty when nothing is unsaved, so the section costs no vertical space in
+    /// the common case, and header-only when it is collapsed.
+    fn unsaved_file_edit_rows(&self, unsaved: Vec<PathBuf>) -> Vec<FileBrowserVisibleRow> {
+        if unsaved.is_empty() {
+            return Vec::new();
         }
+        let mut rows = vec![FileBrowserVisibleRow::UnsavedHeader {
+            count: unsaved.len(),
+        }];
+        if !self.unsaved_section_is_collapsed() {
+            rows.extend(
+                unsaved
+                    .into_iter()
+                    .map(|path| FileBrowserVisibleRow::UnsavedFile {
+                        path: Arc::new(path),
+                    }),
+            );
+        }
+        rows
     }
 
     fn file_browser_visible_mask(&self, entries: &[FileEntry]) -> std::collections::HashSet<usize> {
@@ -1718,8 +2010,15 @@ impl SidebarPaneView {
             })
             .unwrap_or_default();
 
-        let visible_rows = this.file_browser_visible_rows();
+        let visible_rows = this.file_browser_visible_rows(cx);
         let repo = this.active_repo();
+        // The file the main pane is showing, so the tree can mark it. Read
+        // whatever the target names — a diff of a file is still "this file is
+        // open", not only the read-only content view.
+        let open_path = repo.and_then(|repo| repo.open_file_path().map(|p| p.to_path_buf()));
+        // The same wash a selected branch row wears, so both trees in the
+        // sidebar mark "this is the one you are looking at" identically.
+        let open_row_bg = selected_branch_row_bg(theme);
         let entries = repo
             .and_then(|r| match &r.file_browser.entries {
                 Loadable::Ready(e) => Some(e.as_slice()),
@@ -1763,104 +2062,216 @@ impl SidebarPaneView {
                 .child(svg_icon(path, tint, 12.0))
         };
 
+        let icon_slot_tinted = |path: &'static str, tint: gpui::Rgba| {
+            div()
+                .w(scaled_px(ICON_SLOT_PX))
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(svg_icon(path, tint, 12.0))
+        };
+
+        // Looked up per row, so a set rather than the ordered vec the pinned
+        // section is built from.
+        let unsaved_paths: std::collections::HashSet<PathBuf> =
+            this.unsaved_file_edit_paths(cx).into_iter().collect();
+
+        let unsaved_collapsed = this.unsaved_section_is_collapsed();
+
         range
             .filter_map(|ix| {
-                visible_rows
-                    .get(ix)
-                    .and_then(|row| entries.get(row.entry_index).map(|e| (ix, row, e)))
-            })
-            .map(|(ix, row, entry)| {
-                let left_pad = scaled_px(6.0 + INDENT_STEP_PX * row.depth as f32);
-                let store = Arc::clone(&store);
-                let menu_invoker = (!row.is_directory)
-                    .then(|| SharedString::from(format!("file_browser_file_{ix}")));
-                let context_menu_active = menu_invoker.as_ref().is_some_and(|invoker| {
-                    this.active_context_menu_invoker.as_ref() == Some(invoker)
-                });
-                let row_state =
-                    components::InteractiveRowState::default().open(context_menu_active);
-
-                let mut row_div = div()
-                    .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
-                    .debug_selector(move || format!("file_browser_row_{ix}"))
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
-                    .w_full()
-                    .pl(left_pad)
-                    .pr_2()
-                    .gap(scaled_px(4.0))
-                    .interactive_row(row_style, row_state);
-
-                if row.is_directory {
-                    let path = (*entry.path).clone();
-                    row_div = row_div.on_click(cx.listener(
-                        move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                            store.dispatch(Msg::ToggleFileBrowserDir {
+                let row = visible_rows.get(ix)?;
+                let (entry_index, depth, is_directory, is_expanded) = match row {
+                    // The pinned section shares the list with the tree but not
+                    // its shape, so both rows are built here and return early.
+                    FileBrowserVisibleRow::UnsavedHeader { count } => {
+                        return Some(
+                            div()
+                                .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
+                                .debug_selector(|| "file_browser_unsaved_header".to_string())
+                                .flex()
+                                .flex_row()
+                                .items_center()
+                                .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
+                                .w_full()
+                                .pl(scaled_px(6.0))
+                                .pr_2()
+                                .gap(scaled_px(4.0))
+                                .interactive_row(
+                                    row_style,
+                                    components::InteractiveRowState::default(),
+                                )
+                                .on_click(cx.listener(
+                                    move |this, _e: &gpui::ClickEvent, _window, cx| {
+                                        this.toggle_active_repo_collapse_key(
+                                            SharedString::from(FILE_BROWSER_UNSAVED_SECTION_KEY),
+                                            cx,
+                                        );
+                                    },
+                                ))
+                                .child(chevron_slot(true, !unsaved_collapsed))
+                                .child(icon_slot_tinted("icons/pencil.svg", theme.colors.warning))
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_w(px(0.0))
+                                        .text_xs()
+                                        .text_color(theme.colors.text_muted)
+                                        .child(format!("Unsaved edits ({count})")),
+                                )
+                                .into_any_element(),
+                        );
+                    }
+                    FileBrowserVisibleRow::UnsavedFile { path } => {
+                        return Some(unsaved_file_row(
+                            UnsavedFileRowCtx {
+                                theme,
+                                row_style,
+                                open_row_bg,
                                 repo_id,
-                                path: path.clone(),
-                            });
-                        },
-                    ));
-                } else {
-                    let path = (*entry.path).clone();
-                    let menu_path = path.clone();
-                    let source = repo
-                        .map(|r| r.file_browser.source.clone())
-                        .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
-                    let menu_invoker = menu_invoker.expect("file rows have a context-menu invoker");
-                    row_div = row_div
-                        .on_click(
-                            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                                store.dispatch(Msg::OpenFileContent {
+                                ix,
+                                is_open: open_path.as_deref() == Some(path.as_path()),
+                            },
+                            Arc::clone(path),
+                            scaled_px(6.0 + INDENT_STEP_PX),
+                            scaled_px(FILE_BROWSER_ROW_HEIGHT_PX),
+                            scaled_px(ICON_SLOT_PX),
+                            Arc::clone(&store),
+                            cx,
+                        ));
+                    }
+                    FileBrowserVisibleRow::Entry {
+                        entry_index,
+                        depth,
+                        is_directory,
+                        is_expanded,
+                    } => (*entry_index, *depth, *is_directory, *is_expanded),
+                };
+                let entry = entries.get(entry_index)?;
+                let element = {
+                    let left_pad = scaled_px(6.0 + INDENT_STEP_PX * depth as f32);
+                    let store = Arc::clone(&store);
+                    let menu_invoker = (!is_directory)
+                        .then(|| SharedString::from(format!("file_browser_file_{ix}")));
+                    let context_menu_active = menu_invoker.as_ref().is_some_and(|invoker| {
+                        this.active_context_menu_invoker.as_ref() == Some(invoker)
+                    });
+                    let is_open_file = !is_directory
+                        && open_path
+                            .as_ref()
+                            .is_some_and(|open| open.as_path() == entry.path.as_path());
+                    // The pen marks the file wherever it sits in the tree, so a user
+                    // who navigated to it rather than to the pinned section still
+                    // sees that it is holding unsaved text.
+                    let has_unsaved_edits =
+                        !is_directory && unsaved_paths.contains(entry.path.as_ref());
+                    let row_state = components::InteractiveRowState::default()
+                        .selected(is_open_file, open_row_bg)
+                        .open(context_menu_active);
+
+                    let mut row_div = div()
+                        .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
+                        .debug_selector(move || format!("file_browser_row_{ix}"))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .h(scaled_px(FILE_BROWSER_ROW_HEIGHT_PX))
+                        .w_full()
+                        .pl(left_pad)
+                        .pr_2()
+                        .gap(scaled_px(4.0))
+                        .interactive_row(row_style, row_state);
+
+                    if is_directory {
+                        let path = (*entry.path).clone();
+                        row_div = row_div.on_click(cx.listener(
+                            move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                store.dispatch(Msg::ToggleFileBrowserDir {
                                     repo_id,
-                                    source: source.clone(),
                                     path: path.clone(),
                                 });
-                            }),
-                        )
-                        .on_mouse_down(
-                            MouseButton::Right,
-                            cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
-                                cx.stop_propagation();
-                                this.activate_context_menu_invoker(menu_invoker.clone(), cx);
-                                this.open_popover_at(
-                                    PopoverKind::FileBrowserFileMenu {
-                                        repo_id,
-                                        path: menu_path.clone(),
-                                    },
-                                    e.position,
-                                    window,
-                                    cx,
-                                );
-                            }),
-                        );
-                }
-
-                row_div
-                    .child(chevron_slot(row.is_directory, row.is_expanded))
-                    .child(icon_slot(file_or_folder_icon_path(entry, row.is_expanded)))
-                    .child({
-                        let highlight_ranges =
-                            file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
-                        let mut label = components::TruncatedText::new(entry.name.to_string())
-                            .profile(components::TextTruncationProfile::End)
-                            .text_color(text_color)
-                            .text_sm();
-                        if !highlight_ranges.is_empty() {
-                            let style = gpui::HighlightStyle {
-                                color: Some(theme.colors.accent.into()),
-                                font_weight: Some(FontWeight::BOLD),
-                                ..gpui::HighlightStyle::default()
-                            };
-                            label = label.highlights(
-                                highlight_ranges.into_iter().map(|range| (range, style)),
+                            },
+                        ));
+                    } else {
+                        let path = (*entry.path).clone();
+                        let menu_path = path.clone();
+                        let source = repo
+                            .map(|r| r.file_browser.source.clone())
+                            .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
+                        let menu_invoker =
+                            menu_invoker.expect("file rows have a context-menu invoker");
+                        row_div = row_div
+                            .on_click(cx.listener(
+                                move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                    // A file the editor is holding unsaved text for
+                                    // opens straight back into the editor. Opening
+                                    // the read-only view would show the text on
+                                    // disk, which is not what the user left here.
+                                    if has_unsaved_edits {
+                                        store.dispatch(Msg::OpenFileEditor {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                    } else {
+                                        store.dispatch(Msg::OpenFileContent {
+                                            repo_id,
+                                            source: source.clone(),
+                                            path: path.clone(),
+                                        });
+                                    }
+                                },
+                            ))
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(menu_invoker.clone(), cx);
+                                    this.open_popover_at(
+                                        PopoverKind::FileBrowserFileMenu {
+                                            repo_id,
+                                            path: menu_path.clone(),
+                                        },
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }),
                             );
-                        }
-                        div().flex_1().min_w(px(0.0)).child(label.render(cx))
-                    })
-                    .into_any_element()
+                    }
+
+                    row_div
+                        .child(chevron_slot(is_directory, is_expanded))
+                        .child(icon_slot(file_or_folder_icon_path(entry, is_expanded)))
+                        .child({
+                            let highlight_ranges =
+                                file_search_highlight_ranges(&search_matchers, entry.name.as_ref());
+                            let mut label = components::TruncatedText::new(entry.name.to_string())
+                                .profile(components::TextTruncationProfile::End)
+                                .text_color(text_color)
+                                .text_sm();
+                            if !highlight_ranges.is_empty() {
+                                let style = gpui::HighlightStyle {
+                                    color: Some(theme.colors.accent.into()),
+                                    font_weight: Some(FontWeight::BOLD),
+                                    ..gpui::HighlightStyle::default()
+                                };
+                                label = label.highlights(
+                                    highlight_ranges.into_iter().map(|range| (range, style)),
+                                );
+                            }
+                            div().flex_1().min_w(px(0.0)).child(label.render(cx))
+                        })
+                        .when(has_unsaved_edits, |row| {
+                            row.child(div().flex_none().flex().items_center().child(svg_icon(
+                                "icons/pencil.svg",
+                                theme.colors.warning,
+                                10.0,
+                            )))
+                        })
+                        .into_any_element()
+                };
+                Some(element)
             })
             .collect()
     }
@@ -2132,6 +2543,131 @@ fn file_search_matches(matchers: &[DiffSearchMatcher], haystack: &str) -> bool {
 
 /// Sorted, de-overlapped match ranges across all query lines, for label
 /// highlighting in the results.
+/// The row-invariant half of an unsaved-edits row, so the builder below stays
+/// under a readable argument count.
+struct UnsavedFileRowCtx {
+    theme: AppTheme,
+    row_style: components::InteractiveRowStyle,
+    open_row_bg: gpui::Rgba,
+    repo_id: RepoId,
+    ix: usize,
+    is_open: bool,
+}
+
+/// One row of the pinned unsaved-edits section: pen, path, discard.
+///
+/// Clicking the row opens the file, the way a tree row does — the section is a
+/// shortcut to those files, not a separate kind of thing. The discard button is
+/// on the row rather than behind a menu because getting rid of a stray buffer is
+/// the whole reason the section is worth looking at, and it takes effect
+/// immediately: it is only ever shown for a file that has something to discard,
+/// and the alternative is one Ctrl+S away.
+#[allow(clippy::too_many_arguments)]
+fn unsaved_file_row(
+    ctx: UnsavedFileRowCtx,
+    path: Arc<PathBuf>,
+    left_pad: Pixels,
+    row_height: Pixels,
+    icon_slot_px: Pixels,
+    store: Arc<AppStore>,
+    cx: &mut gpui::Context<SidebarPaneView>,
+) -> AnyElement {
+    let UnsavedFileRowCtx {
+        theme,
+        row_style,
+        open_row_bg,
+        repo_id,
+        ix,
+        is_open,
+    } = ctx;
+    let icon_px = crate::ui_scale::design_px_from_percent(12.0, 100);
+    // The full repo-relative path, not just the file name: two `mod.rs` under
+    // different folders are indistinguishable here, and this row is the only
+    // place they appear side by side.
+    let label = path.display().to_string();
+    let open_path = (*path).clone();
+
+    div()
+        .id(ElementId::Name(format!("file_browser_row_{ix}").into()))
+        .debug_selector(move || format!("file_browser_unsaved_{ix}"))
+        .flex()
+        .flex_row()
+        .items_center()
+        .h(row_height)
+        .w_full()
+        .pl(left_pad)
+        .pr_2()
+        .gap(px(4.0))
+        .interactive_row(
+            row_style,
+            components::InteractiveRowState::default().selected(is_open, open_row_bg),
+        )
+        // Straight into the editor, not the read-only view: every row in this
+        // section has unsaved text, and the read-only view would show the file
+        // on disk instead of what the user was in the middle of writing.
+        .on_click(
+            cx.listener(move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                store.dispatch(Msg::OpenFileEditor {
+                    repo_id,
+                    path: open_path.clone(),
+                });
+            }),
+        )
+        .child(
+            div()
+                .w(icon_slot_px)
+                .flex_none()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(super::super::icons::svg_icon(
+                    "icons/pencil.svg",
+                    theme.colors.warning,
+                    icon_px,
+                )),
+        )
+        .child(
+            div().flex_1().min_w(px(0.0)).child(
+                components::TruncatedText::new(label)
+                    // Path elision keeps the file name, which is what identifies
+                    // the row, and drops the folders in the middle.
+                    .profile(components::TextTruncationProfile::Path)
+                    .text_color(theme.colors.text)
+                    .text_sm()
+                    .render(cx),
+            ),
+        )
+        .child(
+            components::Button::new(SharedString::from(format!("unsaved_discard_{ix}")), "")
+                .borderless()
+                .style(components::ButtonStyle::Subtle)
+                .start_slot(super::super::icons::svg_icon(
+                    "icons/undo.svg",
+                    theme.colors.text_muted,
+                    icon_px,
+                ))
+                .on_click(theme, cx, {
+                    let path = Arc::clone(&path);
+                    move |this, _e, _window, cx| {
+                        let path = Arc::clone(&path);
+                        let _ = this.root_view.update(cx, move |root, cx| {
+                            root.main_pane.update(cx, |pane, cx| {
+                                pane.discard_file_edits_for(repo_id, path.as_path(), cx);
+                            });
+                        });
+                    }
+                })
+                .w(icon_slot_px)
+                .h(icon_slot_px)
+                .debug_selector(move || format!("file_browser_unsaved_discard_{ix}"))
+                .gitcomet_tooltip(
+                    theme,
+                    "Throw away the unsaved changes and reload this file from disk".into(),
+                ),
+        )
+        .into_any_element()
+}
+
 fn file_search_highlight_ranges(
     matchers: &[DiffSearchMatcher],
     name: &str,

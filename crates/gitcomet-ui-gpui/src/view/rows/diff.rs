@@ -516,7 +516,8 @@ fn file_diff_split_side_line(row: &FileDiffRow, is_left: bool) -> Option<u32> {
 /// Snapshot of blame data needed to render the annotation column for one diff
 /// render pass. Owns its data (an `Arc` clone of the loaded blame plus the
 /// recency range and a single `now` timestamp) so it does not borrow the view.
-pub(super) struct BlameRenderCtx {
+#[derive(Clone)]
+pub(in crate::view) struct BlameRenderCtx {
     lines: std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>,
     range: Option<(i64, i64)>,
     now: std::time::SystemTime,
@@ -528,6 +529,16 @@ pub(super) struct BlameRenderCtx {
     /// used to classify uncommitted lines as staged vs unstaged. `None` when
     /// blaming a committed revision, where that distinction has no meaning.
     area: Option<gitcomet_core::domain::DiffArea>,
+}
+
+impl BlameRenderCtx {
+    /// How many lines the blamed revision has.
+    ///
+    /// The editor compares this against its buffer to work out how far unsaved
+    /// edits have slid the attribution below them.
+    pub(in crate::view) fn line_count(&self) -> usize {
+        self.lines.len()
+    }
 }
 
 /// Staged vs unstaged classification for an uncommitted blame row when blaming a
@@ -605,7 +616,7 @@ fn local_change_label(local: Option<LocalChange>) -> &'static str {
 /// add/modify/removal passes `false`. `old_line` is used only to recognize a pure
 /// removal worth a bar. Full file-content views without diff sidedness pass
 /// `is_context = false`, falling back to the area default.
-pub(super) fn build_row_blame_paint(
+pub(in crate::view) fn build_row_blame_paint(
     ctx: &BlameRenderCtx,
     is_context: bool,
     old_line: Option<u32>,
@@ -795,6 +806,23 @@ fn build_row_blame_paint_tracked(
 }
 
 impl MainPaneView {
+    /// Test-only reader for the blame lines behind that context.
+    ///
+    /// `blame_render_ctx` needs `&mut self` to memoize its time range, which a
+    /// `read`-borrowed pane cannot give it.
+    #[cfg(test)]
+    pub(in crate::view) fn blame_render_ctx_for_test(
+        &self,
+    ) -> Option<&std::sync::Arc<Vec<gitcomet_core::services::BlameLine>>> {
+        if !self.annotation_active() || !self.blame_matches_rendered_target() {
+            return None;
+        }
+        match &self.active_repo()?.history_state.blame {
+            gitcomet_state::model::Loadable::Ready(lines) => Some(lines),
+            _ => None,
+        }
+    }
+
     /// Build a blame render context when annotate is enabled and blame for the
     /// current target is loaded; otherwise `None`.
     ///
@@ -802,7 +830,7 @@ impl MainPaneView {
     /// the store (`retained_blame_while_loading`) so the column keeps its
     /// contents instead of blanking on every refresh. The retained value is
     /// dropped when blame re-targets, so it always describes `blame_path`.
-    pub(super) fn blame_render_ctx(&mut self) -> Option<BlameRenderCtx> {
+    pub(in crate::view) fn blame_render_ctx(&mut self) -> Option<BlameRenderCtx> {
         if !self.annotation_active() || !self.blame_matches_rendered_target() {
             return None;
         }

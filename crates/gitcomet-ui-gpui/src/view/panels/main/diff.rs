@@ -245,6 +245,32 @@ impl MainPaneView {
                                 })
                         };
 
+                        // A content view is one file, not a comparison: opening
+                        // a picture from the explorer shows the picture, with no
+                        // A/B header and no empty "before" half to explain away.
+                        let is_content_view = self
+                            .active_repo()
+                            .is_some_and(|repo| repo.diff_state.content_preview);
+                        if is_content_view {
+                            return div()
+                                .id("diff_image_container")
+                                .debug_selector(|| "diff_image_single".to_string())
+                                .relative()
+                                .h_full()
+                                .min_h(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .bg(theme.colors.window_bg)
+                                .child(
+                                    div()
+                                        .flex_1()
+                                        .min_h(px(0.0))
+                                        .flex()
+                                        .child(cell("diff_image_single_cell", new.or(old))),
+                                )
+                                .into_any_element();
+                        }
+
                         let columns_header = components::split_columns_header(
                             theme,
                             ui_scale_percent,

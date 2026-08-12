@@ -1227,6 +1227,7 @@ fn reload_repo_clears_stale_navigation_history() {
             path: Some(PathBuf::from("src/lib.rs")),
         }),
         content_preview: false,
+        edit_mode: false,
         selected_commit: Some(c.clone()),
         range_selection: None,
     };

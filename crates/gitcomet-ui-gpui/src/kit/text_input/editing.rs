@@ -1294,7 +1294,27 @@ impl TextInput {
         self.select_to(self.content.len(), cx);
     }
 
-    #[allow(dead_code)]
+    /// Whether the buffer is currently wrapping long lines.
+    #[cfg(test)]
+    pub fn soft_wrap(&self) -> bool {
+        self.soft_wrap
+    }
+
+    /// How many visual rows each logical line occupies under the current wrap
+    /// width, or an empty slice when the counts are not yet in step with the
+    /// text (before the first prepaint, or between an edit and the wrap pass).
+    ///
+    /// This is the very array the element lays the buffer out from — it builds
+    /// its y-offsets by scanning it — so a gutter that projects through it lands
+    /// on the same rows as the text, whatever the wrap estimate got right or
+    /// wrong. Deriving the gutter independently is what would drift.
+    pub fn wrap_row_counts(&self) -> &[usize] {
+        if !(self.multiline && self.soft_wrap) {
+            return &[];
+        }
+        &self.wrap.row_counts
+    }
+
     pub fn set_soft_wrap(&mut self, soft_wrap: bool, cx: &mut Context<Self>) {
         if self.soft_wrap == soft_wrap {
             return;
