@@ -31,7 +31,8 @@ pub(crate) use gitcomet_ui_gpui::benchmarks::{
     MergeOpenBootstrapMetrics, NetworkFixture, NetworkMetrics, OpenRepoFixture, OpenRepoMetrics,
     PaneResizeDragMetrics, PaneResizeDragStepFixture, PaneResizeTarget,
     PatchDiffFirstWindowMetrics, PatchDiffPagedRowsFixture, PatchDiffSearchQueryUpdateFixture,
-    PathDisplayCacheChurnFixture, PathDisplayCacheChurnMetrics, RapidCommitSelectionFixture,
+    PathDisplayCacheChurnFixture, PathDisplayCacheChurnMetrics, PickerPromptFrameFixture,
+    PickerPromptFrameMetrics, PickerPromptKind, RapidCommitSelectionFixture,
     RapidCommitSelectionMetrics, RealRepoFixture, RealRepoMetrics, RealRepoScenario,
     ReplacementAlignmentFixture, RepoSwitchDuringScrollFixture, RepoSwitchDuringScrollMetrics,
     RepoSwitchFixture, RepoSwitchMetrics, RepoTabDragFixture, RepoTabDragMetrics,
@@ -269,6 +270,25 @@ pub(crate) fn emit_sidecar_metrics(bench: &str, mut metrics: Map<String, Value>)
 
 pub(crate) fn emit_allocation_only_sidecar(bench: &str) {
     emit_sidecar_metrics(bench, Map::new());
+}
+
+pub(crate) fn emit_picker_prompt_sidecar(case_name: &str, metrics: &PickerPromptFrameMetrics) {
+    let mut payload = Map::new();
+    payload.insert("local_branches".to_string(), json!(metrics.local_branches));
+    payload.insert(
+        "remote_branches".to_string(),
+        json!(metrics.remote_branches),
+    );
+    payload.insert("worktrees".to_string(), json!(metrics.worktrees));
+    payload.insert("rows_matched".to_string(), json!(metrics.rows_matched));
+    payload.insert("rows_rendered".to_string(), json!(metrics.rows_rendered));
+    payload.insert("text_parts".to_string(), json!(metrics.text_parts));
+    payload.insert("tooltip_parts".to_string(), json!(metrics.tooltip_parts));
+    payload.insert(
+        "content_height_px".to_string(),
+        json!(metrics.content_height_px),
+    );
+    emit_sidecar_metrics(&format!("picker_prompt/{case_name}"), payload);
 }
 
 pub(crate) fn emit_patch_diff_first_window_sidecar(

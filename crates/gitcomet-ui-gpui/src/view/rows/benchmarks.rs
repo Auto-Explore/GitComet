@@ -59,6 +59,7 @@ use tempfile::TempDir;
 mod conflict;
 mod diff_fixtures;
 mod git_ops;
+mod picker_fixtures;
 mod real_repo;
 mod repo_history;
 mod runtime_fixtures;
@@ -77,6 +78,7 @@ pub(crate) use git_ops::{
     build_git_ops_status_repo, git_command, git_ops_status_relative_path, git_stdout,
     hash_parsed_diff, hash_repo_status, run_git,
 };
+pub use picker_fixtures::*;
 pub use real_repo::*;
 pub(in crate::view) use repo_history::hash_branch_sidebar_rows;
 pub use repo_history::*;

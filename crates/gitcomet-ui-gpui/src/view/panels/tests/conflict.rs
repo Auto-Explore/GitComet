@@ -7981,3 +7981,242 @@ fn shift_f2_and_f3_step_over_resolved_conflicts(cx: &mut gpui::TestAppContext) {
 
     fixture.cleanup();
 }
+
+/// The last conflict standing must still be reachable from itself.
+///
+/// Once everything else is decided there is nothing strictly past the anchor in
+/// either direction, so both chords went dead and both toolbar arrows greyed
+/// out — at exactly the point where the user has scrolled off somewhere else and
+/// wants the one remaining decision back on screen.
+#[gpui::test]
+fn shift_f2_and_f3_still_reach_the_last_unresolved_conflict(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(992);
+    let fixture =
+        SyntheticLargeConflictFixture::new("last_open_nav", "fixtures/last_open_nav.html", 400, 6);
+    fixture.write();
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &fixture.workdir,
+        &fixture.file_rel,
+        &fixture.base_text,
+        &fixture.ours_text,
+        &fixture.theirs_text,
+        &fixture.current_text,
+    );
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "last-open nav fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver
+                .nav_targets
+                .iter()
+                .filter(|target| target.unresolved)
+                .count()
+                >= 3
+        },
+        |pane| format!("targets={}", pane.conflict_resolver.nav_targets.len()),
+    );
+    draw_and_drain_test_window(cx);
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let open_display_indices = |cx: &mut gpui::VisualTestContext| -> Vec<usize> {
+        cx.update(|_window, app| {
+            main_pane
+                .read(app)
+                .conflict_resolver
+                .nav_targets
+                .iter()
+                .filter(|target| target.unresolved)
+                .filter_map(|target| target.display_conflict_index)
+                .collect()
+        })
+    };
+
+    // Resolve every conflict but the last, the way a user does, so the one left
+    // is genuinely the only unresolved target.
+    let keep_open = *open_display_indices(cx).last().expect("an open conflict");
+    while let Some(display) = open_display_indices(cx)
+        .into_iter()
+        .find(|display| *display != keep_open)
+    {
+        cx.update(|_window, app| {
+            main_pane.update(app, |pane, cx| {
+                pane.conflict_resolver_select_conflict(display, cx);
+                pane.conflict_resolver_pick_active_conflict(
+                    crate::view::conflict_resolver::ConflictChoice::Ours,
+                    cx,
+                );
+            });
+        });
+        draw_and_drain_test_window(cx);
+    }
+    assert_eq!(
+        open_display_indices(cx),
+        vec![keep_open],
+        "exactly one conflict must be left open for this test to mean anything"
+    );
+
+    let sole_target = cx.update(|_window, app| {
+        main_pane
+            .read(app)
+            .conflict_resolver
+            .nav_targets
+            .iter()
+            .position(|target| target.unresolved)
+            .expect("the remaining open conflict has a nav target")
+    });
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_jump_to_nav_target(sole_target, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let anchor = |cx: &mut gpui::VisualTestContext| -> Option<usize> {
+        cx.update(|_window, app| {
+            main_pane
+                .read(app)
+                .conflict_resolver
+                .nav_anchor
+                .map(|anchor| anchor.order_hint)
+        })
+    };
+    let press = |cx: &mut gpui::VisualTestContext, chord: &str| -> bool {
+        let keystroke = gpui::Keystroke::parse(chord).expect("valid chord");
+        cx.update(|window, app| {
+            main_pane.update(app, |pane, cx| {
+                pane.handle_diff_shortcut(&keystroke, window, cx)
+            })
+        })
+    };
+
+    let sole_order = cx.update(|_window, app| {
+        main_pane.read(app).conflict_resolver.nav_targets[sole_target].order
+    });
+    assert_eq!(anchor(cx), Some(sole_order));
+
+    // The toolbar reads the same predicates the chords do, so both arrows have
+    // to come back with them.
+    cx.update(|_window, app| {
+        let pane = main_pane.read(app);
+        assert!(
+            pane.conflict_has_next_unresolved(),
+            "next-unresolved must be offered while a conflict is still open"
+        );
+        assert!(
+            pane.conflict_has_prev_unresolved(),
+            "previous-unresolved must be offered too"
+        );
+    });
+
+    for chord in ["shift-f3", "shift-f2"] {
+        assert!(press(cx, chord), "{chord} should be handled");
+        draw_and_drain_test_window(cx);
+        assert_eq!(
+            anchor(cx),
+            Some(sole_order),
+            "{chord} must keep the last open conflict selected rather than going dead"
+        );
+    }
+
+    fixture.cleanup();
+}
+
+/// *Reset conflict markers* has to outlive the round-trip it starts.
+///
+/// The button clears protection and then dispatches, and the resync that comes
+/// back re-derived protection from the same unchanged worktree payload — so the
+/// flag went straight back on and every pick and Unresolve greyed out again.
+/// From the user's side the button did nothing.
+///
+/// The payload here is one git left conflicted but that no longer carries
+/// markers, which is what an editor-side resolution looks like: protection is
+/// right to fire on it, and the reset is the user overriding that.
+#[gpui::test]
+fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    let repo_id = gitcomet_state::model::RepoId(996);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_reset_sticks",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/reset_sticks.txt");
+    let base = "head\nB\ntail\n";
+    let ours = "head\nB1\ntail\n";
+    let theirs = "head\nB2\ntail\n";
+    let resolved_by_hand = "head\nB1\ntail\n";
+
+    seed_unresolved_conflict_state(
+        cx,
+        &view,
+        repo_id,
+        &workdir,
+        &file_rel,
+        base,
+        ours,
+        theirs,
+        resolved_by_hand,
+    );
+    draw_and_drain_test_window(cx);
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    let protected = |cx: &mut gpui::VisualTestContext| -> bool {
+        cx.update(|_window, app| main_pane.read(app).conflict_resolver.output_is_protected)
+    };
+
+    assert!(
+        protected(cx),
+        "a payload with no conflict block left reads as resolved by hand"
+    );
+
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_reset_output_from_markers(cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(!protected(cx), "the reset must clear protection");
+
+    // Now resolve something. That dispatches, which bumps `conflict_rev`, which
+    // is what drives the resync — and the resync re-derives protection from the
+    // same unchanged worktree payload that still reads as hand-resolved. Only
+    // the waiver keeps it off.
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_select_conflict(0, cx);
+            pane.conflict_resolver_pick_active_conflict(
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    draw_and_drain_test_window(cx);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        !protected(cx),
+        "protection came back after the first pick, so the reset did nothing"
+    );
+    assert!(
+        cx.update(|_window, app| main_pane
+            .read(app)
+            .conflict_resolver_active_pick_state()
+            .is_some()),
+        "the pick controls must be usable after the reset"
+    );
+}

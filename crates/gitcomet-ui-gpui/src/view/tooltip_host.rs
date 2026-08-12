@@ -1,5 +1,9 @@
 use super::*;
 
+/// How long the pointer has to rest before a truncated-text tooltip appears.
+/// `wait_for_native_tooltip` in the test support advances the clock by this much.
+const TOOLTIP_DELAY: Duration = Duration::from_millis(500);
+
 pub(crate) struct TooltipHost {
     theme: AppTheme,
 
@@ -10,6 +14,13 @@ pub(crate) struct TooltipHost {
     tooltip_visible_pos: Option<Point<Pixels>>,
     tooltip_delay_seq: u64,
     last_mouse_pos: Point<Pixels>,
+    /// The timer waiting to show the tooltip that `tooltip_pending_pos` was set
+    /// for. Held rather than detached because the pointer restarts the delay on
+    /// every move of more than a couple of pixels: detaching left one live timer
+    /// per mouse-move event, each waking the executor 500ms later only to find
+    /// the sequence had moved on. Dropping the old task cancels it, so at most
+    /// one is ever pending.
+    pending_delay: Option<gpui::Task<()>>,
 }
 
 impl TooltipHost {
@@ -23,6 +34,7 @@ impl TooltipHost {
             tooltip_visible_pos: None,
             tooltip_delay_seq: 0,
             last_mouse_pos: point(px(0.0), px(0.0)),
+            pending_delay: None,
         }
     }
 
@@ -77,6 +89,7 @@ impl TooltipHost {
         self.tooltip_pending_pos = None;
         self.tooltip_visible_pos = None;
         self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
+        self.pending_delay = None;
         cx.notify();
         true
     }
@@ -96,6 +109,7 @@ impl TooltipHost {
         self.tooltip_visible_pos = None;
         self.tooltip_pending_pos = None;
         self.tooltip_delay_seq = self.tooltip_delay_seq.wrapping_add(1);
+        self.pending_delay = None;
 
         let Some(text) = self.tooltip_text.clone() else {
             return;
@@ -110,11 +124,19 @@ impl TooltipHost {
             return;
         }
 
-        let seq = self.tooltip_delay_seq;
+        self.pending_delay = Some(self.spawn_tooltip_delay(text, cx));
+    }
 
+    /// Timer that reveals `text` once the pointer has rested for the delay.
+    fn spawn_tooltip_delay(
+        &self,
+        text: SharedString,
+        cx: &mut gpui::Context<Self>,
+    ) -> gpui::Task<()> {
+        let seq = self.tooltip_delay_seq;
         cx.spawn(
             async move |view: WeakEntity<TooltipHost>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(500)).await;
+                smol::Timer::after(TOOLTIP_DELAY).await;
                 let _ = view.update(cx, |this, cx| {
                     if this.tooltip_delay_seq != seq {
                         return;
@@ -136,7 +158,6 @@ impl TooltipHost {
                 });
             },
         )
-        .detach();
     }
 
     fn maybe_restart_tooltip_delay(&mut self, cx: &mut gpui::Context<Self>) {
@@ -182,33 +203,9 @@ impl TooltipHost {
             return;
         }
 
-        let seq = self.tooltip_delay_seq;
-
-        cx.spawn(
-            async move |view: WeakEntity<TooltipHost>, cx: &mut gpui::AsyncApp| {
-                smol::Timer::after(Duration::from_millis(500)).await;
-                let _ = view.update(cx, |this, cx| {
-                    if this.tooltip_delay_seq != seq {
-                        return;
-                    }
-                    if this.tooltip_text.as_ref() != Some(&candidate) {
-                        return;
-                    }
-                    let Some(pending_pos) = this.tooltip_pending_pos else {
-                        return;
-                    };
-                    let dx = (this.last_mouse_pos.x - pending_pos.x).abs();
-                    let dy = (this.last_mouse_pos.y - pending_pos.y).abs();
-                    if dx > px(2.0) || dy > px(2.0) {
-                        return;
-                    }
-                    this.tooltip_visible_text = Some(candidate.clone());
-                    this.tooltip_visible_pos = Some(pending_pos);
-                    cx.notify();
-                });
-            },
-        )
-        .detach();
+        // Replaces the previous timer rather than adding to it: the pointer
+        // crossing a row restarts this on every move it reports.
+        self.pending_delay = Some(self.spawn_tooltip_delay(candidate, cx));
     }
 
     #[cfg(test)]

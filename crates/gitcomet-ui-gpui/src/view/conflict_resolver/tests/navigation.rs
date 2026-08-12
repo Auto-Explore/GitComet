@@ -493,3 +493,178 @@ fn conflict_navigation_reaches_rendered_blocks_the_plan_does_not_call_conflicts(
         "a settled automatic delta is not a conflict"
     );
 }
+
+/// The last unresolved conflict is usually the one the user is standing on, and
+/// the viewport can be anywhere. Both directions went dead there, which greyed
+/// out the toolbar arrows and made F3/Shift+F3 do nothing at exactly the moment
+/// the user wanted to get back to the one conflict still open.
+#[test]
+fn the_sole_remaining_target_is_reachable_from_itself() {
+    let targets = vec![
+        target(
+            ConflictNavTargetId::Region(0),
+            0,
+            None,
+            Some(0),
+            true,
+            true,
+            false,
+        ),
+        target(
+            ConflictNavTargetId::Region(1),
+            1,
+            None,
+            Some(1),
+            true,
+            true,
+            true,
+        ),
+        target(
+            ConflictNavTargetId::Region(2),
+            2,
+            None,
+            Some(2),
+            true,
+            true,
+            false,
+        ),
+    ];
+    let anchor = Some(targets[1].anchor());
+
+    for filter in [
+        ConflictNavTargetFilter::Unresolved,
+        ConflictNavTargetFilter::Delta,
+    ] {
+        assert_eq!(
+            next_conflict_nav_target_index(&targets, anchor, filter),
+            (filter == ConflictNavTargetFilter::Delta).then_some(2),
+        );
+    }
+
+    assert_eq!(
+        next_conflict_nav_target_index_or_sole_anchor(
+            &targets,
+            anchor,
+            ConflictNavTargetFilter::Unresolved,
+        ),
+        Some(1),
+    );
+    assert_eq!(
+        previous_conflict_nav_target_index_or_sole_anchor(
+            &targets,
+            anchor,
+            ConflictNavTargetFilter::Unresolved,
+        ),
+        Some(1),
+    );
+}
+
+/// Deliberately not wrapping: with more than one match the ends still report
+/// "nothing further this way", which is how the user knows they are at the end.
+#[test]
+fn the_fallback_leaves_multi_match_navigation_alone() {
+    let targets = vec![
+        target(
+            ConflictNavTargetId::Region(0),
+            0,
+            None,
+            Some(0),
+            true,
+            true,
+            true,
+        ),
+        target(
+            ConflictNavTargetId::Region(1),
+            1,
+            None,
+            Some(1),
+            true,
+            true,
+            false,
+        ),
+        target(
+            ConflictNavTargetId::Region(2),
+            2,
+            None,
+            Some(2),
+            true,
+            true,
+            true,
+        ),
+    ];
+
+    for index in 0..targets.len() {
+        let anchor = Some(targets[index].anchor());
+        for filter in [
+            ConflictNavTargetFilter::Unresolved,
+            ConflictNavTargetFilter::Conflict,
+            ConflictNavTargetFilter::Delta,
+        ] {
+            assert_eq!(
+                next_conflict_nav_target_index_or_sole_anchor(&targets, anchor, filter),
+                next_conflict_nav_target_index(&targets, anchor, filter),
+                "next diverged at {index} for {filter:?}",
+            );
+            assert_eq!(
+                previous_conflict_nav_target_index_or_sole_anchor(&targets, anchor, filter),
+                previous_conflict_nav_target_index(&targets, anchor, filter),
+                "previous diverged at {index} for {filter:?}",
+            );
+        }
+    }
+}
+
+/// The anchor can point at a target the filter does not match — a settled delta,
+/// say. There is nothing to re-reveal then, so the fallback must stay quiet
+/// rather than selecting a row that is not a candidate.
+#[test]
+fn the_fallback_ignores_an_anchor_the_filter_rejects() {
+    let targets = vec![
+        target(
+            ConflictNavTargetId::Region(0),
+            0,
+            None,
+            Some(0),
+            true,
+            false,
+            false,
+        ),
+        target(
+            ConflictNavTargetId::Region(1),
+            1,
+            None,
+            Some(1),
+            true,
+            true,
+            true,
+        ),
+    ];
+    let anchor = Some(targets[1].anchor());
+
+    assert_eq!(
+        next_conflict_nav_target_index_or_sole_anchor(
+            &targets,
+            Some(targets[0].anchor()),
+            ConflictNavTargetFilter::Unresolved,
+        ),
+        Some(1),
+        "a strictly-following match still wins",
+    );
+    assert_eq!(
+        previous_conflict_nav_target_index_or_sole_anchor(
+            &targets,
+            Some(targets[0].anchor()),
+            ConflictNavTargetFilter::Unresolved,
+        ),
+        None,
+        "the anchor itself is not unresolved, so there is nothing behind it",
+    );
+    assert_eq!(
+        previous_conflict_nav_target_index_or_sole_anchor(
+            &targets,
+            anchor,
+            ConflictNavTargetFilter::Unresolved,
+        ),
+        Some(1),
+    );
+}

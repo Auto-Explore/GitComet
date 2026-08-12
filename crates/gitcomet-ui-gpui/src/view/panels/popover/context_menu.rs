@@ -408,6 +408,7 @@ impl PopoverHost {
                 join_next_region,
                 alignment_marked_columns,
                 has_manual_alignments,
+                output_is_protected,
             } => Some(conflict_resolver_chunk::model(
                 *conflict_ix,
                 *has_base,
@@ -419,6 +420,7 @@ impl PopoverHost {
                 join_next_region.clone(),
                 *alignment_marked_columns,
                 *has_manual_alignments,
+                *output_is_protected,
             )),
             PopoverKind::ConflictResolverOutputMenu {
                 cursor_line,

@@ -10,11 +10,11 @@ use super::{
     conflict_marker_nav_entries_from_markers, conflict_resolver_output_context_line,
     conflict_strategy_needs_full_side_payloads, dirty_byte_range_to_line_range,
     first_output_marker_line_for_conflict, focused_mergetool_save_exit_code,
-    output_line_range_for_conflict_block_in_text, pane_content_width_for_layout,
-    parse_conflict_canvas_rows_env, remap_resolved_output_conflict_block_ranges_for_delta,
-    renderable_conflict_file, resolved_outline_delta_between_texts,
-    resolved_outline_delta_for_snapshot_transition, resolved_output_active_conflict_background,
-    resolved_output_active_unresolved_highlight_style,
+    historical_browse_content, output_line_range_for_conflict_block_in_text,
+    pane_content_width_for_layout, parse_conflict_canvas_rows_env,
+    remap_resolved_output_conflict_block_ranges_for_delta, renderable_conflict_file,
+    resolved_outline_delta_between_texts, resolved_outline_delta_for_snapshot_transition,
+    resolved_output_active_conflict_background, resolved_output_active_unresolved_highlight_style,
     resolved_output_conflict_block_ranges_in_text, resolved_output_live_highlight_provider,
     resolved_output_live_provider_binding_key, resolved_output_live_syntax_mask,
     resolved_output_marker_for_line, resolved_output_markers_for_text,
@@ -31,7 +31,7 @@ use crate::view::conflict_resolver::{
 };
 use crate::view::rows;
 use crate::view::{ConflictResolverUiState, GitCometViewMode};
-use gitcomet_core::domain::RepoSpec;
+use gitcomet_core::domain::{CommitId, DiffTarget, FileSource, RepoSpec};
 use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -87,15 +87,65 @@ fn specialized_conflict_strategies_require_full_side_payloads() {
 }
 
 #[test]
-fn ordinary_git_markers_do_not_protect_output_when_they_reconstruct_the_stages() {
+fn ordinary_git_markers_do_not_protect_output_when_every_line_comes_from_a_stage() {
     let current = "before\n<<<<<<< HEAD\nours\n=======\ntheirs\n>>>>>>> topic\nafter\n";
     let projection = "before\n<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\nafter\n";
 
     assert!(!worktree_output_requires_protection(
         Some(current),
         Some(projection),
+        None,
         Some("before\nours\nafter\n"),
         Some("before\ntheirs\nafter\n"),
+    ));
+}
+
+/// Two correct three-way merges can put their conflict boundaries in different
+/// places. Here git conflicts over `B`, while our plan anchors on `mid` and
+/// leaves `B` as one-sided context — so the documents interleave the same lines
+/// in different orders and neither reconstructs to the other's sides. Requiring
+/// such an equality is what protected every real merge and left the resolver
+/// inert.
+#[test]
+fn a_merge_whose_boundaries_disagree_with_ours_stays_interactive() {
+    let base = "head\nB\nmid\nD\n";
+    let ours = "head\nB1\nmid\nD\n";
+    let theirs = "head\nB2\nmid2\nD2\n";
+    let current = "head\n<<<<<<< HEAD\nB1\nmid\n=======\nB2\nmid2\n>>>>>>> topic\nD2\n";
+    let projection =
+        "head\n<<<<<<< ours\nB1\n||||||| base\nB\n=======\nB2\n>>>>>>> theirs\nmid2\nD2\n";
+
+    assert!(!worktree_output_requires_protection(
+        Some(current),
+        Some(projection),
+        Some(base),
+        Some(ours),
+        Some(theirs),
+    ));
+
+    // A line that belongs to no stage is a hand resolution, wherever the
+    // boundaries fall, and still holds the worktree bytes.
+    let hand_edited = "head\n<<<<<<< HEAD\nB1\nmid\n=======\nB2\nmid2\n>>>>>>> topic\nD2 edited\n";
+    assert!(worktree_output_requires_protection(
+        Some(hand_edited),
+        Some(projection),
+        Some(base),
+        Some(ours),
+        Some(theirs),
+    ));
+}
+
+/// Marker *labels* are git's, not ours, and must never count as content.
+#[test]
+fn marker_label_lines_are_not_weighed_against_the_stages() {
+    let current = "<<<<<<< HEAD\nours\n||||||| 1a2b3c4:path/to/file.rs\nbase\n=======\ntheirs\n>>>>>>> a-branch-name\n";
+
+    assert!(!worktree_output_requires_protection(
+        Some(current),
+        Some("<<<<<<< ours\nours\n=======\ntheirs\n>>>>>>> theirs\n"),
+        Some("base\n"),
+        Some("ours\n"),
+        Some("theirs\n"),
     ));
 }
 
@@ -124,12 +174,14 @@ fn manually_edited_worktree_output_is_protected_from_stage_projection() {
     assert!(worktree_output_requires_protection(
         Some(partially_resolved),
         Some(projection),
+        None,
         Some("before\nours one\nours two\nafter\n"),
         Some("before\ntheirs one\ntheirs two\nafter\n"),
     ));
     assert!(worktree_output_requires_protection(
         Some("before\nmanually merged\nafter\n"),
         Some(projection),
+        None,
         Some("before\nours one\nours two\nafter\n"),
         Some("before\ntheirs one\ntheirs two\nafter\n"),
     ));
@@ -145,6 +197,7 @@ fn mixed_line_ending_worktree_output_is_protected_from_stage_projection() {
     assert!(worktree_output_requires_protection(
         Some(current),
         Some(projection),
+        None,
         Some("a\r\nx\n"),
         Some("a\r\ny\n"),
     ));
@@ -158,6 +211,7 @@ fn uniform_crlf_worktree_output_stays_interactive() {
     assert!(!worktree_output_requires_protection(
         Some(current),
         Some(projection),
+        None,
         Some("a\r\nx\r\n"),
         Some("a\r\ny\r\n"),
     ));
@@ -170,6 +224,7 @@ fn identical_current_and_projection_remain_interactive_without_stage_payloads() 
     assert!(!worktree_output_requires_protection(
         Some(markers),
         Some(markers),
+        None,
         None,
         None,
     ));
@@ -248,6 +303,72 @@ fn repo_with_conflict_file(
     repo.conflict_state.conflict_file_path = Some(target_path.to_path_buf());
     repo.conflict_state.conflict_file = conflict_file;
     repo
+}
+
+fn repo_browsing_commit(sha: &str, content_preview: bool) -> RepoState {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.file_browser.source = FileSource::Commit(CommitId(sha.into()));
+    repo.diff_state.content_preview = content_preview;
+    repo
+}
+
+fn commit_content_target(sha: &str) -> DiffTarget {
+    DiffTarget::Commit {
+        commit_id: CommitId(sha.into()),
+        path: Some(PathBuf::from("src/main.rs")),
+    }
+}
+
+#[test]
+fn historical_browse_content_matches_the_browsed_commit() {
+    let repo = repo_browsing_commit("aaaa", true);
+    assert!(historical_browse_content(
+        &repo,
+        Some(&commit_content_target("aaaa"))
+    ));
+}
+
+#[test]
+fn historical_browse_content_ignores_another_commits_content() {
+    let repo = repo_browsing_commit("aaaa", true);
+    assert!(!historical_browse_content(
+        &repo,
+        Some(&commit_content_target("bbbb"))
+    ));
+}
+
+#[test]
+fn historical_browse_content_ignores_plain_diffs_and_live_state() {
+    // Content preview off: a patch diff of the browsed commit is not the
+    // browsed file's content.
+    let no_preview = repo_browsing_commit("aaaa", false);
+    assert!(!historical_browse_content(
+        &no_preview,
+        Some(&commit_content_target("aaaa"))
+    ));
+
+    let previewing = repo_browsing_commit("aaaa", true);
+    assert!(!historical_browse_content(&previewing, None));
+    assert!(!historical_browse_content(
+        &previewing,
+        Some(&DiffTarget::WorkingTree {
+            path: PathBuf::from("src/main.rs"),
+            area: gitcomet_core::domain::DiffArea::Unstaged,
+        })
+    ));
+
+    // No browse point at all.
+    let mut live = repo_browsing_commit("aaaa", true);
+    live.file_browser.source = FileSource::WorkingDirectory;
+    assert!(!historical_browse_content(
+        &live,
+        Some(&commit_content_target("aaaa"))
+    ));
 }
 
 fn text_conflict_file(path: &Path, current: &str) -> ConflictFile {

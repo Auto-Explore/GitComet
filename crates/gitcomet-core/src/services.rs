@@ -1066,6 +1066,25 @@ pub trait GitRepository: Send + Sync {
         Ok(worktrees)
     }
 
+    /// Tip-commit author/date/summary for every local and remote-tracking ref,
+    /// as `(short refname, metadata)` pairs. Purely decorative — callers render
+    /// name-only rows when this is unavailable, so backends may leave it
+    /// unimplemented.
+    fn list_ref_metadata(&self) -> Result<Vec<(String, RefMetadata)>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "ref metadata listing is not implemented for this backend",
+        )))
+    }
+    fn list_ref_metadata_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<(String, RefMetadata)>> {
+        cancellation.check_cancelled()?;
+        let metadata = self.list_ref_metadata()?;
+        cancellation.check_cancelled()?;
+        Ok(metadata)
+    }
+
     fn add_worktree_with_output(
         &self,
         _path: &Path,

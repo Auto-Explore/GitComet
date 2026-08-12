@@ -29,6 +29,7 @@ mod remote_remove_confirm;
 mod rename_branch_prompt;
 mod repo_picker;
 mod reset_prompt;
+mod rows_cache;
 mod search_inputs;
 mod squash_prompt;
 mod stage_conflict_markers_confirm;
@@ -43,6 +44,7 @@ mod submodule_remove_picker;
 mod submodule_trust_confirm;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
+mod workspace_picker;
 mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
@@ -155,6 +157,7 @@ pub(in super::super) struct PopoverHost {
     _repo_picker_search_input_subscription: Option<gpui::Subscription>,
     _branch_picker_search_input_subscription: Option<gpui::Subscription>,
     _worktree_picker_search_input_subscription: Option<gpui::Subscription>,
+    _workspace_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
     _file_history_search_input_subscription: Option<gpui::Subscription>,
     _squash_message_input_subscription: gpui::Subscription,
@@ -198,14 +201,25 @@ pub(in super::super) struct PopoverHost {
     repo_picker_sort_menu_open: bool,
     branch_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
+    workspace_picker_selected_index: Option<usize>,
+    /// Path/reference the workspace badge's create row hands to the Add-worktree
+    /// dialog. Consumed (and cleared) when that dialog opens, so a later
+    /// open from elsewhere still starts blank.
+    pending_worktree_add_prefill: Option<(String, String)>,
     submodule_picker_selected_index: Option<usize>,
     file_history_selected_index: Option<usize>,
+    /// Row models for the two badge pickers, rebuilt only when the repository
+    /// data behind them changes rather than on every frame. See
+    /// [`rows_cache`] — a hover moving between rows re-renders this whole view.
+    branch_picker_rows_cache: rows_cache::RowsCache<branch_picker::BranchPickerNavTarget>,
+    workspace_picker_rows_cache: rows_cache::RowsCache<workspace_picker::WorkspaceRow>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
     file_history_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
+    workspace_picker_search_input: Option<Entity<components::TextInput>>,
     submodule_picker_search_input: Option<Entity<components::TextInput>>,
     picker_prompt_scroll: ScrollHandle,
 
@@ -275,6 +289,28 @@ pub(in super::super) struct PopoverHost {
     rebase_reword_input: Entity<components::TextInput>,
     rebase_reword_description_input: Entity<components::TextInput>,
     rebase_reword_description_scroll: ScrollHandle,
+}
+
+/// Rows the branch badge's checkout picker would show for `query`, for the
+/// picker benchmarks. The builder is a pure function of the repository, so the
+/// benchmark measures exactly what a frame used to rebuild.
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) fn benchmark_branch_checkout_rows(
+    repo: &RepoState,
+    query: &str,
+    now: std::time::SystemTime,
+) -> Vec<components::PickerPromptItem> {
+    branch_picker::rows(repo, query, now).items
+}
+
+/// Rows the workspace badge's picker would show for `query`, for the picker
+/// benchmarks.
+#[cfg(feature = "benchmarks")]
+pub(in crate::view) fn benchmark_workspace_rows(
+    repo: &RepoState,
+    query: &str,
+) -> Vec<components::PickerPromptItem> {
+    workspace_picker::rows(repo, query).items
 }
 
 pub(in super::super) fn popover_ui_scale(cx: &mut gpui::Context<PopoverHost>) -> ui_scale::UiScale {
@@ -696,7 +732,13 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
 
 pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<PopoverWidthSpec> {
     match kind {
-        PopoverKind::RepoPicker | PopoverKind::BranchPicker { .. } => Some(PICKER_WIDTH),
+        PopoverKind::RepoPicker
+        | PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
+        } => Some(PICKER_WIDTH),
+        PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::Checkout,
+        } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::StashPrompt
         | PopoverKind::CommitPrompt { .. }
         | PopoverKind::StashPickerPrompt { .. }
@@ -760,7 +802,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Worktree(
-                    WorktreePopoverKind::OpenPicker | WorktreePopoverKind::RemovePicker,
+                    WorktreePopoverKind::OpenPicker
+                    | WorktreePopoverKind::RemovePicker
+                    | WorktreePopoverKind::BadgePicker,
                 ),
             ..
         }
@@ -1495,6 +1539,7 @@ impl PopoverHost {
             _repo_picker_search_input_subscription: None,
             _branch_picker_search_input_subscription: None,
             _worktree_picker_search_input_subscription: None,
+            _workspace_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
             _file_history_search_input_subscription: None,
             _stash_picker_search_input_subscription: None,
@@ -1523,13 +1568,18 @@ impl PopoverHost {
             repo_picker_sort_menu_open: false,
             branch_picker_selected_index: None,
             worktree_picker_selected_index: None,
+            workspace_picker_selected_index: None,
+            pending_worktree_add_prefill: None,
             submodule_picker_selected_index: None,
             file_history_selected_index: None,
+            branch_picker_rows_cache: rows_cache::RowsCache::default(),
+            workspace_picker_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
             file_history_search_input: None,
             worktree_picker_search_input: None,
+            workspace_picker_search_input: None,
             submodule_picker_search_input: None,
             picker_prompt_scroll: ScrollHandle::new(),
             clone_repo_url_input,
@@ -1629,6 +1679,7 @@ impl PopoverHost {
                 &self.remote_picker_search_input,
                 &self.file_history_search_input,
                 &self.worktree_picker_search_input,
+                &self.workspace_picker_search_input,
                 &self.submodule_picker_search_input,
                 &self.stash_picker_search_input,
             ]
@@ -1655,6 +1706,16 @@ impl PopoverHost {
     #[cfg(test)]
     pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn worktree_path_input_text_for_tests(&self, app: &gpui::App) -> String {
+        self.worktree_path_input.read(app).text().to_string()
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn worktree_ref_source_target_for_tests(&self) -> &str {
+        &self.worktree_ref_source_target
     }
 
     /// Whether the unsaved-edits confirmation is the popover on screen.
@@ -2719,6 +2780,7 @@ impl PopoverHost {
             }
             PopoverKind::PreviousCommitMessagesMenu { repo_id } => Some(*repo_id),
             PopoverKind::CommitOptionsMenu { repo_id } => Some(*repo_id),
+            PopoverKind::BranchPicker { .. } => self.state.active_repo,
             _ => None,
         };
         let Some(repo_id) = repo_id else {
@@ -2727,6 +2789,16 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|repo| repo.id == repo_id) else {
             return;
         };
+
+        if matches!(kind, PopoverKind::BranchPicker { .. }) {
+            // Decorates the checkout picker's rows; load once, retry on error.
+            if matches!(repo.ref_metadata, Loadable::NotLoaded | Loadable::Error(_)) {
+                self.store.dispatch(Msg::LoadRefMetadata { repo_id });
+            }
+            // Remote branches arrive with the repo's normal refresh; the picker
+            // just omits the Remote section until they do.
+            return;
+        }
 
         if matches!(
             kind,
@@ -2781,6 +2853,16 @@ impl PopoverHost {
                     | PopoverKind::StashPrompt
                     | PopoverKind::CommitPrompt { .. }
                     | PopoverKind::StashPickerPrompt { .. }
+                    // Action-bar badges stay lit while their picker is open.
+                    // Scoped to Checkout: the Delete picker is opened from the
+                    // sidebar context menu, whose invoker must still be cleared.
+                    | PopoverKind::BranchPicker {
+                        purpose: BranchPickerPurpose::Checkout,
+                    }
+                    | PopoverKind::Repo {
+                        kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
+                        ..
+                    }
             );
         if !keep_active_invoker {
             self.clear_active_context_menu_invoker(cx);
@@ -2791,8 +2873,14 @@ impl PopoverHost {
         self.repo_picker_selected_index = None;
         self.branch_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
+        self.workspace_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
         self.file_history_selected_index = None;
+        // Rows are keyed by the data they were built from, so a stale slot can
+        // only be reused when that data is unchanged. Dropping them on open still
+        // keeps the memory from outliving the picker that needed it.
+        self.branch_picker_rows_cache.clear();
+        self.workspace_picker_rows_cache.clear();
         if is_context_menu {
             self.popover = Some(kind);
             self.context_menu_selected_ix = self
@@ -3023,14 +3111,25 @@ impl PopoverHost {
                     ..
                 } => {
                     let theme = self.theme;
+                    let (path_prefill, reference_prefill) =
+                        self.pending_worktree_add_prefill.take().unwrap_or_default();
                     self.worktree_path_input.update(cx, |input, cx| {
                         input.set_theme(theme, cx);
-                        input.set_text("", cx);
+                        input.set_text(path_prefill, cx);
                         cx.notify();
                     });
-                    self.worktree_ref_source_target = String::new();
+                    self.worktree_ref_source_target = reference_prefill.clone();
                     self.suppress_worktree_submit_after_ref_enter = false;
-                    let _ = self.ensure_branch_picker_search_input(window, cx);
+                    let ref_input = self.ensure_branch_picker_search_input(window, cx);
+                    // `ensure_*` blanks the input, so the prefilled ref has to be
+                    // written back afterwards or the box would read empty while
+                    // submit still used the reference.
+                    if !reference_prefill.is_empty() {
+                        ref_input.update(cx, |input, cx| {
+                            input.set_text(reference_prefill, cx);
+                            cx.notify();
+                        });
+                    }
                     let focus = self
                         .worktree_path_input
                         .read_with(cx, |i, _| i.focus_handle());
@@ -3044,6 +3143,14 @@ impl PopoverHost {
                         ),
                 } => {
                     let _ = self.ensure_worktree_picker_search_input(window, cx);
+                    self.store
+                        .dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
+                } => {
+                    let _ = self.ensure_workspace_picker_search_input(window, cx);
                     self.store
                         .dispatch(Msg::LoadWorktrees { repo_id: *repo_id });
                 }
@@ -3619,6 +3726,7 @@ impl PopoverHost {
                     WorktreePopoverKind::RemovePicker => {
                         worktree_remove_picker::panel(self, repo_id, cx)
                     }
+                    WorktreePopoverKind::BadgePicker => workspace_picker::panel(self, repo_id, cx),
                     WorktreePopoverKind::RemoveConfirm { path, branch } => {
                         worktree_remove_confirm::panel(self, repo_id, path, branch, cx)
                     }
@@ -3799,6 +3907,7 @@ impl PopoverHost {
                 join_next_region,
                 alignment_marked_columns,
                 has_manual_alignments,
+                output_is_protected,
             } => self.context_menu_view(
                 PopoverKind::ConflictResolverChunkMenu {
                     conflict_ix,
@@ -3811,6 +3920,7 @@ impl PopoverHost {
                     join_next_region,
                     alignment_marked_columns,
                     has_manual_alignments,
+                    output_is_protected,
                 },
                 cx,
             ),

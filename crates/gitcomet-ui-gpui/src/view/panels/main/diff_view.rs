@@ -2315,6 +2315,16 @@ impl MainPaneView {
         let supports_diff_content_toggle = (inline_submodule_diff_active || !has_submodule_summary)
             && self.supports_diff_content_mode_toggle(is_file_preview);
 
+        // Browsing a historical commit: tint the header and the content surface
+        // instead of framing the pane, and only while the content on screen is
+        // the browsed commit's.
+        let historical_browse = is_file_preview && self.historical_browse_content_active();
+        let content_bg = if historical_browse {
+            crate::theme::historical_surface_bg(theme, theme.colors.window_bg)
+        } else {
+            theme.colors.window_bg
+        };
+
         // Deliberately not gated on `is_file_preview`: that predicate also asks
         // whether the path is *previewable*, and a file the preview declines
         // (an unknown extension, say) is still a file the editor can open — it
@@ -2925,7 +2935,7 @@ impl MainPaneView {
                                         .relative()
                                         .h_full()
                                         .min_h(px(0.0))
-                                        .bg(theme.colors.window_bg)
+                                        .bg(content_bg)
                                         .child(
                                             div()
                                                 .id("worktree_markdown_preview_document")
@@ -2967,7 +2977,7 @@ impl MainPaneView {
                         });
                         div()
                             .id("worktree_preview_error_scroll")
-                            .bg(theme.colors.window_bg)
+                            .bg(content_bg)
                             .font_family(editor_font_family.clone())
                             .flex()
                             .flex_col()
@@ -3015,7 +3025,7 @@ impl MainPaneView {
                                 .relative()
                                 .h_full()
                                 .min_h(px(0.0))
-                                .bg(theme.colors.window_bg)
+                                .bg(content_bg)
                                 .font_family(editor_font_family.clone())
                                 .child(
                                     div()
@@ -3773,7 +3783,11 @@ impl MainPaneView {
                 header
                     .h(components::control_height_md(ui_scale_percent))
                     .px_2()
-                    .bg(theme.colors.surface_bg_elevated)
+                    .bg(if historical_browse {
+                        crate::theme::historical_header_bg(theme, theme.colors.surface_bg_elevated)
+                    } else {
+                        theme.colors.surface_bg_elevated
+                    })
                     .border_b_1()
                     .border_color(theme.colors.border),
             )

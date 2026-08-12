@@ -1196,8 +1196,18 @@ impl SidebarPaneView {
     fn render_tab_bar(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
-        let bg = theme.colors.sidebar_bg;
         let mode = self.state.sidebar_mode;
+        // The Files tab's list is the thing pinned to a commit, so the header
+        // above it takes the browse tint only while that list is on screen.
+        let browsing_files = mode == SidebarMode::Files
+            && self
+                .active_repo()
+                .is_some_and(|r| r.browsing_commit().is_some());
+        let bg = if browsing_files {
+            crate::theme::historical_header_bg(theme, theme.colors.sidebar_bg)
+        } else {
+            theme.colors.sidebar_bg
+        };
 
         let store_branches = Arc::clone(&self.store);
         let store_files = Arc::clone(&self.store);
@@ -1247,8 +1257,14 @@ impl SidebarPaneView {
             .h(scaled_px(22.0))
             .rounded(px(theme.radii.control))
             .when(mode == SidebarMode::Files, |d| {
-                d.bg(theme.colors.active_section)
-                    .text_color(theme.colors.text)
+                // Carry the tint onto the active chip too, so it does not read
+                // as a neutral hole punched in a tinted bar.
+                d.bg(if browsing_files {
+                    crate::theme::historical_header_bg(theme, theme.colors.active_section)
+                } else {
+                    theme.colors.active_section
+                })
+                .text_color(theme.colors.text)
             })
             .when(mode != SidebarMode::Files, |d| {
                 d.bg(gpui::transparent_black())
@@ -1747,20 +1763,24 @@ impl SidebarPaneView {
         let browsing_commit = self
             .active_repo()
             .is_some_and(|r| r.browsing_commit().is_some());
-        let purple = crate::theme::historical_outline(theme.is_dark);
         div()
             .relative()
             .flex()
             .flex_col()
             .h_full()
             .min_h(px(0.0))
+            // A wash rather than a frame: browse mode should read as a change of
+            // surface, not as a box drawn around the list.
+            .when(browsing_commit, |d| {
+                // Over `sidebar_bg`: that is what the pane behind this paints, so
+                // browse mode shifts the hue without also stepping the lightness.
+                d.bg(crate::theme::historical_surface_bg(
+                    theme,
+                    theme.colors.sidebar_bg,
+                ))
+            })
             .child(search_bar)
             .child(body)
-            .when(browsing_commit, |d| {
-                // Overlay the historical frame so entering browse mode does
-                // not inset or resize the file browser beneath it.
-                d.child(div().absolute().inset_0().border_2().border_color(purple))
-            })
             .into_any()
     }
 
