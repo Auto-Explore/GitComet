@@ -71,6 +71,9 @@ pub enum Effect {
     },
     LoadLog {
         repo_id: RepoId,
+        /// Identifies this walk, so its replies can be told from those of a
+        /// walk a newer request superseded. See [`crate::model::LogLoadSeq`].
+        seq: crate::model::LogLoadSeq,
         scope: LogScope,
         /// Case-insensitive author filter, or `None` for all authors.
         author: Option<String>,

@@ -931,24 +931,29 @@ fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppC
 }
 
 fn author_filter_fixture_repo(repo_id: RepoId) -> RepoState {
+    author_filter_repo_with_authors(repo_id, &["Alice", "Bob"])
+}
+
+fn author_filter_repo_with_authors(repo_id: RepoId, authors: &[&str]) -> RepoState {
     let workdir = std::env::temp_dir().join(format!(
         "gitcomet_ui_test_{}_author_filter",
         std::process::id()
     ));
     let mut repo = shortcut_fixture_repo(repo_id, &workdir, &CommitId("deadbeefdeadbeef".into()));
-    let commit = |id: &str, summary: &str, author: &str| gitcomet_core::domain::Commit {
-        id: CommitId(id.into()),
-        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
-        summary: summary.into(),
-        author: author.into(),
-        time: std::time::SystemTime::UNIX_EPOCH,
-    };
+    let commits = authors
+        .iter()
+        .enumerate()
+        .map(|(index, author)| gitcomet_core::domain::Commit {
+            id: CommitId(format!("deadbeefdeadbee{index}").into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: format!("commit {index}").into(),
+            author: (*author).into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        })
+        .collect();
     let log_page: Loadable<std::sync::Arc<gitcomet_core::domain::LogPage>> = Loadable::Ready(
         gitcomet_core::domain::LogPage {
-            commits: vec![
-                commit("deadbeefdeadbeef", "Second commit", "Alice"),
-                commit("cafebabecafebabe", "Initial commit", "Bob"),
-            ],
+            commits,
             next_cursor: None,
         }
         .into(),
@@ -1081,14 +1086,15 @@ fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
             .unwrap_or_default()
     });
     assert_eq!(query, "bo", "keystrokes must reach the search box");
-    // Only the matching authors are handed to the picker, so `Bob` is row 1
-    // (behind the "All authors" row, which the query itself filters out).
+    // Every author is handed to the picker, which does the narrowing; the
+    // selectors carry each row's original index — "All authors" 0, `Alice` 1,
+    // `Bob` 2 — so only `Bob`'s survives.
     assert!(
-        cx.debug_bounds("picker_prompt_item_1").is_some(),
+        cx.debug_bounds("picker_prompt_item_2").is_some(),
         "`Bob` must survive the query"
     );
     assert!(
-        cx.debug_bounds("picker_prompt_item_2").is_none(),
+        cx.debug_bounds("picker_prompt_item_1").is_none(),
         "`Alice` must be filtered out"
     );
     assert!(
@@ -1242,6 +1248,56 @@ fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
                 .find(|repo| repo.id == repo_id)
                 .and_then(|repo| repo.history_state.history_author_filter.clone())
                 == Some("car".to_string())
+        })
+    });
+}
+
+/// Typing narrows the list without moving the selection, so the index can end up
+/// past the end. The dropdown clamps it when it decides which row to highlight,
+/// and Enter has to land on that same row rather than falling back to the raw
+/// query — which would apply a filter the user never highlighted.
+#[gpui::test]
+fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(718);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_repo_with_authors(
+            repo_id,
+            &["Barb", "Bob", "boberta"],
+        )),
+    );
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    // "b" matches all three; three Downs land on the last of them.
+    cx.simulate_keystrokes("b");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("down down down");
+    draw_and_drain_test_window(cx);
+
+    // "bo" narrows to two, leaving the selection past the end.
+    cx.simulate_keystrokes("o");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+
+    wait_until(cx, "the highlighted author to be applied", |cx| {
+        cx.update(|_window, _app| {
+            store_for_assert
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.history_state.history_author_filter.clone())
+                == Some("boberta".to_string())
         })
     });
 }

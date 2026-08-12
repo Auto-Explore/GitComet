@@ -678,28 +678,47 @@ pub(crate) fn build_git_ops_status_repo(tracked_files: usize, dirty_files: usize
 
 /// Author of the sparse commits in [`build_git_ops_log_repo_with_rare_author`].
 const RARE_BENCH_AUTHOR: &str = "Rare Bench";
+const COMMON_BENCH_AUTHOR: &str = "Bench <bench@example.com>";
+
+fn build_git_ops_log_repo(total_commits: usize) -> TempDir {
+    build_git_ops_log_repo_with_authors(total_commits, |_| COMMON_BENCH_AUTHOR.to_string())
+}
 
 /// Like [`build_git_ops_log_repo`], but every `rare_every`-th commit is by a
 /// different author — so an author filter for that name has to walk deep into
 /// the history to fill a page.
 fn build_git_ops_log_repo_with_rare_author(total_commits: usize, rare_every: usize) -> TempDir {
-    let repo_root = tempfile::tempdir().expect("create git_ops author filter tempdir");
+    build_git_ops_log_repo_with_authors(total_commits, |index| {
+        if index.is_multiple_of(rare_every) {
+            format!("{RARE_BENCH_AUTHOR} <rare@example.com>")
+        } else {
+            COMMON_BENCH_AUTHOR.to_string()
+        }
+    })
+}
+
+/// A linear history of `total_commits` commits, each touching the same file,
+/// with `author_at(index)` naming the author of commit `index` (1-based).
+fn build_git_ops_log_repo_with_authors(
+    total_commits: usize,
+    author_at: impl Fn(usize) -> String,
+) -> TempDir {
+    let repo_root = tempfile::tempdir().expect("create git_ops log tempdir");
     let repo = repo_root.path();
     init_git_ops_repo(repo);
 
+    // Blob marks take 1..=total_commits, so commit marks start above them —
+    // a fixed offset would collide once the history outgrows it.
+    let commit_mark_base = total_commits;
     let mut import = String::with_capacity(total_commits.saturating_mul(192));
     for index in 1..=total_commits {
         let blob_mark = index;
-        let commit_mark = 100_000usize.saturating_add(index);
+        let commit_mark = commit_mark_base.saturating_add(index);
         let previous_commit_mark = commit_mark.saturating_sub(1);
         let payload = format!("seed-{index:05}");
         let message = format!("c{index:05}");
         let timestamp = 1_700_000_000usize.saturating_add(index);
-        let author = if index.is_multiple_of(rare_every) {
-            format!("{RARE_BENCH_AUTHOR} <rare@example.com>")
-        } else {
-            "Bench <bench@example.com>".to_string()
-        };
+        let author = author_at(index);
 
         import.push_str("blob\n");
         import.push_str(&format!("mark :{blob_mark}\n"));
@@ -710,47 +729,7 @@ fn build_git_ops_log_repo_with_rare_author(total_commits: usize, rare_every: usi
         import.push_str(&format!("mark :{commit_mark}\n"));
         import.push_str(&format!("author {author} {timestamp} +0000\n"));
         import.push_str(&format!(
-            "committer Bench <bench@example.com> {timestamp} +0000\n"
-        ));
-        import.push_str(&format!("data {}\n", message.len()));
-        import.push_str(&message);
-        import.push('\n');
-        if index > 1 {
-            import.push_str(&format!("from :{previous_commit_mark}\n"));
-        }
-        import.push_str(&format!("M 100644 :{blob_mark} history.txt\n"));
-    }
-
-    run_git_with_input(repo, &["fast-import", "--quiet"], &import);
-    repo_root
-}
-
-fn build_git_ops_log_repo(total_commits: usize) -> TempDir {
-    let repo_root = tempfile::tempdir().expect("create git_ops log tempdir");
-    let repo = repo_root.path();
-    init_git_ops_repo(repo);
-
-    let mut import = String::with_capacity(total_commits.saturating_mul(192));
-    for index in 1..=total_commits {
-        let blob_mark = index;
-        let commit_mark = 100_000usize.saturating_add(index);
-        let previous_commit_mark = commit_mark.saturating_sub(1);
-        let payload = format!("seed-{index:05}");
-        let message = format!("c{index:05}");
-        let timestamp = 1_700_000_000usize.saturating_add(index);
-
-        import.push_str("blob\n");
-        import.push_str(&format!("mark :{blob_mark}\n"));
-        import.push_str(&format!("data {}\n", payload.len()));
-        import.push_str(&payload);
-        import.push('\n');
-        import.push_str("commit refs/heads/main\n");
-        import.push_str(&format!("mark :{commit_mark}\n"));
-        import.push_str(&format!(
-            "author Bench <bench@example.com> {timestamp} +0000\n"
-        ));
-        import.push_str(&format!(
-            "committer Bench <bench@example.com> {timestamp} +0000\n"
+            "committer {COMMON_BENCH_AUTHOR} {timestamp} +0000\n"
         ));
         import.push_str(&format!("data {}\n", message.len()));
         import.push_str(&message);

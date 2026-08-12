@@ -160,10 +160,12 @@ fn parse_remote_url(url: &str) -> Option<ForgeWebBase> {
     // branch when the whole URL has no `://`.
     if !url.contains("://")
         && let Some((user_host, path)) = url.split_once(':')
-            && !user_host.contains('/') && path.contains('/') {
-                let host = user_host.rsplit('@').next()?;
-                return build_base(host, path, "https");
-            }
+        && !user_host.contains('/')
+        && path.contains('/')
+    {
+        let host = user_host.rsplit('@').next()?;
+        return build_base(host, path, "https");
+    }
 
     // Scheme URLs: https://, http://, git://, ssh://, git+ssh://.
     let (scheme, rest) = url.split_once("://")?;

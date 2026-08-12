@@ -467,11 +467,13 @@ pub(super) fn schedule_load_upstream_divergence(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_log(
     executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    seq: crate::model::LogLoadSeq,
     scope: LogScope,
     author: Option<String>,
     limit: usize,
@@ -479,7 +481,6 @@ pub(super) fn schedule_load_log(
     cancellation: CancellationToken,
 ) {
     let cursor_on_missing = cursor.clone();
-    let author_on_missing = author.clone();
     spawn_detached_with_repo_or_else(
         executor,
         "load-log",
@@ -494,17 +495,12 @@ pub(super) fn schedule_load_log(
                 // a repository with a million commits — and the user should not
                 // be looking at the previous filter's rows for all of it.
                 let chunk_tx = msg_tx.clone();
-                let chunk_scope = scope;
-                let chunk_author = author.clone();
-                let chunk_cursor = cursor.clone();
                 let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
                     send_or_log(
                         &chunk_tx,
                         Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
                             repo_id,
-                            scope: chunk_scope,
-                            author: chunk_author.clone(),
-                            cursor: chunk_cursor.clone(),
+                            seq,
                             commits: chunk.commits,
                             scanned: chunk.scanned,
                         }),
@@ -523,8 +519,8 @@ pub(super) fn schedule_load_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
+                    seq,
                     scope,
-                    author,
                     cursor,
                     result,
                 }),
@@ -535,8 +531,8 @@ pub(super) fn schedule_load_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
+                    seq,
                     scope,
-                    author: author_on_missing,
                     cursor: cursor_on_missing,
                     result: Err(missing_repo_error(repo_id)),
                 }),

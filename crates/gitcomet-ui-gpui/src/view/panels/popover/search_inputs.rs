@@ -95,7 +95,13 @@ impl PopoverHost {
                     return;
                 }
                 PickerNavOutcome::Enter => {
-                    let payload = (*selected_index(this)).and_then(|sel| list.get(sel).cloned());
+                    // Typing narrows the list without moving the selection, so
+                    // the index can point past the end. `PickerPrompt` clamps it
+                    // the same way when it decides which row to highlight —
+                    // Enter has to resolve against that row, not past it.
+                    let payload = (*selected_index(this))
+                        .zip(list.len().checked_sub(1))
+                        .and_then(|(sel, last)| list.get(sel.min(last)).cloned());
                     on_enter(this, payload, query, window, cx);
                 }
                 PickerNavOutcome::Idle => {}

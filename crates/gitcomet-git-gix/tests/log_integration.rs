@@ -462,8 +462,99 @@ fn full_reachable_history_mode_paginates_without_repeating_commits() {
     assert_eq!(legacy_second.commits, second.commits);
 }
 
+/// Every history mode pages through the resumable walk, first-parent and
+/// all-branches included. Without a resume token the walk is rebuilt from the
+/// tips and re-traversed to the cursor for every page, so an author filter that
+/// had to cross the whole history to fill one page crosses it again for the
+/// next, and again for the one after that.
 #[test]
-fn shallow_history_modes_paginate_without_resume_tokens() {
+fn every_history_mode_paginates_through_a_resumable_walk() {
+    let fixture = HistoryModeFixture::new();
+    let backend = GixBackend;
+    let opened = backend.open(fixture.repo()).unwrap();
+
+    for mode in [
+        HistoryMode::FullReachable,
+        HistoryMode::FirstParent,
+        HistoryMode::NoMerges,
+        HistoryMode::MergesOnly,
+        HistoryMode::AllBranches,
+    ] {
+        let whole = opened.log_history_mode_page(mode, 20, None).unwrap();
+        assert!(
+            whole.next_cursor.is_none(),
+            "{mode:?}: the fixture is meant to fit in one page"
+        );
+
+        let mut paged: Vec<String> = Vec::new();
+        let mut cursor = None;
+        for _ in 0..whole.commits.len() + 1 {
+            let page = opened
+                .log_history_mode_page(mode, 1, cursor.as_ref())
+                .unwrap();
+            paged.extend(page.commits.iter().map(|c| c.id.as_ref().to_string()));
+            let Some(next) = page.next_cursor else {
+                break;
+            };
+            assert!(
+                next.resume_token.is_some(),
+                "{mode:?}: a page with more to give must hand back a resumable walk"
+            );
+            cursor = Some(next);
+        }
+
+        assert_eq!(
+            paged,
+            whole
+                .commits
+                .iter()
+                .map(|c| c.id.as_ref().to_string())
+                .collect::<Vec<_>>(),
+            "{mode:?}: paging one at a time must visit the same commits, in the same order"
+        );
+    }
+}
+
+/// The scope this mattered most for: `AllBranches` walks from every ref, so
+/// rebuilding it per page is the most expensive rebuild there is.
+#[test]
+fn all_branches_author_filter_resumes_instead_of_re_walking() {
+    let fixture = HistoryModeFixture::new();
+    let backend = GixBackend;
+    let opened = backend.open(fixture.repo()).unwrap();
+
+    let all = opened
+        .log_history_mode_page_filtered(HistoryMode::AllBranches, Some("You"), 20, None)
+        .unwrap();
+    assert!(
+        all.commits.len() > 1,
+        "the fixture's commits are all by You"
+    );
+
+    let first = opened
+        .log_history_mode_page_filtered(HistoryMode::AllBranches, Some("You"), 1, None)
+        .unwrap();
+    let cursor = first.next_cursor.expect("more to page through");
+    assert!(
+        cursor.resume_token.is_some(),
+        "a filtered all-branches page must resume its walk rather than rebuild it"
+    );
+
+    let second = opened
+        .log_history_mode_page_filtered(HistoryMode::AllBranches, Some("You"), 1, Some(&cursor))
+        .unwrap();
+    assert_eq!(
+        second.commits.first().map(|c| c.id.as_ref()),
+        all.commits.get(1).map(|c| c.id.as_ref()),
+        "the resumed walk must continue where the first page stopped"
+    );
+}
+
+/// A shallow clone pages through the same resumable walk as everything else —
+/// its boundary is a filter on the traversal, not a reason to re-walk from the
+/// tip for every page — and still stops dead at the boundary.
+#[test]
+fn shallow_history_modes_paginate_and_stop_at_the_boundary() {
     let dir = tempfile::tempdir().unwrap();
     let origin_work = dir.path().join("origin-work");
     let origin_bare = dir.path().join("origin.git");
@@ -522,8 +613,8 @@ fn shallow_history_modes_paginate_without_resume_tokens() {
         let cursor = first.next_cursor.as_ref().expect("next cursor");
         assert_eq!(cursor.last_seen.as_ref(), tip_id.as_str());
         assert!(
-            cursor.resume_token.is_none(),
-            "shallow repositories should keep legacy cursor semantics"
+            cursor.resume_token.is_some(),
+            "a shallow repository resumes its walk like any other"
         );
 
         let second = opened.log_history_mode_page(mode, 1, Some(cursor)).unwrap();
@@ -1555,6 +1646,52 @@ fn author_filter_matches_case_insensitively_on_a_substring() {
     }
 }
 
+/// The needle has to be folded the same way it is compared. Folding it with
+/// `str::to_lowercase` while comparing with `eq_ignore_ascii_case` left any name
+/// holding an uppercase non-ASCII letter unmatchable — including by picking that
+/// exact name out of the author dropdown, which then walked the whole history to
+/// return nothing.
+#[test]
+fn author_filter_matches_a_name_with_non_ascii_uppercase() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    run_git(&repo, &["init", "--initial-branch=main"]);
+    run_git(&repo, &["config", "user.email", "dev@example.com"]);
+    run_git(&repo, &["config", "user.name", "Common Dev"]);
+    std::fs::write(repo.join("file.txt"), "v0").unwrap();
+    run_git(&repo, &["add", "file.txt"]);
+    run_git_at(
+        &repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "--author",
+            "José Ángel <ja@example.com>",
+            "-m",
+            "c0",
+        ],
+        1_000,
+    );
+
+    let opened = GixBackend.open(&repo).unwrap();
+    // Exact, ASCII-folded, and a substring starting on the non-ASCII letter.
+    for query in ["José Ángel", "josé Ángel", "Ángel"] {
+        let page = opened
+            .log_history_mode_page_filtered(HistoryMode::FullReachable, Some(query), 10, None)
+            .unwrap();
+        assert_eq!(
+            page.commits
+                .iter()
+                .map(|c| c.author.as_ref())
+                .collect::<Vec<_>>(),
+            vec!["José Ángel"],
+            "`{query}` should match the author it was taken from"
+        );
+    }
+}
+
 #[test]
 fn author_filter_pages_without_repeating_or_skipping() {
     let (_dir, repo) = author_filter_fixture();
@@ -1660,12 +1797,13 @@ fn cancelled_author_filter_walk_reports_cancellation() {
     cancellation.cancel();
 
     let error = opened
-        .log_history_mode_page_filtered_cancellable(
+        .log_history_mode_page_streaming(
             HistoryMode::FullReachable,
             Some("common"),
             10,
             None,
             &cancellation,
+            &mut |_| {},
         )
         .expect_err("a cancelled walk must not return a page");
     assert!(matches!(error.kind(), ErrorKind::Cancelled));

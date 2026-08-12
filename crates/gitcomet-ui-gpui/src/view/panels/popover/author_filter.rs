@@ -37,9 +37,13 @@ fn collect_author_suggestions(commits: &[gitcomet_core::domain::Commit]) -> Vec<
         }
     }
 
+    // ASCII folding throughout — the same rule the dedup above, the active-filter
+    // mark below, and the backend's own matcher apply. A Unicode fold here would
+    // order names by a key nothing else in the feature agrees with.
+    //
     // `sort_by_cached_key` builds one key per author; `sort_by_key` would
     // rebuild it on every comparison.
-    authors.sort_by_cached_key(|author| author.to_lowercase());
+    authors.sort_by_cached_key(|author| author.to_ascii_lowercase());
     authors
 }
 
@@ -88,40 +92,32 @@ pub(super) fn suggestions(this: &mut PopoverHost, repo_id: RepoId) -> Arc<[Share
     authors
 }
 
-/// Case-insensitive substring match, folding ASCII only — the same rule
-/// [`components::PickerPrompt`] applies when it filters the rows it is handed.
-fn matches_query(name: &str, query: &str) -> bool {
-    if query.is_empty() {
-        return true;
-    }
-    let needle = query.as_bytes();
-    let haystack = name.as_bytes();
-    haystack.len() >= needle.len()
-        && haystack
-            .windows(needle.len())
-            .any(|window| window.eq_ignore_ascii_case(needle))
-}
-
-/// The rows the dropdown shows for `query`, and the target each one applies.
+/// Every row the dropdown can offer, and the target each one applies.
 /// `items` and `targets` are index-aligned, so a `PickerPrompt` selection index
 /// (which is the original, pre-filter index) reads straight out of `targets`.
+///
+/// Narrowing by the typed query is left to [`components::PickerPrompt`], which
+/// filters the items it is handed anyway — doing it here first would scan every
+/// author twice per keystroke and give the two passes a chance to disagree.
 pub(super) struct AuthorRows {
     pub(super) items: Vec<components::PickerPromptItem>,
     pub(super) targets: Vec<AuthorTarget>,
     pub(super) marked_index: Option<usize>,
 }
 
-pub(super) fn rows(authors: &[SharedString], current: Option<&str>, query: &str) -> AuthorRows {
+pub(super) fn rows(authors: &[SharedString], current: Option<&str>) -> AuthorRows {
     // "All authors" is always offered; `PickerPrompt` drops it from the
     // rendered rows when it does not match the query, and the navigation
     // targets are derived from that same layout.
-    let mut items = vec![components::PickerPromptItem::from(SharedString::from(
+    let mut items = Vec::with_capacity(authors.len() + 1);
+    let mut targets = Vec::with_capacity(authors.len() + 1);
+    items.push(components::PickerPromptItem::from(SharedString::from(
         ALL_AUTHORS_LABEL,
-    ))];
-    let mut targets = vec![AuthorTarget::All];
+    )));
+    targets.push(AuthorTarget::All);
     let mut marked_index = current.is_none().then_some(0);
 
-    for author in authors.iter().filter(|author| matches_query(author, query)) {
+    for author in authors {
         if marked_index.is_none()
             && current.is_some_and(|current| current.eq_ignore_ascii_case(author))
         {
@@ -138,6 +134,18 @@ pub(super) fn rows(authors: &[SharedString], current: Option<&str>, query: &str)
     }
 }
 
+/// Every row for `repo_id`, with the repository's active filter marked.
+fn rows_for_repo(this: &mut PopoverHost, repo_id: RepoId) -> AuthorRows {
+    let authors = suggestions(this, repo_id);
+    let current = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| repo.history_state.history_author_filter.clone());
+    rows(&authors, current.as_deref())
+}
+
 /// What the arrow keys walk, in the order the rows are rendered.
 ///
 /// `PickerPrompt` re-sorts a non-empty query's matches by where the match lands,
@@ -148,14 +156,7 @@ pub(super) fn nav_targets(
     repo_id: RepoId,
     query: &str,
 ) -> Vec<AuthorTarget> {
-    let authors = suggestions(this, repo_id);
-    let current = this
-        .state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.history_state.history_author_filter.clone());
-    let rows = rows(&authors, current.as_deref(), query);
+    let rows = rows_for_repo(this, repo_id);
     components::picker_prompt_layout(&rows.items, query)
         .item_indices
         .iter()
@@ -216,14 +217,7 @@ pub(super) fn panel(
     });
 
     let query = search.read(cx).text().trim().to_string();
-    let authors = suggestions(this, repo_id);
-    let current = this
-        .state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.history_state.history_author_filter.clone());
-    let rows = rows(&authors, current.as_deref(), &query);
+    let rows = rows_for_repo(this, repo_id);
     let targets = rows.targets;
 
     // Suggestions only cover the commits loaded so far, so a name that is not
@@ -281,6 +275,16 @@ mod tests {
         rows.targets.iter().map(target_label).collect()
     }
 
+    /// The rows as the dropdown actually renders them for `query` — narrowing
+    /// and match-position ordering both belong to `PickerPrompt`.
+    fn rendered_labels(rows: &AuthorRows, query: &str) -> Vec<String> {
+        components::picker_prompt_layout(&rows.items, query)
+            .item_indices
+            .iter()
+            .map(|&ix| target_label(&rows.targets[ix]))
+            .collect()
+    }
+
     fn target_label(target: &AuthorTarget) -> String {
         match target {
             AuthorTarget::All => ALL_AUTHORS_LABEL.to_owned(),
@@ -305,7 +309,7 @@ mod tests {
     #[test]
     fn all_authors_is_first_and_marked_when_no_filter_is_active() {
         let authors: Vec<SharedString> = vec!["Alice".into(), "Bob".into()];
-        let rows = rows(&authors, None, "");
+        let rows = rows(&authors, None);
 
         assert_eq!(labels(&rows), vec!["All authors", "Alice", "Bob"]);
         assert_eq!(rows.marked_index, Some(0));
@@ -313,20 +317,47 @@ mod tests {
         assert_eq!(rows.targets[1], AuthorTarget::Author("Alice".into()));
     }
 
+    /// Dedup, ordering and the active-filter mark all fold ASCII only — the rule
+    /// the backend's own matcher uses. A Unicode fold in any one of the three
+    /// would disagree with the other two: names that show as separate rows would
+    /// sort as if they were the same, and the row for the active filter would go
+    /// unmarked.
+    #[test]
+    fn non_ascii_names_are_folded_the_same_way_at_every_step() {
+        let authors = collect_author_suggestions(&[
+            commit("Zoe"),
+            commit("Éric"),
+            commit("éric"),
+            commit("ÉRIC"),
+        ]);
+
+        // "Éric" and "ÉRIC" differ only in ASCII letters, so they collapse; the
+        // two accents stay distinct, because nothing downstream — the backend
+        // matcher least of all — would treat them as the same person.
+        assert_eq!(authors, vec!["Zoe", "Éric", "éric"]);
+
+        let rows = rows(&authors, Some("éric"));
+        assert_eq!(
+            rows.marked_index,
+            Some(3),
+            "the row for the active filter has to be the one that is marked"
+        );
+    }
+
     #[test]
     fn active_filter_is_marked_case_insensitively() {
         let authors: Vec<SharedString> = vec!["Alice".into(), "Bob".into()];
-        let rows = rows(&authors, Some("alice"), "");
+        let rows = rows(&authors, Some("alice"));
 
         assert_eq!(rows.marked_index, Some(1));
     }
 
     #[test]
-    fn query_narrows_rows_case_insensitively() {
+    fn query_narrows_rendered_rows_case_insensitively() {
         let authors: Vec<SharedString> = vec!["Alice".into(), "Bob".into(), "boberta".into()];
-        let rows = rows(&authors, None, "BO");
+        let rows = rows(&authors, None);
 
-        assert_eq!(labels(&rows), vec!["All authors", "Bob", "boberta"]);
+        assert_eq!(rendered_labels(&rows, "BO"), vec!["Bob", "boberta"]);
     }
 
     /// Every author is offered, however many there are — the list is
@@ -336,7 +367,7 @@ mod tests {
         let authors: Vec<SharedString> = (0..5_000)
             .map(|ix| SharedString::from(format!("author {ix:04}")))
             .collect();
-        let rows = rows(&authors, None, "");
+        let rows = rows(&authors, None);
 
         // "All authors" rides along on top of the full list.
         assert_eq!(rows.items.len(), 5_001);
@@ -352,15 +383,10 @@ mod tests {
     #[test]
     fn nav_order_follows_the_rendered_order() {
         let authors: Vec<SharedString> = vec!["Zoe Bar".into(), "Bar Zoe".into()];
-        let rows = rows(&authors, None, "bar");
-        let ordered: Vec<String> = components::picker_prompt_layout(&rows.items, "bar")
-            .item_indices
-            .iter()
-            .map(|&ix| target_label(&rows.targets[ix]))
-            .collect();
+        let rows = rows(&authors, None);
 
         // "Bar Zoe" matches at offset 0, so it renders above "Zoe Bar";
         // "All authors" does not match and drops out entirely.
-        assert_eq!(ordered, vec!["Bar Zoe", "Zoe Bar"]);
+        assert_eq!(rendered_labels(&rows, "bar"), vec!["Bar Zoe", "Zoe Bar"]);
     }
 }

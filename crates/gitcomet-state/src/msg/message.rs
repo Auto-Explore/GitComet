@@ -946,8 +946,8 @@ pub enum InternalMsg {
     },
     LogLoaded {
         repo_id: RepoId,
+        seq: crate::model::LogLoadSeq,
         scope: LogScope,
-        author: Option<String>,
         cursor: Option<LogCursor>,
         result: Result<LogPage, Error>,
     },
@@ -957,9 +957,7 @@ pub enum InternalMsg {
     /// prefixes of each other — and `scanned` counts commits visited.
     LogChunkLoaded {
         repo_id: RepoId,
-        scope: LogScope,
-        author: Option<String>,
-        cursor: Option<LogCursor>,
+        seq: crate::model::LogLoadSeq,
         commits: Vec<Commit>,
         scanned: u64,
     },

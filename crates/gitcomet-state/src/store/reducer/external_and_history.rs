@@ -248,6 +248,29 @@ pub(super) fn repo_externally_changed(
     effects
 }
 
+/// Reloads the first page after the user changed *what* the history shows —
+/// its scope or its author filter. The caller has already applied the change to
+/// `repo_state`; this holds the previous page on screen while the new walk runs,
+/// drops any pagination in progress, and persists the change. `persist` is given
+/// the repository's workdir.
+fn restart_history_load(
+    state: &mut AppState,
+    repo_ix: usize,
+    persist: impl FnOnce(std::path::PathBuf) -> Effect,
+) -> Vec<Effect> {
+    let repo_state = &mut state.repos[repo_ix];
+    repo_state.retain_log_while_loading();
+    repo_state.set_log(Loadable::Loading);
+    repo_state.set_log_loading_more(false);
+    // Any count on screen belongs to the walk being replaced.
+    repo_state.set_log_scan_progress(None);
+
+    let mut effects = vec![persist(repo_state.spec.workdir.clone())];
+    let request = super::util::first_page_log_request(repo_state);
+    effects.extend(super::util::request_log_effect(repo_state, request));
+    effects
+}
+
 pub(super) fn set_history_scope(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
@@ -256,44 +279,17 @@ pub(super) fn set_history_scope(
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    if state.repos[repo_ix].history_state.history_scope == scope {
+        return Vec::new();
+    }
+    state.repos[repo_ix].set_log_scope(scope);
 
-    let workdir = {
-        let repo_state = &mut state.repos[repo_ix];
-        if repo_state.history_state.history_scope == scope {
-            return Vec::new();
-        }
-
-        repo_state.set_log_scope(scope);
-        repo_state.retain_log_while_loading();
-        repo_state.set_log(Loadable::Loading);
-        repo_state.set_log_loading_more(false);
-        repo_state.spec.workdir.clone()
-    };
-    let mut effects = vec![Effect::PersistRepoHistoryMode {
+    restart_history_load(state, repo_ix, |workdir| Effect::PersistRepoHistoryMode {
         repo_id: Some(repo_id),
         workdir,
         mode: scope,
         action: "updating history mode",
-    }];
-    let author_filter = state.repos[repo_ix]
-        .history_state
-        .history_author_filter
-        .clone();
-    if state.repos[repo_ix].loads_in_flight.request_log(
-        scope,
-        author_filter.clone(),
-        super::util::DEFAULT_LOG_PAGE_SIZE,
-        None,
-    ) {
-        effects.push(Effect::LoadLog {
-            repo_id,
-            scope,
-            author: author_filter,
-            limit: super::util::DEFAULT_LOG_PAGE_SIZE,
-            cursor: None,
-        });
-    }
-    effects
+    })
 }
 
 pub(super) fn set_history_author_filter(
@@ -304,43 +300,19 @@ pub(super) fn set_history_author_filter(
     let Some(repo_ix) = state.repos.iter().position(|r| r.id == repo_id) else {
         return Vec::new();
     };
-
-    let workdir = {
-        let repo_state = &mut state.repos[repo_ix];
-        if repo_state.history_state.history_author_filter == author {
-            return Vec::new();
-        }
-
-        repo_state.set_history_author_filter(author.clone());
-        repo_state.retain_log_while_loading();
-        repo_state.set_log(Loadable::Loading);
-        repo_state.set_log_loading_more(false);
-        // The count belongs to the walk being replaced.
-        repo_state.set_log_scan_progress(None);
-        repo_state.spec.workdir.clone()
-    };
-    let mut effects = vec![Effect::PersistRepoHistoryAuthorFilter {
-        repo_id: Some(repo_id),
-        workdir,
-        author: author.clone(),
-        action: "updating history author filter",
-    }];
-    let history_scope = state.repos[repo_ix].history_state.history_scope;
-    if state.repos[repo_ix].loads_in_flight.request_log(
-        history_scope,
-        author.clone(),
-        super::util::DEFAULT_LOG_PAGE_SIZE,
-        None,
-    ) {
-        effects.push(Effect::LoadLog {
-            repo_id,
-            scope: history_scope,
-            author,
-            limit: super::util::DEFAULT_LOG_PAGE_SIZE,
-            cursor: None,
-        });
+    if state.repos[repo_ix].history_state.history_author_filter == author {
+        return Vec::new();
     }
-    effects
+    state.repos[repo_ix].set_history_author_filter(author.clone());
+
+    restart_history_load(state, repo_ix, |workdir| {
+        Effect::PersistRepoHistoryAuthorFilter {
+            repo_id: Some(repo_id),
+            workdir,
+            author,
+            action: "updating history author filter",
+        }
+    })
 }
 
 pub(super) fn load_more_history(
@@ -363,23 +335,13 @@ pub(super) fn load_more_history(
     };
 
     repo_state.set_log_loading_more(true);
-    let author = repo_state.history_state.history_author_filter.clone();
-    if repo_state.loads_in_flight.request_log(
-        repo_state.history_state.history_scope,
-        author.clone(),
-        super::util::DEFAULT_LOG_PAGE_SIZE,
-        Some(cursor.clone()),
-    ) {
-        vec![Effect::LoadLog {
-            repo_id,
-            scope: repo_state.history_state.history_scope,
-            author,
-            limit: super::util::DEFAULT_LOG_PAGE_SIZE,
-            cursor: Some(cursor),
-        }]
-    } else {
-        Vec::new()
-    }
+    let request = crate::model::PendingLogLoad {
+        cursor: Some(cursor),
+        ..super::util::first_page_log_request(repo_state)
+    };
+    super::util::request_log_effect(repo_state, request)
+        .into_iter()
+        .collect()
 }
 
 pub(super) fn rebase_state_loaded(
@@ -545,21 +507,15 @@ pub(super) fn merge_commit_message_loaded(
 pub(super) fn log_chunk_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
-    scope: LogScope,
-    author: Option<String>,
-    cursor: Option<LogCursor>,
+    seq: crate::model::LogLoadSeq,
     commits: Vec<gitcomet_core::domain::Commit>,
     scanned: u64,
 ) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    if cursor.is_some()
-        || !repo_state.loads_in_flight.is_active_log_reply(
-            scope,
-            author.as_deref(),
-            cursor.as_ref(),
-        )
+    if !repo_state.loads_in_flight.is_active_log_reply(seq)
+        || repo_state.loads_in_flight.active_log_is_load_more()
     {
         return Vec::new();
     }
@@ -570,18 +526,21 @@ pub(super) fn log_chunk_loaded(
         // progress readout advance.
         return Vec::new();
     }
-    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+    // Published as the page held *while loading*, not as the finished log: the
+    // walk is still running, so there is no answer yet to "is there more?", and
+    // a `Ready` page with no cursor would claim there is not.
+    repo_state.set_partial_log_while_loading(Arc::new(LogPage {
         commits,
         next_cursor: None,
-    })));
+    }));
     Vec::new()
 }
 
 pub(super) fn log_loaded(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
+    seq: crate::model::LogLoadSeq,
     scope: LogScope,
-    author: Option<String>,
     cursor: Option<LogCursor>,
     result: std::result::Result<LogPage, Error>,
 ) -> Vec<Effect> {
@@ -592,21 +551,7 @@ pub(super) fn log_loaded(
         // Drop replies from a walk that a newer request superseded. That walk
         // was cancelled and its replacement is still running, so the in-flight
         // bookkeeping belongs to the newer request and must not be touched here.
-        //
-        // With no request being tracked there is nothing to compare against, so
-        // fall back to checking the reply against the state it would land in —
-        // all this could do before requests were tracked.
-        let superseded = if repo_state.loads_in_flight.has_active_log() {
-            !repo_state.loads_in_flight.is_active_log_reply(
-                scope,
-                author.as_deref(),
-                cursor.as_ref(),
-            )
-        } else {
-            repo_state.history_state.history_scope != scope
-                || repo_state.history_state.history_author_filter.as_deref() != author.as_deref()
-        };
-        if superseded {
+        if !repo_state.loads_in_flight.is_active_log_reply(seq) {
             return effects;
         }
 
@@ -703,10 +648,11 @@ pub(super) fn log_loaded(
             repo_state.set_log_loading_more(false);
         }
 
-        if let Some(next) = repo_state.loads_in_flight.finish_log() {
+        if let Some((seq, next)) = repo_state.loads_in_flight.finish_log() {
             repo_state.set_log_loading_more(next.cursor.is_some());
             effects.push(Effect::LoadLog {
                 repo_id,
+                seq,
                 scope: next.scope,
                 author: next.author,
                 limit: next.limit,

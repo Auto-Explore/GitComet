@@ -130,6 +130,9 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     repo_state.loads_in_flight.clear();
+    // The cancelled walk's reply is dropped by the repo-load guard, so nothing
+    // downstream will ever clear the count it left on screen.
+    repo_state.set_log_scan_progress(None);
     if matches!(repo_state.open, Loadable::Loading) {
         repo_state.set_open(Loadable::NotLoaded);
     }

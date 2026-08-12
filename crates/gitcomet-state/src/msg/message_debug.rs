@@ -92,31 +92,27 @@ impl std::fmt::Debug for InternalMsg {
                 .finish(),
             InternalMsg::LogLoaded {
                 repo_id,
+                seq,
                 scope,
-                author,
                 cursor,
                 result,
             } => f
                 .debug_struct("LogLoaded")
                 .field("repo_id", repo_id)
+                .field("seq", seq)
                 .field("scope", scope)
-                .field("author", author)
                 .field("cursor", cursor)
                 .field("result", result)
                 .finish(),
             InternalMsg::LogChunkLoaded {
                 repo_id,
-                scope,
-                author,
-                cursor,
+                seq,
                 commits,
                 scanned,
             } => f
                 .debug_struct("LogChunkLoaded")
                 .field("repo_id", repo_id)
-                .field("scope", scope)
-                .field("author", author)
-                .field("cursor", cursor)
+                .field("seq", seq)
                 .field("commits", &commits.len())
                 .field("scanned", scanned)
                 .finish(),

@@ -1061,6 +1061,7 @@ fn hash_repo_switch_outcome(state: &AppState, effects: &[Effect]) -> u64 {
                 author,
                 limit,
                 cursor,
+                ..
             } => {
                 repo_id.0.hash(&mut h);
                 std::mem::discriminant(scope).hash(&mut h);
@@ -1988,8 +1989,10 @@ impl HistoryLoadMoreAppendFixture {
             &mut state,
             Msg::Internal(InternalMsg::LogLoaded {
                 repo_id: self.repo_id,
+                // Nothing is tracking a walk in the fixture, so any sequence
+                // number is accepted; production carries the request's own.
+                seq: 0,
                 scope: self.scope,
-                author: None,
                 cursor: None,
                 result: Ok(LogPage {
                     commits: self.existing_commits.clone(),
@@ -2032,8 +2035,10 @@ impl HistoryLoadMoreAppendFixture {
             state,
             Msg::Internal(InternalMsg::LogLoaded {
                 repo_id: self.repo_id,
+                // Nothing is tracking a walk in the fixture, so any sequence
+                // number is accepted; production carries the request's own.
+                seq: 0,
                 scope: self.scope,
-                author: None,
                 cursor,
                 result: Ok(page),
             }),

@@ -158,7 +158,7 @@ fn ensure_repo_task_token(
             previous.load_epoch,
             load_epoch
         );
-        previous.cancellation.cancel();
+        previous.cancel();
     } else {
         repo_load_trace::trace!(
             "repo_load_token create repo_id={:?} load_epoch={}",
@@ -301,14 +301,14 @@ fn send_unavailable_git_effect_result(
         )),
         Effect::LoadLog {
             repo_id,
+            seq,
             scope,
-            author,
             cursor,
             ..
         } => send(Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
+            seq,
             scope,
-            author,
             cursor,
             result: Err(git_unavailable_error(runtime)),
         })),
@@ -1548,6 +1548,7 @@ pub(super) fn schedule_effect(
         }
         Effect::LoadLog {
             repo_id,
+            seq,
             scope,
             author,
             limit,
@@ -1561,6 +1562,7 @@ pub(super) fn schedule_effect(
                     repos,
                     msg_tx,
                     repo_id,
+                    seq,
                     scope,
                     author,
                     limit,
