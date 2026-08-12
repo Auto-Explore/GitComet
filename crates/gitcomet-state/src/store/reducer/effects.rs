@@ -14,8 +14,8 @@ use gitcomet_core::conflict_session::{
 };
 use gitcomet_core::domain::{
     Branch, CommitDetails, CommitFileChange, CommitId, EMPTY_TREE_ID, FileEntry, FileSource,
-    FileStatusKind, LogPage, RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag,
-    RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    FileStatusKind, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
@@ -527,6 +527,37 @@ pub(super) fn worktrees_loaded(
             .finish(RepoLoadsInFlight::WORKTREES)
         {
             effects.push(Effect::LoadWorktrees { repo_id });
+        }
+    }
+    effects
+}
+
+pub(super) fn ref_metadata_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<(String, RefMetadata)>, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let ref_metadata = match result {
+            Ok(entries) => Loadable::Ready(entries.into_iter().collect()),
+            // A backend that does not implement this will never implement it,
+            // so latch an empty map rather than `Error` — callers retry on
+            // `Error`, which would re-schedule a doomed load on every open.
+            Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) => {
+                Loadable::Ready(std::collections::HashMap::new())
+            }
+            // Deliberately no diagnostic: this data only decorates picker rows,
+            // which fall back to name-only. A transient failure must not raise
+            // an error banner on every picker open.
+            Err(e) => Loadable::Error(e.to_string()),
+        };
+        repo_state.set_ref_metadata(ref_metadata);
+        if repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::REF_METADATA)
+        {
+            effects.push(Effect::LoadRefMetadata { repo_id });
         }
     }
     effects
@@ -1293,6 +1324,24 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
         .request(RepoLoadsInFlight::WORKTREES)
     {
         vec![Effect::LoadWorktrees { repo_id }]
+    } else {
+        Vec::new()
+    }
+}
+
+pub(super) fn load_ref_metadata(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    repo_state.set_ref_metadata(Loadable::Loading);
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::REF_METADATA)
+    {
+        vec![Effect::LoadRefMetadata { repo_id }]
     } else {
         Vec::new()
     }

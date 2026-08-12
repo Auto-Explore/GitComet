@@ -1035,8 +1035,8 @@ impl MainPaneView {
                 }
             }
             repo.diff_state.diff_state_rev.hash(&mut hasher);
-            // The historical-browse purple frame keys off content-preview mode, which
-            // can share a diff_target with a plain diff of the same commit+path.
+            // The historical-browse tint keys off content-preview mode, which can
+            // share a diff_target with a plain diff of the same commit+path.
             repo.diff_state.content_preview.hash(&mut hasher);
             // Entering or leaving the editor swaps the whole content body and
             // the toolbar; without this the pane would not re-render for it.
@@ -1062,7 +1062,7 @@ impl MainPaneView {
                 0
             };
             commit_details_rev.hash(&mut hasher);
-            // The historical-browse purple frame keys off the file browser source.
+            // The historical-browse tint keys off the file browser source.
             repo.file_browser.file_browser_rev.hash(&mut hasher);
 
             match &repo.interactive_rebase_setup {
@@ -4128,6 +4128,16 @@ impl MainPaneView {
             .or_else(|| self.active_repo()?.diff_state.diff_target.as_ref())
     }
 
+    /// Whether the content pane is showing a file's full content *at the commit
+    /// the file browser is pinned to*, i.e. whether it earns the historical
+    /// browse tint. See [`historical_browse_content`].
+    pub(in crate::view) fn historical_browse_content_active(&self) -> bool {
+        let Some(repo) = self.active_repo() else {
+            return false;
+        };
+        historical_browse_content(repo, self.rendered_diff_target())
+    }
+
     pub(in crate::view) fn rendered_patch_diff_loadable(
         &self,
     ) -> Option<&gitcomet_state::model::Loadable<gitcomet_state::model::Shared<Diff>>> {
@@ -4674,6 +4684,7 @@ impl MainPaneView {
                 join_next_region,
                 alignment_marked_columns: self.conflict_resolver_alignment_marked_columns(),
                 has_manual_alignments: self.conflict_resolver_has_manual_alignments(),
+                output_is_protected: self.conflict_resolver.output_is_protected,
             },
             anchor,
             window,

@@ -648,3 +648,74 @@ fn list_branches_reflects_removed_upstream_without_reopen() {
         .expect("feature branch present");
     assert_eq!(feature_after.upstream, None);
 }
+
+#[test]
+fn list_ref_metadata_reports_author_date_and_subject_for_local_and_remote_refs() {
+    if !require_git_shell_for_refs_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).unwrap();
+    fs::create_dir_all(&work_repo).unwrap();
+
+    run_git(&remote_repo, &["init", "--bare", "-b", "main"]);
+
+    run_git(&work_repo, &["init", "-b", "main"]);
+    run_git(&work_repo, &["config", "user.email", "you@example.com"]);
+    run_git(&work_repo, &["config", "user.name", "Ada Lovelace"]);
+    run_git(&work_repo, &["config", "commit.gpgsign", "false"]);
+    let origin_url = git_remote_url(&remote_repo);
+    run_git(
+        &work_repo,
+        &["remote", "add", "origin", origin_url.as_str()],
+    );
+
+    fs::write(work_repo.join("file.txt"), "base\n").unwrap();
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base commit"],
+    );
+    run_git(&work_repo, &["push", "-u", "origin", "main"]);
+
+    run_git(&work_repo, &["checkout", "-b", "feature"]);
+    fs::write(work_repo.join("feature.txt"), "feature\n").unwrap();
+    run_git(&work_repo, &["add", "feature.txt"]);
+    run_git(
+        &work_repo,
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-m",
+            "add the feature",
+        ],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).unwrap();
+    let metadata = opened.list_ref_metadata().expect("list ref metadata");
+
+    let lookup = |name: &str| {
+        metadata
+            .iter()
+            .find(|(ref_name, _)| ref_name == name)
+            .map(|(_, meta)| meta)
+    };
+
+    let main = lookup("main").expect("main present");
+    assert_eq!(main.author, "Ada Lovelace");
+    assert_eq!(main.summary, "base commit");
+    assert!(main.committed_at > 0, "expected a real timestamp");
+
+    let feature = lookup("feature").expect("feature present");
+    assert_eq!(feature.summary, "add the feature");
+
+    // Remote-tracking refs are covered by the same call.
+    let remote_main = lookup("origin/main").expect("origin/main present");
+    assert_eq!(remote_main.summary, "base commit");
+}

@@ -6,19 +6,28 @@ use crate::view::restrict_scroll_to_vertical_axis;
 use crate::view::tooltip_host::TooltipHost;
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton,
-    MouseDownEvent, MouseMoveEvent, ScrollHandle, SharedString, UniformListScrollHandle,
-    WeakEntity, Window, div, px, uniform_list,
+    ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
+    MouseMoveEvent, Pixels, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
 use std::ops::Range;
+use std::rc::Rc;
 use std::sync::Arc;
 
-use super::{TextTruncationProfile, TruncatedText};
+use super::{TextTruncationProfile, TruncatedText, TruncatedTextFlex};
 
 pub struct PickerPrompt {
     query_input: Entity<TextInput>,
     scroll_handle: ScrollHandle,
-    items: Vec<PickerPromptItem>,
+    items: Rc<[PickerPromptItem]>,
+    /// Layout the caller already resolved for these items. Pickers that memoise
+    /// their rows pass it so `render` does not filter and sort them a second
+    /// time on every frame; the rest let `render` resolve it.
+    layout: Option<Rc<PickerPromptLayout>>,
+    /// Renders only the rows the viewport can show once the list is long enough.
+    /// Opt-in, because a picker whose rows can be left unbuilt must scroll its
+    /// keyboard selection into view through [`PickerPromptGeometry`] rather than
+    /// through `ScrollHandle::scroll_to_item`, which needs the row to exist.
+    windowed: bool,
     empty_text: SharedString,
     max_height: gpui::Pixels,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
@@ -33,7 +42,6 @@ pub struct PickerPrompt {
     query_row_trailing: Option<gpui::AnyElement>,
     list_override: Option<gpui::AnyElement>,
     remove_tooltip: Option<SharedString>,
-    uniform_scroll: Option<UniformListScrollHandle>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -41,19 +49,75 @@ pub struct PickerPromptItem {
     display_text: SharedString,
     match_text: SharedString,
     parts: Vec<PickerPromptItemPart>,
+    /// Supporting detail, rendered on a second, quieter line below `parts`.
+    /// Empty for the single-line rows most pickers use.
+    secondary: Vec<PickerPromptItemPart>,
     icon: Option<&'static str>,
     repository_initials: Option<SharedString>,
     section: Option<SharedString>,
     removable: bool,
 }
 
+/// Row and header metrics, taken from Zed's title-bar menus so the two read the
+/// same: a row's fill is inset from the popover edge rather than spanning it, and
+/// the text sits a further 6px inside that fill (10px from the edge in total).
+/// See `zed/crates/ui/src/components/list/list_item.rs` (`inset` + `Sparse`).
+const LIST_PAD_PX: f32 = 4.0;
+const ROW_PAD_X_PX: f32 = 6.0;
+/// Air above and below a row's text (Zed's `ListItemSpacing::Sparse` → `py_1`).
+///
+/// A row is otherwise exactly as tall as its own text — each line's box is its
+/// font size times the line height — so a row with a detail line grows by one
+/// line box and the whole menu keeps its proportions at any UI scale. Pinning the
+/// line boxes to scaled pixel heights instead made the lines crowd, because the
+/// rem-based font sizes did not scale with them.
+const ROW_PAD_Y_PX: f32 = 4.0;
+/// Gap between a row's leading icon and its text (Zed's `gap_2p5`).
+const ROW_ICON_GAP_PX: f32 = 10.0;
+/// Zed's rows are `rounded_sm` (`rems(0.25)`), tighter than `radii.row`, which
+/// stays as it is for the sidebar and history rows.
+const ROW_CORNER_PX: f32 = 4.0;
+/// Zed's picker query row is `h_9`.
+const QUERY_ROW_HEIGHT_PX: f32 = 36.0;
+/// Zed's `ListSubHeader` label box.
+const SECTION_HEADER_HEIGHT_PX: f32 = 20.0;
+/// Air a section header adds around its label box: `pt_1p5` + `pb_1`.
+const SECTION_HEADER_PAD_TOP_PX: f32 = 6.0;
+const SECTION_HEADER_PAD_BOTTOM_PX: f32 = 4.0;
+/// Every header but the first is introduced by a 1px rule with a margin above it.
+const SECTION_HEADER_MARGIN_PX: f32 = 4.0;
+/// Type sizes of a row's two lines, in rems — see [`picker_item_label`], which
+/// sets these on the lines themselves.
+const PRIMARY_TEXT_REMS: f32 = 0.875;
+const SECONDARY_TEXT_REMS: f32 = 0.75;
+/// GPUI's default text line height (`gpui::phi()`), which nothing in the popover
+/// tree overrides. `row_height_is_the_height_rows_actually_paint_at` pins this
+/// to what a drawn row really measures, so a future global override cannot
+/// silently desynchronise the windowed list's spacers from its rows.
+const LINE_HEIGHT_RATIO: f32 = 1.618_034;
+/// The list renders every row until its content is this many viewports tall;
+/// past that it renders only what can be seen. Short lists — every picker in the
+/// app bar one — therefore keep exactly the geometry they had before windowing.
+const WINDOWED_LIST_VIEWPORTS: f32 = 2.0;
+/// Rows rendered beyond each edge of the viewport, so a scroll of a few pixels
+/// does not expose an unrendered row before the next frame.
+const WINDOW_OVERDRAW_ROWS: usize = 4;
+/// Height the badge pickers cap their row list at. Shared so the panel that
+/// renders the list and the keyboard navigation that scrolls it agree on the
+/// viewport they are working in.
+pub const PICKER_LIST_MAX_HEIGHT_PX: f32 = 300.0;
+
 /// Where a filtered picker list ends up on screen: which items survived the
-/// query, in render order, and which scroll child each one is (section headers
-/// take child slots too, so `scroll_to_item` needs the translated index).
+/// query, in render order, which scroll child each one is (section headers take
+/// child slots too, so `scroll_to_item` needs the translated index), and where
+/// the query matched inside each one.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct PickerPromptLayout {
     pub item_indices: Vec<usize>,
     pub child_indices: Vec<usize>,
+    /// Match span, in the item's match-text coordinates, for the row's
+    /// highlight. Parallel to `item_indices`; `None` for an empty query.
+    pub match_ranges: Vec<Option<Range<usize>>>,
 }
 
 /// Resolve the display layout the same way [`PickerPrompt::render`] does, so
@@ -64,6 +128,7 @@ pub fn picker_prompt_layout(items: &[PickerPromptItem], query: &str) -> PickerPr
     let mut layout = PickerPromptLayout {
         item_indices: Vec::with_capacity(matches.len()),
         child_indices: Vec::with_capacity(matches.len()),
+        match_ranges: Vec::with_capacity(matches.len()),
     };
     let mut child_ix = 0usize;
     let mut sections = SectionRun::default();
@@ -73,9 +138,212 @@ pub fn picker_prompt_layout(items: &[PickerPromptItem], query: &str) -> PickerPr
         }
         layout.item_indices.push(m.index);
         layout.child_indices.push(child_ix);
+        layout.match_ranges.push(m.range.clone());
         child_ix += 1;
     }
     layout
+}
+
+/// Where every row of a rendered picker list sits vertically.
+///
+/// Row heights are fully determined by the type sizes and paddings above, so the
+/// list can be windowed — rendering only the rows the viewport can show, with
+/// spacers standing in for the rest — without measuring anything. Keyboard
+/// navigation shares this, because a row outside the window has no element for
+/// `ScrollHandle::scroll_to_item` to find.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct PickerPromptGeometry {
+    /// Top edge of each displayed row, measured from the first row rather than
+    /// from the scroll container: the list's own padding is a property of the
+    /// container, which the spacers must not repeat. `pad` converts to scroll
+    /// coordinates.
+    tops: Vec<Pixels>,
+    /// Height of each displayed row, excluding any section header above it.
+    heights: Vec<Pixels>,
+    /// Height of the header that precedes a row, or zero.
+    header_heights: Vec<Pixels>,
+    /// Height of every row and header together.
+    rows_height: Pixels,
+    /// The list's vertical padding, above the first row and below the last.
+    pad: Pixels,
+}
+
+impl PickerPromptGeometry {
+    pub fn new(
+        items: &[PickerPromptItem],
+        layout: &PickerPromptLayout,
+        ui_scale: impl Into<UiScale>,
+    ) -> Self {
+        let ui_scale = ui_scale.into();
+        let row_count = layout.item_indices.len();
+        let mut geometry = Self {
+            tops: Vec::with_capacity(row_count),
+            heights: Vec::with_capacity(row_count),
+            header_heights: Vec::with_capacity(row_count),
+            rows_height: px(0.0),
+            pad: ui_scale.px(LIST_PAD_PX),
+        };
+
+        let mut y = px(0.0);
+        let mut sections = SectionRun::default();
+        for (display_ix, item_ix) in layout.item_indices.iter().enumerate() {
+            let Some(item) = items.get(*item_ix) else {
+                continue;
+            };
+            let header = if sections.starts_new_section(item.section.as_ref()) {
+                section_header_height(ui_scale, display_ix == 0)
+            } else {
+                px(0.0)
+            };
+            let height = row_height(ui_scale, !item.secondary.is_empty());
+            geometry.header_heights.push(header);
+            geometry.tops.push(y + header);
+            geometry.heights.push(height);
+            y += header + height;
+        }
+
+        geometry.rows_height = y;
+        geometry
+    }
+
+    /// The scrollable height of the list: every row and header, plus the list's
+    /// padding above and below them.
+    pub fn total_height(&self) -> Pixels {
+        self.rows_height + self.pad * 2.0
+    }
+
+    /// Displayed rows a frame builds elements for at this scroll offset — every
+    /// row for a short list, a viewport's worth plus overdraw for a long one.
+    #[cfg(feature = "benchmarks")]
+    pub fn visible_rows(&self, offset: Pixels, viewport: Pixels) -> Range<usize> {
+        self.window(offset, viewport).rows
+    }
+
+    /// True when the list is long enough to be worth windowing.
+    fn is_windowed(&self, viewport: Pixels) -> bool {
+        viewport > px(0.0) && self.total_height() > viewport * WINDOWED_LIST_VIEWPORTS
+    }
+
+    /// The rows to render for a viewport of `viewport` at scroll offset `offset`
+    /// (0 at the top, growing downwards), plus the space the rows before and
+    /// after them occupy.
+    fn window(&self, offset: Pixels, viewport: Pixels) -> PickerPromptWindow {
+        let row_count = self.tops.len();
+        if !self.is_windowed(viewport) {
+            return PickerPromptWindow::everything(row_count);
+        }
+
+        // Into row coordinates: the scroll offset counts from above the list's
+        // top padding, which sits before the first row.
+        let top = (offset - self.pad).max(px(0.0));
+        let bottom = top + viewport;
+        let first_visible = (0..row_count)
+            .find(|ix| self.tops[*ix] + self.heights[*ix] > top)
+            .unwrap_or(0);
+        let last_visible = (first_visible..row_count)
+            .take_while(|ix| self.tops[*ix] < bottom)
+            .last()
+            .unwrap_or(first_visible);
+
+        let first = first_visible.saturating_sub(WINDOW_OVERDRAW_ROWS);
+        let last = (last_visible + WINDOW_OVERDRAW_ROWS).min(row_count - 1);
+
+        // Spacers stand in for the rows outside the window, so the content stays
+        // exactly as tall as it would be with every row rendered — the scrollbar
+        // and the scroll offset must not move when the window does. They cover
+        // the rows only: the list's own padding is still the list's.
+        let space_before = self.tops[first] - self.header_heights[first];
+        let space_after = self.rows_height - (self.tops[last] + self.heights[last]);
+        PickerPromptWindow {
+            rows: first..(last + 1),
+            space_before,
+            space_after: space_after.max(px(0.0)),
+        }
+    }
+
+    /// Scroll offset that brings displayed row `ix` into view, given where the
+    /// list is scrolled now. Returns the current offset when the row is already
+    /// fully visible, so arrowing within the visible rows does not scroll.
+    pub fn reveal_offset(&self, ix: usize, viewport: Pixels, current: Pixels) -> Pixels {
+        let Some(row_top) = self.tops.get(ix).copied() else {
+            return current;
+        };
+        let height = self.heights.get(ix).copied().unwrap_or(px(0.0));
+        // Scrolling to the first row of a section should show its header too.
+        let header = self.header_heights.get(ix).copied().unwrap_or(px(0.0));
+        // Into scroll coordinates, which the caller's `current` is also in.
+        let top = self.pad + row_top - header;
+        let bottom = self.pad + row_top + height;
+        let current = current.max(px(0.0));
+        let max_offset = (self.total_height() - viewport).max(px(0.0));
+
+        let offset = if top < current {
+            top
+        } else if bottom > current + viewport {
+            bottom - viewport
+        } else {
+            current
+        };
+        offset.clamp(px(0.0), max_offset)
+    }
+
+    /// Top edge of displayed row `ix`, below any header that introduces it.
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub fn row_top(&self, ix: usize) -> Pixels {
+        self.tops[ix]
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub fn row_height(&self, ix: usize) -> Pixels {
+        self.heights[ix]
+    }
+}
+
+struct PickerPromptWindow {
+    rows: Range<usize>,
+    space_before: Pixels,
+    space_after: Pixels,
+}
+
+impl PickerPromptWindow {
+    /// Every row, with no spacers — a list short enough not to need windowing,
+    /// and every picker that has not opted into it.
+    fn everything(row_count: usize) -> Self {
+        Self {
+            rows: 0..row_count,
+            space_before: px(0.0),
+            space_after: px(0.0),
+        }
+    }
+}
+
+/// Height of one line of row text at `size_rems`.
+fn text_line_height(ui_scale: UiScale, size_rems: f32) -> Pixels {
+    let rem_size: f32 = crate::ui_scale::rem_size_for_percent(ui_scale.percent()).into();
+    // Matches `TextStyle::line_height_in_pixels`, which rounds.
+    px((rem_size * size_rems * LINE_HEIGHT_RATIO).round())
+}
+
+/// Height of a picker row, which is its own text plus the air around it — or the
+/// standard control height, whichever is larger (`min_h`).
+fn row_height(ui_scale: UiScale, has_secondary: bool) -> Pixels {
+    let mut content =
+        ui_scale.px(ROW_PAD_Y_PX) * 2.0 + text_line_height(ui_scale, PRIMARY_TEXT_REMS);
+    if has_secondary {
+        content += text_line_height(ui_scale, SECONDARY_TEXT_REMS);
+    }
+    content.max(control_height_md(ui_scale))
+}
+
+fn section_header_height(ui_scale: UiScale, is_first: bool) -> Pixels {
+    let mut height = ui_scale
+        .px(SECTION_HEADER_PAD_TOP_PX + SECTION_HEADER_PAD_BOTTOM_PX + SECTION_HEADER_HEIGHT_PX);
+    if !is_first {
+        // The rule itself is `border_t_1`, which is one physical pixel at any
+        // scale, unlike the margin above it.
+        height += ui_scale.px(SECTION_HEADER_MARGIN_PX) + px(1.0);
+    }
+    height
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -84,6 +352,16 @@ pub struct PickerPromptItemPart {
     profile: TextTruncationProfile,
     flexible: bool,
     searchable: bool,
+    /// Renders one step quieter than the rest of its line — the line's own base
+    /// color already differs between the primary and secondary lines.
+    dim: bool,
+    /// Whether this part shows its full text on hover when it is truncated.
+    ///
+    /// Off costs nothing; on gives the part an element id, a hover listener and
+    /// a hitbox, which the pointer then has to be hit-tested against on every
+    /// move. Parts that cannot truncate — separators, a short sha, a relative
+    /// date — have nothing to reveal, so they opt out.
+    tooltip: bool,
     match_range: Option<Range<usize>>,
 }
 
@@ -96,7 +374,9 @@ impl PickerPrompt {
         Self {
             query_input,
             scroll_handle,
-            items: Vec::new(),
+            items: Rc::from(Vec::new()),
+            layout: None,
+            windowed: false,
             empty_text: "No matches".into(),
             max_height: px(360.0),
             tooltip_host: None,
@@ -111,7 +391,6 @@ impl PickerPrompt {
             query_row_trailing: None,
             list_override: None,
             remove_tooltip: None,
-            uniform_scroll: None,
         }
     }
 
@@ -120,7 +399,34 @@ impl PickerPrompt {
         I: IntoIterator<Item = T>,
         T: Into<PickerPromptItem>,
     {
-        self.items = items.into_iter().map(Into::into).collect();
+        self.items = items.into_iter().map(Into::into).collect::<Vec<_>>().into();
+        self
+    }
+
+    /// Renders only the rows the viewport can show, standing spacers in for the
+    /// rest, once the list grows past a couple of viewports.
+    ///
+    /// The picker's keyboard navigation must scroll by [`PickerPromptGeometry`]
+    /// when this is on: a row outside the window has no element for
+    /// `ScrollHandle::scroll_to_item` to find, so it would refuse to scroll to it.
+    pub fn windowed_rows(mut self) -> Self {
+        self.windowed = true;
+        self
+    }
+
+    /// Items and the layout already resolved for them, shared rather than
+    /// rebuilt. For pickers that memoise their row model across frames (see
+    /// `popover::rows_cache`); `layout` must have come from
+    /// [`picker_prompt_layout`] over these very items and the query the input
+    /// currently holds, or the rendered rows and the rows keyboard navigation
+    /// walks would disagree.
+    pub fn prebuilt_items(
+        mut self,
+        items: Rc<[PickerPromptItem]>,
+        layout: Rc<PickerPromptLayout>,
+    ) -> Self {
+        self.items = items;
+        self.layout = Some(layout);
         self
     }
 
@@ -197,19 +503,6 @@ impl PickerPrompt {
         self
     }
 
-    /// Draws the rows through a virtualized `uniform_list` tracked by `handle`,
-    /// building only the ones on screen instead of laying every match out on
-    /// every frame. For lists long enough that the cost shows (thousands of
-    /// authors, say); rows must be uniform height, so section headers are not
-    /// rendered on this path.
-    ///
-    /// Keyboard navigation has to scroll `handle` rather than the
-    /// [`ScrollHandle`] passed to [`Self::new`].
-    pub fn virtualized(mut self, handle: UniformListScrollHandle) -> Self {
-        self.uniform_scroll = Some(handle);
-        self
-    }
-
     /// Tooltip for the trailing remove button on
     /// [`PickerPromptItem::removable`] rows.
     pub fn remove_tooltip(mut self, tooltip: impl Into<SharedString>) -> Self {
@@ -251,16 +544,23 @@ impl PickerPrompt {
         let ui_scale = ui_scale.into();
         let scaled_px = |value| ui_scale.px(value);
 
-        let query = self
-            .query_input
-            .read_with(cx, |input, _| input.text().trim().to_string());
-        let matches = match_items(&self.items, &section_groups(&self.items), &query);
+        // Reuse the caller's layout when it supplied one; otherwise filter here.
+        let layout = match self.layout.clone() {
+            Some(layout) => layout,
+            None => {
+                let query = self
+                    .query_input
+                    .read_with(cx, |input, _| input.text().trim().to_string());
+                Rc::new(picker_prompt_layout(&self.items, &query))
+            }
+        };
+        let row_count = layout.item_indices.len();
 
         let selected_index = self.selected_index.and_then(|ix| {
-            if matches.is_empty() {
+            if row_count == 0 {
                 None
             } else {
-                Some(ix.min(matches.len() - 1))
+                Some(ix.min(row_count - 1))
             }
         });
 
@@ -283,7 +583,7 @@ impl PickerPrompt {
                     .min_w(px(0.0))
                     .when(attached_list_surface || padded_query_row, |query_row| {
                         query_row
-                            .h(control_height_md(ui_scale))
+                            .h(scaled_px(QUERY_ROW_HEIGHT_PX))
                             .items_center()
                             .px(scaled_px(10.0))
                     })
@@ -307,99 +607,60 @@ impl PickerPrompt {
             return body.child(div().w_full().min_w(px(0.0)).child(list_override));
         }
 
-        if matches.is_empty() {
-            let list = div()
-                .id("picker_prompt_list")
-                .flex()
-                .flex_col()
-                .overflow_y_scroll()
-                .max_h(self.max_height)
-                .track_scroll(&scroll_handle)
-                .child(
-                    div()
-                        .h(control_height_md(ui_scale))
-                        .w_full()
-                        .flex()
-                        .items_center()
-                        .px(scaled_px(8.0))
-                        .text_sm()
-                        .line_height(scaled_px(18.0))
-                        .text_color(theme.colors.text_muted)
-                        .child(self.empty_text),
-                );
-            let gutter = Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
-            let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
-            #[cfg(test)]
-            let scrollbar = scrollbar.debug_selector("picker_prompt_scrollbar");
-            return body.child(
+        let mut list = div()
+            .id("picker_prompt_list")
+            .flex()
+            .flex_col()
+            .overflow_y_scroll()
+            .max_h(self.max_height)
+            .py(scaled_px(LIST_PAD_PX))
+            .pl(scaled_px(LIST_PAD_PX))
+            .track_scroll(&scroll_handle);
+        list = restrict_scroll_to_vertical_axis(list);
+
+        if row_count == 0 {
+            list = list.child(
                 div()
-                    .id("picker_prompt_list_container")
-                    .relative()
+                    .h(control_height_md(ui_scale))
                     .w_full()
-                    .min_w(px(0.0))
-                    .child(restrict_scroll_to_vertical_axis(list).pr(gutter))
-                    .child(scrollbar.render(theme)),
+                    .flex()
+                    .items_center()
+                    .px(scaled_px(ROW_PAD_X_PX))
+                    .text_sm()
+                    .line_height(scaled_px(18.0))
+                    .text_color(theme.colors.text_muted)
+                    .child(self.empty_text),
             );
-        }
-
-        let rows = PickerRows {
-            theme,
-            ui_scale,
-            items: self.items,
-            matches,
-            selected_index,
-            marked_index: self.marked_index,
-            leading_icon,
-            selected_hint,
-            accent_selection,
-            select_on_mouse_down,
-            remove_tooltip,
-            tooltip_host: self.tooltip_host,
-            on_select,
-            on_remove,
-        };
-
-        let (list, scrollbar) = if let Some(uniform_scroll) = self.uniform_scroll {
-            let row_count = rows.matches.len();
-            // Fit the rows when there are few of them; the list only takes the
-            // full height once it has enough rows to fill it.
-            let list_height = (control_height_md(ui_scale) * row_count as f32).min(self.max_height);
-            let gutter = Scrollbar::visible_gutter(uniform_scroll.clone(), ScrollbarAxis::Vertical);
-            let list = uniform_list(
-                "picker_prompt_list",
-                row_count,
-                cx.processor(move |_this, range: Range<usize>, _window, cx| {
-                    range
-                        .map(|display_ix| rows.row(display_ix, cx).into_any_element())
-                        .collect::<Vec<AnyElement>>()
-                }),
-            )
-            .w_full()
-            .h(list_height)
-            .pr(gutter)
-            .track_scroll(&uniform_scroll);
-            let scrollbar = Scrollbar::new("picker_prompt_scrollbar", uniform_scroll);
-            #[cfg(test)]
-            let scrollbar = scrollbar.debug_selector("picker_prompt_scrollbar");
-            (
-                restrict_scroll_to_vertical_axis(list).into_any_element(),
-                scrollbar.render(theme),
-            )
         } else {
-            let mut list = div()
-                .id("picker_prompt_list")
-                .flex()
-                .flex_col()
-                .overflow_y_scroll()
-                .max_h(self.max_height)
-                .track_scroll(&scroll_handle);
-            list = restrict_scroll_to_vertical_axis(list);
-
+            // Long lists render only what the viewport can show; the rows above
+            // and below it become two spacers of exactly their height, so the
+            // scrollbar and the scroll offset behave as if all of them were
+            // there.
+            let window = if self.windowed {
+                let geometry = PickerPromptGeometry::new(&self.items, &layout, ui_scale);
+                geometry.window(-scroll_handle.offset().y, self.max_height)
+            } else {
+                PickerPromptWindow::everything(row_count)
+            };
+            if window.space_before > px(0.0) {
+                list = list.child(div().flex_shrink_0().w_full().h(window.space_before));
+            }
             let mut sections = SectionRun::default();
-            for display_ix in 0..rows.matches.len() {
-                let item = &rows.items[rows.matches[display_ix].index];
-                if sections.starts_new_section(item.section.as_ref())
-                    && let Some(section) = item.section.clone()
+            // The run has to start where the window does, or the first rendered
+            // row of a section that began off-screen would repeat its header.
+            for skipped in 0..window.rows.start {
+                let item_ix = layout.item_indices[skipped];
+                sections.starts_new_section(self.items[item_ix].section.as_ref());
+            }
+            for display_ix in window.rows.clone() {
+                let original_index = layout.item_indices[display_ix];
+                let match_range = layout
+                    .match_ranges
+                    .get(display_ix)
+                    .cloned()
+                    .unwrap_or_default();
+                if sections.starts_new_section(self.items[original_index].section.as_ref())
+                    && let Some(section) = self.items[original_index].section.clone()
                 {
                     list = list.child(section_header_row(
                         theme,
@@ -408,14 +669,187 @@ impl PickerPrompt {
                         display_ix == 0,
                     ));
                 }
-                list = list.child(rows.row(display_ix, cx));
+                let label = picker_item_label(
+                    theme,
+                    &self.items[original_index],
+                    match_range,
+                    self.tooltip_host.clone(),
+                    cx,
+                );
+                let on_select = Arc::clone(&on_select);
+                let row_initials = self.items[original_index].repository_initials.clone();
+                let has_initials = row_initials.is_some();
+                let is_selected = selected_index == Some(display_ix);
+                let is_marked = self.marked_index == Some(original_index);
+                let row_icon = (!has_initials)
+                    .then(|| row_leading_icon(&self.items[original_index], leading_icon, is_marked))
+                    .flatten();
+                let is_removable = self.items[original_index].removable;
+                // Only the remove button reveals itself on row hover, so only
+                // removable rows pay for a hover group — naming one costs a
+                // formatted string and a group-hitbox registration per row, per
+                // frame.
+                let row_group: Option<SharedString> =
+                    is_removable.then(|| format!("picker_prompt_row_{original_index}").into());
+                let mut row = div()
+                    .id(("picker_prompt_item", original_index))
+                    .debug_selector(move || format!("picker_prompt_item_{original_index}"))
+                    .when_some(row_group.clone(), |row, group| row.group(group))
+                    // Sized by its own text rather than pinned to a height, so a
+                    // row with a detail line grows by exactly one line box.
+                    // `flex_shrink_0` is what keeps that honest: once the rows
+                    // overflow the list's max height, a shrinkable row would be
+                    // squashed below its content and its two lines would overlap.
+                    .flex_shrink_0()
+                    .min_h(control_height_md(ui_scale))
+                    .py(scaled_px(ROW_PAD_Y_PX))
+                    .w_full()
+                    .relative()
+                    .flex()
+                    .items_center()
+                    .gap(scaled_px(ROW_ICON_GAP_PX))
+                    .px(scaled_px(ROW_PAD_X_PX))
+                    .rounded(scaled_px(ROW_CORNER_PX))
+                    .cursor(CursorStyle::PointingHand)
+                    .when_some(row_icon, |row, icon| {
+                        row.child(
+                            crate::view::icons::svg_icon(
+                                icon,
+                                if is_marked {
+                                    theme.colors.accent
+                                } else {
+                                    theme.colors.text_muted
+                                },
+                                scaled_px(14.0),
+                            )
+                            .debug_selector(move || {
+                                format!("picker_prompt_item_icon_{original_index}")
+                            }),
+                        )
+                    })
+                    .when_some(row_initials, |row, initials| {
+                        row.child(
+                            super::repository_initials_box(
+                                theme,
+                                ui_scale,
+                                initials,
+                                is_selected || is_marked,
+                            )
+                            .debug_selector(move || {
+                                format!("picker_prompt_repository_badge_{original_index}")
+                            }),
+                        )
+                    })
+                    .child(div().flex_1().min_w(px(0.0)).child(label))
+                    // Only rows with repository initials still need this: they have
+                    // no icon slot to turn into a check.
+                    .when(is_marked && has_initials, |row| {
+                        row.child(
+                            div()
+                                .flex_shrink_0()
+                                .pl(scaled_px(6.0))
+                                .debug_selector(move || {
+                                    format!("picker_prompt_item_trailing_check_{original_index}")
+                                })
+                                .child(crate::view::icons::svg_icon(
+                                    "icons/check.svg",
+                                    theme.colors.accent,
+                                    scaled_px(12.0),
+                                )),
+                        )
+                    })
+                    .when(is_selected, |row| {
+                        row.when_some(selected_hint.clone(), |row, hint| {
+                            row.child(
+                                div()
+                                    .flex_shrink_0()
+                                    .min_w(scaled_px(34.0))
+                                    .h(scaled_px(22.0))
+                                    .px(scaled_px(6.0))
+                                    .flex()
+                                    .items_center()
+                                    .justify_center()
+                                    .rounded(scaled_px(4.0))
+                                    .bg(with_alpha(
+                                        theme.colors.text,
+                                        if theme.is_dark { 0.06 } else { 0.035 },
+                                    ))
+                                    .font_family(
+                                        crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
+                                    )
+                                    .text_xs()
+                                    .text_color(theme.colors.text_muted)
+                                    .child(hint),
+                            )
+                        })
+                    })
+                    .when_some(row_group.clone(), |row, row_group| {
+                        row.child(remove_row_button(
+                            theme,
+                            ui_scale,
+                            original_index,
+                            row_group,
+                            // Keyboard users never hover, so the row the
+                            // selection sits on keeps its button visible.
+                            is_selected,
+                            remove_tooltip.clone(),
+                            self.tooltip_host.clone(),
+                            Arc::clone(&on_remove),
+                            cx,
+                        ))
+                    });
+                if select_on_mouse_down {
+                    row = row.on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            (on_select)(this, original_index, &ClickEvent::default(), window, cx);
+                        }),
+                    );
+                } else {
+                    row = row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+                        (on_select)(this, original_index, event, window, cx);
+                    }));
+                }
+                // Text-alpha overlays keep the highlight visible on the
+                // elevated popover surface, unlike the canvas-tuned tokens.
+                let hover_overlay = theme.hover_overlay();
+                let active_overlay = theme.active_overlay();
+                if is_selected {
+                    row = row.bg(active_overlay).when(accent_selection, |row| {
+                        row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
+                            div()
+                                .absolute()
+                                .left_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(scaled_px(3.0))
+                                .rounded_tr(px(theme.radii.row))
+                                .rounded_br(px(theme.radii.row))
+                                .bg(theme.colors.accent),
+                        )
+                    });
+                }
+                row = row
+                    .hover(move |s| s.bg(hover_overlay))
+                    .active(move |s| s.bg(active_overlay));
+                list = list.child(row);
             }
+            if window.space_after > px(0.0) {
+                list = list.child(div().flex_shrink_0().w_full().h(window.space_after));
+            }
+        }
 
-            let gutter = Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
+        let scrollbar_gutter =
+            Scrollbar::visible_gutter(scroll_handle.clone(), ScrollbarAxis::Vertical);
+        // Mirrors the list's left padding so rows stay centred in the list, with
+        // the scrollbar's own gutter added on top of it when one is showing.
+        let list = list.pr(scrollbar_gutter + scaled_px(LIST_PAD_PX));
+        let scrollbar = {
             let scrollbar = Scrollbar::new("picker_prompt_scrollbar", scroll_handle);
             #[cfg(test)]
             let scrollbar = scrollbar.debug_selector("picker_prompt_scrollbar");
-            (list.pr(gutter).into_any_element(), scrollbar.render(theme))
+            scrollbar.render(theme)
         };
 
         body.child(
@@ -427,171 +861,6 @@ impl PickerPrompt {
                 .child(list)
                 .child(scrollbar),
         )
-    }
-}
-
-/// Everything a result row is drawn from, kept in one place so the plain and
-/// virtualized lists build identical rows.
-struct PickerRows<V: 'static> {
-    theme: AppTheme,
-    ui_scale: UiScale,
-    items: Vec<PickerPromptItem>,
-    matches: Vec<Match>,
-    selected_index: Option<usize>,
-    marked_index: Option<usize>,
-    leading_icon: Option<&'static str>,
-    selected_hint: Option<SharedString>,
-    accent_selection: bool,
-    select_on_mouse_down: bool,
-    remove_tooltip: Option<SharedString>,
-    tooltip_host: Option<WeakEntity<TooltipHost>>,
-    on_select: Arc<OnSelectFn<V>>,
-    on_remove: Arc<OnRemoveFn<V>>,
-}
-
-impl<V: 'static> PickerRows<V> {
-    /// `display_ix` indexes the filtered, rendered order; the callbacks and the
-    /// marked row use the item's original index.
-    fn row(&self, display_ix: usize, cx: &gpui::Context<V>) -> gpui::Stateful<Div> {
-        let theme = self.theme;
-        let ui_scale = self.ui_scale;
-        let scaled_px = |value| ui_scale.px(value);
-        let m = &self.matches[display_ix];
-        let original_index = m.index;
-        let item = &self.items[original_index];
-
-        let label = picker_item_label(theme, item, m.range.clone(), self.tooltip_host.clone(), cx);
-        let on_select = Arc::clone(&self.on_select);
-        let row_initials = item.repository_initials.clone();
-        let row_icon = row_initials
-            .is_none()
-            .then(|| item.icon.or(self.leading_icon))
-            .flatten();
-        let is_selected = self.selected_index == Some(display_ix);
-        let is_marked = self.marked_index == Some(original_index);
-        let is_removable = item.removable;
-        let selected_hint = self.selected_hint.clone();
-        let accent_selection = self.accent_selection;
-        let row_group: SharedString = format!("picker_prompt_row_{original_index}").into();
-        let mut row = div()
-            .id(("picker_prompt_item", original_index))
-            .debug_selector(move || format!("picker_prompt_item_{original_index}"))
-            .group(row_group.clone())
-            .h(control_height_md(ui_scale))
-            .w_full()
-            .relative()
-            .flex()
-            .items_center()
-            .gap(scaled_px(7.0))
-            .px(scaled_px(8.0))
-            .rounded(px(theme.radii.row))
-            .cursor(CursorStyle::PointingHand)
-            .when_some(row_icon, |row, icon| {
-                row.child(crate::view::icons::svg_icon(
-                    icon,
-                    if is_selected {
-                        theme.colors.accent
-                    } else {
-                        theme.colors.text_muted
-                    },
-                    scaled_px(14.0),
-                ))
-            })
-            .when_some(row_initials, |row, initials| {
-                row.child(
-                    super::repository_initials_box(
-                        theme,
-                        ui_scale,
-                        initials,
-                        is_selected || is_marked,
-                    )
-                    .debug_selector(move || {
-                        format!("picker_prompt_repository_badge_{original_index}")
-                    }),
-                )
-            })
-            .child(div().flex_1().min_w(px(0.0)).child(label))
-            .when(is_marked, |row| {
-                row.child(div().flex_shrink_0().pl(scaled_px(6.0)).child(
-                    crate::view::icons::svg_icon(
-                        "icons/check.svg",
-                        theme.colors.accent,
-                        scaled_px(12.0),
-                    ),
-                ))
-            })
-            .when(is_selected, |row| {
-                row.when_some(selected_hint, |row, hint| {
-                    row.child(
-                        div()
-                            .flex_shrink_0()
-                            .min_w(scaled_px(34.0))
-                            .h(scaled_px(22.0))
-                            .px(scaled_px(6.0))
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .rounded(scaled_px(4.0))
-                            .bg(with_alpha(
-                                theme.colors.text,
-                                if theme.is_dark { 0.06 } else { 0.035 },
-                            ))
-                            .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child(hint),
-                    )
-                })
-            })
-            .when(is_removable, |row| {
-                row.child(remove_row_button(
-                    theme,
-                    ui_scale,
-                    original_index,
-                    row_group.clone(),
-                    // Keyboard users never hover, so the row the selection sits
-                    // on keeps its button visible.
-                    is_selected,
-                    self.remove_tooltip.clone(),
-                    self.tooltip_host.clone(),
-                    Arc::clone(&self.on_remove),
-                    cx,
-                ))
-            });
-        if self.select_on_mouse_down {
-            row = row.on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _event: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    (on_select)(this, original_index, &ClickEvent::default(), window, cx);
-                }),
-            );
-        } else {
-            row = row.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
-                (on_select)(this, original_index, event, window, cx);
-            }));
-        }
-        // Text-alpha overlays keep the highlight visible on the elevated
-        // popover surface, unlike the canvas-tuned tokens.
-        let hover_overlay = theme.hover_overlay();
-        let active_overlay = theme.active_overlay();
-        if is_selected {
-            row = row.bg(active_overlay).when(accent_selection, |row| {
-                row.rounded_tl(px(0.0)).rounded_bl(px(0.0)).child(
-                    div()
-                        .absolute()
-                        .left_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(scaled_px(3.0))
-                        .rounded_tr(px(theme.radii.row))
-                        .rounded_br(px(theme.radii.row))
-                        .bg(theme.colors.accent),
-                )
-            });
-        }
-        row.hover(move |s| s.bg(hover_overlay))
-            .active(move |s| s.bg(active_overlay))
     }
 }
 
@@ -610,29 +879,35 @@ impl PickerPromptItem {
     {
         let mut display_text = String::new();
         let mut match_text = String::new();
-        let mut built_parts = Vec::new();
-
-        for mut part in parts {
-            display_text.push_str(part.text.as_ref());
-
-            if part.searchable {
-                let start = match_text.len();
-                match_text.push_str(part.text.as_ref());
-                part.match_range = Some(start..match_text.len());
-            }
-
-            built_parts.push(part);
-        }
+        let built_parts = accumulate_parts(parts, Some(&mut display_text), &mut match_text);
 
         Self {
             display_text: display_text.into(),
             match_text: match_text.into(),
             parts: built_parts,
+            secondary: Vec::new(),
             icon: None,
             repository_initials: None,
             section: None,
             removable: false,
         }
+    }
+
+    /// Adds a second, quieter line of supporting detail below the primary parts,
+    /// making the row two lines tall.
+    ///
+    /// Searchable secondary parts still filter and highlight — a worktree's path
+    /// finds its row from the second line just as its name does from the first.
+    /// They stay out of `display_text` on purpose: that is the picker's sort key,
+    /// which should order rows by what the eye reads first.
+    pub fn secondary_parts<I>(mut self, parts: I) -> Self
+    where
+        I: IntoIterator<Item = PickerPromptItemPart>,
+    {
+        let mut match_text = self.match_text.to_string();
+        self.secondary = accumulate_parts(parts, None, &mut match_text);
+        self.match_text = match_text.into();
+        self
     }
 
     pub fn icon(mut self, icon: &'static str) -> Self {
@@ -672,6 +947,72 @@ impl PickerPromptItem {
     fn parts(&self) -> &[PickerPromptItemPart] {
         self.parts.as_slice()
     }
+
+    fn secondary(&self) -> &[PickerPromptItemPart] {
+        self.secondary.as_slice()
+    }
+
+    /// The secondary line's text, part by part — what a row's detail line says.
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(crate) fn debug_secondary_text(&self) -> String {
+        self.secondary
+            .iter()
+            .map(|part| part.text.as_ref())
+            .collect()
+    }
+
+    #[cfg(feature = "benchmarks")]
+    pub fn debug_display_text(&self) -> &str {
+        self.display_text.as_ref()
+    }
+
+    /// Text parts across both of the row's lines — one element each.
+    #[cfg(feature = "benchmarks")]
+    pub fn debug_part_count(&self) -> usize {
+        self.parts.len() + self.secondary.len()
+    }
+
+    /// Parts carrying a hover tooltip, and so an element id, a hover listener
+    /// and a hitbox.
+    #[cfg(feature = "benchmarks")]
+    pub fn debug_tooltip_part_count(&self) -> usize {
+        self.parts
+            .iter()
+            .chain(self.secondary.iter())
+            .filter(|part| part.tooltip)
+            .count()
+    }
+}
+
+/// Appends `parts` to a row's match text — and, for the primary line, its display
+/// text — recording each searchable part's span in match-text coordinates so a
+/// query's hit can be highlighted in the part that actually contains it.
+///
+/// `display_text` is `None` for the secondary line, which stays out of the sort
+/// key by design.
+fn accumulate_parts<I>(
+    parts: I,
+    mut display_text: Option<&mut String>,
+    match_text: &mut String,
+) -> Vec<PickerPromptItemPart>
+where
+    I: IntoIterator<Item = PickerPromptItemPart>,
+{
+    let mut built = Vec::new();
+    for mut part in parts {
+        if let Some(display_text) = display_text.as_deref_mut() {
+            display_text.push_str(part.text.as_ref());
+        }
+
+        if part.searchable {
+            let start = match_text.len();
+            match_text.push_str(part.text.as_ref());
+            part.match_range = Some(start..match_text.len());
+        }
+
+        built.push(part);
+    }
+    built
 }
 
 impl PickerPromptItemPart {
@@ -681,12 +1022,28 @@ impl PickerPromptItemPart {
             profile: TextTruncationProfile::End,
             flexible: true,
             searchable: true,
+            dim: false,
+            tooltip: true,
             match_range: None,
         }
     }
 
+    /// Punctuation and connective text between the parts that carry meaning, so
+    /// it renders one step quieter than they do. Never truncated, so it carries
+    /// no tooltip.
     pub fn separator(text: impl Into<SharedString>) -> Self {
-        Self::new(text).flexible(false).searchable(false)
+        Self::new(text)
+            .flexible(false)
+            .searchable(false)
+            .dim()
+            .tooltip(false)
+    }
+
+    /// Opts this part out of the truncated-text hover tooltip. Use for text that
+    /// cannot be cut off — a short sha, a relative date, a fixed label.
+    pub fn tooltip(mut self, tooltip: bool) -> Self {
+        self.tooltip = tooltip;
+        self
     }
 
     pub fn path(text: impl Into<SharedString>) -> Self {
@@ -700,6 +1057,12 @@ impl PickerPromptItemPart {
 
     pub fn flexible(mut self, flexible: bool) -> Self {
         self.flexible = flexible;
+        self
+    }
+
+    /// Renders this part one step quieter than the rest of its line.
+    pub fn dim(mut self) -> Self {
+        self.dim = true;
         self
     }
 
@@ -833,6 +1196,25 @@ fn match_items(items: &[PickerPromptItem], groups: &[usize], query: &str) -> Vec
     out
 }
 
+/// The icon in a row's leading slot.
+///
+/// The marked row says "this is the current one" by turning its icon into a check
+/// rather than keeping its own icon and adding a second one at the far end — which
+/// also leaves the row's trailing edge free for its hover actions.
+fn row_leading_icon(
+    item: &PickerPromptItem,
+    leading_icon: Option<&'static str>,
+    is_marked: bool,
+) -> Option<&'static str> {
+    if is_marked {
+        return Some("icons/check.svg");
+    }
+    item.icon.or(leading_icon)
+}
+
+/// A group label above a run of rows. Plain muted text rather than a heavier
+/// treatment, and every section after the first is introduced by a rule, so the
+/// groups separate without the labels having to shout.
 fn section_header_row(
     theme: AppTheme,
     ui_scale: UiScale,
@@ -843,21 +1225,106 @@ fn section_header_row(
     div()
         .w_full()
         .flex_shrink_0()
-        .px(scaled_px(8.0))
-        .pt(scaled_px(if is_first { 4.0 } else { 10.0 }))
+        .when(!is_first, |header| {
+            header
+                .mt(scaled_px(4.0))
+                .border_t_1()
+                .border_color(theme.colors.border_variant)
+        })
+        .pt(scaled_px(6.0))
         .pb(scaled_px(4.0))
-        .text_xs()
-        .font_weight(FontWeight::SEMIBOLD)
-        .line_height(scaled_px(16.0))
-        .text_color(theme.colors.text_muted)
-        .whitespace_nowrap()
-        .overflow_hidden()
-        .child(label)
+        .child(
+            div()
+                .h(scaled_px(SECTION_HEADER_HEIGHT_PX))
+                .w_full()
+                .flex()
+                .items_center()
+                .px(scaled_px(ROW_PAD_X_PX))
+                .text_xs()
+                .text_color(theme.colors.text_muted)
+                .whitespace_nowrap()
+                .overflow_hidden()
+                .child(label),
+        )
 }
 
 fn picker_item_label<V: 'static>(
     theme: AppTheme,
     item: &PickerPromptItem,
+    range: Option<Range<usize>>,
+    tooltip_host: Option<WeakEntity<TooltipHost>>,
+    cx: &gpui::Context<V>,
+) -> Div {
+    let has_secondary = !item.secondary().is_empty();
+    // The title line stays at normal weight even with detail below it: the smaller,
+    // muted detail line supplies the contrast, so bolding the title only makes the
+    // list noisier.
+    let primary = picker_item_line(
+        theme,
+        LineRole {
+            text_id: "picker_prompt_label_part_text",
+            parts: item.parts(),
+            base_color: theme.colors.text,
+            dim_color: theme.colors.text_muted,
+            text_size: gpui::rems(0.875),
+            weight: FontWeight::NORMAL,
+        },
+        range.clone(),
+        tooltip_host.clone(),
+        cx,
+    );
+
+    if !has_secondary {
+        return primary;
+    }
+
+    let secondary = picker_item_line(
+        theme,
+        LineRole {
+            text_id: "picker_prompt_secondary_part_text",
+            parts: item.secondary(),
+            base_color: theme.colors.text_muted,
+            // Half-strength muted, the weight Zed gives the dots between a row's
+            // detail fields.
+            dim_color: with_alpha(theme.colors.text_muted, 0.5),
+            text_size: gpui::rems(0.75),
+            weight: FontWeight::NORMAL,
+        },
+        range,
+        tooltip_host,
+        cx,
+    );
+
+    div()
+        .flex()
+        .flex_col()
+        .w_full()
+        .min_w(px(0.0))
+        .overflow_hidden()
+        .child(primary)
+        .child(secondary)
+}
+
+/// How one line of a picker row renders: which parts it holds and the type and
+/// color treatment that mark it as the title or the supporting detail.
+struct LineRole<'a> {
+    /// Element-id stem for this line's tooltip-bearing parts. Both lines of a row
+    /// live under the same parent, so their part ids must not collide.
+    text_id: &'static str,
+    parts: &'a [PickerPromptItemPart],
+    base_color: gpui::Rgba,
+    dim_color: gpui::Rgba,
+    /// Set on the line *and* on each `TruncatedText`. The latter measures itself
+    /// against the text style in effect during layout, which does not yet carry
+    /// the line's own `text_sm`/`text_xs`; leaving it to inherit reserved a line
+    /// box for 1rem text and left both lines sitting loose in it.
+    text_size: gpui::Rems,
+    weight: FontWeight,
+}
+
+fn picker_item_line<V: 'static>(
+    theme: AppTheme,
+    role: LineRole<'_>,
     range: Option<Range<usize>>,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
     cx: &gpui::Context<V>,
@@ -868,47 +1335,55 @@ fn picker_item_label<V: 'static>(
         ..HighlightStyle::default()
     };
 
-    let mut label = div()
+    // `TruncatedText` shapes against the inherited text style, so size and
+    // weight are set here on the line rather than per part.
+    let mut line = div()
         .flex()
         .w_full()
         .min_w(px(0.0))
         .items_center()
         .overflow_hidden()
         .whitespace_nowrap()
-        .text_sm();
+        .font_weight(role.weight)
+        .text_size(role.text_size);
 
-    for (ix, part) in item.parts().iter().enumerate() {
+    for (ix, part) in role.parts.iter().enumerate() {
         let highlight_range = part.local_match_range(range.as_ref());
-        let mut container = div().min_w(px(0.0)).overflow_hidden().whitespace_nowrap();
-        if part.flexible {
-            container = container.flex_1();
+        // `TruncatedText` already wraps its element in a clipping box, so the
+        // flex behaviour goes on that box rather than nesting a second div
+        // around it — this is one element per part instead of two.
+        let flex = if part.flexible {
+            TruncatedTextFlex::Grow
         } else if part.searchable {
-            container.style().flex_shrink = Some(1.0);
+            TruncatedTextFlex::Shrink
         } else {
-            container = container.flex_shrink_0();
-        }
+            TruncatedTextFlex::Fixed
+        };
 
         let mut text = TruncatedText::new(part.text.clone())
-            .id(("picker_prompt_label_part_text", ix))
             .profile(part.profile)
-            .text_color(theme.colors.text);
+            .flex(flex)
+            .text_size(role.text_size)
+            .text_color(if part.dim {
+                role.dim_color
+            } else {
+                role.base_color
+            });
         if let Some(highlight_range) = highlight_range.clone() {
             text = text
                 .focus_range(Some(highlight_range.clone()))
                 .highlights([(highlight_range, match_highlight)]);
         }
-        if let Some(tooltip_host) = tooltip_host.clone() {
-            text = text.full_text_tooltip(tooltip_host);
+        // The id exists for the tooltip's hover state; without one the part is a
+        // plain clipping box and needs no element state at all.
+        if let Some(tooltip_host) = tooltip_host.clone().filter(|_| part.tooltip) {
+            text = text.id((role.text_id, ix)).full_text_tooltip(tooltip_host);
         }
 
-        label = label.child(
-            container
-                .id(("picker_prompt_label_part", ix))
-                .child(text.render(cx)),
-        );
+        line = line.child(text.render(cx));
     }
 
-    label
+    line
 }
 
 /// The trailing `x` on a removable row — drops the entry from the list the
@@ -1077,6 +1552,74 @@ mod tests {
     }
 
     #[test]
+    fn the_marked_row_shows_a_check_instead_of_its_own_icon() {
+        let item = PickerPromptItem::plain("main").icon("icons/git_branch.svg");
+
+        assert_eq!(
+            row_leading_icon(&item, None, true),
+            Some("icons/check.svg"),
+            "the marked row gives up its icon for the check"
+        );
+        assert_eq!(
+            row_leading_icon(&item, None, false),
+            Some("icons/git_branch.svg")
+        );
+    }
+
+    #[test]
+    fn unmarked_rows_without_an_icon_fall_back_to_the_picker_wide_one() {
+        let item = PickerPromptItem::plain("main");
+
+        assert_eq!(
+            row_leading_icon(&item, Some("icons/git_branch.svg"), false),
+            Some("icons/git_branch.svg")
+        );
+        assert_eq!(row_leading_icon(&item, None, false), None);
+    }
+
+    #[test]
+    fn secondary_parts_keep_filtering_and_highlighting_the_row() {
+        // The worktree picker moved the path onto the second line; a path query
+        // must still find the row and light up the matched span there.
+        let item =
+            PickerPromptItem::from_parts([PickerPromptItemPart::new("feature").flexible(false)])
+                .secondary_parts([PickerPromptItemPart::path("/tmp/ws/feature/src/main.rs")]);
+
+        let matches = match_items(std::slice::from_ref(&item), &[0], "src");
+        let range = matches
+            .first()
+            .and_then(|m| m.range.clone())
+            .expect("a path query must still match");
+
+        assert_eq!(item.parts()[0].local_match_range(Some(&range)), None);
+        assert_eq!(
+            item.secondary()[0].local_match_range(Some(&range)),
+            Some(16..19),
+            "the hit belongs to the secondary part that contains it"
+        );
+    }
+
+    #[test]
+    fn secondary_parts_stay_out_of_the_sort_key() {
+        // Sorting is by what the eye reads first, so a long detail line must not
+        // push a short-titled row down the list.
+        let items = vec![
+            PickerPromptItem::from_parts([PickerPromptItemPart::new("main")]).secondary_parts([
+                PickerPromptItemPart::path("/a/very/long/path/that/dwarfs/the/title"),
+            ]),
+            PickerPromptItem::from_parts([PickerPromptItemPart::new("maintenance")]),
+        ];
+
+        let matches = match_items(&items, &section_groups(&items), "main");
+
+        assert_eq!(
+            matches.iter().map(|m| m.index).collect::<Vec<_>>(),
+            vec![0, 1],
+            "the shorter title sorts first regardless of its detail line"
+        );
+    }
+
+    #[test]
     fn picker_prompt_layout_reserves_a_child_slot_per_section_header() {
         let items = vec![
             PickerPromptItem::plain("alpha").section("Open"),
@@ -1118,6 +1661,194 @@ mod tests {
 
         assert_eq!(layout.item_indices, vec![1]);
         assert_eq!(layout.child_indices, vec![1]);
+    }
+
+    fn two_line_items(count: usize) -> Vec<PickerPromptItem> {
+        (0..count)
+            .map(|ix| {
+                PickerPromptItem::plain(format!("branch-{ix}"))
+                    .secondary_parts([PickerPromptItemPart::new("Ada  •  2 days ago")])
+            })
+            .collect()
+    }
+
+    fn geometry_for(items: &[PickerPromptItem]) -> PickerPromptGeometry {
+        let layout = picker_prompt_layout(items, "");
+        PickerPromptGeometry::new(items, &layout, UiScale::from_percent(100))
+    }
+
+    #[test]
+    fn a_list_that_barely_scrolls_renders_every_row() {
+        // Windowing only earns its keep on long lists; short ones keep exactly
+        // the geometry they had before it existed.
+        let items = two_line_items(8);
+        let geometry = geometry_for(&items);
+        let viewport = px(PICKER_LIST_MAX_HEIGHT_PX);
+
+        let window = geometry.window(px(0.0), viewport);
+
+        assert!(!geometry.is_windowed(viewport));
+        assert_eq!(window.rows, 0..8);
+        assert_eq!(window.space_before, px(0.0));
+        assert_eq!(window.space_after, px(0.0));
+    }
+
+    #[test]
+    fn a_long_list_renders_only_what_can_be_seen() {
+        let items = two_line_items(1_200);
+        let geometry = geometry_for(&items);
+        let viewport = px(PICKER_LIST_MAX_HEIGHT_PX);
+
+        let window = geometry.window(px(0.0), viewport);
+
+        assert!(geometry.is_windowed(viewport));
+        // A 300px viewport over 50px rows is six rows, plus the overdraw below.
+        assert!(
+            window.rows.len() < 20,
+            "expected a viewport-sized window, rendered {} rows",
+            window.rows.len()
+        );
+        assert_eq!(window.rows.start, 0);
+    }
+
+    #[test]
+    fn the_windowed_list_is_exactly_as_tall_as_the_full_one() {
+        // The spacers stand in for the rows outside the window — and only for
+        // those: the list's own padding stays the list's, or the rows would shift
+        // down and the scrollbar would grow the moment windowing kicked in. If
+        // this did not add up, scrolling would jump as the window moved.
+        let items = two_line_items(1_200);
+        let geometry = geometry_for(&items);
+        let viewport = px(PICKER_LIST_MAX_HEIGHT_PX);
+        let pad = UiScale::from_percent(100).px(LIST_PAD_PX);
+
+        for offset in [px(0.0), px(640.0), px(20_000.0)] {
+            let window = geometry.window(offset, viewport);
+            let rendered: Pixels = window
+                .rows
+                .clone()
+                .map(|ix| geometry.heights[ix] + geometry.header_heights[ix])
+                .fold(px(0.0), |sum, height| sum + height);
+
+            assert_eq!(
+                pad + window.space_before + rendered + window.space_after + pad,
+                geometry.total_height(),
+                "spacers must account for every row outside the window at {offset:?}"
+            );
+        }
+        // And an unwindowed list adds no spacers at all.
+        let short = geometry_for(&two_line_items(4));
+        let window = short.window(px(0.0), viewport);
+        assert_eq!(window.space_before, px(0.0));
+        assert_eq!(window.space_after, px(0.0));
+    }
+
+    #[test]
+    fn scrolling_down_keeps_the_window_around_the_viewport() {
+        let items = two_line_items(1_200);
+        let geometry = geometry_for(&items);
+        let viewport = px(PICKER_LIST_MAX_HEIGHT_PX);
+        let offset = geometry.reveal_offset(600, viewport, px(0.0));
+
+        let window = geometry.window(offset, viewport);
+
+        assert!(window.rows.contains(&600));
+        assert!(window.rows.start > 0, "rows above the viewport are dropped");
+        assert!(window.space_before > px(0.0));
+        assert!(window.space_after > px(0.0));
+    }
+
+    #[test]
+    fn reveal_offset_scrolls_to_rows_outside_the_viewport_and_leaves_visible_ones_alone() {
+        let items = two_line_items(1_200);
+        let geometry = geometry_for(&items);
+        let viewport = px(PICKER_LIST_MAX_HEIGHT_PX);
+
+        // Offsets are in the scroll container's coordinates, so they count the
+        // list's top padding as well as the rows above.
+        let pad = UiScale::from_percent(100).px(LIST_PAD_PX);
+
+        // A row far below: scrolled to sit at the bottom edge of the viewport.
+        let down = geometry.reveal_offset(40, viewport, px(0.0));
+        assert_eq!(
+            down,
+            pad + geometry.row_top(40) + geometry.row_height(40) - viewport
+        );
+
+        // A row above the current offset: scrolled to the top edge.
+        let up = geometry.reveal_offset(10, viewport, down);
+        assert_eq!(up, pad + geometry.row_top(10));
+
+        // A row already fully visible: left where it is.
+        let unchanged = geometry.reveal_offset(1, viewport, px(0.0));
+        assert_eq!(unchanged, px(0.0));
+    }
+
+    #[test]
+    fn reveal_offset_stays_within_the_scrollable_range() {
+        let items = two_line_items(1_200);
+        let geometry = geometry_for(&items);
+        let viewport = px(PICKER_LIST_MAX_HEIGHT_PX);
+
+        let last = geometry.reveal_offset(1_199, viewport, px(0.0));
+
+        // Scrolls no further than it has to: the last row sits flush with the
+        // bottom edge, which is inside the scrollable range (the list's bottom
+        // padding is the remaining few pixels).
+        let pad = UiScale::from_percent(100).px(LIST_PAD_PX);
+        assert_eq!(
+            last,
+            pad + geometry.row_top(1_199) + geometry.row_height(1_199) - viewport
+        );
+        assert!(last <= geometry.total_height() - viewport);
+    }
+
+    #[test]
+    fn a_section_header_is_counted_once_above_the_row_that_opens_it() {
+        let items = vec![
+            PickerPromptItem::plain("alpha").section("Local Branches"),
+            PickerPromptItem::plain("beta").section("Local Branches"),
+            PickerPromptItem::plain("origin/gamma").section("Remote Branches"),
+        ];
+        let geometry = geometry_for(&items);
+        let ui_scale = UiScale::from_percent(100);
+
+        assert_eq!(
+            geometry.header_heights[0],
+            section_header_height(ui_scale, true)
+        );
+        assert_eq!(geometry.header_heights[1], px(0.0));
+        assert_eq!(
+            geometry.header_heights[2],
+            section_header_height(ui_scale, false),
+            "every header but the first also carries its rule"
+        );
+        // The second section's rows sit below both headers and the rows above.
+        let single = row_height(ui_scale, false);
+        assert_eq!(
+            geometry.row_top(2),
+            section_header_height(ui_scale, true)
+                + single * 2.0
+                + section_header_height(ui_scale, false)
+        );
+    }
+
+    #[test]
+    fn a_detail_line_makes_a_row_one_line_box_taller() {
+        let ui_scale = UiScale::from_percent(100);
+
+        assert_eq!(
+            row_height(ui_scale, true) - row_height(ui_scale, false),
+            text_line_height(ui_scale, SECONDARY_TEXT_REMS)
+        );
+    }
+
+    #[test]
+    fn a_single_line_row_is_never_shorter_than_a_control() {
+        // `min_h(control_height_md)` is what stops a one-line row from collapsing.
+        let ui_scale = UiScale::from_percent(80);
+
+        assert!(row_height(ui_scale, false) >= control_height_md(ui_scale));
     }
 
     #[test]

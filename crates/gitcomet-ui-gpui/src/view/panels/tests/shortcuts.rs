@@ -1024,8 +1024,8 @@ fn history_author_filter_scrolls_to_every_author(cx: &mut gpui::TestAppContext) 
 
     cx.update(|_window, app| {
         let popover_host = view.read(app).popover_host.clone();
-        popover_host.update(app, |host, _cx| {
-            host.scroll_history_author_filter_to_item_for_test(AUTHORS);
+        popover_host.update(app, |host, cx| {
+            host.scroll_history_author_filter_to_item_for_test(AUTHORS, cx);
         });
     });
     draw_and_drain_test_window(cx);

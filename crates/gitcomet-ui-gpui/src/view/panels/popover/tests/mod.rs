@@ -65,3 +65,4 @@ mod repository_switcher;
 mod stash;
 mod status;
 mod submodule;
+mod workspace;

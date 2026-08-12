@@ -512,7 +512,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_jump_prev(&mut self, cx: &mut gpui::Context<Self>) {
-        let target = conflict_resolver::previous_conflict_nav_target_index(
+        let target = conflict_resolver::previous_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Conflict,
@@ -523,7 +523,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_jump_next(&mut self, cx: &mut gpui::Context<Self>) {
-        let target = conflict_resolver::next_conflict_nav_target_index(
+        let target = conflict_resolver::next_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Conflict,
@@ -534,7 +534,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_has_prev(&self) -> bool {
-        conflict_resolver::previous_conflict_nav_target_index(
+        conflict_resolver::previous_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Conflict,
@@ -543,7 +543,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_has_next(&self) -> bool {
-        conflict_resolver::next_conflict_nav_target_index(
+        conflict_resolver::next_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Conflict,
@@ -594,7 +594,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_jump_next_unresolved(&mut self, cx: &mut gpui::Context<Self>) {
-        let target = conflict_resolver::next_conflict_nav_target_index(
+        let target = conflict_resolver::next_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Unresolved,
@@ -605,7 +605,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_jump_prev_unresolved(&mut self, cx: &mut gpui::Context<Self>) {
-        let target = conflict_resolver::previous_conflict_nav_target_index(
+        let target = conflict_resolver::previous_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Unresolved,
@@ -616,7 +616,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_has_next_unresolved(&self) -> bool {
-        conflict_resolver::next_conflict_nav_target_index(
+        conflict_resolver::next_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Unresolved,
@@ -625,7 +625,7 @@ impl MainPaneView {
     }
 
     pub(in crate::view) fn conflict_has_prev_unresolved(&self) -> bool {
-        conflict_resolver::previous_conflict_nav_target_index(
+        conflict_resolver::previous_conflict_nav_target_index_or_sole_anchor(
             &self.conflict_resolver.nav_targets,
             self.conflict_resolver.nav_anchor,
             conflict_resolver::ConflictNavTargetFilter::Unresolved,
@@ -810,6 +810,7 @@ impl MainPaneView {
         let output_is_protected = worktree_output_requires_protection(
             current_text.as_deref(),
             structural_marker_snapshot.as_deref(),
+            file.base.as_deref(),
             file.ours.as_deref(),
             file.theirs.as_deref(),
         );
@@ -1317,6 +1318,9 @@ impl MainPaneView {
             conflict_syntax_language,
             source_hash: Some(source_hash),
             output_is_protected,
+            // A re-bootstrap means a different conflict or different file
+            // content, so an earlier waiver no longer speaks for it.
+            output_protection_waived: false,
             current: marker_snapshot,
             marker_segments,
             collapse_context,
@@ -1609,12 +1613,14 @@ impl MainPaneView {
             .as_ref()
             .map(|(text, _)| Arc::clone(text))
             .or_else(|| structural_marker_snapshot.clone());
-        let next_output_is_protected = worktree_output_requires_protection(
-            worktree_current.as_deref(),
-            structural_marker_snapshot.as_deref(),
-            file.ours.as_deref(),
-            file.theirs.as_deref(),
-        );
+        let next_output_is_protected = !self.conflict_resolver.output_protection_waived
+            && worktree_output_requires_protection(
+                worktree_current.as_deref(),
+                structural_marker_snapshot.as_deref(),
+                file.base.as_deref(),
+                file.ours.as_deref(),
+                file.theirs.as_deref(),
+            );
         // The stage-derived marker snapshot drives conflict geometry. The
         // worktree payload remains independent so a partial or complete manual
         // resolution can be retained without making stale worktree markers the
@@ -1789,8 +1795,15 @@ impl MainPaneView {
         self.conflict_resolver_rebuild_visible_map();
 
         let output_path = self.conflict_resolver.path.clone();
+        // Protection has to be able to clear itself. Carrying
+        // `previous_output_is_protected` alone re-armed the flag on every
+        // resync, so a session that was protected once stayed protected for
+        // good — with the markers undecorated and every pick a silent no-op —
+        // no matter what the predicate said afterwards. Unsaved manual edits to
+        // the buffer are still held by the second disjunct, which is the case
+        // that branch exists for.
         let preserve_unmapped_live_output = live_materialized_output.is_some()
-            && (previous_output_is_protected
+            && ((previous_output_is_protected && next_output_is_protected)
                 || (self.conflict_resolved_output_modified
                     && mapped_replacements.is_none()
                     && !previous_generated_output_matches_live));
@@ -3167,10 +3180,28 @@ impl MainPaneView {
         let Some(current) = self.conflict_resolver.current.as_deref() else {
             return;
         };
-        let segments = conflict_resolver::parse_conflict_markers(current);
+        let mut segments = conflict_resolver::parse_conflict_markers(current);
         if conflict_resolver::conflict_count(&segments) == 0 {
             return;
         }
+        // Same reason as the bootstrap and resync paths: 2-way markers carry no
+        // base section, so without the ancestor every block reads as base-less.
+        // That rejects "A (base)" outright and shifts the Ours/Theirs mapping in
+        // `conflict_resolver_apply_block_choice` onto the two-input sources, so
+        // the store round-trip hands back a selection the blocks cannot express
+        // and every pick after a reset looks like it did nothing.
+        if let Some(base_text) = self
+            .conflict_resolver
+            .loaded_file
+            .as_ref()
+            .and_then(|file| file.base.clone())
+        {
+            conflict_resolver::populate_block_bases_from_shared_ancestor(&mut segments, base_text);
+        }
+        // Asking for the markers back is asking for the stage projection over
+        // the worktree payload. Record that, or the resync this reset triggers
+        // re-derives protection from the very payload the user just overrode.
+        self.conflict_resolver.output_protection_waived = true;
         self.conflict_resolver.output_is_protected = false;
         self.conflict_resolver.marker_segments = segments;
         self.conflict_resolver.conflict_region_indices =

@@ -1,6 +1,44 @@
 use super::super::*;
 
 pub(crate) const STRUCTURAL_BUDGETS: &[StructuralBudgetSpec] = &[
+    // --- picker_prompt structural budgets ---
+    // Element counts per frame, which hold regardless of build profile or
+    // machine. These are the guard on the two things that made the badge pickers
+    // slow: building every row every frame, and hanging a tooltip hitbox off
+    // every text part.
+    StructuralBudgetSpec {
+        bench: "picker_prompt/branch_hover_frame/1200",
+        metric: "rows_matched",
+        comparator: StructuralBudgetComparator::Exactly,
+        threshold: 1_200.0,
+    },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/branch_hover_frame/1200",
+        metric: "rows_rendered",
+        // Six 50px rows fit the 300px list, plus the overdraw below it.
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 16.0,
+    },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/branch_hover_frame/1200",
+        metric: "text_parts",
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 112.0,
+    },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/branch_hover_frame/1200",
+        // Only the parts that can actually be cut off carry one; a branch row's
+        // name and its commit summary, not the separators, author or date.
+        metric: "tooltip_parts",
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 32.0,
+    },
+    StructuralBudgetSpec {
+        bench: "picker_prompt/branch_hover_frame/200",
+        metric: "rows_rendered",
+        comparator: StructuralBudgetComparator::AtMost,
+        threshold: 16.0,
+    },
     // --- resolved_output_recompute_incremental structural budgets ---
     StructuralBudgetSpec {
         bench: "resolved_output_recompute_incremental/full_recompute",

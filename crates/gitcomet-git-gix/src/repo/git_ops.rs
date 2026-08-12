@@ -1,6 +1,6 @@
 use super::{BranchTrackingConfigCacheEntry, GixRepo, oid_to_arc_str, repo_file_stamp};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_capture, run_git_raw_output};
-use gitcomet_core::domain::{Branch, CommitId, Upstream, UpstreamDivergence};
+use gitcomet_core::domain::{Branch, CommitId, RefMetadata, Upstream, UpstreamDivergence};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
@@ -157,6 +157,21 @@ impl GixRepo {
         )?;
         parse_local_branches_for_each_ref(&output)
     }
+
+    pub(super) fn list_ref_metadata_impl(&self) -> Result<Vec<(String, RefMetadata)>> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("for-each-ref")
+            .arg(
+                "--format=%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)",
+            )
+            .arg("refs/heads")
+            .arg("refs/remotes");
+        let output = run_git_capture(
+            cmd,
+            "git for-each-ref --format=%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject) refs/heads refs/remotes",
+        )?;
+        Ok(parse_ref_metadata_for_each_ref(&output))
+    }
 }
 
 fn collect_local_branches(
@@ -223,6 +238,43 @@ fn try_collect_loose_local_branches_fast(repo: &gix::Repository) -> Result<Optio
     }
     branches.sort_unstable_by(|left, right| left.name.cmp(&right.name));
     Ok(Some(branches))
+}
+
+/// Parses `%(refname:short)%00%(authorname)%00%(committerdate:unix)%00%(contents:subject)`
+/// records. Malformed lines are skipped rather than failing the call: this data
+/// is decorative, and losing one row is better than losing the whole picker.
+fn parse_ref_metadata_for_each_ref(output: &str) -> Vec<(String, RefMetadata)> {
+    let mut entries = Vec::new();
+
+    for line in output.lines() {
+        if line.is_empty() {
+            continue;
+        }
+
+        // `splitn` so a stray NUL inside the subject cannot shift the fields.
+        let mut fields = line.splitn(4, '\0');
+        let name = fields.next().unwrap_or_default();
+        let author = fields.next().unwrap_or_default();
+        let committed_at = fields.next().unwrap_or_default();
+        let summary = fields.next().unwrap_or_default();
+        if name.is_empty() {
+            continue;
+        }
+        let Ok(committed_at) = committed_at.trim().parse::<i64>() else {
+            continue;
+        };
+
+        entries.push((
+            name.to_owned(),
+            RefMetadata {
+                author: author.to_owned(),
+                committed_at,
+                summary: summary.to_owned(),
+            },
+        ));
+    }
+
+    entries
 }
 
 fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
@@ -569,7 +621,8 @@ fn branch_upstream_target(
 mod tests {
     use super::{
         LOCAL_BRANCH_PREFIX, cached_commit_id, local_branch_name,
-        parse_local_branches_for_each_ref, parse_upstream_short, parse_upstream_track_divergence,
+        parse_local_branches_for_each_ref, parse_ref_metadata_for_each_ref, parse_upstream_short,
+        parse_upstream_track_divergence,
     };
     use gitcomet_core::domain::UpstreamDivergence;
     use rustc_hash::FxHashMap as HashMap;
@@ -645,6 +698,50 @@ mod tests {
         );
         assert_eq!(parse_upstream_track_divergence("[gone]"), None);
         assert_eq!(parse_upstream_track_divergence(""), None);
+    }
+
+    #[test]
+    fn parse_ref_metadata_for_each_ref_parses_local_and_remote_refs() {
+        let entries = parse_ref_metadata_for_each_ref(
+            "main\x00Sampo Kivistö\x001754870400\x00improve font loading\norigin/main\x00Roope Airinen\x001754784000\x00made divs draggable\n",
+        );
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "main");
+        assert_eq!(entries[0].1.author, "Sampo Kivistö");
+        assert_eq!(entries[0].1.committed_at, 1_754_870_400);
+        assert_eq!(entries[0].1.summary, "improve font loading");
+        assert_eq!(entries[1].0, "origin/main");
+        assert_eq!(entries[1].1.author, "Roope Airinen");
+    }
+
+    #[test]
+    fn parse_ref_metadata_for_each_ref_keeps_nul_bytes_inside_the_subject() {
+        // `splitn(4, ..)` means a stray NUL in the subject cannot shift fields.
+        let entries =
+            parse_ref_metadata_for_each_ref("main\x00Sampo\x001754870400\x00odd\x00subject\n");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.summary, "odd\x00subject");
+    }
+
+    #[test]
+    fn parse_ref_metadata_for_each_ref_skips_malformed_rows_without_failing() {
+        let entries = parse_ref_metadata_for_each_ref(
+            "\x00Sampo\x001754870400\x00no name\nmain\x00Sampo\x00not-a-timestamp\x00bad date\ntruncated\nkept\x00Sampo\x001754870400\x00fine\n",
+        );
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "kept");
+    }
+
+    #[test]
+    fn parse_ref_metadata_for_each_ref_allows_empty_author_and_subject() {
+        let entries = parse_ref_metadata_for_each_ref("main\x00\x001754870400\x00\n");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].1.author, "");
+        assert_eq!(entries[0].1.summary, "");
     }
 
     #[test]

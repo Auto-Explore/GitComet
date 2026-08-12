@@ -215,6 +215,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::RefMetadataLoaded { repo_id, result } => f
+                .debug_struct("RefMetadataLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::SubmodulesLoaded { repo_id, result } => f
                 .debug_struct("SubmodulesLoaded")
                 .field("repo_id", repo_id)

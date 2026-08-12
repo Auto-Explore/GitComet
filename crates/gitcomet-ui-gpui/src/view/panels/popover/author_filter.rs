@@ -164,6 +164,24 @@ pub(super) fn nav_targets(
         .collect()
 }
 
+/// The rows the dropdown renders for `query`, with the layout that places them.
+///
+/// The list is windowed, so a row below the viewport has no element for
+/// `ScrollHandle::scroll_to_item` to find; keyboard navigation scrolls by this
+/// geometry instead. See `PopoverHost::scroll_picker_prompt_to_row`.
+pub(super) fn rendered_rows(
+    this: &mut PopoverHost,
+    repo_id: RepoId,
+    query: &str,
+) -> (
+    Vec<components::PickerPromptItem>,
+    components::PickerPromptLayout,
+) {
+    let rows = rows_for_repo(this, repo_id);
+    let layout = components::picker_prompt_layout(&rows.items, query);
+    (rows.items, layout)
+}
+
 pub(super) fn apply(
     this: &mut PopoverHost,
     repo_id: RepoId,
@@ -232,15 +250,16 @@ pub(super) fn panel(
         .items(rows.items)
         .tooltip_host(this.tooltip_host.clone())
         .empty_text(empty_text)
-        .max_height(scaled_px(320.0))
+        .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
         .selected_index(this.history_author_filter_selected_index)
         .marked_index(rows.marked_index)
         .accent_selection()
         .padded_query_row()
         // A busy repository has thousands of contributors: build only the rows
         // on screen, so every author stays scrollable without the whole list
-        // being laid out each frame.
-        .virtualized(this.history_author_filter_list_scroll.clone());
+        // being laid out each frame. Keyboard navigation scrolls by the row
+        // geometry to match (`scroll_picker_prompt_to_row`).
+        .windowed_rows();
 
     components::context_menu(
         theme,

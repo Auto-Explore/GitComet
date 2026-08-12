@@ -3,8 +3,8 @@ use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
     Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
     DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
-    RecentCommitMessage, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec, RepoStatus,
-    StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
+    RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
+    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -941,6 +941,20 @@ impl GitRepository for GixRepo {
         let worktrees = self.list_worktrees_impl()?;
         cancellation.check_cancelled()?;
         Ok(worktrees)
+    }
+
+    fn list_ref_metadata(&self) -> Result<Vec<(String, RefMetadata)>> {
+        self.list_ref_metadata_impl()
+    }
+
+    fn list_ref_metadata_cancellable(
+        &self,
+        cancellation: &CancellationToken,
+    ) -> Result<Vec<(String, RefMetadata)>> {
+        cancellation.check_cancelled()?;
+        let metadata = self.list_ref_metadata_impl()?;
+        cancellation.check_cancelled()?;
+        Ok(metadata)
     }
 
     fn add_worktree_with_output(

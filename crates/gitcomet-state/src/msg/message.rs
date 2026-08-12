@@ -326,6 +326,11 @@ pub enum Msg {
     LoadWorktrees {
         repo_id: RepoId,
     },
+    /// On-demand load of tip-commit author/date/summary for every ref. Only
+    /// requested by pickers that render it.
+    LoadRefMetadata {
+        repo_id: RepoId,
+    },
     LoadSubmodules {
         repo_id: RepoId,
     },
@@ -1042,6 +1047,10 @@ pub enum InternalMsg {
     WorktreesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Worktree>, Error>,
+    },
+    RefMetadataLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<(String, RefMetadata)>, Error>,
     },
     SubmodulesLoaded {
         repo_id: RepoId,

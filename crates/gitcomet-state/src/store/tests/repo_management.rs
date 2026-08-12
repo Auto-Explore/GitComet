@@ -2575,6 +2575,230 @@ fn pre_open_worktree_lazy_load_retries_after_repo_opened() {
 }
 
 #[test]
+fn load_ref_metadata_emits_effect_and_result_builds_the_lookup_map() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    let repo_id = RepoId(1);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadRefMetadata { repo_id },
+    );
+    assert!(effects.iter().any(
+        |effect| matches!(effect, Effect::LoadRefMetadata { repo_id: rid } if *rid == repo_id)
+    ));
+    assert!(state.repos[0].ref_metadata.is_loading());
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+            repo_id,
+            result: Ok(vec![(
+                "main".to_string(),
+                gitcomet_core::domain::RefMetadata {
+                    author: "Ada".to_string(),
+                    committed_at: 1_754_870_400,
+                    summary: "first".to_string(),
+                },
+            )]),
+        }),
+    );
+
+    let Loadable::Ready(map) = &state.repos[0].ref_metadata else {
+        panic!("expected ref metadata to be ready");
+    };
+    assert_eq!(map.get("main").map(|m| m.summary.as_str()), Some("first"));
+}
+
+#[test]
+fn ref_metadata_load_failure_records_no_diagnostic() {
+    // Decorative data: a backend that cannot supply it must not raise an error
+    // banner every time a picker opens.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    let repo_id = RepoId(1);
+    let diagnostics_before = state.repos[0].diagnostics.len();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+            repo_id,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("git blew up".to_string()),
+            )),
+        }),
+    );
+
+    assert!(matches!(state.repos[0].ref_metadata, Loadable::Error(_)));
+    assert_eq!(state.repos[0].diagnostics.len(), diagnostics_before);
+}
+
+#[test]
+fn unsupported_ref_metadata_latches_instead_of_retrying_forever() {
+    // Callers refetch on `Error`, so storing `Error` for a backend that can
+    // never supply this would re-schedule a doomed load on every picker open.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+            repo_id,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Unsupported("nope"),
+            )),
+        }),
+    );
+
+    let Loadable::Ready(map) = &state.repos[0].ref_metadata else {
+        panic!("expected Unsupported to latch as an empty Ready map");
+    };
+    assert!(map.is_empty());
+}
+
+#[test]
+fn transient_ref_metadata_failure_stays_retryable() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+            repo_id,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("git blew up".to_string()),
+            )),
+        }),
+    );
+
+    assert!(
+        matches!(state.repos[0].ref_metadata, Loadable::Error(_)),
+        "a transient failure must stay retryable"
+    );
+}
+
+#[test]
+fn branch_change_during_an_in_flight_metadata_load_schedules_a_refetch() {
+    // Otherwise the in-flight result (read from the *old* refs) lands as
+    // `Ready` and, since callers only refetch on NotLoaded/Error, is never
+    // corrected.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    let repo_id = RepoId(1);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    // Start a metadata load, then let the branch list change underneath it.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadRefMetadata { repo_id },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::BranchesLoaded {
+            repo_id,
+            result: Ok(vec![]),
+        }),
+    );
+
+    // The stale result arrives; it must trigger another load rather than stick.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded {
+            repo_id,
+            result: Ok(vec![]),
+        }),
+    );
+
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::LoadRefMetadata { repo_id: rid } if *rid == repo_id)
+        ),
+        "expected a refetch to be scheduled, got {effects:?}"
+    );
+}
+
+#[test]
 fn pre_open_submodule_load_auto_starts_after_repo_opened() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);

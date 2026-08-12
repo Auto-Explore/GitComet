@@ -140,6 +140,18 @@ pub struct Branch {
     pub divergence: Option<UpstreamDivergence>,
 }
 
+/// Decorative tip-commit details for a ref, keyed by short refname (`main`,
+/// `origin/main`). Deliberately kept out of [`Branch`]: branch listing has a
+/// loose-ref fast path that never reads commit objects, and this data is only
+/// needed when a picker that displays it is opened.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct RefMetadata {
+    pub author: String,
+    /// Committer date as a Unix timestamp in seconds.
+    pub committed_at: i64,
+    pub summary: String,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Tag {
     pub name: String,

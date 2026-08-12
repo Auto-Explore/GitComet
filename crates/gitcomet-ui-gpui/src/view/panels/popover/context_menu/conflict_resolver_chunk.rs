@@ -20,6 +20,7 @@ pub(super) fn model(
     join_next_region: Option<ConflictResolverJoinTarget>,
     alignment_marked_columns: usize,
     has_manual_alignments: bool,
+    output_is_protected: bool,
 ) -> ContextMenuModel {
     let mut items = vec![ContextMenuItem::Header(
         format!("Resolve chunk {}", conflict_ix.saturating_add(1)).into(),
@@ -33,7 +34,7 @@ pub(super) fn model(
                 "icons/box.svg",
             )),
             shortcut: Some("A / Ctrl+1".into()),
-            disabled: !has_base,
+            disabled: !has_base || output_is_protected,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
                 target: ResolverPickTarget::Chunk {
                     conflict_ix,
@@ -49,7 +50,7 @@ pub(super) fn model(
                 "icons/computer.svg",
             )),
             shortcut: Some("B / Ctrl+2".into()),
-            disabled: false,
+            disabled: output_is_protected,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
                 target: ResolverPickTarget::Chunk {
                     conflict_ix,
@@ -65,7 +66,7 @@ pub(super) fn model(
                 "icons/cloud.svg",
             )),
             shortcut: Some("C / Ctrl+3".into()),
-            disabled: false,
+            disabled: output_is_protected,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
                 target: ResolverPickTarget::Chunk {
                     conflict_ix,
@@ -82,7 +83,7 @@ pub(super) fn model(
                 "icons/computer.svg",
             )),
             shortcut: Some("A / Ctrl+1".into()),
-            disabled: false,
+            disabled: output_is_protected,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
                 target: ResolverPickTarget::Chunk {
                     conflict_ix,
@@ -98,7 +99,7 @@ pub(super) fn model(
                 "icons/cloud.svg",
             )),
             shortcut: Some("B / Ctrl+2".into()),
-            disabled: false,
+            disabled: output_is_protected,
             action: Box::new(ContextMenuAction::ConflictResolverPick {
                 target: ResolverPickTarget::Chunk {
                     conflict_ix,
@@ -124,7 +125,7 @@ pub(super) fn model(
         } else {
             "C / Ctrl+3".into()
         }),
-        disabled: false,
+        disabled: output_is_protected,
         action: Box::new(ContextMenuAction::ConflictResolverPick {
             target: ResolverPickTarget::Chunk {
                 conflict_ix,
@@ -141,7 +142,7 @@ pub(super) fn model(
         label: "Unresolve".into(),
         icon: Some("icons/undo.svg".into()),
         shortcut: Some("U".into()),
-        disabled: false,
+        disabled: output_is_protected,
         action: Box::new(ContextMenuAction::ConflictResolverUnresolve { conflict_ix }),
     });
 
@@ -218,6 +219,36 @@ pub(super) fn model(
 mod tests {
     use super::*;
 
+    /// The unprotected menu, which is what every case below but
+    /// `protected_output_greys_out_every_resolution_entry` is about.
+    #[allow(clippy::too_many_arguments)]
+    fn model(
+        conflict_ix: usize,
+        has_base: bool,
+        is_three_way: bool,
+        selected_choices: &[conflict_resolver::ConflictChoice],
+        output_line_ix: Option<usize>,
+        split_selection_rows: Option<usize>,
+        join_previous_region: Option<ConflictResolverJoinTarget>,
+        join_next_region: Option<ConflictResolverJoinTarget>,
+        alignment_marked_columns: usize,
+        has_manual_alignments: bool,
+    ) -> ContextMenuModel {
+        super::model(
+            conflict_ix,
+            has_base,
+            is_three_way,
+            selected_choices,
+            output_line_ix,
+            split_selection_rows,
+            join_previous_region,
+            join_next_region,
+            alignment_marked_columns,
+            has_manual_alignments,
+            false,
+        )
+    }
+
     fn join_target(first_region_index: usize) -> ConflictResolverJoinTarget {
         ConflictResolverJoinTarget {
             repo_id: gitcomet_state::model::RepoId(1),
@@ -230,13 +261,13 @@ mod tests {
     #[test]
     fn model_three_way_includes_a_b_c_both_and_unresolve() {
         // Header + A/B/C picks + Keep both + separator + Unresolve.
-        let model = super::model(2, true, true, &[], None, None, None, None, 0, false);
+        let model = model(2, true, true, &[], None, None, None, None, 0, false);
         assert_eq!(model.items.len(), 7);
     }
 
     #[test]
     fn model_entries_carry_shortcut_hints() {
-        let model = super::model(2, true, true, &[], None, None, None, None, 0, false);
+        let model = model(2, true, true, &[], None, None, None, None, 0, false);
         let shortcuts: Vec<Option<String>> = model
             .items
             .iter()
@@ -259,9 +290,61 @@ mod tests {
         );
     }
 
+    /// A protected output rejects every resolution action on the way in, so the
+    /// entries have to say so. Left enabled they looked live and did nothing.
+    #[test]
+    fn protected_output_greys_out_every_resolution_entry() {
+        let protected = super::model(
+            0,
+            true,
+            true,
+            &[],
+            None,
+            Some(2),
+            None,
+            None,
+            0,
+            false,
+            true,
+        );
+        let resolution_entries: Vec<(&str, bool)> = protected
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                ContextMenuItem::Entry {
+                    label,
+                    action,
+                    disabled,
+                    ..
+                } => matches!(
+                    action.as_ref(),
+                    ContextMenuAction::ConflictResolverPick { .. }
+                        | ContextMenuAction::ConflictResolverUnresolve { .. }
+                )
+                .then_some((label.as_ref(), *disabled)),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(resolution_entries.len(), 5);
+        assert!(
+            resolution_entries.iter().all(|(_, disabled)| *disabled),
+            "every pick and unresolve entry must grey out: {resolution_entries:?}"
+        );
+
+        // Structural entries are unaffected: splitting a chunk rewrites the
+        // in-memory projection, not the protected output buffer.
+        assert!(protected.items.iter().any(|item| matches!(
+            item,
+            ContextMenuItem::Entry { action, disabled, .. }
+                if matches!(**action, ContextMenuAction::ConflictResolverSplitSelection)
+                    && !*disabled
+        )));
+    }
+
     #[test]
     fn model_three_way_disables_a_when_base_missing() {
-        let model = super::model(0, false, true, &[], None, None, None, None, 0, false);
+        let model = model(0, false, true, &[], None, None, None, None, 0, false);
         match &model.items[1] {
             ContextMenuItem::Entry { disabled, .. } => assert!(*disabled),
             _ => panic!("expected entry"),
@@ -271,13 +354,13 @@ mod tests {
     #[test]
     fn model_two_way_includes_b_c_both_and_unresolve() {
         // Header + A/B picks + Keep both + separator + Unresolve.
-        let model = super::model(1, false, false, &[], Some(3), None, None, None, 0, false);
+        let model = model(1, false, false, &[], Some(3), None, None, None, 0, false);
         assert_eq!(model.items.len(), 6);
     }
 
     #[test]
     fn model_two_way_uses_a_b_c_labels_and_shortcuts() {
-        let model = super::model(1, false, false, &[], Some(3), None, None, None, 0, false);
+        let model = model(1, false, false, &[], Some(3), None, None, None, 0, false);
         let entries: Vec<(String, Option<String>)> = model
             .items
             .iter()
@@ -308,7 +391,7 @@ mod tests {
 
     #[test]
     fn model_two_way_uses_svg_source_icons_when_unselected() {
-        let model = super::model(1, false, false, &[], Some(3), None, None, None, 0, false);
+        let model = model(1, false, false, &[], Some(3), None, None, None, 0, false);
         match &model.items[1] {
             ContextMenuItem::Entry { icon, .. } => {
                 assert_eq!(
@@ -329,7 +412,7 @@ mod tests {
     #[test]
     fn model_two_way_marks_selected_entry() {
         let selected = vec![conflict_resolver::ConflictChoice::Theirs];
-        let model = super::model(
+        let model = model(
             1,
             false,
             false,
@@ -355,7 +438,7 @@ mod tests {
             conflict_resolver::ConflictChoice::Base,
             conflict_resolver::ConflictChoice::Ours,
         ];
-        let model = super::model(1, true, true, &selected, None, None, None, None, 0, false);
+        let model = model(1, true, true, &selected, None, None, None, None, 0, false);
         match &model.items[1] {
             ContextMenuItem::Entry { icon, .. } => {
                 assert_eq!(icon.as_ref().map(|s| s.as_ref()), Some("icons/check.svg"));
@@ -372,7 +455,7 @@ mod tests {
 
     #[test]
     fn model_three_way_uses_svg_source_icons_when_unselected() {
-        let model = super::model(1, true, true, &[], None, None, None, None, 0, false);
+        let model = model(1, true, true, &[], None, None, None, None, 0, false);
         match &model.items[1] {
             ContextMenuItem::Entry { icon, .. } => {
                 assert_eq!(icon.as_ref().map(|s| s.as_ref()), Some("icons/box.svg"));
@@ -398,12 +481,10 @@ mod tests {
 
     #[test]
     fn model_shows_split_only_for_a_valid_selection() {
-        let without_selection =
-            super::model(0, false, false, &[], None, None, None, None, 0, false);
+        let without_selection = model(0, false, false, &[], None, None, None, None, 0, false);
         assert_eq!(without_selection.items.len(), 6);
 
-        let with_selection =
-            super::model(0, false, false, &[], None, Some(1), None, None, 0, false);
+        let with_selection = model(0, false, false, &[], None, Some(1), None, None, 0, false);
         assert_eq!(with_selection.items.len(), 8);
         match with_selection.items.last().expect("split entry") {
             ContextMenuItem::Entry {
@@ -436,7 +517,7 @@ mod tests {
         ];
 
         for (previous, next, expected) in cases {
-            let model = super::model(1, false, false, &[], None, None, previous, next, 0, false);
+            let model = model(1, false, false, &[], None, None, previous, next, 0, false);
             let actual: Vec<(&str, usize)> = model
                 .items
                 .iter()
@@ -456,7 +537,7 @@ mod tests {
 
     #[test]
     fn manual_alignment_entries_appear_only_once_there_is_something_to_act_on() {
-        let plain = super::model(0, false, false, &[], None, None, None, None, 0, false);
+        let plain = model(0, false, false, &[], None, None, None, None, 0, false);
         assert!(
             !plain
                 .items
@@ -466,7 +547,7 @@ mod tests {
             "nothing marked and nothing pinned leaves the menu unchanged"
         );
 
-        let marked = super::model(0, false, false, &[], None, None, None, None, 2, false);
+        let marked = model(0, false, false, &[], None, None, None, None, 2, false);
         assert!(
             marked
                 .items
@@ -486,7 +567,7 @@ mod tests {
             "there is nothing pinned to clear yet"
         );
 
-        let pinned = super::model(0, false, false, &[], None, None, None, None, 0, true);
+        let pinned = model(0, false, false, &[], None, None, None, None, 0, true);
         assert!(pinned.items.iter().any(
             |item| matches!(item, ContextMenuItem::Entry { action, .. }
             if matches!(

@@ -130,6 +130,7 @@ pub(super) fn internal_msg_name(msg: &InternalMsg) -> &'static str {
         InternalMsg::RemoteTagsLoaded { .. } => "RemoteTagsLoaded",
         InternalMsg::StashesLoaded { .. } => "StashesLoaded",
         InternalMsg::WorktreesLoaded { .. } => "WorktreesLoaded",
+        InternalMsg::RefMetadataLoaded { .. } => "RefMetadataLoaded",
         InternalMsg::SubmodulesLoaded { .. } => "SubmodulesLoaded",
         InternalMsg::RebaseStateLoaded { .. } => "RebaseStateLoaded",
         InternalMsg::MergeCommitMessageLoaded { .. } => "MergeCommitMessageLoaded",
@@ -154,6 +155,7 @@ pub(super) fn effect_name(effect: &Effect) -> &'static str {
         Effect::LoadRemoteTags { .. } => "LoadRemoteTags",
         Effect::LoadStashes { .. } => "LoadStashes",
         Effect::LoadWorktrees { .. } => "LoadWorktrees",
+        Effect::LoadRefMetadata { .. } => "LoadRefMetadata",
         Effect::LoadSubmodules { .. } => "LoadSubmodules",
         Effect::LoadRebaseAndMergeState { .. } => "LoadRebaseAndMergeState",
         Effect::LoadRebaseState { .. } => "LoadRebaseState",
@@ -181,6 +183,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadRemoteTags { repo_id }
         | Effect::LoadStashes { repo_id, .. }
         | Effect::LoadWorktrees { repo_id }
+        | Effect::LoadRefMetadata { repo_id }
         | Effect::LoadSubmodules { repo_id }
         | Effect::LoadRebaseAndMergeState { repo_id }
         | Effect::LoadRebaseState { repo_id }
