@@ -202,6 +202,11 @@ pub(in crate::view) enum ContextMenuAction {
         area: DiffArea,
         path: std::path::PathBuf,
     },
+    AddToGitignoreSelectionOrPath {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
     CheckoutConflictSideSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,

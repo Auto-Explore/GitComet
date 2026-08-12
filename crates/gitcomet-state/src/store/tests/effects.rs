@@ -1846,6 +1846,202 @@ fn save_worktree_file_effect_writes_and_can_stage() {
 }
 
 #[test]
+fn append_gitignore_patterns_effect_creates_appends_and_dedupes() {
+    struct Backend;
+    impl GitBackend for Backend {
+        fn open(&self, _path: &Path) -> std::result::Result<Arc<dyn GitRepository>, Error> {
+            Err(Error::new(ErrorKind::Unsupported("test backend")))
+        }
+    }
+
+    struct Repo {
+        spec: RepoSpec,
+    }
+
+    impl GitRepository for Repo {
+        fn spec(&self) -> &RepoSpec {
+            &self.spec
+        }
+        fn log_head_page(&self, _limit: usize, _cursor: Option<&LogCursor>) -> Result<LogPage> {
+            unimplemented!()
+        }
+        fn commit_details(&self, _id: &CommitId) -> Result<CommitDetails> {
+            unimplemented!()
+        }
+        fn reflog_head(&self, _limit: usize) -> Result<Vec<ReflogEntry>> {
+            unimplemented!()
+        }
+        fn current_branch(&self) -> Result<String> {
+            unimplemented!()
+        }
+        fn list_branches(&self) -> Result<Vec<Branch>> {
+            unimplemented!()
+        }
+        fn list_remotes(&self) -> Result<Vec<Remote>> {
+            unimplemented!()
+        }
+        fn list_remote_branches(&self) -> Result<Vec<RemoteBranch>> {
+            unimplemented!()
+        }
+        fn status(&self) -> Result<RepoStatus> {
+            unimplemented!()
+        }
+        fn diff_unified(&self, _target: &DiffTarget) -> Result<String> {
+            unimplemented!()
+        }
+        fn create_branch(&self, _name: &str, _target: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn delete_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_branch(&self, _name: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn cherry_pick(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn revert(&self, _id: &CommitId) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_create(&self, _message: &str, _include_untracked: bool) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_list(&self) -> Result<Vec<StashEntry>> {
+            unimplemented!()
+        }
+        fn stash_apply(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stash_drop(&self, _index: usize) -> Result<()> {
+            unimplemented!()
+        }
+        fn stage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn unstage(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+        fn commit(&self, _message: &str) -> Result<()> {
+            unimplemented!()
+        }
+        fn fetch_all(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn pull(&self, _mode: PullMode) -> Result<()> {
+            unimplemented!()
+        }
+        fn push(&self) -> Result<()> {
+            unimplemented!()
+        }
+        fn discard_worktree_changes(&self, _paths: &[&Path]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    // `tempfile` rather than a hand-rolled directory: its `Drop` runs on unwind,
+    // so a failing assertion below does not leave a stray repo in /tmp.
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let base = dir.path().to_path_buf();
+    let gitignore = base.join(".gitignore");
+
+    let repo_id = RepoId(1);
+    let repos: HashMap<RepoId, Arc<dyn GitRepository>> = {
+        let repo: Arc<dyn GitRepository> = Arc::new(Repo {
+            spec: RepoSpec {
+                workdir: base.clone(),
+            },
+        });
+        let mut repos = HashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+
+    let executor = super::executor::TaskExecutor::new(1);
+    let backend: Arc<dyn GitBackend> = Arc::new(Backend);
+
+    // Runs one append to completion and hands back the command's stdout, which
+    // is how the worker reports the "nothing to add" short-circuit.
+    let append = |patterns: Vec<String>| -> String {
+        let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+        schedule_effect_for_test(
+            &executor,
+            &executor,
+            &backend,
+            &repos,
+            msg_tx,
+            Effect::AppendGitignorePatterns { repo_id, patterns },
+        );
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_secs(5) {
+            if let Ok(msg) = msg_rx.recv_timeout(Duration::from_millis(50))
+                && let Msg::Internal(crate::msg::InternalMsg::RepoCommandFinished {
+                    command,
+                    result,
+                    ..
+                }) = msg
+            {
+                assert!(matches!(
+                    command,
+                    crate::msg::RepoCommandKind::AppendGitignorePatterns { .. }
+                ));
+                return result.expect("append should succeed").stdout;
+            }
+        }
+        panic!("timed out waiting for RepoCommandFinished");
+    };
+
+    append(vec!["/a.log".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(&gitignore).unwrap(),
+        "/a.log\n",
+        "the file is created when absent"
+    );
+
+    append(vec!["/a.log".to_string(), "/b.log".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(&gitignore).unwrap(),
+        "/a.log\n/b.log\n",
+        "the already-present pattern is skipped, the new one appended"
+    );
+
+    let before = std::fs::read_to_string(&gitignore).unwrap();
+    let stdout = append(vec!["/a.log".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(&gitignore).unwrap(),
+        before,
+        "re-running must not duplicate the line"
+    );
+    assert_eq!(
+        stdout.trim(),
+        gitcomet_core::gitignore::NOTHING_TO_ADD,
+        "a fully redundant append must short-circuit before the write so it does \
+         not bump the mtime and rebuild the filesystem watcher for nothing — and \
+         it must say so with the marker `summarize_command` keys off, or the user \
+         is told a write happened"
+    );
+
+    std::fs::write(&gitignore, "/target").unwrap();
+    append(vec!["/c.log".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(&gitignore).unwrap(),
+        "/target\n/c.log\n",
+        "an unterminated last line must not fuse with the new pattern"
+    );
+
+    std::fs::write(&gitignore, "/target\r\n").unwrap();
+    append(vec!["/d.log".to_string()]);
+    assert_eq!(
+        std::fs::read_to_string(&gitignore).unwrap(),
+        "/target\r\n/d.log\r\n",
+        "a CRLF file stays CRLF"
+    );
+}
+
+#[test]
 fn checkout_conflict_base_effect_calls_repo_and_emits_finished() {
     struct Backend;
     impl GitBackend for Backend {

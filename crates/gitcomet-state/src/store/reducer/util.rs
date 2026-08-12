@@ -1128,6 +1128,7 @@ fn summarize_command(
             RepoCommandKind::CheckoutConflictBase { .. } => "Checkout base",
             RepoCommandKind::LaunchMergetool { .. } => "Mergetool",
             RepoCommandKind::SaveWorktreeFile { .. } => "Save file",
+            RepoCommandKind::AppendGitignorePatterns { .. } => "Update .gitignore",
             RepoCommandKind::ExportPatch { .. } | RepoCommandKind::ApplyPatch { .. } => "Patch",
             RepoCommandKind::AddWorktree { .. }
             | RepoCommandKind::RemoveWorktree { .. }
@@ -1301,6 +1302,23 @@ fn summarize_command(
                 format!("Saved and staged → {}", path.display())
             } else {
                 format!("Saved → {}", path.display())
+            }
+        }
+        // Deliberately "added to .gitignore" rather than "ignored": a later
+        // negation, a nested .gitignore or .git/info/exclude can still win, and
+        // promising an outcome we did not verify would be a lie the user only
+        // catches when the file stays in the list.
+        // The worker skips the write when every pattern is already there, and
+        // announcing "Added …" for a run that changed nothing would send the
+        // user looking for a file that has not moved.
+        RepoCommandKind::AppendGitignorePatterns { patterns } => {
+            if output.stdout.trim() == gitcomet_core::gitignore::NOTHING_TO_ADD {
+                "Already in .gitignore; nothing added".to_string()
+            } else {
+                match patterns.as_slice() {
+                    [pattern] => format!("Added {pattern} to .gitignore"),
+                    patterns => format!("Added {} patterns to .gitignore", patterns.len()),
+                }
             }
         }
         RepoCommandKind::Reset { mode, target } => {
@@ -2180,6 +2198,43 @@ mod tests {
             None,
         );
         assert_eq!(fetch_summary, "Fetch: Synchronized");
+
+        let gitignore_command = RepoCommandKind::AppendGitignorePatterns {
+            patterns: vec!["/build/out.log".to_string()],
+        };
+        let (_, gitignore_written) = summarize_command(
+            &gitignore_command,
+            &command_output("Update .gitignore", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(gitignore_written, "Added /build/out.log to .gitignore");
+
+        let (_, gitignore_noop) = summarize_command(
+            &gitignore_command,
+            &command_output(
+                "Update .gitignore",
+                gitcomet_core::gitignore::NOTHING_TO_ADD,
+                "",
+            ),
+            true,
+            None,
+        );
+        assert_eq!(
+            gitignore_noop, "Already in .gitignore; nothing added",
+            "the worker skipped the write, so announcing \"Added …\" would send \
+             the user looking for a change that never happened"
+        );
+
+        let (_, gitignore_many) = summarize_command(
+            &RepoCommandKind::AppendGitignorePatterns {
+                patterns: vec!["/a".to_string(), "/b".to_string()],
+            },
+            &command_output("Update .gitignore", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(gitignore_many, "Added 2 patterns to .gitignore");
 
         let (_, pull_up_to_date) = summarize_command(
             &RepoCommandKind::Pull {

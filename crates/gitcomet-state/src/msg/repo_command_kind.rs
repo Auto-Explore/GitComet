@@ -126,6 +126,9 @@ pub enum RepoCommandKind {
         path: PathBuf,
         stage: bool,
     },
+    AppendGitignorePatterns {
+        patterns: Vec<String>,
+    },
     ExportPatch {
         commit_id: CommitId,
         dest: PathBuf,

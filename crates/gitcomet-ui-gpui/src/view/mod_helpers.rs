@@ -4379,6 +4379,17 @@ pub(super) enum PopoverKind {
         area: DiffArea,
         path: Option<std::path::PathBuf>,
     },
+    /// Add the clicked status path — or its folder, or its extension — to the
+    /// repo-root `.gitignore`.
+    ///
+    /// `path` is the clicked row only. The multi-selection it may stand for is
+    /// re-derived when the dialog opens and consumed only on submit, so
+    /// cancelling leaves the selection intact.
+    AddToGitignorePrompt {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
     /// Staging would mark files resolved that still contain conflict markers.
     /// `paths` is the stage request as issued (empty means everything);
     /// `unresolved` is what the user is being warned about.

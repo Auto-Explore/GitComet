@@ -216,6 +216,10 @@ pub enum Effect {
         contents: String,
         stage: bool,
     },
+    AppendGitignorePatterns {
+        repo_id: RepoId,
+        patterns: Vec<String>,
+    },
 
     CheckoutBranch {
         repo_id: RepoId,
