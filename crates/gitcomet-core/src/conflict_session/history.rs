@@ -140,6 +140,40 @@ pub fn history_merge_region(
     Some(result)
 }
 
+/// Retry a narrowed merge block using the nearest section header from its
+/// already-resolved prefix. This keeps KDiff3-sized append conflicts eligible
+/// for history merging without pulling earlier history entries into the
+/// block's replacement text.
+pub(super) fn history_merge_region_with_context(
+    context_before: &str,
+    base: Option<&str>,
+    ours: &str,
+    theirs: &str,
+    options: &HistoryAutosolveOptions,
+) -> Option<String> {
+    let section_re = RegexBuilder::new(&options.section_start)
+        .size_limit(USER_REGEX_SIZE_LIMIT)
+        .dfa_size_limit(USER_REGEX_DFA_SIZE_LIMIT)
+        .build()
+        .ok()?;
+    let section = context_before
+        .lines()
+        .rev()
+        .find(|line| section_re.is_match(line))?;
+    let header = format!("{section}\n");
+    let contextual_base = base.map(|text| format!("{header}{text}"));
+    let contextual_ours = format!("{header}{ours}");
+    let contextual_theirs = format!("{header}{theirs}");
+    history_merge_region(
+        contextual_base.as_deref(),
+        &contextual_ours,
+        &contextual_theirs,
+        options,
+    )?
+    .strip_prefix(&header)
+    .map(ToOwned::to_owned)
+}
+
 /// Parse text into history entries. Returns entries found after the section
 /// start marker (or from the beginning if the entire text is a history block).
 ///

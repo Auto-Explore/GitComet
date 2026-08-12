@@ -1,3 +1,5 @@
+use super::highlight::runs_for_line;
+use super::state::{LineShapeInput, PlainLineLayouts, TextShapeStyle};
 use super::*;
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -146,6 +148,45 @@ pub(crate) fn benchmark_text_input_shaping_slice(text: &str, max_bytes: usize) -
     hash_shaping_slice(text, max_bytes)
 }
 
+/// Shape one soft-wrapped source line.
+///
+/// Unlike the plain path there is no cache here: `WrappedLine` shaping is
+/// driven by wrap width as well as text, and the wrapped-row cache it used to
+/// write was never read back.
+pub(super) fn shape_wrapped_line(
+    line: LineShapeInput<'_>,
+    wrap_width: Pixels,
+    precomputed_runs: Option<&[TextRun]>,
+    shape_style: &TextShapeStyle<'_>,
+    window: &mut Window,
+) -> WrappedLine {
+    let capped_text = build_shaping_text(line.line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
+    let owned_runs;
+    let runs = if let Some(precomputed_runs) = precomputed_runs {
+        precomputed_runs
+    } else {
+        owned_runs = runs_for_line(
+            shape_style.base_font,
+            shape_style.text_color,
+            line.line_start,
+            capped_text.as_ref(),
+            shape_style.highlights,
+        );
+        owned_runs.as_slice()
+    };
+    let shaped = window
+        .text_system()
+        .shape_text(
+            capped_text,
+            shape_style.font_size,
+            runs,
+            Some(wrap_width),
+            None,
+        )
+        .unwrap_or_default();
+    shaped.into_iter().next().unwrap_or_default()
+}
+
 pub(super) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
     color.a = alpha;
     color
@@ -172,6 +213,105 @@ pub(super) fn compute_line_starts(text: &str) -> Vec<usize> {
     starts
 }
 
+/// Where a frame reads its row text from.
+///
+/// The soft-wrap and masked arms hand over a document they already hold as one
+/// `&str`; the plain arm copies out only the rows it is about to shape, so a
+/// frame costs the viewport rather than the document.
+pub(super) enum LineTextSource<'a> {
+    Whole {
+        text: &'a str,
+        starts: &'a [usize],
+    },
+    Window {
+        rows: Range<usize>,
+        text: String,
+        starts: Vec<usize>,
+        /// The caret's row, when it sits outside `rows` and still has to be
+        /// shaped to place the caret.
+        stray: Option<(usize, String)>,
+    },
+}
+
+impl LineTextSource<'_> {
+    /// Copy out `rows` (and `extra`, if it falls outside them) from `snapshot`.
+    ///
+    /// Cost is proportional to the rows taken, not to the document.
+    pub(super) fn window(
+        snapshot: &crate::kit::text_model::TextModelSnapshot,
+        rows: Range<usize>,
+        extra: Option<usize>,
+    ) -> Self {
+        let mut text = String::new();
+        let mut starts = Vec::with_capacity(rows.len() + 1);
+        let line_count = snapshot.line_count();
+        for row in rows.clone() {
+            starts.push(text.len());
+            text.push_str(snapshot.line_text(row).as_ref());
+            // Re-add the terminator the model strips, so `line_text_for_index`
+            // sees the same shape it does for a whole document — but only where
+            // the document really has one. A final row with no trailing newline
+            // that ends in `\r` keeps that `\r` in the `Whole` variant, so
+            // inventing a terminator here would make the same row shape one
+            // character narrower in this arm than in the other.
+            if row + 1 < line_count {
+                text.push('\n');
+            }
+        }
+        starts.push(text.len());
+
+        // The caret's row, when it is outside the window. Stored already
+        // stripped: the windowed rows lose their `\r` to `line_text_for_index`
+        // and the `Whole` variant strips it too, but `line_text` only excludes
+        // the `\n`. Leaving it on would make the caret's row shape one column
+        // wider than the identical row shapes in-viewport, so scrolling the
+        // caret in and out would move it.
+        let stray = extra.filter(|row| !rows.contains(row)).map(|row| {
+            let text = snapshot.line_text(row);
+            // Strip only where the document really terminates the row, exactly
+            // as the windowed rows above do: a `\r` at the very end of a file
+            // with no trailing newline survives in the `Whole` variant, so it
+            // has to survive here.
+            let text = match text.strip_suffix('\r') {
+                Some(stripped) if row + 1 < line_count => stripped,
+                _ => text.as_ref(),
+            };
+            (row, text.to_owned())
+        });
+
+        Self::Window {
+            rows,
+            text,
+            starts,
+            stray,
+        }
+    }
+
+    /// Text of `line_ix`, excluding its terminator. Empty for rows outside the
+    /// window, which a correct caller never asks for.
+    pub(super) fn line_text(&self, line_ix: usize) -> &str {
+        match self {
+            Self::Whole { text, starts } => line_text_for_index(text, starts, line_ix),
+            Self::Window {
+                rows,
+                text,
+                starts,
+                stray,
+            } => {
+                if let Some((stray_row, stray_text)) = stray
+                    && *stray_row == line_ix
+                {
+                    return stray_text;
+                }
+                if !rows.contains(&line_ix) {
+                    return "";
+                }
+                line_text_for_index(text, starts, line_ix - rows.start)
+            }
+        }
+    }
+}
+
 pub(super) fn line_text_for_index<'a>(text: &'a str, starts: &[usize], line_ix: usize) -> &'a str {
     let text_len = text.len();
     let Some(start) = starts.get(line_ix).copied() else {
@@ -188,6 +328,9 @@ pub(super) fn line_text_for_index<'a>(text: &'a str, starts: &[usize], line_ix: 
         .min(text_len);
     if end > start && text.as_bytes().get(end - 1) == Some(&b'\n') {
         end -= 1;
+        if end > start && text.as_bytes().get(end - 1) == Some(&b'\r') {
+            end -= 1;
+        }
     }
     text.get(start..end).unwrap_or("")
 }
@@ -246,17 +389,27 @@ pub(super) fn truncated_line_source_offset_for_x(line: &TruncatedLineLayout, x: 
         .display_to_source_start_offset(display_offset)
 }
 
+/// The line index and line-local byte offset for a document offset.
+///
+/// The local offset is clamped to the shaped line's length when that line is
+/// one of the shaped ones; for a line outside the shaped window callers pair
+/// this with `PlainLineLayouts::get`, which yields `None`, so the unclamped
+/// offset is never turned into geometry.
 pub(super) fn line_for_offset(
     starts: &[usize],
-    lines: &[ShapedLine],
+    lines: &PlainLineLayouts,
     offset: usize,
 ) -> (usize, usize) {
     let mut ix = starts.partition_point(|&s| s <= offset);
     if ix == 0 {
         ix = 1;
     }
-    let line_ix = (ix - 1).min(lines.len().saturating_sub(1));
+    let line_ix = (ix - 1).min(lines.line_count().saturating_sub(1));
     let start = starts.get(line_ix).copied().unwrap_or(0);
-    let local = offset.saturating_sub(start).min(lines[line_ix].len());
+    let local = offset.saturating_sub(start);
+    let local = match lines.get(line_ix) {
+        Some(line) => local.min(line.len()),
+        None => local,
+    };
     (line_ix, local)
 }

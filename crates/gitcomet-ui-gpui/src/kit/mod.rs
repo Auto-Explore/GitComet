@@ -1,13 +1,17 @@
+mod minimap;
+pub(crate) mod rope;
 mod scrollbar;
 mod text_input;
 pub(crate) mod text_model;
 pub(crate) mod text_truncation;
 
+pub use minimap::{MINIMAP_COLUMN_WIDTH_PX, MinimapColumn};
 pub use scrollbar::{
     Scrollbar, ScrollbarAxis, ScrollbarDriver, ScrollbarMarker, ScrollbarMarkerKind,
 };
 #[cfg(feature = "benchmarks")]
 pub(crate) use scrollbar::{compute_vertical_click_offset, vertical_thumb_metrics};
+pub(crate) use text_input::utf8_edit_delta_between_texts;
 pub use text_input::{
     Backspace, Copy, Cut, Delete, DeleteWordLeft, DeleteWordRight, Down, End, Enter,
     HighlightProvider, HighlightProviderResult, Home, Left, PageDown, PageUp, Paste, Redo, Right,

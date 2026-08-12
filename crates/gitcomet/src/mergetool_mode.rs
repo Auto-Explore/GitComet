@@ -1,8 +1,11 @@
 use crate::cli::{MergetoolConfig, exit_code};
 use gitcomet_core::{
     conflict_labels::{BaseLabelScenario, format_base_label},
-    conflict_session::try_autosolve_merged_text,
-    merge::{MergeError, MergeLabels, MergeOptions, merge_file_bytes},
+    conflict_session::try_autosolve_merge_plan,
+    merge::{
+        MergeError, MergeLabels, MergeOptions, build_merge_plan_bytes_with_optional_base,
+        render_merge_plan,
+    },
 };
 use std::{fs, path::Path};
 
@@ -35,12 +38,14 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         )
     })?;
 
-    let base_bytes = match &config.base {
-        Some(base_path) => fs::read(base_path)
-            .map_err(|e| format!("Failed to read base file {}: {e}", base_path.display()))?,
-        // No base file: treat as empty (add/add conflict scenario).
-        None => Vec::new(),
-    };
+    let base_bytes = config
+        .base
+        .as_ref()
+        .map(|base_path| {
+            fs::read(base_path)
+                .map_err(|e| format!("Failed to read base file {}: {e}", base_path.display()))
+        })
+        .transpose()?;
 
     // Build merge options from config labels and algorithm preferences.
     let options = MergeOptions {
@@ -52,18 +57,24 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
     };
 
     // Run the 3-way merge algorithm with byte-level binary detection.
-    let result = match merge_file_bytes(&base_bytes, &local_bytes, &remote_bytes, &options) {
+    let plan = match build_merge_plan_bytes_with_optional_base(
+        base_bytes.as_deref(),
+        &local_bytes,
+        &remote_bytes,
+        &options,
+    ) {
         Ok(result) => result,
         Err(MergeError::BinaryContent) => {
             return handle_binary_merge(
                 config,
                 config.base.is_some(),
-                &base_bytes,
+                base_bytes.as_deref().unwrap_or_default(),
                 &local_bytes,
                 &remote_bytes,
             );
         }
     };
+    let result = render_merge_plan(&plan, &options);
     let is_clean = result.is_clean();
     let conflict_count = result.conflict_count;
 
@@ -79,7 +90,7 @@ pub fn run_mergetool(config: &MergetoolConfig) -> Result<MergetoolRunResult, Str
         })
     } else if config.auto {
         // Auto mode: try heuristic passes on conflict blocks.
-        if let Some(clean_output) = try_autosolve_merged_text(&result.output) {
+        if let Some(clean_output) = try_autosolve_merge_plan(&plan, &options) {
             // All conflicts resolved by heuristics — write clean output.
             write_merged_output(config, clean_output.as_bytes())?;
             let display_name = merged_display_name(config);

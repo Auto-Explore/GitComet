@@ -292,7 +292,6 @@ fn render_conflict_markdown_preview_rows(
     this.update_markdown_preview_horizontal_min_width(
         document.as_ref(),
         range.clone(),
-        None,
         editor_font_family.as_str(),
         window,
         cx,
@@ -302,12 +301,13 @@ fn render_conflict_markdown_preview_rows(
         range,
         &super::history::MarkdownPreviewRenderContext {
             theme,
-            bar_color: None,
             min_width: this.diff_horizontal_content_width().max(viewport_width),
             editor_font_family: editor_font_family.into(),
             ui_scale_percent: crate::ui_scale::current(cx).percent,
             view: None,
             text_region: DiffTextRegion::Inline,
+            wrap_plan: None,
+            image_base_dir: None,
         },
     )
 }
@@ -526,11 +526,12 @@ impl MainPaneView {
                     let label: SharedString = if matches!(column, ThreeWayColumn::Base) {
                         let choice_label = conflict_choices
                             .get(range_ix)
-                            .map(|c| match c {
+                            .map(|c| match *c {
                                 conflict_resolver::ConflictChoice::Base => "Base (A)",
                                 conflict_resolver::ConflictChoice::Ours => "Local (B)",
                                 conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
                                 conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+                                _ => "Ordered source selection",
                             })
                             .unwrap_or("?");
                         format!("  Resolved: picked {choice_label}").into()
@@ -556,17 +557,20 @@ impl MainPaneView {
                             theme.colors.success,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
-                        .when(range_ix == this.conflict_resolver.active_conflict, |d| {
-                            d.child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(px(3.0))
-                                    .bg(theme.colors.accent),
-                            )
-                        })
+                        .when(
+                            Some(range_ix) == this.conflict_resolver.active_conflict,
+                            |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(px(3.0))
+                                        .bg(theme.colors.accent),
+                                )
+                            },
+                        )
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
@@ -712,13 +716,30 @@ impl MainPaneView {
                         show_line_numbers,
                     );
 
-                    let is_active_conflict =
-                        range_ix == Some(this.conflict_resolver.active_conflict);
+                    let semantic_nav_target =
+                        this.conflict_resolver.nav_target_index_for_aligned_row(ix);
+                    let is_active_conflict = this.conflict_resolver.conflict_is_active(range_ix)
+                        || this
+                            .conflict_resolver
+                            .selected_nav_target_contains_aligned_row(ix);
                     // section 30 split: highlight rows in the drag selection; the
                     // begin/extend handlers only fire when split is available.
                     let row_selected = this.conflict_resolver.conflict_row_is_selected(ix);
                     let row_selection_enabled =
                         this.conflict_resolver.conflict_row_selection_enabled();
+                    // kdiff3 manual diff help: only the three-way source columns
+                    // sit in the shared aligned space that a pin is expressed in.
+                    let alignment_mark =
+                        this.conflict_resolver.manual_alignment_enabled().then(|| {
+                            conflict_canvas::AlignmentMarkContext {
+                                column,
+                                side_line,
+                                marked: side_line.is_some_and(|line| {
+                                    this.conflict_resolver
+                                        .alignment_line_is_selected(column, line)
+                                }),
+                            }
+                        });
                     if this.conflict_canvas_rows_enabled {
                         let chunk_context = range_ix.map(|conflict_ix| ConflictChunkContext {
                             conflict_ix,
@@ -748,8 +769,10 @@ impl MainPaneView {
                             chunk_context,
                             chunk_menu_prefix,
                             true,
+                            semantic_nav_target,
                             is_active_conflict,
                             row_selection_enabled.then_some(row_selected),
+                            alignment_mark,
                         ));
                         continue;
                     }
@@ -878,6 +901,13 @@ impl MainPaneView {
                                         cx,
                                     );
                                 }
+                            }),
+                        );
+                    } else if let Some(target_index) = semantic_nav_target {
+                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                this.conflict_jump_to_nav_target(target_index, cx);
                             }),
                         );
                     }
@@ -1050,8 +1080,7 @@ impl MainPaneView {
                     show_line_numbers,
                 );
 
-                let is_active_conflict =
-                    conflict_ix == Some(this.conflict_resolver.active_conflict);
+                let is_active_conflict = this.conflict_resolver.conflict_is_active(conflict_ix);
                 if this.conflict_canvas_rows_enabled {
                     let chunk_context_data = conflict_ix.map(|conflict_ix| ConflictChunkContext {
                         conflict_ix,
@@ -1081,9 +1110,12 @@ impl MainPaneView {
                         chunk_context_data,
                         chunk_menu_prefix,
                         false,
+                        None,
                         is_active_conflict,
                         // Block-local two-way rows are not in the shared aligned
-                        // space, so split selection is unavailable here.
+                        // space, so split selection and manual alignment are
+                        // both unavailable here.
+                        None,
                         None,
                     );
                 }
@@ -1257,11 +1289,12 @@ impl MainPaneView {
                     let label: SharedString = if matches!(side, ConflictPickSide::Ours) {
                         let choice_label = conflict_choices
                             .get(range_ix)
-                            .map(|c| match c {
+                            .map(|c| match *c {
                                 conflict_resolver::ConflictChoice::Base => "Base (A)",
                                 conflict_resolver::ConflictChoice::Ours => "Local (B)",
                                 conflict_resolver::ConflictChoice::Theirs => "Remote (C)",
                                 conflict_resolver::ConflictChoice::Both => "Local+Remote (B+C)",
+                                _ => "Ordered source selection",
                             })
                             .unwrap_or("?");
                         format!("  Resolved: picked {choice_label}").into()
@@ -1287,17 +1320,20 @@ impl MainPaneView {
                             theme.colors.success,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
-                        .when(range_ix == this.conflict_resolver.active_conflict, |d| {
-                            d.child(
-                                div()
-                                    .absolute()
-                                    .left_0()
-                                    .top_0()
-                                    .bottom_0()
-                                    .w(px(3.0))
-                                    .bg(theme.colors.accent),
-                            )
-                        })
+                        .when(
+                            Some(range_ix) == this.conflict_resolver.active_conflict,
+                            |d| {
+                                d.child(
+                                    div()
+                                        .absolute()
+                                        .left_0()
+                                        .top_0()
+                                        .bottom_0()
+                                        .w(px(3.0))
+                                        .bg(theme.colors.accent),
+                                )
+                            },
+                        )
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.text_muted)
@@ -1459,8 +1495,12 @@ impl MainPaneView {
                     let conflict_ix = this
                         .conflict_resolver
                         .conflict_index_for_side_line(column, row);
-                    let is_active_conflict =
-                        conflict_ix == Some(this.conflict_resolver.active_conflict);
+                    let semantic_nav_target =
+                        this.conflict_resolver.nav_target_index_for_aligned_row(row);
+                    let is_active_conflict = this.conflict_resolver.conflict_is_active(conflict_ix)
+                        || this
+                            .conflict_resolver
+                            .selected_nav_target_contains_aligned_row(row);
                     let row_selected = this.conflict_resolver.conflict_row_is_selected(row);
                     let row_selection_enabled =
                         this.conflict_resolver.conflict_row_selection_enabled();
@@ -1494,8 +1534,12 @@ impl MainPaneView {
                             chunk_context,
                             chunk_menu_prefix,
                             false,
+                            semantic_nav_target,
                             is_active_conflict,
                             row_selection_enabled.then_some(row_selected),
+                            // The two-way split shows ours/theirs only; a pin
+                            // needs all three source columns to place it.
+                            None,
                         ));
                         continue;
                     }
@@ -1623,6 +1667,13 @@ impl MainPaneView {
                                         cx,
                                     );
                                 }
+                            }),
+                        );
+                    } else if let Some(target_index) = semantic_nav_target {
+                        cell = cell.cursor(CursorStyle::PointingHand).on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                                this.conflict_jump_to_nav_target(target_index, cx);
                             }),
                         );
                     }
@@ -1756,6 +1807,21 @@ impl MainPaneView {
         if this.conflict_resolver.resolved_outline_gutter_rows.len() != line_count {
             let meta = &this.conflict_resolver.resolved_outline.meta;
             let markers = &this.conflict_resolver.resolved_outline.markers;
+            let line_starts = &this.conflict_resolved_preview_line_starts;
+            // A placeholder row is unresolved by definition, so read that off
+            // the row's own text rather than trusting the marker array, which
+            // is rebuilt incrementally and can lag a resolve/unresolve.
+            let placeholder_rows: Vec<bool> =
+                this.conflict_resolver_input.read_with(cx, |input, _| {
+                    let text = input.text();
+                    (0..line_count)
+                        .map(|ix| {
+                            conflict_resolver::line_is_unresolved_conflict_placeholder(
+                                resolved_output_line_text(text, line_starts, ix),
+                            )
+                        })
+                        .collect()
+                });
             let mut gutter_rows = Vec::with_capacity(line_count);
             for ix in 0..line_count {
                 let source = meta
@@ -1763,13 +1829,19 @@ impl MainPaneView {
                     .map(|entry| entry.source)
                     .unwrap_or(conflict_resolver::ResolvedLineSource::Manual);
                 let marker = markers.get(ix).copied().flatten();
-                gutter_rows.push(conflict_resolver::ResolvedOutputGutterRow::new(
+                let row = conflict_resolver::ResolvedOutputGutterRow::new(
                     source,
                     marker.map(|entry| entry.conflict_ix),
                     marker.is_some_and(|entry| entry.is_start),
                     marker.is_some_and(|entry| entry.is_end),
                     marker.is_some_and(|entry| entry.unresolved),
-                ));
+                );
+                let is_placeholder = placeholder_rows.get(ix).copied().unwrap_or(false);
+                gutter_rows.push(if is_placeholder {
+                    row.with_unresolved_placeholder()
+                } else {
+                    row
+                });
             }
             this.conflict_resolver.resolved_outline_gutter_rows = gutter_rows;
         }
@@ -1819,13 +1891,15 @@ impl MainPaneView {
                 // a line git itself pre-merged (or plain context), not a
                 // resolver pick — mute it so only real picks read as
                 // decisions.
-                let badge_fg = if gutter_row.has_marker() {
+                let badge_fg = if gutter_row.has_marker() && gutter_row.unresolved() {
+                    theme.colors.danger
+                } else if gutter_row.has_marker() {
                     badge_fg
                 } else {
                     with_alpha(badge_fg, if theme.is_dark { 0.45 } else { 0.55 })
                 };
                 let conflict_ix = gutter_row.marker_conflict_ix();
-                let conflict_active = conflict_ix == Some(this.conflict_resolver.active_conflict);
+                let conflict_active = this.conflict_resolver.conflict_is_active(conflict_ix);
                 let conflict_unresolved = gutter_row.unresolved();
                 let marker_color = if conflict_unresolved {
                     with_alpha(theme.colors.danger, if theme.is_dark { 0.96 } else { 0.90 })
@@ -1879,13 +1953,23 @@ impl MainPaneView {
                 let mut row = div()
                     .id(("conflict_resolved_preview_row", ix))
                     .relative()
-                    .h(px(20.0))
+                    .h(px(crate::view::panes::main::RESOLVED_OUTPUT_ROW_HEIGHT_PX))
                     .px_2()
                     .flex()
                     .items_center()
                     .text_xs()
                     .font_family(editor_font_family.clone())
                     .text_color(theme.colors.text)
+                    // The active conflict's open row wears the same yellow wash
+                    // the editor paints behind its `<Merge Conflict>` text, so
+                    // the gutter and the code read as one highlighted row.
+                    .when(conflict_active && conflict_unresolved, |d| {
+                        d.bg(
+                            crate::view::panes::main::resolved_output_active_conflict_background(
+                                theme,
+                            ),
+                        )
+                    })
                     .when(gutter_row.manual_without_marker(), |d| {
                         d.bg(with_alpha(
                             theme.colors.surface_bg_elevated,
@@ -2007,6 +2091,8 @@ impl MainPaneView {
         if let Some(projection) = this.conflict_resolved_output_projection.as_ref() {
             let unresolved_row_bg =
                 with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
+            let active_unresolved_row_bg =
+                crate::view::panes::main::resolved_output_active_conflict_background(theme);
             let resolved_row_bg = with_alpha(
                 theme.colors.success,
                 if theme.is_dark { 0.12 } else { 0.08 },
@@ -2034,12 +2120,24 @@ impl MainPaneView {
                     .copied()
                     .flatten();
                 let row_bg = conflict_marker.map(|marker| {
-                    if marker.unresolved {
-                        unresolved_row_bg
-                    } else {
+                    if !marker.unresolved {
                         resolved_row_bg
+                    } else if this
+                        .conflict_resolver
+                        .conflict_is_active(Some(marker.conflict_ix))
+                    {
+                        // Same yellow the editable output washes its active row
+                        // with: which open conflict the picks apply to.
+                        active_unresolved_row_bg
+                    } else {
+                        unresolved_row_bg
                     }
                 });
+                let text_color = if conflict_marker.is_some_and(|marker| marker.unresolved) {
+                    theme.colors.danger
+                } else {
+                    theme.colors.text
+                };
 
                 elements.push(
                     div()
@@ -2052,7 +2150,7 @@ impl MainPaneView {
                         .items_center()
                         .text_xs()
                         .font_family(editor_font_family.clone())
-                        .text_color(theme.colors.text)
+                        .text_color(text_color)
                         .whitespace_nowrap()
                         .when_some(row_bg, |d, bg| d.bg(bg))
                         .on_mouse_down(
@@ -2104,242 +2202,13 @@ impl MainPaneView {
             return elements;
         }
 
-        let syntax_language = this.conflict_resolved_preview_render_syntax_language();
-        let syntax_document = this.conflict_resolved_preview_prepared_syntax_document;
-        let syntax_mode = syntax_mode_for_prepared_document(syntax_document);
-        let line_starts = &this.conflict_resolved_preview_line_starts;
-        // Collapsed context mode projects the output row space: map each
-        // visible row to its output line (folds render as separator rows).
-        let items: Vec<Option<conflict_resolver::ThreeWayVisibleItem>> = range
-            .clone()
-            .map(|vi| this.resolved_output_item_for_visible(vi))
-            .collect();
-        let row_line = |item: &Option<conflict_resolver::ThreeWayVisibleItem>| match item {
-            Some(conflict_resolver::ThreeWayVisibleItem::Line(line)) => Some(*line),
-            _ => None,
-        };
-        let highlight_start = items.iter().find_map(&row_line);
-        let highlight_end = items.iter().rev().find_map(&row_line);
-        let (line_texts, prepared_line_highlights) =
-            this.conflict_resolver_input.read_with(cx, |input, _| {
-                let text = input.text();
-                let line_texts: Vec<SharedString> = items
-                    .iter()
-                    .map(|item| match row_line(item) {
-                        Some(line) => resolved_output_line_text(text, line_starts, line)
-                            .to_string()
-                            .into(),
-                        None => SharedString::default(),
-                    })
-                    .collect();
-                let prepared_line_highlights = syntax_document
-                    .zip(syntax_language)
-                    .zip(highlight_start.zip(highlight_end))
-                    .and_then(|((document, language), (start, end))| {
-                        request_syntax_highlights_for_prepared_document_line_range(
-                            theme,
-                            text,
-                            line_starts,
-                            document,
-                            language,
-                            start..end + 1,
-                        )
-                    })
-                    .unwrap_or_default();
-                (line_texts, prepared_line_highlights)
-            });
-        if prepared_line_highlights.iter().any(|line| line.pending) {
-            this.ensure_prepared_syntax_chunk_poll(cx);
-        }
-
-        let unresolved_row_bg =
-            with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
-        let resolved_row_bg = with_alpha(
-            theme.colors.success,
-            if theme.is_dark { 0.12 } else { 0.08 },
-        );
-
-        let elements: Vec<AnyElement> = range
-            .zip(items.iter().cloned())
-            .zip(line_texts)
-            .map(|((vi, item), line_text)| {
-                let ix = match item {
-                    Some(conflict_resolver::ThreeWayVisibleItem::Line(line)) => line,
-                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
-                        source_line_start,
-                        len,
-                        fold_id,
-                    }) => {
-                        return Self::conflict_context_fold_row(
-                            theme,
-                            "conflict_resolved_output_fold",
-                            vi,
-                            source_line_start,
-                            len,
-                            fold_id,
-                            true,
-                            cx,
-                        );
-                    }
-                    Some(conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(_)) | None => {
-                        return div()
-                            .id(("conflict_resolved_output_oob", vi))
-                            .h(px(20.0))
-                            .px_2()
-                            .text_xs()
-                            .text_color(theme.colors.text_muted)
-                            .child("")
-                            .into_any_element();
-                    }
-                };
-                let display_line_text = if show_ws {
-                    whitespace_visible_line_text(line_text.as_ref())
-                } else {
-                    line_text.clone()
-                };
-                let min_width = conflict_resolved_output_row_min_width(
-                    window,
-                    &display_line_text,
-                    editor_font_family.as_str(),
-                );
-
-                let row_content = if syntax_language.is_some() && !line_text.is_empty() {
-                    let prepared_line_highlight = highlight_start
-                        .and_then(|start| {
-                            ix.checked_sub(start)
-                                .and_then(|offset| prepared_line_highlights.get(offset))
-                        })
-                        .filter(|line| line.line_ix == ix);
-                    let needs_refresh = this
-                        .conflict_resolved_preview_segments_cache_get(ix)
-                        .is_none_or(|styled| styled.text.as_ref() != line_text.as_ref());
-                    let mut pending_styled = None;
-                    if needs_refresh {
-                        if let Some(line_highlights) = prepared_line_highlight {
-                            let styled = build_cached_diff_styled_text_from_relative_highlights(
-                                line_text.as_ref(),
-                                line_highlights.highlights.as_slice(),
-                            );
-                            if line_highlights.pending {
-                                pending_styled = Some(styled);
-                            } else {
-                                this.conflict_resolved_preview_segments_cache_set(ix, styled);
-                            }
-                        } else {
-                            let styled = build_conflict_cached_diff_styled_text(
-                                theme,
-                                line_text.as_ref(),
-                                &[],
-                                "",
-                                syntax_language,
-                                syntax_mode,
-                                None,
-                            );
-                            this.conflict_resolved_preview_segments_cache_set(ix, styled);
-                        }
-                    }
-                    let cached_styled = this.conflict_resolved_preview_segments_cache_get(ix);
-                    let styled = pending_styled
-                        .as_ref()
-                        .or(cached_styled)
-                        .expect("resolved preview row style should exist after populate");
-                    if show_ws {
-                        let visible =
-                            whitespace_visible_line_styled_text_for_raw(styled, line_text.as_ref());
-                        if visible.highlights.is_empty() {
-                            div()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .overflow_hidden()
-                                .child(visible.text)
-                                .into_any_element()
-                        } else {
-                            let visible_text = visible.text;
-                            let visible_highlights = visible.highlights;
-                            div()
-                                .w_full()
-                                .min_w(px(0.0))
-                                .overflow_hidden()
-                                .child(
-                                    gpui::StyledText::new(visible_text)
-                                        .with_highlights(visible_highlights.iter().cloned()),
-                                )
-                                .into_any_element()
-                        }
-                    } else if styled.highlights.is_empty() {
-                        div()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .child(styled.text.clone())
-                            .into_any_element()
-                    } else {
-                        div()
-                            .w_full()
-                            .min_w(px(0.0))
-                            .overflow_hidden()
-                            .child(
-                                gpui::StyledText::new(styled.text.clone())
-                                    .with_highlights(styled.highlights.iter().cloned()),
-                            )
-                            .into_any_element()
-                    }
-                } else {
-                    div()
-                        .w_full()
-                        .min_w(px(0.0))
-                        .overflow_hidden()
-                        .child(display_line_text)
-                        .into_any_element()
-                };
-
-                let conflict_marker = this
-                    .conflict_resolver
-                    .resolved_outline
-                    .markers
-                    .get(ix)
-                    .copied()
-                    .flatten();
-                let row_bg = conflict_marker.map(|marker| {
-                    if marker.unresolved {
-                        unresolved_row_bg
-                    } else {
-                        resolved_row_bg
-                    }
-                });
-
-                div()
-                    .id(("conflict_resolved_output_row", ix))
-                    .w_full()
-                    .min_w(min_width)
-                    .h(px(20.0))
-                    .px_2()
-                    .flex()
-                    .items_center()
-                    .text_xs()
-                    .font_family(editor_font_family.clone())
-                    .text_color(theme.colors.text)
-                    .whitespace_nowrap()
-                    .when_some(row_bg, |d, bg| d.bg(bg))
-                    .on_mouse_down(
-                        MouseButton::Right,
-                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                            cx.stop_propagation();
-                            this.open_conflict_resolver_output_context_menu_for_line(
-                                ix, e.position, window, cx,
-                            );
-                        }),
-                    )
-                    .child(row_content)
-                    .into_any_element()
-            })
-            .collect();
-        perf::record_row_batch(
-            ViewPerfRenderLane::ResolvedPreview,
-            requested_rows,
-            elements.len(),
-        );
-        elements
+        // Unreachable: this list is only mounted when the output is streamed
+        // (`conflict_resolver_view.rs`, inside `if streamed`), and `streamed` is
+        // exactly `conflict_resolved_output_projection.is_some()` — the branch
+        // above. The editable output is drawn by the `TextInput` instead, with
+        // `render_conflict_resolved_preview_rows` supplying only its gutter.
+        perf::record_row_batch(ViewPerfRenderLane::ResolvedPreview, requested_rows, 0);
+        Vec::new()
     }
 
     pub(in super::super) fn render_conflict_compare_diff_rows(
@@ -2861,6 +2730,7 @@ fn three_way_choice_short_label(choice: conflict_resolver::ConflictChoice) -> &'
         conflict_resolver::ConflictChoice::Ours => "B",
         conflict_resolver::ConflictChoice::Theirs => "C",
         conflict_resolver::ConflictChoice::Both => "B+C",
+        _ => "ordered",
     }
 }
 

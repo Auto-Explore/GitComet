@@ -1,203 +1,25 @@
+use crate::kit::rope::{Point, Rope};
 use gpui::SharedString;
-use memchr::memchr_iter;
-use smallvec::SmallVec;
-#[cfg(any(test, feature = "benchmarks"))]
 use std::borrow::Cow;
 use std::ops::{Deref, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 
-const LARGE_TEXT_CHUNK_BYTES: usize = 16 * 1024;
-const SMALL_ADD_CHUNK_BYTES: usize = 4 * 1024;
-const PIECE_TABLE_COMPACTION_THRESHOLD: usize = 256;
 static NEXT_MODEL_ID: AtomicU64 = AtomicU64::new(1);
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum BufferId {
-    Original,
-    Add,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Piece {
-    buffer: BufferId,
-    chunk_index: usize,
-    start: usize,
-    len: usize,
-}
-
-impl Piece {
-    fn prefix(&self, len: usize) -> Option<Self> {
-        (len > 0).then_some(Self {
-            buffer: self.buffer,
-            chunk_index: self.chunk_index,
-            start: self.start,
-            len,
-        })
-    }
-
-    fn suffix(&self, offset: usize) -> Option<Self> {
-        let suffix_len = self.len.saturating_sub(offset);
-        (suffix_len > 0).then_some(Self {
-            buffer: self.buffer,
-            chunk_index: self.chunk_index,
-            start: self.start.saturating_add(offset),
-            len: suffix_len,
-        })
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct LineIndex {
-    starts: Arc<[usize]>,
-}
-
-impl LineIndex {
-    fn from_text(text: &str) -> Self {
-        let bytes = text.as_bytes();
-        let newline_count = memchr_iter(b'\n', bytes).count();
-        let mut starts = Vec::with_capacity(newline_count + 1);
-        starts.push(0);
-        for pos in memchr_iter(b'\n', bytes) {
-            starts.push(pos + 1);
-        }
-        Self {
-            starts: Arc::<[usize]>::from(starts),
-        }
-    }
-
-    fn starts(&self) -> &[usize] {
-        self.starts.as_ref()
-    }
-
-    fn shared_starts(&self) -> Arc<[usize]> {
-        Arc::clone(&self.starts)
-    }
-
-    fn append_text(&mut self, offset: usize, inserted: &str) {
-        if inserted.is_empty() {
-            return;
-        }
-
-        let inserted_breaks = memchr_iter(b'\n', inserted.as_bytes()).count();
-        if inserted_breaks == 0 {
-            return;
-        }
-
-        let starts = self.starts.as_ref();
-        let mut updated = Vec::with_capacity(starts.len().saturating_add(inserted_breaks));
-        updated.extend_from_slice(starts);
-
-        for pos in memchr_iter(b'\n', inserted.as_bytes()) {
-            updated.push(offset.saturating_add(pos).saturating_add(1));
-        }
-
-        self.starts = Arc::<[usize]>::from(updated);
-        debug_assert_eq!(self.starts.as_ref().first().copied(), Some(0));
-        debug_assert!(
-            self.starts
-                .as_ref()
-                .windows(2)
-                .all(|window| window[0] < window[1]),
-            "line starts must remain strictly increasing after append"
-        );
-    }
-
-    fn apply_edit(&mut self, range: Range<usize>, inserted: &str) {
-        {
-            let starts = self.starts.as_ref();
-            debug_assert_eq!(starts.first().copied(), Some(0));
-            debug_assert!(
-                starts.windows(2).all(|window| window[0] < window[1]),
-                "line starts must remain strictly increasing before edit"
-            );
-        }
-
-        let old_len = range.end.saturating_sub(range.start);
-        let new_len = inserted.len();
-        let delta = new_len as isize - old_len as isize;
-
-        let (prefix_len, starts_len, suffix_start) = {
-            let starts = self.starts.as_ref();
-            (
-                starts.partition_point(|&start| start <= range.start),
-                starts.len(),
-                starts.partition_point(|&start| start <= range.end),
-            )
-        };
-
-        let inserted_breaks = memchr_iter(b'\n', inserted.as_bytes()).count();
-        let removed_breaks = suffix_start.saturating_sub(prefix_len);
-        if removed_breaks == inserted_breaks
-            && let Some(updated) = Arc::get_mut(&mut self.starts)
-        {
-            for (write_ix, pos) in (prefix_len..).zip(memchr_iter(b'\n', inserted.as_bytes())) {
-                updated[write_ix] = range.start.saturating_add(pos).saturating_add(1);
-            }
-            for start in &mut updated[suffix_start..] {
-                *start = shift_offset_by_delta(*start, delta);
-            }
-            debug_assert_eq!(updated.first().copied(), Some(0));
-            debug_assert!(
-                updated.windows(2).all(|window| window[0] < window[1]),
-                "line starts must remain strictly increasing after in-place edit"
-            );
-            return;
-        }
-
-        let mut updated = Vec::with_capacity(
-            prefix_len
-                .saturating_add(inserted_breaks)
-                .saturating_add(starts_len.saturating_sub(suffix_start))
-                .saturating_add(1),
-        );
-        let starts = self.starts.as_ref();
-        updated.extend_from_slice(&starts[..prefix_len]);
-
-        for pos in memchr_iter(b'\n', inserted.as_bytes()) {
-            updated.push(range.start.saturating_add(pos).saturating_add(1));
-        }
-
-        for &start in &starts[suffix_start..] {
-            updated.push(shift_offset_by_delta(start, delta));
-        }
-
-        // The three sections (prefix, inserted breaks, shifted suffix) are
-        // already in strictly increasing order with non-overlapping ranges:
-        //   prefix values        ≤ range.start
-        //   inserted break values ∈ (range.start, range.start + new_len]
-        //   shifted suffix values > range.start + new_len
-        // so sort/dedup is unnecessary.
-        self.starts = Arc::<[usize]>::from(updated);
-        debug_assert_eq!(self.starts.as_ref().first().copied(), Some(0));
-        debug_assert!(
-            self.starts
-                .as_ref()
-                .windows(2)
-                .all(|window| window[0] < window[1]),
-            "line starts must remain strictly increasing after edit"
-        );
-    }
-}
-
-fn shift_offset_by_delta(start: usize, delta: isize) -> usize {
-    if delta >= 0 {
-        start.saturating_add(delta as usize)
-    } else {
-        start.saturating_sub((-delta) as usize)
-    }
-}
-
+/// The document, plus the caches that let legacy `&str`/`&[usize]` callers keep
+/// working while they are migrated onto the windowed accessors.
+///
+/// Both caches are lazy and both are dropped on every edit. That is deliberate:
+/// an edit is O(log n) in the rope, and anything that re-warms a whole-document
+/// cache afterwards is a caller that has not been migrated yet. The
+/// `no_materialization_tests` suite exists to keep the hot paths off them.
 #[derive(Debug)]
 struct TextModelCore {
     model_id: u64,
     revision: u64,
-    original_chunks: Arc<Vec<Arc<str>>>,
-    add_chunks: Arc<Vec<Arc<String>>>,
-    pieces: Vec<Piece>,
-    len: usize,
-    ascii_only: bool,
-    line_index: LineIndex,
+    rope: Rope,
+    line_starts: OnceLock<Arc<[usize]>>,
     materialized: OnceLock<SharedString>,
 }
 
@@ -206,89 +28,35 @@ impl Clone for TextModelCore {
         Self {
             model_id: self.model_id,
             revision: self.revision,
-            original_chunks: Arc::clone(&self.original_chunks),
-            add_chunks: Arc::clone(&self.add_chunks),
-            pieces: self.pieces.clone(),
-            len: self.len,
-            ascii_only: self.ascii_only,
-            line_index: self.line_index.clone(),
-            // Do not clone materialized text into writable COW clones.
+            // O(1): the tree is persistent and shares every node.
+            rope: self.rope.clone(),
+            // A copy-on-write clone exists because a mutation is coming, which
+            // would invalidate both caches anyway.
+            line_starts: OnceLock::new(),
             materialized: OnceLock::new(),
         }
     }
 }
 
 impl TextModelCore {
-    fn chunk_for_piece(&self, piece: &Piece) -> &str {
-        match piece.buffer {
-            BufferId::Original => self
-                .original_chunks
-                .get(piece.chunk_index)
-                .map(|chunk| chunk.as_ref())
-                .unwrap_or(""),
-            BufferId::Add => self
-                .add_chunks
-                .get(piece.chunk_index)
-                .map(|chunk| chunk.as_str())
-                .unwrap_or(""),
-        }
-    }
-
-    fn piece_slice<'a>(&'a self, piece: &Piece) -> &'a str {
-        let chunk = self.chunk_for_piece(piece);
-        let end = piece.start.saturating_add(piece.len);
-        debug_assert!(
-            end <= chunk.len(),
-            "piece range must stay within backing chunk"
-        );
-        &chunk[piece.start..end]
-    }
-
-    fn original_text_shared_string(&self) -> Option<SharedString> {
-        let first = *self.pieces.first()?;
-        if first.buffer != BufferId::Original || first.start != 0 {
-            return None;
-        }
-
-        let chunk = Arc::clone(self.original_chunks.get(first.chunk_index)?);
-        let mut expected_start = 0usize;
-        for piece in &self.pieces {
-            if piece.buffer != BufferId::Original
-                || piece.chunk_index != first.chunk_index
-                || piece.start != expected_start
-            {
-                return None;
-            }
-            expected_start = expected_start.saturating_add(piece.len);
-        }
-
-        (expected_start == self.len && expected_start == chunk.len())
-            .then_some(SharedString::from(chunk))
+    fn materialized(&self) -> &SharedString {
+        self.materialized
+            .get_or_init(|| SharedString::from(self.rope.to_string()))
     }
 
     fn materialized_clone(&self) -> SharedString {
-        self.materialized
-            .get()
-            .cloned()
-            .unwrap_or_else(|| self.materialized().clone())
+        self.materialized().clone()
     }
 
-    fn materialized(&self) -> &SharedString {
-        self.materialized.get_or_init(|| {
-            if self.pieces.is_empty() {
-                return SharedString::default();
-            }
+    fn line_starts(&self) -> &Arc<[usize]> {
+        self.line_starts
+            .get_or_init(|| Arc::from(self.rope.line_start_offsets()))
+    }
 
-            if let Some(original) = self.original_text_shared_string() {
-                return original;
-            }
-
-            let mut text = String::with_capacity(self.len);
-            for piece in &self.pieces {
-                text.push_str(self.piece_slice(piece));
-            }
-            text.into()
-        })
+    /// True when every byte is a single-byte character, so byte and UTF-16
+    /// offsets coincide. O(1) from the summary rather than a stored flag.
+    fn is_ascii(&self) -> bool {
+        self.rope.len() == self.rope.len_utf16()
     }
 }
 
@@ -309,8 +77,10 @@ impl Default for TextModel {
 }
 
 impl Default for TextModelSnapshot {
+    /// An empty document with its own identity, so it never compares equal to a
+    /// snapshot of real content.
     fn default() -> Self {
-        TextModel::default().snapshot()
+        TextModel::new().snapshot()
     }
 }
 
@@ -320,34 +90,20 @@ impl TextModel {
     }
 
     pub fn from_large_text(text: &str) -> Self {
-        let mut original_chunks = Vec::with_capacity(usize::from(!text.is_empty()));
-        let pieces = if text.is_empty() {
-            Vec::new()
-        } else {
-            let original = Arc::<str>::from(text);
-            let pieces = build_original_pieces(original.as_ref(), LARGE_TEXT_CHUNK_BYTES);
-            original_chunks.push(original);
-            pieces
-        };
-
         let model_id = NEXT_MODEL_ID.fetch_add(1, Ordering::Relaxed).max(1);
         Self {
             core: Arc::new(TextModelCore {
                 model_id,
                 revision: 1,
-                original_chunks: Arc::new(original_chunks),
-                add_chunks: Arc::new(Vec::new()),
-                len: text.len(),
-                ascii_only: text.is_ascii(),
-                line_index: LineIndex::from_text(text),
-                pieces,
+                rope: Rope::from_str(text),
+                line_starts: OnceLock::new(),
                 materialized: OnceLock::new(),
             }),
         }
     }
 
     pub fn len(&self) -> usize {
-        self.core.len
+        self.core.rope.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -368,13 +124,13 @@ impl TextModel {
         self.core.materialized().as_ref()
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(feature = "benchmarks")]
     pub fn as_shared_string(&self) -> SharedString {
         self.core.materialized_clone()
     }
 
     pub fn line_starts(&self) -> &[usize] {
-        self.core.line_index.starts()
+        self.core.line_starts().as_ref()
     }
 
     pub fn snapshot(&self) -> TextModelSnapshot {
@@ -383,6 +139,8 @@ impl TextModel {
         }
     }
 
+    /// Replace the whole document. Mints a fresh `model_id`, so snapshots taken
+    /// of the previous contents never compare equal to the new ones.
     pub fn set_text(&mut self, text: &str) {
         *self = Self::from_large_text(text);
     }
@@ -394,71 +152,34 @@ impl TextModel {
     }
 
     pub fn is_char_boundary(&self, offset: usize) -> bool {
-        core_is_char_boundary(self.core.as_ref(), offset)
+        self.core.rope.is_char_boundary(offset)
     }
 
     pub fn clamp_to_char_boundary(&self, offset: usize) -> usize {
-        core_clamp_to_char_boundary(self.core.as_ref(), offset)
+        self.core
+            .rope
+            .clip_offset(offset, gpui::sum_tree::Bias::Left)
     }
 
+    /// Replace `range` with `new_text`, returning the byte range the inserted
+    /// text now occupies.
+    ///
+    /// O(log n) plus the replaced text: the rope shares every untouched subtree,
+    /// so this does not scale with the document.
     pub fn replace_range(&mut self, range: Range<usize>, new_text: &str) -> Range<usize> {
         let len = self.len();
-        if range.start >= len && range.end >= len {
-            if new_text.is_empty() {
-                return len..len;
-            }
-
-            let core = Arc::make_mut(&mut self.core);
-            return append_text_to_core(core, new_text);
-        }
-
-        let start = self.clamp_to_char_boundary(range.start.min(self.len()));
-        let end = self.clamp_to_char_boundary(range.end.min(self.len()));
+        let start = self.clamp_to_char_boundary(range.start.min(len));
+        let end = self.clamp_to_char_boundary(range.end.min(len));
         let range = if end < start { end..start } else { start..end };
         if range.is_empty() && new_text.is_empty() {
             return range.start..range.start;
         }
 
         let core = Arc::make_mut(&mut self.core);
-        core.ascii_only &= new_text.is_ascii();
-        let inserted_piece = append_add_piece(core, new_text);
-        let span = locate_piece_edit_span(core.pieces.as_slice(), range.clone());
-        let mut replacement = SmallVec::<[Piece; 3]>::new();
-        if let Some(prefix) = span.prefix_fragment {
-            push_piece_merged_small(&mut replacement, prefix);
-        }
-        if let Some(inserted_piece) = inserted_piece {
-            push_piece_merged_small(&mut replacement, inserted_piece);
-        }
-        if let Some(suffix) = span.suffix_fragment {
-            push_piece_merged_small(&mut replacement, suffix);
-        }
-
-        let mut replacement_len = replacement.len();
-        core.pieces
-            .splice(span.replace_start..span.replace_end, replacement);
-        let merged_left = span.replace_start > 0
-            && merge_piece_at(&mut core.pieces, span.replace_start.saturating_sub(1));
-        if replacement_len > 0 {
-            if merged_left {
-                replacement_len = replacement_len.saturating_sub(1);
-            }
-            let right_ix = span
-                .replace_start
-                .saturating_add(replacement_len.saturating_sub(1));
-            if right_ix < core.pieces.len() {
-                let _ = merge_piece_at(&mut core.pieces, right_ix);
-            }
-        }
-        core.len = core
-            .len
-            .saturating_sub(range.end.saturating_sub(range.start))
-            .saturating_add(new_text.len());
-        core.line_index.apply_edit(range.clone(), new_text);
+        core.rope.replace(range.clone(), new_text);
         core.revision = core.revision.wrapping_add(1).max(1);
-        if !maybe_compact_piece_table(core) {
-            core.materialized = OnceLock::new();
-        }
+        core.materialized = OnceLock::new();
+        core.line_starts = OnceLock::new();
 
         range.start..range.start.saturating_add(new_text.len())
     }
@@ -500,7 +221,7 @@ impl From<TextModelSnapshot> for TextModel {
 
 impl TextModelSnapshot {
     pub fn len(&self) -> usize {
-        self.core.len
+        self.core.rope.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -525,97 +246,139 @@ impl TextModelSnapshot {
 
     #[cfg(any(test, feature = "benchmarks"))]
     pub fn line_starts(&self) -> &[usize] {
-        self.core.line_index.starts()
+        self.core.line_starts().as_ref()
     }
 
     pub fn shared_line_starts(&self) -> Arc<[usize]> {
-        self.core.line_index.shared_starts()
+        Arc::clone(self.core.line_starts())
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    /// Whether the document has been flattened into one contiguous `String`.
+    /// The windowed accessors exist precisely so that hot paths never trip
+    /// this, and that is only assertable by observing it.
+    #[cfg(test)]
+    pub(crate) fn is_materialized(&self) -> bool {
+        self.core.materialized.get().is_some()
+    }
+
+    /// Whether the whole-document line-start array has been built.
+    ///
+    /// The quieter of the two O(document) caches, and the one worth asserting
+    /// separately: it allocates an index proportional to the line count without
+    /// copying any text, so a caller that trips it looks innocent next to
+    /// [`TextModelSnapshot::is_materialized`] while costing the same order.
+    #[cfg(test)]
+    pub(crate) fn is_line_index_built(&self) -> bool {
+        self.core.line_starts.get().is_some()
+    }
+
+    /// The document itself, for consumers that need to read arbitrary spans
+    /// without a contiguous buffer — tree-sitter's chunked parser and query
+    /// text provider, above all.
+    ///
+    /// Cloning is an atomic increment: the returned rope is a snapshot, immune
+    /// to later edits, and costs nothing to hold across frames.
+    pub fn rope(&self) -> Rope {
+        self.core.rope.clone()
+    }
+
+    /// Number of rows, which is one more than the number of line breaks. O(1).
+    pub fn line_count(&self) -> usize {
+        self.core.rope.line_count() as usize
+    }
+
+    /// The row containing `offset`. O(log n), and the windowed replacement for
+    /// binary-searching a materialized line-start array.
+    pub fn row_for_offset(&self, offset: usize) -> usize {
+        self.core.rope.offset_to_point(offset.min(self.len())).row as usize
+    }
+
+    /// Byte range of `row` *including* its line terminator, i.e. exactly
+    /// `line_starts[row]..line_starts[row + 1]`.
+    ///
+    /// Callers measuring how wide a row is count the terminator as a column, so
+    /// they need the span between consecutive line starts rather than
+    /// [`TextModelSnapshot::line_range`], which stops before it.
+    /// Two descents, not six: only the row *starts* are wanted, so this seeks
+    /// them directly instead of asking [`TextModelSnapshot::line_range`] twice
+    /// and discarding the row lengths it measures on the way. This is the inner
+    /// loop of the content-width cache, which runs once per row.
+    pub fn line_range_with_terminator(&self, row: usize) -> Range<usize> {
+        let Ok(row) = u32::try_from(row) else {
+            let end = self.len();
+            return end..end;
+        };
+        let start = self.core.rope.point_to_offset(Point::new(row, 0));
+        let end = if u64::from(row) + 1 < self.core.rope.line_count() as u64 {
+            self.core.rope.point_to_offset(Point::new(row + 1, 0))
+        } else {
+            self.len()
+        };
+        start..end.max(start)
+    }
+
+    /// Byte range of `row`, excluding its line terminator.
+    ///
+    /// The windowed read primitive: a renderer that only needs the rows on
+    /// screen asks for those rows, instead of materializing the document and
+    /// indexing into it. O(log n).
+    pub fn line_range(&self, row: usize) -> Range<usize> {
+        let Ok(row) = u32::try_from(row) else {
+            let end = self.len();
+            return end..end;
+        };
+        self.core.rope.line_range(row)
+    }
+
+    /// Text of `row`, excluding its line terminator. Borrowed when the row does
+    /// not straddle a chunk boundary.
+    pub fn line_text(&self, row: usize) -> Cow<'_, str> {
+        self.slice(self.line_range(row))
+    }
+
+    /// UTF-16 code unit offset for a byte offset.
+    ///
+    /// The platform input handler speaks UTF-16, so this runs on essentially
+    /// every caret query. All-ASCII documents — nearly all of them — answer in
+    /// O(1); the rest are an O(log n) descent.
+    pub fn offset_to_utf16(&self, offset: usize) -> usize {
+        if self.core.is_ascii() {
+            return offset.min(self.len());
+        }
+        self.core.rope.offset_to_utf16(offset)
+    }
+
+    /// Byte offset for a UTF-16 code unit offset. Inverse of
+    /// [`TextModelSnapshot::offset_to_utf16`].
+    pub fn offset_from_utf16(&self, target: usize) -> usize {
+        if self.core.is_ascii() {
+            return target.min(self.len());
+        }
+        self.core.rope.offset_from_utf16(target)
+    }
+
     fn clamp_offset_to_char_boundary(&self, offset: usize) -> usize {
-        core_clamp_to_char_boundary(self.core.as_ref(), offset)
+        self.core
+            .rope
+            .clip_offset(offset, gpui::sum_tree::Bias::Left)
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
     fn normalized_char_range(&self, range: Range<usize>) -> Range<usize> {
         let start = self.clamp_offset_to_char_boundary(range.start.min(self.len()));
         let end = self.clamp_offset_to_char_boundary(range.end.min(self.len()));
         if end < start { end..start } else { start..end }
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
-    fn borrowed_slice_for_range(&self, range: Range<usize>) -> Option<&str> {
-        if range.is_empty() {
-            return Some("");
-        }
-
-        if let Some(text) = self.core.materialized.get() {
-            return Some(&text[range]);
-        }
-
-        let mut cursor = 0usize;
-        for piece in &self.core.pieces {
-            let piece_start = cursor;
-            let piece_end = cursor.saturating_add(piece.len);
-            if piece_end <= range.start {
-                cursor = piece_end;
-                continue;
-            }
-            if range.end <= piece_end {
-                let local_start = range.start.saturating_sub(piece_start);
-                let local_end = range.end.saturating_sub(piece_start);
-                let chunk = self.core.chunk_for_piece(piece);
-                let chunk_start = piece.start.saturating_add(local_start);
-                let chunk_end = piece.start.saturating_add(local_end);
-                return chunk.get(chunk_start..chunk_end);
-            }
-            break;
-        }
-        None
-    }
-
-    #[cfg(any(test, feature = "benchmarks"))]
-    fn collect_range_to_string(&self, range: Range<usize>) -> String {
-        let mut out = String::with_capacity(range.end.saturating_sub(range.start));
-        let mut cursor = 0usize;
-        for piece in &self.core.pieces {
-            let piece_start = cursor;
-            let piece_end = cursor.saturating_add(piece.len);
-            if piece_end <= range.start {
-                cursor = piece_end;
-                continue;
-            }
-            if piece_start >= range.end {
-                break;
-            }
-
-            let local_start = range.start.saturating_sub(piece_start);
-            let local_end = range.end.min(piece_end).saturating_sub(piece_start);
-            if local_start < local_end {
-                let chunk = self.core.chunk_for_piece(piece);
-                let chunk_start = piece.start.saturating_add(local_start);
-                let chunk_end = piece.start.saturating_add(local_end);
-                if let Some(slice) = chunk.get(chunk_start..chunk_end) {
-                    out.push_str(slice);
-                }
-            }
-            cursor = piece_end;
-        }
-        out
-    }
-
-    #[cfg(any(test, feature = "benchmarks"))]
+    /// The text in `range`. Borrowed when it lives inside a single chunk, which
+    /// covers a typical row; owned only when it straddles one.
     pub fn slice(&self, range: Range<usize>) -> Cow<'_, str> {
         let range = self.normalized_char_range(range);
-        self.borrowed_slice_for_range(range.clone())
-            .map(Cow::Borrowed)
-            .unwrap_or_else(|| Cow::Owned(self.collect_range_to_string(range)))
-    }
-
-    #[cfg(any(test, feature = "benchmarks"))]
-    pub fn clamp_to_char_boundary(&self, offset: usize) -> usize {
-        self.clamp_offset_to_char_boundary(offset)
+        let mut chunks = self.core.rope.chunks_in_range(range.clone());
+        match (chunks.next(), chunks.next()) {
+            (None, _) => Cow::Borrowed(""),
+            (Some(only), None) => Cow::Borrowed(only),
+            _ => Cow::Owned(self.core.rope.text_for_range(range)),
+        }
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -645,338 +408,6 @@ impl PartialEq for TextModelSnapshot {
 }
 
 impl Eq for TextModelSnapshot {}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct PieceEditSpan {
-    replace_start: usize,
-    replace_end: usize,
-    prefix_fragment: Option<Piece>,
-    suffix_fragment: Option<Piece>,
-}
-
-fn build_original_pieces(text: &str, chunk_bytes: usize) -> Vec<Piece> {
-    if text.is_empty() {
-        return Vec::new();
-    }
-
-    let chunk_bytes = chunk_bytes.max(1);
-    let mut pieces = Vec::with_capacity(text.len() / chunk_bytes + 1);
-    let mut start = 0usize;
-    while start < text.len() {
-        let mut end = (start + chunk_bytes).min(text.len());
-        while end > start && !text.is_char_boundary(end) {
-            end = end.saturating_sub(1);
-        }
-        if end == start {
-            end = text.len();
-        }
-
-        pieces.push(Piece {
-            buffer: BufferId::Original,
-            chunk_index: 0,
-            start,
-            len: end.saturating_sub(start),
-        });
-        start = end;
-    }
-
-    pieces
-}
-
-fn append_text_to_core(core: &mut TextModelCore, text: &str) -> Range<usize> {
-    let start = core.len;
-    if text.is_empty() {
-        return start..start;
-    }
-
-    if core.len == 0 && core.pieces.is_empty() {
-        let add_chunks = Arc::make_mut(&mut core.add_chunks);
-        let chunk_index = add_chunks.len();
-        let chunk = Arc::new(String::from(text));
-        let len = chunk.len();
-        add_chunks.push(chunk);
-
-        core.ascii_only = text.is_ascii();
-        core.pieces.push(Piece {
-            buffer: BufferId::Add,
-            chunk_index,
-            start: 0,
-            len,
-        });
-        core.len = len;
-        core.line_index = LineIndex::from_text(text);
-        core.revision = core.revision.wrapping_add(1).max(1);
-        core.materialized = OnceLock::new();
-        return 0..len;
-    }
-
-    if let Some(inserted_piece) = append_add_piece(core, text) {
-        core.ascii_only &= text.is_ascii();
-        push_piece_merged(&mut core.pieces, inserted_piece);
-        core.len = start.saturating_add(text.len());
-        core.line_index.append_text(start, text);
-        core.revision = core.revision.wrapping_add(1).max(1);
-        core.materialized = OnceLock::new();
-    }
-
-    start..start.saturating_add(text.len())
-}
-
-fn append_add_piece(core: &mut TextModelCore, text: &str) -> Option<Piece> {
-    if text.is_empty() {
-        return None;
-    }
-
-    let add_chunks = Arc::make_mut(&mut core.add_chunks);
-    if let Some(piece) = append_small_text_to_last_add_chunk(add_chunks, text) {
-        return Some(piece);
-    }
-
-    let chunk_index = add_chunks.len();
-    let mut chunk = String::with_capacity(if text.len() <= SMALL_ADD_CHUNK_BYTES {
-        SMALL_ADD_CHUNK_BYTES
-    } else {
-        text.len()
-    });
-    chunk.push_str(text);
-    let len = chunk.len();
-    let chunk = Arc::new(chunk);
-    add_chunks.push(chunk);
-    Some(Piece {
-        buffer: BufferId::Add,
-        chunk_index,
-        start: 0,
-        len,
-    })
-}
-
-fn append_small_text_to_last_add_chunk(
-    add_chunks: &mut [Arc<String>],
-    text: &str,
-) -> Option<Piece> {
-    if text.len() > SMALL_ADD_CHUNK_BYTES {
-        return None;
-    }
-
-    let chunk_index = add_chunks.len().checked_sub(1)?;
-    let chunk = Arc::get_mut(add_chunks.get_mut(chunk_index)?)?;
-    let start = chunk.len();
-    let new_len = start.checked_add(text.len())?;
-    if new_len > SMALL_ADD_CHUNK_BYTES {
-        return None;
-    }
-
-    chunk.push_str(text);
-    Some(Piece {
-        buffer: BufferId::Add,
-        chunk_index,
-        start,
-        len: text.len(),
-    })
-}
-
-fn maybe_compact_piece_table(core: &mut TextModelCore) -> bool {
-    if core.pieces.len() <= PIECE_TABLE_COMPACTION_THRESHOLD {
-        return false;
-    }
-
-    let mut text = String::with_capacity(core.len);
-    for piece in &core.pieces {
-        text.push_str(core.piece_slice(piece));
-    }
-
-    let original = Arc::<str>::from(text);
-    let shared = SharedString::from(Arc::clone(&original));
-    core.original_chunks = Arc::new(vec![original]);
-    core.add_chunks = Arc::new(Vec::new());
-    core.pieces = build_original_pieces(core.original_chunks[0].as_ref(), LARGE_TEXT_CHUNK_BYTES);
-    core.ascii_only = core.original_chunks[0].is_ascii();
-
-    let materialized = OnceLock::new();
-    assert!(
-        materialized.set(shared).is_ok(),
-        "fresh OnceLock should accept materialized text"
-    );
-    core.materialized = materialized;
-    true
-}
-
-fn core_clamp_to_char_boundary(core: &TextModelCore, mut offset: usize) -> usize {
-    offset = offset.min(core.len);
-    if core.ascii_only {
-        return offset;
-    }
-
-    // Fast path: use the materialized string directly to avoid piece walks in
-    // the non-ASCII clamping loop.
-    if let Some(text) = core.materialized.get() {
-        while offset > 0 && !text.is_char_boundary(offset) {
-            offset -= 1;
-        }
-        return offset;
-    }
-
-    while offset > 0 && !core_is_char_boundary(core, offset) {
-        offset = offset.saturating_sub(1);
-    }
-    offset
-}
-
-fn core_is_char_boundary(core: &TextModelCore, offset: usize) -> bool {
-    if offset == 0 || offset == core.len {
-        return true;
-    }
-    if offset > core.len {
-        return false;
-    }
-    if core.ascii_only {
-        return true;
-    }
-
-    if let Some(text) = core.materialized.get() {
-        return text.is_char_boundary(offset);
-    }
-
-    let mut cursor = 0usize;
-    for piece in &core.pieces {
-        let next = cursor.saturating_add(piece.len);
-        if offset == cursor || offset == next {
-            return true;
-        }
-        if offset < next {
-            let local = offset.saturating_sub(cursor);
-            let chunk = core.chunk_for_piece(piece);
-            let absolute = piece.start.saturating_add(local);
-            return chunk.is_char_boundary(absolute);
-        }
-        cursor = next;
-    }
-    false
-}
-
-fn locate_piece_edit_span(pieces: &[Piece], range: Range<usize>) -> PieceEditSpan {
-    let mut cursor = 0usize;
-    let mut ix = 0usize;
-    let mut replace_start = pieces.len();
-    let mut prefix_fragment = None;
-
-    while ix < pieces.len() {
-        let piece = pieces[ix];
-        let piece_start = cursor;
-        let piece_end = cursor.saturating_add(piece.len);
-        if piece_end <= range.start {
-            cursor = piece_end;
-            ix += 1;
-            continue;
-        }
-
-        replace_start = ix;
-        if range.start > piece_start {
-            prefix_fragment = piece.prefix(range.start.saturating_sub(piece_start));
-        }
-        break;
-    }
-
-    if replace_start == pieces.len() {
-        return PieceEditSpan {
-            replace_start,
-            replace_end: replace_start,
-            prefix_fragment: None,
-            suffix_fragment: None,
-        };
-    }
-
-    while ix < pieces.len() {
-        let piece = pieces[ix];
-        let piece_start = cursor;
-        let piece_end = cursor.saturating_add(piece.len);
-        if range.end <= piece_start {
-            return PieceEditSpan {
-                replace_start,
-                replace_end: ix,
-                prefix_fragment,
-                suffix_fragment: None,
-            };
-        }
-        if range.end < piece_end {
-            return PieceEditSpan {
-                replace_start,
-                replace_end: ix.saturating_add(1),
-                prefix_fragment,
-                suffix_fragment: piece.suffix(range.end.saturating_sub(piece_start)),
-            };
-        }
-        if range.end == piece_end {
-            return PieceEditSpan {
-                replace_start,
-                replace_end: ix.saturating_add(1),
-                prefix_fragment,
-                suffix_fragment: None,
-            };
-        }
-        cursor = piece_end;
-        ix += 1;
-    }
-
-    PieceEditSpan {
-        replace_start,
-        replace_end: pieces.len(),
-        prefix_fragment,
-        suffix_fragment: None,
-    }
-}
-
-fn pieces_are_mergeable(left: Piece, right: Piece) -> bool {
-    left.len > 0
-        && right.len > 0
-        && left.buffer == right.buffer
-        && left.chunk_index == right.chunk_index
-        && left.start.saturating_add(left.len) == right.start
-}
-
-fn merge_piece_at(pieces: &mut Vec<Piece>, index: usize) -> bool {
-    let Some(right_ix) = index.checked_add(1) else {
-        return false;
-    };
-    if right_ix >= pieces.len() || !pieces_are_mergeable(pieces[index], pieces[right_ix]) {
-        return false;
-    }
-
-    let right_len = pieces[right_ix].len;
-    pieces[index].len = pieces[index].len.saturating_add(right_len);
-    pieces.remove(right_ix);
-    true
-}
-
-fn push_piece_merged(pieces: &mut Vec<Piece>, piece: Piece) {
-    if piece.len == 0 {
-        return;
-    }
-
-    if let Some(last) = pieces.last_mut()
-        && pieces_are_mergeable(*last, piece)
-    {
-        last.len = last.len.saturating_add(piece.len);
-        return;
-    }
-
-    pieces.push(piece);
-}
-
-fn push_piece_merged_small(pieces: &mut SmallVec<[Piece; 3]>, piece: Piece) {
-    if piece.len == 0 {
-        return;
-    }
-
-    if let Some(last) = pieces.last_mut()
-        && pieces_are_mergeable(*last, piece)
-    {
-        last.len = last.len.saturating_add(piece.len);
-        return;
-    }
-
-    pieces.push(piece);
-}
 
 #[cfg(test)]
 mod tests {
@@ -1055,21 +486,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_shared_line_starts_reuse_index_storage() {
-        let model = TextModel::from_large_text("alpha\nbeta\ngamma");
-        let snapshot = model.snapshot();
-
-        let model_starts = model.snapshot().shared_line_starts();
-        let snapshot_starts = snapshot.shared_line_starts();
-
-        assert!(
-            Arc::ptr_eq(&model_starts, &snapshot_starts),
-            "snapshots should share line-start storage with the source model"
-        );
-        assert_eq!(snapshot_starts.as_ref(), &[0, 6, 11]);
-    }
-
-    #[test]
     fn snapshot_shared_line_starts_remain_stable_after_edit() {
         let mut model = TextModel::from_large_text("alpha\nbeta\ngamma");
         let old_snapshot = model.snapshot();
@@ -1088,91 +504,6 @@ mod tests {
     }
 
     #[test]
-    fn snapshot_slice_borrows_single_piece_ranges_without_materializing() {
-        let text = "a".repeat(LARGE_TEXT_CHUNK_BYTES + 32);
-        let snapshot = TextModel::from_large_text(text.as_str()).snapshot();
-
-        assert!(snapshot.core.materialized.get().is_none());
-        assert_eq!(snapshot.clamp_to_char_boundary(96), 96);
-        let prefix = snapshot.slice(0..96);
-
-        assert!(matches!(prefix, Cow::Borrowed(_)));
-        assert_eq!(prefix.as_ref(), &text[..96]);
-        assert!(snapshot.core.materialized.get().is_none());
-    }
-
-    #[test]
-    fn snapshot_slice_allocates_across_piece_boundaries_without_materializing() {
-        let text = "a".repeat(LARGE_TEXT_CHUNK_BYTES + 32);
-        let snapshot = TextModel::from_large_text(text.as_str()).snapshot();
-        let range = (LARGE_TEXT_CHUNK_BYTES - 8)..(LARGE_TEXT_CHUNK_BYTES + 8);
-
-        assert!(snapshot.core.materialized.get().is_none());
-        let slice = snapshot.slice(range.clone());
-
-        assert!(matches!(slice, Cow::Owned(_)));
-        assert_eq!(slice.as_ref(), &text[range]);
-        assert!(snapshot.core.materialized.get().is_none());
-    }
-
-    #[test]
-    fn append_large_uses_piece_table_insert_path() {
-        let mut model = TextModel::new();
-        let inserted = model.append_large("first\n");
-        assert_eq!(inserted, 0..6);
-        let inserted = model.append_large("second");
-        assert_eq!(inserted, 6..12);
-        assert_eq!(model.as_str(), "first\nsecond");
-        assert_eq!(model.line_starts(), &[0, 6]);
-    }
-
-    #[test]
-    fn small_unique_inserts_share_one_add_chunk() {
-        let mut model = TextModel::from_large_text("body");
-
-        let _ = model.replace_range(4..4, "-tail");
-        let _ = model.replace_range(0..0, "head-");
-        let _ = model.replace_range(5..5, "mid-");
-
-        assert_eq!(model.as_str(), "head-mid-body-tail");
-        assert_eq!(model.core.add_chunks.len(), 1);
-        assert!(
-            model
-                .core
-                .pieces
-                .iter()
-                .filter(|piece| piece.buffer == BufferId::Add)
-                .all(|piece| piece.chunk_index == 0)
-        );
-    }
-
-    #[test]
-    fn later_insert_after_snapshot_uses_new_add_chunk() {
-        let mut model = TextModel::from_large_text("body");
-        let _ = model.replace_range(0..0, "head-");
-        let snapshot = model.snapshot();
-
-        let _ = model.replace_range(model.len()..model.len(), "-tail");
-
-        assert_eq!(snapshot.as_str(), "head-body");
-        assert_eq!(model.as_str(), "head-body-tail");
-        assert_eq!(snapshot.core.add_chunks.len(), 1);
-        assert_eq!(model.core.add_chunks.len(), 2);
-    }
-
-    #[test]
-    fn ascii_fast_path_turns_off_after_unicode_insert() {
-        let mut model = TextModel::from_large_text("alpha");
-        let inserted = model.replace_range(5..5, "🙂");
-        assert_eq!(inserted, 5..9);
-        assert_eq!(model.as_str(), "alpha🙂");
-
-        let replaced = model.replace_range(6..9, "!");
-        assert_eq!(replaced, 5..6);
-        assert_eq!(model.as_str(), "alpha!");
-    }
-
-    #[test]
     fn from_large_text_chunks_preserve_content() {
         let mut text = String::new();
         for ix in 0..2_048usize {
@@ -1182,43 +513,6 @@ mod tests {
         assert_eq!(model.len(), text.len());
         assert_eq!(model.as_str(), text);
         assert_eq!(model.line_starts().len(), 2_049);
-    }
-
-    #[test]
-    fn from_large_text_uses_one_backing_chunk_with_logical_boundaries() {
-        let text = "a".repeat(LARGE_TEXT_CHUNK_BYTES * 2 + 32);
-        let model = TextModel::from_large_text(text.as_str());
-
-        assert_eq!(model.core.original_chunks.len(), 1);
-        assert_eq!(model.core.original_chunks[0].len(), text.len());
-        assert!(model.core.pieces.len() >= 2);
-        assert!(
-            model
-                .core
-                .pieces
-                .iter()
-                .all(|piece| { piece.buffer == BufferId::Original && piece.chunk_index == 0 })
-        );
-        assert_eq!(
-            model
-                .core
-                .pieces
-                .iter()
-                .map(|piece| piece.len)
-                .sum::<usize>(),
-            text.len()
-        );
-    }
-
-    #[test]
-    fn as_shared_string_reuses_original_chunk_when_unedited() {
-        let text = "alpha\nbeta\n".repeat(2_048);
-        let model = TextModel::from_large_text(text.as_str());
-
-        let shared = model.as_shared_string();
-        let shared_arc: Arc<str> = shared.into();
-
-        assert!(Arc::ptr_eq(&shared_arc, &model.core.original_chunks[0]));
     }
 
     #[test]
@@ -1287,22 +581,6 @@ mod tests {
     }
 
     #[test]
-    fn replace_range_reuses_line_index_storage_when_unique_and_line_count_unchanged() {
-        let mut model = TextModel::from_large_text("alpha\nbeta\ngamma");
-        let before_ptr = Arc::as_ptr(&model.core.line_index.starts);
-
-        model.replace_range(6..10, "BETA");
-
-        let after_ptr = Arc::as_ptr(&model.core.line_index.starts);
-        assert_eq!(model.as_str(), "alpha\nBETA\ngamma");
-        assert_eq!(model.line_starts(), &[0, 6, 11]);
-        assert_eq!(
-            before_ptr, after_ptr,
-            "unique edits with unchanged line counts should reuse line-index storage"
-        );
-    }
-
-    #[test]
     fn apply_edit_at_line_boundaries_stays_monotonic() {
         // Exercises boundary conditions around the monotonic-output guarantee:
         // edits exactly at newline offsets, multi-newline inserts replacing
@@ -1367,22 +645,336 @@ mod tests {
             assert_eq!(model.line_starts(), expected_starts.as_slice());
         }
     }
+}
 
-    #[test]
-    fn heavily_fragmented_unique_edits_compact_piece_table() {
-        let mut control = "line\n".repeat(LARGE_TEXT_CHUNK_BYTES);
-        let mut model = TextModel::from_large_text(control.as_str());
+/// Differential tests for the model's observable behaviour.
+///
+/// Written to cross-validate the piece table against [`crate::kit::rope::Rope`]
+/// while the storage swap was in flight, and kept afterwards: the `String`
+/// oracle is what actually pins the semantics, and driving a bare `Rope`
+/// alongside the model still catches a `TextModel` that mis-clamps or
+/// mis-normalizes a range before handing it down.
+#[cfg(test)]
+mod storage_equivalence_tests {
+    use super::*;
+    use crate::kit::rope::Rope;
 
-        for ix in 0..(PIECE_TABLE_COMPACTION_THRESHOLD + 32) {
-            let offset = (ix * 97) % control.len();
-            model.replace_range(offset..offset, "x");
-            control.insert(offset, 'x');
+    /// Deterministic xorshift64*, matching the rope's own test generator.
+    struct Rng(u64);
+
+    impl Rng {
+        fn new(seed: u64) -> Self {
+            Self(seed.wrapping_mul(2685821657736338717).max(1))
         }
 
-        assert_eq!(model.as_str(), control);
-        assert!(
-            model.core.pieces.len() <= PIECE_TABLE_COMPACTION_THRESHOLD,
-            "fragmentation past the threshold should trigger table compaction"
+        fn next_u64(&mut self) -> u64 {
+            let mut x = self.0;
+            x ^= x >> 12;
+            x ^= x << 25;
+            x ^= x >> 27;
+            self.0 = x;
+            x.wrapping_mul(2685821657736338717)
+        }
+
+        fn up_to(&mut self, limit: usize) -> usize {
+            if limit == usize::MAX {
+                return 0;
+            }
+            (self.next_u64() % (limit as u64 + 1)) as usize
+        }
+    }
+
+    fn random_text(rng: &mut Rng, len: usize) -> String {
+        (0..len)
+            .map(|_| match rng.up_to(9) {
+                0..=3 => (b'a' + rng.up_to(25) as u8) as char,
+                4..=5 => '\n',
+                6 => ' ',
+                7 => 'é',
+                8 => '√',
+                _ => '\u{1F600}',
+            })
+            .collect()
+    }
+
+    fn floor_boundary(text: &str, mut index: usize) -> usize {
+        index = index.min(text.len());
+        while index > 0 && !text.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
+    }
+
+    fn assert_agree(model: &TextModelSnapshot, rope: &Rope, expected: &str, context: &str) {
+        assert_eq!(model.len(), rope.len(), "{context}: len");
+        assert_eq!(model.len(), expected.len(), "{context}: len vs oracle");
+        assert_eq!(
+            model.line_count(),
+            rope.line_count() as usize,
+            "{context}: line_count"
         );
+
+        for row in 0..model.line_count() {
+            let model_range = model.line_range(row);
+            let rope_range = rope.line_range(row as u32);
+            assert_eq!(model_range, rope_range, "{context}: line_range({row})");
+            assert_eq!(
+                model.line_text(row).as_ref(),
+                rope.line_text(row as u32),
+                "{context}: line_text({row})"
+            );
+            assert_eq!(
+                model.line_text(row).as_ref(),
+                &expected[model_range],
+                "{context}: line_text({row}) vs oracle"
+            );
+        }
+    }
+
+    #[test]
+    fn piece_table_and_rope_agree_across_random_edits() {
+        for seed in 0..24 {
+            let mut rng = Rng::new(seed);
+            let mut expected = String::new();
+            let mut model = TextModel::new();
+            let mut rope = Rope::new();
+
+            for op in 0..30 {
+                let end = floor_boundary(&expected, rng.up_to(expected.len()));
+                let start = floor_boundary(&expected, rng.up_to(end));
+                let inserted = {
+                    let len = rng.up_to(24);
+                    random_text(&mut rng, len)
+                };
+
+                model.replace_range(start..end, &inserted);
+                rope.replace(start..end, &inserted);
+                expected.replace_range(start..end, &inserted);
+
+                let context = format!("seed {seed} op {op}");
+                let snapshot = model.snapshot();
+                assert_agree(&snapshot, &rope, &expected, &context);
+
+                // Windowed reads and the UTF-16 conversions, at random probes.
+                for _ in 0..4 {
+                    let probe = floor_boundary(&expected, rng.up_to(expected.len()));
+                    let oracle_utf16 = expected[..probe]
+                        .chars()
+                        .map(char::len_utf16)
+                        .sum::<usize>();
+
+                    assert_eq!(
+                        snapshot.offset_to_utf16(probe),
+                        oracle_utf16,
+                        "{context}: offset_to_utf16({probe})"
+                    );
+                    assert_eq!(
+                        snapshot.offset_to_utf16(probe),
+                        rope.offset_to_utf16(probe),
+                        "{context}: offset_to_utf16({probe}) vs rope"
+                    );
+                    assert_eq!(
+                        snapshot.offset_from_utf16(oracle_utf16),
+                        probe,
+                        "{context}: offset_from_utf16({oracle_utf16})"
+                    );
+                    assert_eq!(
+                        snapshot.offset_from_utf16(oracle_utf16),
+                        rope.offset_from_utf16(oracle_utf16),
+                        "{context}: offset_from_utf16({oracle_utf16}) vs rope"
+                    );
+
+                    let end = floor_boundary(&expected, rng.up_to(expected.len()));
+                    let start = floor_boundary(&expected, rng.up_to(end));
+                    assert_eq!(
+                        snapshot.slice(start..end).as_ref(),
+                        &expected[start..end],
+                        "{context}: slice({start}..{end})"
+                    );
+                    assert_eq!(
+                        snapshot.slice(start..end).as_ref(),
+                        rope.text_for_range(start..end),
+                        "{context}: slice({start}..{end}) vs rope"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Reading one row must not depend on the document's size — the property
+    /// the renderer relies on, and the reason `line_text` exists at all.
+    #[test]
+    fn line_text_reads_a_single_row_of_a_large_document() {
+        let text = "the quick brown fox\n".repeat(50_000);
+        let model = TextModel::from_large_text(&text);
+        let snapshot = model.snapshot();
+        let rope = Rope::from_str(&text);
+
+        assert_eq!(snapshot.line_count(), 50_001);
+        for row in [0usize, 1, 25_000, 49_999, 50_000] {
+            assert_eq!(
+                snapshot.line_text(row).as_ref(),
+                rope.line_text(row as u32),
+                "row {row}"
+            );
+        }
+        assert_eq!(snapshot.line_text(0).as_ref(), "the quick brown fox");
+        assert_eq!(snapshot.line_text(50_000).as_ref(), "");
+    }
+
+    /// ASCII documents — nearly all of them — must answer UTF-16 conversions
+    /// without inspecting the text at all.
+    #[test]
+    fn ascii_documents_convert_utf16_offsets_by_identity() {
+        let model = TextModel::from_large_text(&"plain ascii\n".repeat(1000));
+        let snapshot = model.snapshot();
+        for probe in [0usize, 1, 500, snapshot.len()] {
+            assert_eq!(snapshot.offset_to_utf16(probe), probe);
+            assert_eq!(snapshot.offset_from_utf16(probe), probe);
+        }
+    }
+
+    #[test]
+    fn utf16_conversions_handle_surrogate_pairs() {
+        let text = "a🙂b";
+        let model = TextModel::from_large_text(text);
+        let snapshot = model.snapshot();
+        let rope = Rope::from_str(text);
+
+        // 'a' = 1 unit, '🙂' = 2 units (surrogate pair), 'b' = 1 unit.
+        assert_eq!(snapshot.offset_to_utf16(0), 0);
+        assert_eq!(snapshot.offset_to_utf16(1), 1);
+        assert_eq!(snapshot.offset_to_utf16(5), 3);
+        assert_eq!(snapshot.offset_to_utf16(6), 4);
+        assert_eq!(snapshot.offset_from_utf16(3), 5);
+
+        for probe in 0..=4 {
+            assert_eq!(
+                snapshot.offset_from_utf16(probe),
+                rope.offset_from_utf16(probe),
+                "offset_from_utf16({probe})"
+            );
+        }
+    }
+}
+
+/// Guards on what the windowed accessors are *not* allowed to do.
+///
+/// Materializing the document is the cost these APIs exist to avoid, and it is
+/// silent — nothing fails, the frame just gets slower in proportion to the file.
+/// Observing the materialization cache directly is the only way to keep that
+/// honest as the code changes.
+#[cfg(test)]
+mod no_materialization_tests {
+    use super::*;
+
+    /// An edited model whose materialization cache is cold: any accessor that
+    /// reaches for `as_str()` will flatten the whole document to answer.
+    fn edited_model() -> TextModel {
+        let mut model = TextModel::from_large_text(&"pub fn value() -> u32 { 7 }\n".repeat(4000));
+        // Edit mid-document so the piece table is genuinely fragmented and the
+        // "unedited original" fast path cannot apply.
+        let offset = model.len() / 2;
+        model.replace_range(offset..offset, "// touched\n");
+        assert!(
+            !model.snapshot().is_materialized(),
+            "an edit must invalidate the materialization cache"
+        );
+        model
+    }
+
+    #[test]
+    fn utf16_conversions_do_not_materialize_the_document() {
+        let model = edited_model();
+        let snapshot = model.snapshot();
+
+        snapshot.offset_to_utf16(snapshot.len() / 2);
+        snapshot.offset_from_utf16(snapshot.len() / 4);
+
+        assert!(
+            !snapshot.is_materialized(),
+            "caret queries run on every keystroke; they must not flatten the buffer"
+        );
+    }
+
+    #[test]
+    fn reading_one_row_does_not_materialize_the_document() {
+        let model = edited_model();
+        let snapshot = model.snapshot();
+
+        let row = snapshot.line_count() / 2;
+        let text = snapshot.line_text(row);
+
+        assert!(!text.is_empty(), "fixture row should have content");
+        assert!(
+            !snapshot.is_materialized(),
+            "rendering a row must cost the row, not the document"
+        );
+    }
+
+    #[test]
+    fn line_geometry_does_not_materialize_the_document() {
+        let model = edited_model();
+        let snapshot = model.snapshot();
+
+        let _ = snapshot.line_count();
+        let _ = snapshot.line_range(snapshot.line_count() - 1);
+        let _ = snapshot.shared_line_starts();
+
+        assert!(!snapshot.is_materialized());
+    }
+}
+
+/// What the rope-backed storage is *for*: an edit costs the edit, not the
+/// document.
+#[cfg(test)]
+mod edit_cost_tests {
+    use super::*;
+
+    #[test]
+    fn editing_a_large_document_does_not_materialize_it() {
+        let mut model = TextModel::from_large_text(&"fn value() -> u32 { 7 }\n".repeat(20_000));
+        assert!(!model.snapshot().is_materialized());
+
+        // Mid-document insert, delete, and replace — the three shapes an editor
+        // produces. None of them may need the document as one string.
+        let middle = model.len() / 2;
+        model.replace_range(middle..middle, "// inserted\n");
+        model.replace_range(middle..middle + 6, "");
+        model.replace_range(middle..middle + 4, "abcd");
+
+        assert!(
+            !model.snapshot().is_materialized(),
+            "editing must not flatten the buffer"
+        );
+    }
+
+    /// A snapshot taken before an edit keeps observing the old document, and
+    /// getting there costs an atomic increment rather than a copy.
+    #[test]
+    fn snapshots_are_cheap_and_isolated_from_later_edits() {
+        let text = "line of text\n".repeat(20_000);
+        let mut model = TextModel::from_large_text(&text);
+        let before = model.snapshot();
+
+        model.replace_range(0..0, "prefix\n");
+
+        assert_eq!(before.len(), text.len());
+        assert_eq!(before.line_text(0).as_ref(), "line of text");
+        assert_eq!(model.snapshot().line_text(0).as_ref(), "prefix");
+        assert_ne!(before, model.snapshot());
+    }
+
+    /// `longest_row` backs the horizontal scroll bound, and it must stay a
+    /// summary read rather than a scan.
+    #[test]
+    fn the_widest_row_is_known_without_scanning() {
+        let mut model = TextModel::from_large_text(&"short\n".repeat(10_000));
+        let wide = "w".repeat(4096);
+        model.replace_range(0..0, &format!("{wide}\n"));
+
+        let snapshot = model.snapshot();
+        assert_eq!(snapshot.line_text(0).as_ref().len(), wide.len());
+        assert!(!snapshot.is_materialized());
     }
 }

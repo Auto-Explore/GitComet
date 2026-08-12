@@ -1,4 +1,7 @@
 use super::*;
+use crate::view::markdown_preview::{
+    MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewVisualRow,
+};
 #[cfg(test)]
 use std::borrow::Cow;
 use std::io::Read;
@@ -543,6 +546,28 @@ impl MainPaneView {
         }
     }
 
+    /// Rows the file preview list draws.
+    ///
+    /// With word wrap on a long line occupies several of them, so this is not
+    /// the file's line count — every caller that indexes the list wants this
+    /// one, and everything that means "a line of the file" wants the other.
+    pub(in crate::view) fn worktree_preview_visible_len(&self) -> Option<usize> {
+        let line_count = self.worktree_preview_line_count()?;
+        if !self.worktree_preview_wrap_active() {
+            return Some(line_count);
+        }
+        Some(self.diff_wrap_visible_rows.len())
+    }
+
+    /// Whether the file preview's rows are currently a wrap projection of its
+    /// lines rather than the lines themselves.
+    pub(in crate::view) fn worktree_preview_wrap_active(&self) -> bool {
+        self.is_file_preview_active()
+            && self.diff_word_wrap
+            && self.diff_wrap_visible_cache_key.is_some()
+            && !self.diff_wrap_visible_rows.is_empty()
+    }
+
     pub(in crate::view) fn worktree_preview_line_raw_text(
         &self,
         line_ix: usize,
@@ -598,72 +623,273 @@ impl MainPaneView {
         ))
     }
 
-    /// Returns the row count for the active markdown preview, taking the
-    /// current diff view mode into account.  Returns `None` when no markdown
-    /// preview is active.
+    /// Rows the active markdown preview list renders, or `None` when no
+    /// markdown preview is active.
+    ///
+    /// This is the list length, so with word wrap on it counts visual rows —
+    /// every caller indexes rows by list position.
     pub(in crate::view) fn markdown_preview_row_count(&self) -> Option<usize> {
         if self.is_file_preview_active() {
             if let Loadable::Ready(doc) = &self.worktree_markdown_preview {
+                // The single document flows rather than wrapping into a fixed
+                // row grid, so a list position is always a source row index.
                 return Some(doc.rows.len());
             }
             return None;
         }
         if let Loadable::Ready(diff) = &self.file_markdown_preview {
+            let wrapped_len = |list, rows: usize| {
+                self.markdown_preview_wrap_plan(list)
+                    .map_or(rows, |plan| plan.len())
+            };
             return Some(match self.diff_view {
-                DiffViewMode::Inline => diff.inline.rows.len(),
-                DiffViewMode::Split => diff.old.rows.len().max(diff.new.rows.len()),
+                DiffViewMode::Inline => {
+                    wrapped_len(MarkdownPreviewList::Inline, diff.inline.rows.len())
+                }
+                DiffViewMode::Split => wrapped_len(MarkdownPreviewList::Old, diff.old.rows.len())
+                    .max(wrapped_len(MarkdownPreviewList::New, diff.new.rows.len())),
             });
         }
         None
     }
 
-    /// Returns the text of a markdown preview row at `visible_ix` for the
-    /// given `region`.  For file preview (added/deleted/untracked) only
+    /// Returns the text painted by the markdown preview row at `visible_ix`
+    /// for the given `region`. For file preview (added/deleted/untracked) only
     /// `DiffTextRegion::Inline` is meaningful.
+    ///
+    /// `visible_ix` is a list position, which is a source row index only while
+    /// word wrap is off. With wrap on, a source row occupies several list rows
+    /// and each paints one slice of its text, so the wrap plan has to resolve
+    /// the index — otherwise selection, hit testing, and copy all operate on a
+    /// different row than the one under the pointer.
     pub(in crate::view) fn markdown_preview_row_text(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
     ) -> SharedString {
-        let fallback = SharedString::default();
+        self.markdown_preview_row_at(visible_ix, region)
+            .map(|(row, visual)| match visual {
+                Some(visual) => visual.text_slice(row),
+                None => row.text.clone(),
+            })
+            .unwrap_or_default()
+    }
 
+    /// Byte length of [`Self::markdown_preview_row_text`] without building it.
+    ///
+    /// The selection overlay asks for this for every visible row on every
+    /// frame, and slicing a wrapped row allocates, so the length is taken
+    /// straight from the plan instead.
+    pub(in crate::view) fn markdown_preview_row_text_len(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> usize {
+        self.markdown_preview_row_at(visible_ix, region)
+            .map(|(row, visual)| match visual {
+                Some(visual) => row.text.get(visual.byte_range.clone()).map_or(0, str::len),
+                None => row.text.len(),
+            })
+            .unwrap_or(0)
+    }
+
+    /// Arrange for the pane to repaint when a picture in the rendered preview
+    /// finishes decoding.
+    ///
+    /// `gpui` decodes an image once and hands the result to everyone, but it
+    /// only wakes the *first* view that asked for it. A pane that starts
+    /// showing a picture another one is already decoding is therefore never
+    /// told the decode finished, and holds an empty slot until something
+    /// unrelated happens to repaint it. Animated pictures are where this bites:
+    /// `gpui` decodes every frame before it yields anything, so a long GIF
+    /// takes seconds — time enough to open the same document in a second tab.
+    pub(in crate::view) fn watch_pending_markdown_preview_images(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        use futures::FutureExt as _;
+
+        let Loadable::Ready(document) = &self.worktree_markdown_preview else {
+            return;
+        };
+        // A document past the flowing renderer's budget is shown as source, so
+        // it draws no pictures and there is nothing to wait for.
+        if document.rows.len() > crate::view::markdown_preview::MAX_FLOWING_PREVIEW_ROWS {
+            return;
+        }
+        let document = Arc::clone(document);
+        let base_dir = self.markdown_preview_image_base_dir();
+
+        let mut resources = Vec::new();
+        let mut push = |source: &str| {
+            if let Some(resolved) =
+                crate::view::rows::markdown_preview_image_source(base_dir.as_deref(), source)
+            {
+                resources.push(resolved.to_resource());
+            }
+        };
+        for row in document.rows.iter() {
+            // Only the first band of a picture draws it; the rest are height.
+            if !row.continues_a_picture()
+                && let Some(image) = row.image.as_ref()
+            {
+                push(image.source.as_ref());
+            }
+            for inline in row.inline_images.iter() {
+                push(inline.image.source.as_ref());
+            }
+        }
+
+        for resource in resources {
+            if self
+                .worktree_markdown_preview_image_waits
+                .contains(&resource)
+            {
+                continue;
+            }
+            let (task, _) = cx.fetch_asset::<gpui::ImgResourceLoader>(&resource);
+            if task.clone().now_or_never().is_some() {
+                continue;
+            }
+            self.worktree_markdown_preview_image_waits
+                .insert(resource.clone());
+            cx.spawn(async move |view, cx| {
+                // Whether the picture decoded or failed, the pane has to hear
+                // about it: a failure is what draws the stand-in.
+                let _ = task.await;
+                let _ = view.update(cx, |this, cx| {
+                    this.worktree_markdown_preview_image_waits.remove(&resource);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Whether a markdown preview row only continues a picture an earlier row
+    /// already carries.
+    ///
+    /// An image block occupies as many rows as it is tall so the row grid can
+    /// give it height, and every one of them carries the picture's alt text.
+    /// Only the first is a line of the document, so copying a selection that
+    /// runs over a picture would otherwise repeat its alt text once per row.
+    ///
+    /// Only the rendered preview is laid out that way. Text mode is showing the
+    /// file, where a row index is a line number, and the parsed document that
+    /// is still cached beside it describes nothing about those lines.
+    pub(in crate::view) fn markdown_preview_row_repeats_a_picture(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> bool {
+        self.is_markdown_preview_active()
+            && self
+                .markdown_preview_row_at(visible_ix, region)
+                .is_some_and(|(row, _)| row.continues_a_picture())
+    }
+
+    /// Directory that relative image paths in the rendered preview resolve
+    /// against — the directory of the file being previewed.
+    ///
+    /// Images are read from the working tree even when the preview shows an
+    /// older revision of the document: the historical blob is not on disk, and
+    /// showing the current picture beats showing nothing.
+    pub(in crate::view) fn markdown_preview_image_base_dir(&self) -> Option<std::path::PathBuf> {
+        let repo = self.active_repo()?;
+        let workdir = repo.spec.workdir.clone();
+        let path = match repo.diff_state.diff_target.as_ref()? {
+            DiffTarget::WorkingTree { path, .. } => path.clone(),
+            DiffTarget::Commit { path, .. } | DiffTarget::CommitRange { path, .. } => {
+                path.clone()?
+            }
+        };
+        let absolute = if path.is_absolute() {
+            path
+        } else {
+            workdir.join(path)
+        };
+        absolute.parent().map(ToOwned::to_owned)
+    }
+
+    /// Web link under `position` in a rendered markdown preview row.
+    ///
+    /// Preview rows paint link *text*, not the destination, so the URL comes
+    /// from the inline span the click landed in. Offsets from the hitbox are
+    /// relative to the slice a row painted, which is the whole row only while
+    /// word wrap is off.
+    pub(in crate::view) fn markdown_preview_link_at(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<SharedString> {
+        if !self.is_markdown_preview_active() {
+            return None;
+        }
+        let (row, visual) = self.markdown_preview_row_at(visible_ix, region)?;
+        let slice_start = visual.map_or(0, |visual| visual.byte_range.start);
+        let offset =
+            slice_start + self.diff_text_offset_for_position(visible_ix, region, position)?;
+
+        row.inline_spans
+            .iter()
+            .find(|span| span.byte_range.contains(&offset))
+            .and_then(|span| span.link_url.clone())
+    }
+
+    /// The wrap plan `list` renders with, once it is confirmed to describe the
+    /// preview document currently loaded rather than one it replaced.
+    pub(in crate::view) fn markdown_preview_wrap_plan(
+        &self,
+        list: MarkdownPreviewList,
+    ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
+        self.markdown_preview_wrap
+            .plan_for_rev(list, self.file_markdown_preview_seq)
+    }
+
+    /// The source row a list position paints, plus the visual row describing
+    /// which slice of it — `None` when the list is not wrapped.
+    fn markdown_preview_row_at(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<(&MarkdownPreviewRow, Option<&MarkdownPreviewVisualRow>)> {
+        let (list, document) = self.markdown_preview_list_for_region(region)?;
+        let Some(plan) = self.markdown_preview_wrap_plan(list) else {
+            return document.rows.get(visible_ix).map(|row| (row, None));
+        };
+        let visual = plan.get(visible_ix)?;
+        document
+            .rows
+            .get(visual.row_ix)
+            .map(|row| (row, Some(visual)))
+    }
+
+    /// The preview list and document a diff text region reads from.
+    fn markdown_preview_list_for_region(
+        &self,
+        region: DiffTextRegion,
+    ) -> Option<(MarkdownPreviewList, &MarkdownPreviewDocument)> {
         if self.is_file_preview_active() {
             let Loadable::Ready(doc) = &self.worktree_markdown_preview else {
-                return fallback;
+                return None;
             };
-            return doc
-                .rows
-                .get(visible_ix)
-                .map(|r| r.text.clone())
-                .unwrap_or(fallback);
+            return Some((MarkdownPreviewList::Worktree, doc.as_ref()));
         }
 
         let Loadable::Ready(diff) = &self.file_markdown_preview else {
-            return fallback;
+            return None;
         };
 
-        match self.diff_view {
-            DiffViewMode::Inline => diff
-                .inline
-                .rows
-                .get(visible_ix)
-                .map(|r| r.text.clone())
-                .unwrap_or(fallback),
+        Some(match self.diff_view {
+            DiffViewMode::Inline => (MarkdownPreviewList::Inline, &diff.inline),
             DiffViewMode::Split => match region {
-                DiffTextRegion::SplitLeft | DiffTextRegion::Inline => diff
-                    .old
-                    .rows
-                    .get(visible_ix)
-                    .map(|r| r.text.clone())
-                    .unwrap_or(fallback),
-                DiffTextRegion::SplitRight => diff
-                    .new
-                    .rows
-                    .get(visible_ix)
-                    .map(|r| r.text.clone())
-                    .unwrap_or(fallback),
+                DiffTextRegion::SplitLeft | DiffTextRegion::Inline => {
+                    (MarkdownPreviewList::Old, &diff.old)
+                }
+                DiffTextRegion::SplitRight => (MarkdownPreviewList::New, &diff.new),
             },
-        }
+        })
     }
 
     pub(in super::super::super) fn untracked_worktree_preview_path(

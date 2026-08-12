@@ -1740,6 +1740,7 @@ pub(in super::super) fn drain_completed_prepared_syntax_chunk_builds_for_documen
     })
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in super::super) fn has_pending_prepared_syntax_chunk_builds_for_document(
     document: PreparedSyntaxDocument,
 ) -> bool {
@@ -3180,7 +3181,7 @@ fn bounded_node_byte_range(node: tree_sitter::Node, input_len: usize) -> Option<
     (byte_range.start < byte_range.end).then_some(byte_range)
 }
 
-fn normalized_injection_content_byte_range(
+pub(super) fn normalized_injection_content_byte_range(
     node: tree_sitter::Node,
     input_len: usize,
 ) -> Option<Range<usize>> {
@@ -3269,7 +3270,7 @@ fn query_capture_text<'capture, 'input>(
     std::str::from_utf8(&input[byte_range.start..byte_range.end]).ok()
 }
 
-fn injection_language_from_name(name: &str) -> Option<DiffSyntaxLanguage> {
+pub(super) fn injection_language_from_name(name: &str) -> Option<DiffSyntaxLanguage> {
     let name =
         name.trim_matches(|ch: char| ch.is_ascii_whitespace() || matches!(ch, '"' | '\'' | '`'));
     if name.is_empty() {

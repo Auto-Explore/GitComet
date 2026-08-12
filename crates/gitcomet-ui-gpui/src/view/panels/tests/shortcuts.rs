@@ -468,6 +468,7 @@ fn conflict_navigation_anchor(
             .read(app)
             .conflict_resolver
             .nav_anchor
+            .map(|anchor| anchor.order_hint)
     })
 }
 
@@ -481,6 +482,7 @@ fn active_conflict_ix(
             .read(app)
             .conflict_resolver
             .active_conflict
+            .expect("test resolver should have an actionable displayed conflict")
     })
 }
 
@@ -3240,6 +3242,8 @@ fn reveal_whitespace_toggle_invalidates_wrapped_diff_rows(cx: &mut gpui::TestApp
                     file_diff_cache_seq: 0,
                     inline_columns: 8,
                     split_columns: 8,
+                    preview_columns: 8,
+                    preview_content_rev: 0,
                     reveal_whitespace_chars: false,
                 });
                 pane.diff_wrap_visible_rows = vec![DiffWrapVisualRow {
@@ -4143,7 +4147,7 @@ fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::T
         },
         |pane| {
             format!(
-                "path={:?} markers={} active_conflict={}",
+                "path={:?} markers={} active_conflict={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.resolved_outline.markers.len(),
                 pane.conflict_resolver.active_conflict,
@@ -4190,19 +4194,24 @@ fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::T
     draw_and_drain_test_window(cx);
     let first_anchor = conflict_navigation_anchor(cx, &view)
         .expect("expected F7 from diff search input to set a navigation anchor");
+    assert_eq!(
+        active_conflict_ix(cx, &view),
+        1,
+        "expected one F7 from the fresh first-conflict anchor to advance"
+    );
 
     cx.simulate_keystrokes("f7");
     draw_and_drain_test_window(cx);
     let second_anchor = conflict_navigation_anchor(cx, &view)
         .expect("expected the second F7 to keep a conflict navigation anchor");
-    assert!(
-        second_anchor > first_anchor,
-        "expected repeated F7 from diff search input to move to a later conflict"
+    assert_eq!(
+        second_anchor, first_anchor,
+        "explicit conflict navigation does not wrap past the last target"
     );
     assert_eq!(
         active_conflict_ix(cx, &view),
         1,
-        "expected repeated F7 from diff search input to advance to the second conflict"
+        "expected repeated F7 at the end to keep the second conflict active"
     );
 
     cx.simulate_keystrokes("shift-f7");
@@ -4221,6 +4230,244 @@ fn conflict_diff_search_input_change_navigation_preserves_focus(cx: &mut gpui::T
         diff_search_input_is_focused(cx, &view),
         "expected diff search input to keep focus after conflict navigation shortcuts"
     );
+}
+
+#[gpui::test]
+fn semantic_conflict_navigation_handles_automatic_deltas_and_projection_rebuilds(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70544);
+    let commit_id = CommitId("1122334455667722".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_semantic_conflict_nav",
+        std::process::id()
+    ));
+    let path = std::path::PathBuf::from("src/semantic-conflict.rs");
+    let base = "start\nold-a\nsep-1\nold-conflict-1\nsep-2\nold-b\nsep-3\nold-conflict-2\nend\n";
+    let ours = "start\nnew-a\nsep-1\nours-conflict-1\nsep-2\nold-b\nsep-3\nours-conflict-2\nend\n";
+    let theirs =
+        "start\nold-a\nsep-1\ntheirs-conflict-1\nsep-2\nnew-b\nsep-3\ntheirs-conflict-2\nend\n";
+    let session = ConflictSession::from_stage_inputs(
+        path.clone(),
+        gitcomet_core::domain::FileConflictKind::BothModified,
+        ConflictPayload::Text(base.into()),
+        ConflictPayload::Text(ours.into()),
+        ConflictPayload::Text(theirs.into()),
+    );
+    let current = session
+        .marker_projection_text()
+        .expect("plan-backed session marker projection")
+        .to_string();
+
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    set_test_conflict_status(&mut repo, path.clone(), DiffArea::Unstaged);
+    set_test_conflict_file(&mut repo, path.clone(), base, ours, theirs, current);
+    repo.conflict_state.conflict_file_load_mode = gitcomet_state::model::ConflictFileLoadMode::Full;
+    repo.conflict_state.conflict_session = Some(session);
+    repo.conflict_state.conflict_rev = 1;
+
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "semantic conflict targets",
+        |pane| {
+            pane.conflict_resolver.path.as_deref() == Some(path.as_path())
+                && pane.conflict_resolver.nav_targets.len() == 4
+                && pane.conflict_resolver.active_conflict == Some(0)
+                && pane
+                    .conflict_resolver
+                    .nav_anchor
+                    .is_some_and(|anchor| anchor.order_hint == 1)
+        },
+        |pane| {
+            format!(
+                "path={:?} targets={:?} anchor={:?} active={:?}",
+                pane.conflict_resolver.path,
+                pane.conflict_resolver.nav_targets,
+                pane.conflict_resolver.nav_anchor,
+                pane.conflict_resolver.active_conflict,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                assert!(pane.conflict_has_prev_delta());
+                assert!(pane.conflict_has_next_delta());
+                pane.conflict_jump_first(cx);
+            });
+        });
+    });
+    let (anchor, active, can_prev_conflict, can_next_conflict, can_first) =
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (
+                pane.conflict_resolver.nav_anchor,
+                pane.conflict_resolver.active_conflict,
+                pane.conflict_has_prev(),
+                pane.conflict_has_next(),
+                pane.conflict_has_prev_delta(),
+            )
+        });
+    assert_eq!(anchor.unwrap().order_hint, 0);
+    assert_eq!(active, None, "automatic deltas have no marker block");
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let (has_base, selected) = pane
+            .conflict_resolver_active_pick_state()
+            .expect("the semantic automatic delta remains actionable");
+        assert!(has_base);
+        assert!(selected.contains(&crate::view::conflict_resolver::ConflictChoice::Ours));
+    });
+
+    // Ctrl+3 reaches the semantic plan block even though navigation left no
+    // displayed marker selected. KDiff3-style source picks toggle, so the
+    // automatic local selection becomes an ordered Local+Remote selection.
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("ctrl-3");
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "automatic delta Ctrl+3 override",
+        |pane| {
+            pane.conflict_resolver_active_pick_state()
+                .is_some_and(|(_, selected)| {
+                    selected.contains(&crate::view::conflict_resolver::ConflictChoice::Ours)
+                        && selected
+                            .contains(&crate::view::conflict_resolver::ConflictChoice::Theirs)
+                })
+        },
+        |pane| {
+            format!(
+                "active pick state={:?}",
+                pane.conflict_resolver_active_pick_state()
+            )
+        },
+    );
+    assert!(!can_prev_conflict);
+    assert!(can_next_conflict);
+    assert!(!can_first);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_jump_next(cx);
+            });
+        });
+    });
+    assert_eq!(active_conflict_ix(cx, &view), 0);
+    assert_eq!(conflict_navigation_anchor(cx, &view), Some(1));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.conflict_jump_last(cx);
+            });
+        });
+    });
+    assert_eq!(active_conflict_ix(cx, &view), 1);
+    assert_eq!(conflict_navigation_anchor(cx, &view), Some(3));
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.conflict_has_prev_delta());
+        assert!(!pane.conflict_has_next_delta());
+    });
+
+    // A block click resets the semantic anchor before subsequent F2/F3/F7
+    // traversal, even when another target was selected previously.
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_select_conflict(0, cx);
+            pane.conflict_resolver_toggle_collapse_context(cx);
+            pane.conflict_resolver_toggle_hide_resolved(cx);
+            let next_mode = match pane.conflict_resolver.view_mode {
+                ConflictResolverViewMode::ThreeWay => ConflictResolverViewMode::TwoWayDiff,
+                ConflictResolverViewMode::TwoWayDiff => ConflictResolverViewMode::ThreeWay,
+            };
+            pane.conflict_resolver_set_view_mode(next_mode, cx);
+        });
+    });
+    assert_eq!(active_conflict_ix(cx, &view), 0);
+    assert_eq!(
+        conflict_navigation_anchor(cx, &view),
+        Some(1),
+        "view mode, context folding, and hide-resolved rebuilds preserve the anchor"
+    );
+
+    bind_app_keys_and_global_diff_fallback_for_test(cx);
+    focus_detached_window_focus(cx);
+    cx.simulate_keystrokes("f7");
+    draw_and_drain_test_window(cx);
+    assert_eq!(
+        active_conflict_ix(cx, &view),
+        1,
+        "detached-focus navigation continues from the clicked semantic target"
+    );
+    assert_eq!(conflict_navigation_anchor(cx, &view), Some(3));
+
+    // Resolving the last conflict keeps the existing wrap-around auto-advance
+    // behavior, but the destination is selected through the semantic target
+    // list (and therefore skips both automatic deltas).
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_pick_active_conflict(
+                crate::view::conflict_resolver::ConflictChoice::Ours,
+                cx,
+            );
+        });
+    });
+    assert_eq!(
+        active_conflict_ix(cx, &view),
+        0,
+        "auto-advance wraps from the last resolved conflict to the first unresolved conflict"
+    );
+    assert_eq!(conflict_navigation_anchor(cx, &view), Some(1));
+
+    // Ctrl+Shift+3 is Choose C Everywhere, not "all unresolved conflicts".
+    // It must replace both original conflicts and both automatic deltas.
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.conflict_resolver_set_view_mode(ConflictResolverViewMode::ThreeWay, cx);
+        });
+    });
+    cx.simulate_keystrokes("ctrl-shift-3");
+    // The bulk choice lands in the store, and this harness seeds the view's
+    // state directly rather than wiring the store through to it, so assert
+    // where the reducer actually writes.
+    let delta_selections = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let snapshot = view.read(app).store.snapshot();
+            snapshot
+                .repos
+                .iter()
+                .find_map(|repo| repo.conflict_state.conflict_session.as_ref())
+                .and_then(|session| session.merge_plan.as_ref())
+                .map(|plan| {
+                    plan.blocks
+                        .iter()
+                        .filter(|block| block.is_delta)
+                        .map(|block| block.selection.as_slice().to_vec())
+                        .collect::<Vec<_>>()
+                })
+        })
+    };
+    wait_until(cx, "Choose C Everywhere", |cx| {
+        delta_selections(cx).is_some_and(|blocks| {
+            !blocks.is_empty()
+                && blocks
+                    .iter()
+                    .all(|selection| selection.as_slice() == [gitcomet_core::merge::MergeSource::C])
+        })
+    });
 }
 
 #[gpui::test]
@@ -5229,7 +5476,7 @@ fn detached_window_focus_conflict_quick_pick_uses_global_diff_shortcut_fallback(
         },
         |pane| {
             format!(
-                "path={:?} markers={} active_conflict={}",
+                "path={:?} markers={} active_conflict={:?}",
                 pane.conflict_resolver.path.clone(),
                 pane.conflict_resolver.resolved_outline.markers.len(),
                 pane.conflict_resolver.active_conflict,

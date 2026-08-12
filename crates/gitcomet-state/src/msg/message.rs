@@ -75,12 +75,27 @@ impl ConflictAutosolveMode {
     }
 }
 
+/// A KDiff3-style source choice applied in bulk. The blocks it reaches depend
+/// on the [`ConflictBulkScope`] it is dispatched with.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ConflictBulkChoice {
     Base,
     Ours,
     Theirs,
     Both,
+}
+
+/// Which blocks a bulk choice reaches, mirroring KDiff3's `chooseGlobal`
+/// `bConflictsOnly` / `bWhiteSpaceOnly` pair.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ConflictBulkScope {
+    /// "Choose A/B/C Everywhere": every merge-plan delta, including the ones
+    /// the planner already selected automatically.
+    #[default]
+    AllDeltas,
+    /// "Choose A/B/C for All Unsolved Whitespace Conflicts": only blocks still
+    /// unresolved and classified as whitespace-only, skipping hand-edited ones.
+    UnsolvedWhitespace,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -123,6 +138,9 @@ pub enum RepoWatchDegradedReason {
     WatchLimitReached { unwatched_dirs: usize },
 }
 
+// Dispatch keeps internal messages inline so the hot reducer path does not
+// require an additional allocation for every effect completion.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum Msg {
     OpenRepo(PathBuf),
@@ -754,12 +772,43 @@ pub enum Msg {
         repo_id: RepoId,
         path: RepoPath,
         choice: ConflictBulkChoice,
+        scope: ConflictBulkScope,
     },
     ConflictSetRegionChoice {
         repo_id: RepoId,
         path: RepoPath,
         region_index: usize,
         choice: ConflictRegionChoice,
+    },
+    /// Toggle one merge source, appending it after already-selected sources.
+    ConflictToggleRegionSource {
+        repo_id: RepoId,
+        path: RepoPath,
+        region_index: usize,
+        source: gitcomet_core::merge::MergeSource,
+    },
+    /// Replace a region's complete ordered source selection.
+    ConflictReplaceRegionSelection {
+        repo_id: RepoId,
+        path: RepoPath,
+        region_index: usize,
+        selection: gitcomet_core::merge::OrderedSelection,
+    },
+    /// Toggle one source on a semantic merge-plan block. Unlike region
+    /// actions, this also addresses automatically selected deltas that do not
+    /// render conflict markers.
+    ConflictTogglePlanBlockSource {
+        repo_id: RepoId,
+        path: RepoPath,
+        block_id: gitcomet_core::merge::MergeBlockId,
+        source: gitcomet_core::merge::MergeSource,
+    },
+    /// Replace a semantic merge-plan block's complete ordered selection.
+    ConflictReplacePlanBlockSelection {
+        repo_id: RepoId,
+        path: RepoPath,
+        block_id: gitcomet_core::merge::MergeBlockId,
+        selection: gitcomet_core::merge::OrderedSelection,
     },
     ConflictSyncRegionResolutions {
         repo_id: RepoId,
@@ -776,8 +825,8 @@ pub enum Msg {
         repo_id: RepoId,
         path: RepoPath,
     },
-    /// section 30 split: rewrite one conflict-marker block into 2–3 blocks at
-    /// block-local line boundaries and persist the rewritten marker text.
+    /// section 30 split: rewrite one in-memory conflict block into 2–3 blocks
+    /// at block-local line boundaries.
     ConflictSplitRegion {
         repo_id: RepoId,
         path: RepoPath,
@@ -785,6 +834,22 @@ pub enum Msg {
         boundaries: gitcomet_core::conflict_session::ConflictRegionSplitBoundaries,
         /// Resolver revision from which the region index and boundaries were
         /// calculated. Stale requests are rejected before editing the session.
+        expected_conflict_rev: u64,
+    },
+    /// KDiff3 manual diff help: pin one line range per source so the planner
+    /// must align them, then replan the file around that constraint.
+    ConflictAddManualAlignment {
+        repo_id: RepoId,
+        path: RepoPath,
+        alignment: gitcomet_core::merge::ManualAlignment,
+        /// Resolver revision the pinned ranges were read from. Stale requests
+        /// are rejected before replanning.
+        expected_conflict_rev: u64,
+    },
+    /// Drop every manual alignment and replan from the automatic one.
+    ConflictClearManualAlignments {
+        repo_id: RepoId,
+        path: RepoPath,
         expected_conflict_rev: u64,
     },
     /// section 30 join: merge conflict blocks `region_index` and `region_index + 1`,

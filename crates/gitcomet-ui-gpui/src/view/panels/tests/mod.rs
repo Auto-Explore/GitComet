@@ -48,7 +48,7 @@ fn diff_text_click_position_for_offset_range(
     (0..2048usize)
         .find_map(|step| {
             let position = point(hitbox.bounds.left() + px(step as f32), y);
-            pane.diff_text_offset_for_position_for_tests(visible_ix, region, position)
+            pane.diff_text_offset_for_position(visible_ix, region, position)
                 .filter(|offset| target.contains(offset))
                 .map(|_| position)
         })
@@ -986,11 +986,21 @@ pub(super) fn opening_repo_state(
     )
 }
 
+/// Publish `state` the way production does: into the store first, then into the
+/// UI model.
+///
+/// The model alone is not enough. `poller.rs` feeds the model *from*
+/// `store.snapshot()`, so in the running app the two always agree — and code
+/// that reads the store directly (`with_conflict_resolver_session`, and every
+/// plan-block pick behind it) depends on that. Setting only the model leaves the
+/// store empty, and those paths then no-op silently: a pick on a plan-backed
+/// conflict looks like it worked and resolves nothing.
 pub(super) fn push_test_state(
     this: &super::super::GitCometView,
     state: Arc<AppState>,
     cx: &mut impl gpui::AppContext,
 ) {
+    this.store.replace_snapshot_for_test(Arc::clone(&state));
     this._ui_model.update(cx, |model, cx| {
         model.set_state(state, cx);
     });

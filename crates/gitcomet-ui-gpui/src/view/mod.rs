@@ -98,7 +98,10 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
-            && matches!(key, "a" | "c" | "e" | "s" | "d" | "h" | "u"))
+            && matches!(
+                key,
+                "1" | "2" | "3" | "a" | "c" | "e" | "s" | "d" | "h" | "u"
+            ))
         || (matches!(key, "a" | "b" | "c" | "d") && no_command_modifiers)
 }
 
@@ -166,6 +169,7 @@ mod panes;
 mod patch_split;
 mod path_display;
 mod perf;
+mod permalink;
 pub(super) mod platform_open;
 mod poller;
 mod repo_open;
@@ -975,7 +979,15 @@ impl GitCometView {
                 // TODO: Implement merge branch/ref
             }
             "rebase" => {
-                // TODO: Implement rebase onto
+                if let Some(window) = window {
+                    self.open_popover_centered(
+                        PopoverKind::BranchPicker {
+                            purpose: BranchPickerPurpose::RebaseOnto,
+                        },
+                        window,
+                        cx,
+                    );
+                }
             }
             "create-tag" => {
                 if let Some(repo_id) = self.active_repo_id()

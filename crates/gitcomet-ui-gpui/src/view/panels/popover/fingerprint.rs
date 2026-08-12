@@ -51,6 +51,7 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         PopoverKind::DiffContentModeSettings
+        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -128,6 +129,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -166,7 +168,6 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
-        | PopoverKind::ConflictSaveStageConfirm { repo_id, .. }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
@@ -333,7 +334,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
-        | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
@@ -346,6 +346,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
         | PopoverKind::DiffContentModeSettings
+        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -440,6 +441,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
+        PopoverKind::MarkdownLinkMenu { url } => {
+            96u8.hash(hasher);
+            url.hash(hasher);
+        }
         PopoverKind::DiffActionMenu => 69u8.hash(hasher),
         PopoverKind::MergetoolSettingsMenu => 75u8.hash(hasher),
         PopoverKind::CommitOptionsMenu { repo_id } => {
@@ -589,6 +594,8 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             split_selection_rows,
             join_previous_region,
             join_next_region,
+            alignment_marked_columns,
+            has_manual_alignments,
         } => {
             59u8.hash(hasher);
             conflict_ix.hash(hasher);
@@ -599,6 +606,8 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             split_selection_rows.hash(hasher);
             join_previous_region.hash(hasher);
             join_next_region.hash(hasher);
+            alignment_marked_columns.hash(hasher);
+            has_manual_alignments.hash(hasher);
         }
         PopoverKind::ConflictResolverOutputMenu {
             cursor_line,
@@ -706,18 +715,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::MergeAbortConfirm { repo_id } => {
             51u8.hash(hasher);
             repo_id.hash(hasher);
-        }
-        PopoverKind::ConflictSaveStageConfirm {
-            repo_id,
-            path,
-            has_conflict_markers,
-            unresolved_blocks,
-        } => {
-            52u8.hash(hasher);
-            repo_id.hash(hasher);
-            path.hash(hasher);
-            has_conflict_markers.hash(hasher);
-            unresolved_blocks.hash(hasher);
         }
         PopoverKind::CommitPrompt { repo_id } => {
             73u8.hash(hasher);

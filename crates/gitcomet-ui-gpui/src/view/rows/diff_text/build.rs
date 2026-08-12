@@ -330,9 +330,10 @@ pub(super) fn should_cache_single_line_styled_text(text: &str) -> bool {
 
 fn styled_text_to_cached(
     text: SharedString,
-    highlights: Vec<DiffTextHighlight>,
+    mut highlights: Vec<DiffTextHighlight>,
 ) -> CachedDiffStyledText {
     let text_hash = hash_text_content(text.as_ref());
+    crate::text_runs::sanitize_highlights(text.as_ref(), &mut highlights);
 
     if highlights.is_empty() {
         return CachedDiffStyledText {
@@ -364,9 +365,14 @@ pub(super) fn styled_text_to_cached_from_buf(
     }
 
     let text = if !text.contains('\t') {
+        if !crate::text_runs::highlights_are_shapeable(text, highlights) {
+            return styled_text_to_cached(SharedString::new(text), highlights.to_vec());
+        }
         SharedString::new(text)
     } else {
-        let (expanded, remapped) = expanded_text_and_remapped_relative_highlights(text, highlights);
+        let (expanded, mut remapped) =
+            expanded_text_and_remapped_relative_highlights(text, highlights);
+        crate::text_runs::sanitize_highlights(expanded.as_ref(), &mut remapped);
         let text_hash = hash_text_content(expanded.as_ref());
 
         if remapped.is_empty() {
@@ -1275,6 +1281,10 @@ pub(in crate::view) struct PreparedDocumentByteRangeHighlights {
 }
 
 #[derive(Clone, Default)]
+#[cfg(any(test, feature = "benchmarks"))]
+// The bench warmup only wants the chunk-building side effect and drops the
+// result; the fields are read by the unit tests.
+#[cfg_attr(not(test), allow(dead_code))]
 pub(in crate::view) struct PreparedDocumentLineHighlights {
     pub line_ix: usize,
     pub highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,

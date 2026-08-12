@@ -4,10 +4,23 @@ renamed in 'ours',
 and a file of the
 same name will be
 added in 'theirs'.
+=======
+This file has
+the same name
+as a file that
+was renamed in
+the other branch.
+>>>>>>>
 
+<<<<<<<
 The original file
 will exist in the
 'theirs' side as
+=======
+This will, upon
+merging, lead to
+a rename conflict.
+>>>>>>>
 well.
 
 Expected index
@@ -17,14 +30,3 @@ entries are:
 3 A
 2 B
 3 B
-=======
-This file has
-the same name
-as a file that
-was renamed in
-the other branch.
-
-This will, upon
-merging, lead to
-a rename conflict.
->>>>>>>

@@ -131,22 +131,51 @@ fn install_terminal_interrupt_handler() -> std::io::Result<()> {
 }
 
 /// Windows has no SIGINT: the console delivers Ctrl+C, Ctrl+Break and console
-/// close as control events, and terminates the process once every handler
-/// declines them. Retiring the recovery marker there keeps a deliberate
-/// terminal interrupt from being reported as a crash on the next launch.
+/// close as control events. Retiring the recovery marker there keeps a
+/// deliberate terminal interrupt from being reported as a crash on the next
+/// launch, and ending the process from the handler keeps the interrupt from
+/// hanging the UI. See [`handle_console_ctrl_event`].
 #[cfg(windows)]
 fn install_terminal_interrupt_handler() -> bool {
     gitcomet_win32_window_utils::install_console_ctrl_handler(handle_console_ctrl_event)
 }
 
+/// How long the recovery-marker cleanup gets before a console interrupt ends
+/// the process regardless of whether it finished.
+#[cfg(windows)]
+const CONSOLE_CTRL_CLEANUP_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
 #[cfg(windows)]
 fn handle_console_ctrl_event(event: u32) -> bool {
-    if console_ctrl_event_ends_process(event) {
-        retire_active_session();
+    if !console_ctrl_event_ends_process(event) {
+        // Not an event that ends the process, so leave it to the console.
+        return false;
     }
-    // Decline the event so the console keeps its own termination behaviour,
-    // including the exit status the invoking shell expects.
-    false
+
+    // Retiring the marker takes a lock and writes to the crash directory, and
+    // either can stall — another thread mid-session-lifecycle, or a LOCALAPPDATA
+    // on an unreachable network share. Arm the exit before running it so a
+    // stalled cleanup cannot restore the very hang this handler prevents.
+    let _ = std::thread::Builder::new()
+        .name("gitcomet-ctrl-c-watchdog".to_string())
+        .spawn(|| {
+            std::thread::sleep(CONSOLE_CTRL_CLEANUP_GRACE);
+            gitcomet_win32_window_utils::terminate_current_process(
+                gitcomet_win32_window_utils::CONTROL_C_EXIT_CODE,
+            );
+        });
+
+    retire_active_session();
+    // Declining the event here would hand termination to the console's default
+    // handler, which calls `ExitProcess`. That deadlocks in a running GitComet
+    // window — it takes the loader lock before stopping the renderer, executor
+    // and allocator threads, then runs `DLL_PROCESS_DETACH` for every loaded
+    // module — so Ctrl+C would leave the process alive forever. End the process
+    // here instead, reporting the status the invoking shell expects for an
+    // interrupted program.
+    gitcomet_win32_window_utils::terminate_current_process(
+        gitcomet_win32_window_utils::CONTROL_C_EXIT_CODE,
+    );
 }
 
 #[cfg(windows)]
@@ -1918,12 +1947,11 @@ new frame
             CTRL_SHUTDOWN_EVENT,
         ] {
             assert!(console_ctrl_event_ends_process(event));
-            assert!(
-                !handle_console_ctrl_event(event),
-                "declining the event keeps the console's own termination status"
-            );
         }
         assert!(!console_ctrl_event_ends_process(u32::MAX));
+        // `handle_console_ctrl_event` itself ends the process for each of these
+        // events, so it can only be exercised from a child process. See
+        // `terminal_interrupt_ends_process_and_clears_active_session_state`.
     }
 
     #[cfg(windows)]
@@ -1940,6 +1968,94 @@ new frame
         assert!(!SESSION_ACTIVE.load(Ordering::SeqCst));
         assert!(!session_marker_path(dir.path()).exists());
         assert!(!last_operation_path(dir.path()).exists());
+    }
+
+    /// A console control event must end the process and leave no recovery
+    /// marker behind. The handler ends the process, so it can only be exercised
+    /// from a child. The deadlock this guards against needs a full UI process to
+    /// reproduce; what is checked here is the contract the handler must keep.
+    #[cfg(windows)]
+    #[test]
+    fn terminal_interrupt_ends_process_and_clears_active_session_state() {
+        use std::os::windows::process::CommandExt;
+
+        const CHILD_PROCESS: &str = "GITCOMET_CTRL_BREAK_CLEANUP_TEST_CHILD";
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CHILD_READY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        const CHILD_EXIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+        const POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(50);
+
+        if std::env::var_os(CHILD_PROCESS).is_some() {
+            assert!(
+                install_terminal_interrupt_handler(),
+                "install console control handler"
+            );
+            begin_session().expect("begin child session");
+            let dir = crash_dir().expect("child crash directory");
+            std::fs::write(last_operation_path(&dir), "copy_source=test\n")
+                .expect("write child operation diagnostics");
+            std::fs::write(runtime_error_path(&dir), "message=test runtime error\n")
+                .expect("write child runtime diagnostics");
+            loop {
+                std::thread::park();
+            }
+        }
+
+        let state_root = tempdir().expect("temporary state root");
+        // A new process group keeps the Ctrl+Break event off the test runner
+        // itself, which shares this console with the child.
+        let mut child =
+            std::process::Command::new(std::env::current_exe().expect("test executable"))
+                .arg("terminal_interrupt_ends_process_and_clears_active_session_state")
+                .env(CHILD_PROCESS, "1")
+                .env("LOCALAPPDATA", state_root.path())
+                .creation_flags(CREATE_NEW_PROCESS_GROUP)
+                .spawn()
+                .expect("run console control cleanup child");
+        let child_pid = child.id();
+        let dir = state_root.path().join("gitcomet").join("crashes");
+        let marker = session_marker_path_for_pid(&dir, child_pid);
+
+        let ready_deadline = std::time::Instant::now() + CHILD_READY_TIMEOUT;
+        while !marker.exists() && std::time::Instant::now() < ready_deadline {
+            std::thread::sleep(POLL_INTERVAL);
+        }
+        assert!(
+            marker.exists(),
+            "child should register its recovery marker before the interrupt"
+        );
+
+        if !gitcomet_win32_window_utils::send_console_ctrl_break(child_pid) {
+            // Test runners without a console cannot deliver control events.
+            let _ = child.kill();
+            let _ = child.wait();
+            eprintln!(
+                "skipping console control interrupt test: {}",
+                std::io::Error::last_os_error()
+            );
+            return;
+        }
+
+        let exit_deadline = std::time::Instant::now() + CHILD_EXIT_TIMEOUT;
+        let status = loop {
+            match child.try_wait().expect("poll console control child") {
+                Some(status) => break status,
+                None if std::time::Instant::now() >= exit_deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    panic!("console control event did not end the child process");
+                }
+                None => std::thread::sleep(POLL_INTERVAL),
+            }
+        };
+
+        assert_eq!(
+            status.code(),
+            Some(gitcomet_win32_window_utils::CONTROL_C_EXIT_CODE as i32)
+        );
+        assert!(!marker.exists());
+        assert!(!last_operation_path_for_pid(&dir, child_pid).exists());
+        assert!(!runtime_error_path_for_pid(&dir, child_pid).exists());
     }
 
     #[test]

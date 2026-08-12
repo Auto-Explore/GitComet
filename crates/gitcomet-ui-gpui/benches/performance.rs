@@ -198,6 +198,9 @@ exact_filtered_target!(
     bench_conflict_split_resize_step_selected => bench_conflict_split_resize_step
 );
 exact_filtered_target!(
+    bench_conflict_resolved_output_live_syntax_selected => bench_conflict_resolved_output_live_syntax
+);
+exact_filtered_target!(
     bench_conflict_streamed_provider_selected => bench_conflict_streamed_provider
 );
 exact_filtered_target!(
@@ -298,6 +301,7 @@ criterion_group! {
         bench_diff_open_conflict_compare_first_window_selected,
         bench_diff_refresh_rev_only_same_content_selected,
         bench_conflict_split_resize_step_selected,
+        bench_conflict_resolved_output_live_syntax_selected,
         bench_conflict_streamed_provider_selected,
         bench_conflict_streamed_resolved_output_selected,
         bench_pane_resize_drag_step_selected,

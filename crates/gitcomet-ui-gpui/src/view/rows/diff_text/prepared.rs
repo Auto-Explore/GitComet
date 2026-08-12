@@ -231,6 +231,7 @@ pub(in crate::view) fn drain_completed_prepared_diff_syntax_chunk_builds_for_doc
     syntax::drain_completed_prepared_syntax_chunk_builds_for_document(document.inner)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn has_pending_prepared_diff_syntax_chunk_builds_for_document(
     document: PreparedDiffSyntaxDocument,
 ) -> bool {
@@ -441,6 +442,7 @@ pub(in crate::view) fn syntax_highlights_for_prepared_document_byte_range(
     Some(highlights)
 }
 
+#[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) fn request_syntax_highlights_for_prepared_document_line_range(
     theme: AppTheme,
     text: &str,

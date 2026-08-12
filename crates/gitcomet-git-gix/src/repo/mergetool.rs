@@ -1,3 +1,6 @@
+use super::mergetool_builtin::{
+    BuiltinMergeCommand, MergetoolFiles, builtin_merge_command, builtin_tool_program,
+};
 use super::{GixRepo, conflict_stages::gix_index_stage_blob_bytes_optional};
 use crate::util::{bytes_to_text_preserving_utf8, run_git_simple};
 use gitcomet_core::error::{Error, ErrorKind};
@@ -21,7 +24,10 @@ impl GixRepo {
     ///    Repository-local `mergetool.<tool>.cmd` is blocked by default unless
     ///    explicitly trusted via a GitComet global consent key.
     /// 2. Extracts conflict stages (`:1:`, `:2:`, `:3:`) into temp files.
-    /// 3. Invokes the tool with BASE, LOCAL, REMOTE, MERGED file paths.
+    /// 3. Invokes the tool with the BASE, LOCAL, REMOTE and MERGED files, using
+    ///    git's built-in argument convention for the tool (see
+    ///    [`super::mergetool_builtin`]) so it opens in merge mode rather than as
+    ///    a read-only diff.
     /// 4. Reads trust-exit config to decide success semantics:
     ///    `mergetool.<tool>.trustExitCode`, then `mergetool.trustExitCode`.
     /// 5. Reads back the merged file and stages it on success.
@@ -68,14 +74,48 @@ impl GixRepo {
                 &merged_path,
             )?
         } else {
-            // No custom command — try invoking the tool name directly with
-            // the standard argument convention used by many merge tools.
-            let tool_executable = tool_path.as_deref().unwrap_or(&tool_name);
+            // No custom command — use the argument convention git's built-in
+            // definition for this tool would use. Passing bare positional paths
+            // leaves tools such as KDiff3 in read-only 3-way diff mode because
+            // nothing tells them where to write the merge result.
+            // `mergetool.<tool>.path` wins; otherwise a few built-ins are
+            // invoked through a command that is not the tool name (`vscode` runs
+            // `code`, `bc` runs `bcomp`, ...), exactly as git translates them.
+            let builtin_program = match tool_path {
+                Some(_) => None,
+                None => builtin_tool_program(&tool_name),
+            };
+            let tool_executable = tool_path
+                .as_deref()
+                .or(builtin_program.as_deref())
+                .unwrap_or(&tool_name);
+            let args = match builtin_merge_command(
+                &tool_name,
+                &MergetoolFiles {
+                    base: base_path,
+                    local: local_path,
+                    remote: remote_path,
+                    merged: &merged_path,
+                    merged_label: path,
+                    base_present: stage_paths.base_present,
+                },
+            ) {
+                BuiltinMergeCommand::Args(args) => args,
+                BuiltinMergeCommand::Unsupported(message) => {
+                    return Err(Error::new(ErrorKind::Backend(message)));
+                }
+                // Not a git built-in: keep the generic convention, which is what
+                // a tool configured only through `mergetool.<tool>.path` gets.
+                BuiltinMergeCommand::Unknown => vec![
+                    local_path.into(),
+                    base_path.into(),
+                    remote_path.into(),
+                    merged_path.clone().into_os_string(),
+                ],
+            };
+
             no_window_command(tool_executable)
-                .arg(local_path)
-                .arg(base_path)
-                .arg(remote_path)
-                .arg(&merged_path)
+                .args(&args)
                 .current_dir(workdir)
                 .output()
                 .map_err(|e| {
@@ -450,6 +490,10 @@ struct StagePaths {
     base: PathBuf,
     local: PathBuf,
     remote: PathBuf,
+    /// Whether the index carried a stage 1 entry. Built-in merge tools take a
+    /// different (two-way) command line when there is no merge base, so the
+    /// empty placeholder file written for `base` must not be mistaken for one.
+    base_present: bool,
     _temp_dir: Option<tempfile::TempDir>,
     cleanup_files: bool,
 }
@@ -477,13 +521,14 @@ fn materialize_mergetool_stage_files(
     write_to_temp: bool,
     keep_temporaries: bool,
 ) -> Result<StagePaths> {
-    let stage_paths = build_stage_paths(workdir, conflict_path, write_to_temp, keep_temporaries)?;
+    let mut stage_paths =
+        build_stage_paths(workdir, conflict_path, write_to_temp, keep_temporaries)?;
+    let base_bytes = gix_index_stage_blob_bytes_optional(repo, conflict_path, 1)?;
+    stage_paths.base_present = base_bytes.is_some();
     write_stage_bytes(
         workdir,
         &stage_paths.base,
-        gix_index_stage_blob_bytes_optional(repo, conflict_path, 1)?
-            .as_deref()
-            .unwrap_or(b""),
+        base_bytes.as_deref().unwrap_or(b""),
     )?;
     write_stage_bytes(
         workdir,
@@ -549,6 +594,7 @@ fn build_stage_paths(
             base,
             local,
             remote,
+            base_present: false,
             _temp_dir: temp_dir_guard,
             cleanup_files: false,
         });
@@ -581,6 +627,7 @@ fn build_stage_paths(
         base,
         local,
         remote,
+        base_present: false,
         _temp_dir: None,
         cleanup_files: !keep_temporaries,
     })

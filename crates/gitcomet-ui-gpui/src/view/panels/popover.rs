@@ -8,7 +8,6 @@ mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
 mod clone_repo;
 mod commit_prompt;
-mod conflict_save_stage_confirm;
 pub(in super::super) mod context_menu;
 mod create_branch_from_ref_prompt;
 mod create_tag_prompt;
@@ -357,6 +356,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::RepoTabMenu { .. }
+            | PopoverKind::MarkdownLinkMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
             | PopoverKind::InteractiveRebaseAutosquashMenu
@@ -411,7 +411,6 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
-            | PopoverKind::ConflictSaveStageConfirm { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
@@ -674,7 +673,6 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
-        | PopoverKind::ConflictSaveStageConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
@@ -683,6 +681,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
+        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
@@ -732,9 +731,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
-        PopoverKind::MergeAbortConfirm { .. } | PopoverKind::ConflictSaveStageConfirm { .. } => {
-            Some(DIALOG_360_WIDTH)
-        }
+        PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } => Some(DIALOG_440_WIDTH),
         PopoverKind::Repo {
@@ -779,7 +776,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::TerminalShutdownConfirm(_) => Some(DIALOG_440_WIDTH),
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
-        PopoverKind::DiffActionMenu => Some(DIFF_ACTION_MENU_WIDTH),
+        PopoverKind::MarkdownLinkMenu { .. } | PopoverKind::DiffActionMenu => {
+            Some(DIFF_ACTION_MENU_WIDTH)
+        }
         // "Browse repository at this point" needs more room than the default
         // context-menu width.
         PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
@@ -1792,6 +1791,7 @@ impl PopoverHost {
             Some(
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
+                    | PopoverKind::MarkdownLinkMenu { .. }
                     | PopoverKind::DiffActionMenu
                     | PopoverKind::MergetoolSettingsMenu
                     | PopoverKind::DiffHunkMenu { .. }
@@ -2262,6 +2262,18 @@ impl PopoverHost {
                 });
                 self.store.dispatch(Msg::DeleteBranch { repo_id, name });
                 self.close_popover(cx);
+            }
+            Some(PopoverKind::BranchPicker {
+                purpose: BranchPickerPurpose::RebaseOnto,
+            }) => {
+                self.open_popover_centered(
+                    PopoverKind::RebaseOntoConfirm {
+                        repo_id,
+                        onto: name,
+                    },
+                    window,
+                    cx,
+                );
             }
             _ => {
                 self.store.dispatch(Msg::CheckoutBranch { repo_id, name });
@@ -3641,19 +3653,6 @@ impl PopoverHost {
             PopoverKind::MergeAbortConfirm { repo_id } => {
                 merge_abort_confirm::panel(self, repo_id, cx)
             }
-            PopoverKind::ConflictSaveStageConfirm {
-                repo_id,
-                path,
-                has_conflict_markers,
-                unresolved_blocks,
-            } => conflict_save_stage_confirm::panel(
-                self,
-                repo_id,
-                &path,
-                has_conflict_markers,
-                unresolved_blocks,
-                cx,
-            ),
             PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
                 force_delete_branch_confirm::panel(self, repo_id, name, cx)
             }
@@ -3684,6 +3683,9 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
+            PopoverKind::MarkdownLinkMenu { url } => {
+                self.context_menu_view(PopoverKind::MarkdownLinkMenu { url }, cx)
+            }
             PopoverKind::MergetoolSettingsMenu => {
                 self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
             }
@@ -3784,6 +3786,8 @@ impl PopoverHost {
                 split_selection_rows,
                 join_previous_region,
                 join_next_region,
+                alignment_marked_columns,
+                has_manual_alignments,
             } => self.context_menu_view(
                 PopoverKind::ConflictResolverChunkMenu {
                     conflict_ix,
@@ -3794,6 +3798,8 @@ impl PopoverHost {
                     split_selection_rows,
                     join_previous_region,
                     join_next_region,
+                    alignment_marked_columns,
+                    has_manual_alignments,
                 },
                 cx,
             ),

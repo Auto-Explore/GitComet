@@ -1618,13 +1618,50 @@ fn reduce_inner(
             repo_id,
             path,
             choice,
-        } => conflict_interactions::apply_bulk_choice(state, repo_id, path, choice),
+            scope,
+        } => conflict_interactions::apply_bulk_choice(state, repo_id, path, choice, scope),
         Msg::ConflictSetRegionChoice {
             repo_id,
             path,
             region_index,
             choice,
         } => conflict_interactions::set_region_choice(state, repo_id, path, region_index, choice),
+        Msg::ConflictToggleRegionSource {
+            repo_id,
+            path,
+            region_index,
+            source,
+        } => {
+            conflict_interactions::toggle_region_source(state, repo_id, path, region_index, source)
+        }
+        Msg::ConflictReplaceRegionSelection {
+            repo_id,
+            path,
+            region_index,
+            selection,
+        } => conflict_interactions::replace_region_selection(
+            state,
+            repo_id,
+            path,
+            region_index,
+            selection,
+        ),
+        Msg::ConflictTogglePlanBlockSource {
+            repo_id,
+            path,
+            block_id,
+            source,
+        } => {
+            conflict_interactions::toggle_plan_block_source(state, repo_id, path, block_id, source)
+        }
+        Msg::ConflictReplacePlanBlockSelection {
+            repo_id,
+            path,
+            block_id,
+            selection,
+        } => conflict_interactions::replace_plan_block_selection(
+            state, repo_id, path, block_id, selection,
+        ),
         Msg::ConflictSyncRegionResolutions {
             repo_id,
             path,
@@ -1661,6 +1698,28 @@ fn reduce_inner(
             }
             effects
         }
+        Msg::ConflictAddManualAlignment {
+            repo_id,
+            path,
+            alignment,
+            expected_conflict_rev,
+        } => conflict_interactions::add_manual_alignment(
+            state,
+            repo_id,
+            path,
+            alignment,
+            expected_conflict_rev,
+        ),
+        Msg::ConflictClearManualAlignments {
+            repo_id,
+            path,
+            expected_conflict_rev,
+        } => conflict_interactions::clear_manual_alignments(
+            state,
+            repo_id,
+            path,
+            expected_conflict_rev,
+        ),
         Msg::ConflictJoinRegions {
             repo_id,
             path,

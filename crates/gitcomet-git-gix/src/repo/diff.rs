@@ -8,7 +8,9 @@ use crate::util::{
     git_command_failed_error, run_git_parsed_stdout, run_git_parsed_stdout_cancellable,
     run_git_raw_output,
 };
-use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, canonicalize_stage_parts};
+use gitcomet_core::conflict_session::{
+    ConflictPayload, ConflictResolverStrategy, ConflictSession, canonicalize_stage_parts,
+};
 use gitcomet_core::domain::{
     Diff, DiffArea, DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText,
     FileDiffTextSource,
@@ -683,24 +685,43 @@ impl GixRepo {
         let ours = ConflictPayload::from_stage_parts(stages.ours_bytes, stages.ours);
         let theirs = ConflictPayload::from_stage_parts(stages.theirs_bytes, stages.theirs);
 
-        let session = match current {
-            Some(ConflictPayload::Text(current)) => ConflictSession::from_merged_shared_text(
+        let is_binary = base.is_binary() || ours.is_binary() || theirs.is_binary();
+        let strategy = ConflictResolverStrategy::for_conflict(conflict_kind, is_binary);
+        let session = if strategy == ConflictResolverStrategy::FullTextResolver {
+            // Full-text sessions use one stage-derived merge plan for aligned
+            // rows, conflict regions, and the marker projection while retaining
+            // the independently loaded worktree payload as the output seed.
+            ConflictSession::from_stage_inputs_with_current(
                 repo_path,
                 conflict_kind,
                 base,
                 ours,
                 theirs,
                 current,
-            ),
-            Some(current) => ConflictSession::new_with_current(
-                repo_path,
-                conflict_kind,
-                base,
-                ours,
-                theirs,
-                current,
-            ),
-            None => ConflictSession::new(repo_path, conflict_kind, base, ours, theirs),
+            )
+        } else {
+            // Binary and file-decision resolvers still need the current
+            // worktree payload (including an absent payload) for their
+            // specialized completion behavior.
+            match current {
+                Some(ConflictPayload::Text(current)) => ConflictSession::from_merged_shared_text(
+                    repo_path,
+                    conflict_kind,
+                    base,
+                    ours,
+                    theirs,
+                    current,
+                ),
+                Some(current) => ConflictSession::new_with_current(
+                    repo_path,
+                    conflict_kind,
+                    base,
+                    ours,
+                    theirs,
+                    current,
+                ),
+                None => ConflictSession::new(repo_path, conflict_kind, base, ours, theirs),
+            }
         };
         Ok(Some(session))
     }

@@ -268,7 +268,7 @@ impl<'a> HighlightCursor<'a> {
 pub(super) fn build_streamed_highlight_runs_for_visible_window(
     base_font: &gpui::Font,
     base_color: gpui::Hsla,
-    display_text: &str,
+    display_text: &LineTextSource<'_>,
     line_starts: &[usize],
     visible_line_range: Range<usize>,
     highlights: &[(Range<usize>, gpui::HighlightStyle)],
@@ -284,7 +284,7 @@ pub(super) fn build_streamed_highlight_runs_for_visible_window(
     let mut cursor = HighlightCursor::new_at_offset(highlights, first_line_start);
     for line_ix in visible_line_range {
         let line_start = line_starts.get(line_ix).copied().unwrap_or(0);
-        let line_text = line_text_for_index(display_text, line_starts, line_ix);
+        let line_text = display_text.line_text(line_ix);
         let capped_line_text = build_shaping_line_slice(line_text, TEXT_INPUT_MAX_LINE_SHAPE_BYTES);
         let capped_line_text = capped_line_text.as_ref();
         if !capped_line_text.is_empty() {
@@ -432,10 +432,14 @@ pub(crate) fn benchmark_text_input_runs_streamed_visible_window(
 ) -> u64 {
     let base_font = gpui::font(".SystemUIFont");
     let base_color = gpui::hsla(0.0, 0.0, 1.0, 1.0);
+    let source = LineTextSource::Whole {
+        text,
+        starts: line_starts,
+    };
     let line_runs = build_streamed_highlight_runs_for_visible_window(
         &base_font,
         base_color,
-        text,
+        &source,
         line_starts,
         visible_line_range,
         highlights,

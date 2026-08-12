@@ -3021,6 +3021,14 @@ fn positional_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'
 }
 
 pub(crate) fn myers_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
+    // An empty side has a fully determined edit script, so take GNU diff's
+    // "handle simple cases" branch instead of searching for it. The search
+    // would find the same answer at depth D = max(n, m) while storing a
+    // D*(D+1)/2 trace, which is gigabytes for a file-sized deletion.
+    if old.is_empty() || new.is_empty() {
+        return myers_fallback_edits(old, new);
+    }
+
     // Guard against overflow: if n + m exceeds isize::MAX, use linear fallback.
     let Some(sum) = old.len().checked_add(new.len()) else {
         return myers_fallback_edits(old, new);

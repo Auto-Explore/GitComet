@@ -265,11 +265,16 @@ impl MainPaneView {
         // belongs to that editor, not to the diff/conflict shortcut table.
         // Letting them through here staged the conflict file on the first space
         // typed (StagePath → the file leaves Conflicted → the resolver closes
-        // mid-edit). Two deliberate carve-outs:
+        // mid-edit). Three deliberate carve-outs:
         //   * Ctrl+1/2/3 pick aliases are chords with no text-input collision,
         //     so they stay live while editing (kdiff3 parity).
-        //   * Ctrl+Home/End/PgUp/PgDn are intentionally NOT handled here, so the
-        //     editor keeps them for cursor movement (kdiff3 parity).
+        //   * Shift+F2/F3 (previous/next unresolved conflict) likewise: an
+        //     F-key produces no text and the editor binds only the unmodified
+        //     `f2`/`f3`, so the chord is free here — and jumping to the next
+        //     open conflict is exactly what you want *while* editing the
+        //     merged result, which is why it is not left outside.
+        //   * GitComet's Ctrl+Home/End resolver bindings are intentionally NOT
+        //     handled here, so the editor keeps them for cursor movement.
         if self
             .conflict_resolver_input
             .read(cx)
@@ -280,17 +285,50 @@ impl MainPaneView {
                 && (mods.control || mods.platform)
                 && !mods.alt
                 && !mods.function
-                && !mods.shift
-                && self.conflict_resolver_conflict_count() > 0
                 && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
                     key,
                     self.conflict_resolver.view_mode,
                 )
             {
-                self.conflict_resolver_pick_active_conflict(choice, cx);
+                if mods.shift {
+                    self.conflict_resolver_choose_everywhere(choice, cx);
+                    return true;
+                }
+                if self.conflict_resolver_has_active_pick_target() {
+                    self.conflict_resolver_pick_active_conflict(choice, cx);
+                    return true;
+                }
+            }
+            if self.is_conflict_resolver_active()
+                && matches!(key, "f2" | "f3")
+                && mods.shift
+                && !mods.control
+                && !mods.alt
+                && !mods.platform
+                && !mods.function
+                && !self.conflict_resolver.nav_targets.is_empty()
+            {
+                if key == "f2" {
+                    self.conflict_jump_prev_unresolved(cx);
+                } else {
+                    self.conflict_jump_next_unresolved(cx);
+                }
                 return true;
             }
             return false;
+        }
+
+        // kdiff3 manual diff help: Escape abandons pending alignment marks
+        // before reaching the resolver's other escape behaviors, so a
+        // mis-marked line does not cost the user their selection or view.
+        if key == "escape"
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && self.conflict_resolver_clear_alignment_marks(cx)
+        {
+            return true;
         }
 
         if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
@@ -315,6 +353,32 @@ impl MainPaneView {
 
         if !handled && mods.secondary() && mods.number_of_modifiers() == 1 && key == "f" {
             handled = self.open_search_for_active_view(window, cx);
+        }
+
+        // Shift+F2/F3 step between *unresolved* conflicts — the resolved ones
+        // are skipped, which is what separates this from plain F2/F3.
+        //
+        // It sits ahead of the diff-search block below deliberately: this is a
+        // distinct chord, so letting it become "previous/next search match"
+        // whenever the search box happens to be open would be surprising. The
+        // resolver guard keeps that scoped — outside the conflict resolver
+        // Shift+F2/F3 falls through and means exactly what it always did.
+        if !handled
+            && matches!(key, "f2" | "f3")
+            && mods.shift
+            && !mods.control
+            && !mods.alt
+            && !mods.platform
+            && !mods.function
+            && self.is_conflict_resolver_active()
+            && !self.conflict_resolver.nav_targets.is_empty()
+        {
+            if key == "f2" {
+                self.conflict_jump_prev_unresolved(cx);
+            } else {
+                self.conflict_jump_next_unresolved(cx);
+            }
+            handled = true;
         }
 
         if !handled
@@ -874,7 +938,7 @@ impl MainPaneView {
                 .read(cx)
                 .focus_handle()
                 .is_focused(window)
-            && self.conflict_resolver_conflict_count() > 0
+            && self.conflict_resolver_has_active_pick_target()
         {
             if let Some(choice) = conflict_resolver::conflict_quick_pick_choice_for_key(
                 key,
@@ -889,6 +953,24 @@ impl MainPaneView {
             }
         }
 
+        // KDiff3-compatible Ctrl+Shift+1/2/3: choose A/B/C on every delta,
+        // including blocks that were selected automatically and have no
+        // conflict markers.
+        if !handled
+            && conflict_resolver_active
+            && (mods.control || mods.platform)
+            && mods.shift
+            && !mods.alt
+            && !mods.function
+            && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
+                key,
+                self.conflict_resolver.view_mode,
+            )
+        {
+            self.conflict_resolver_choose_everywhere(choice, cx);
+            handled = true;
+        }
+
         // section 30: kdiff3-compatible Ctrl+1/2/3 pick aliases. When the output
         // editor is focused these are handled by the carve-out at the top of this
         // fn; this block covers the case where focus is elsewhere.
@@ -898,7 +980,7 @@ impl MainPaneView {
             && !mods.alt
             && !mods.function
             && !mods.shift
-            && self.conflict_resolver_conflict_count() > 0
+            && self.conflict_resolver_has_active_pick_target()
             && let Some(choice) = conflict_resolver::conflict_ctrl_pick_choice_for_key(
                 key,
                 self.conflict_resolver.view_mode,
@@ -908,16 +990,33 @@ impl MainPaneView {
             handled = true;
         }
 
-        // section 30: kdiff3-compatible delta navigation — Ctrl+Home/End jump to the
-        // first/last delta, Ctrl+PgUp/PgDn to the previous/next unresolved
-        // conflict.
+        // kdiff3 manual diff help: Ctrl+Y pins the lines marked in the source
+        // columns onto one another; Ctrl+Shift+Y drops every pin and returns
+        // the file to its automatic alignment.
+        if !handled
+            && conflict_resolver_active
+            && (mods.control || mods.platform)
+            && !mods.alt
+            && !mods.function
+            && key == "y"
+        {
+            handled = if mods.shift {
+                self.conflict_resolver_clear_manual_alignments(cx)
+            } else {
+                self.conflict_resolver_align_manually(cx)
+            };
+        }
+
+        // GitComet resolver navigation: Ctrl+Home/End jump to the first/last
+        // delta. (Previous/next *unresolved* conflict is Shift+F2/F3, handled
+        // above — Ctrl+PgUp/PgDn belongs to the repository tabs.)
         if !handled
             && conflict_resolver_active
             && (mods.control || mods.platform)
             && !mods.alt
             && !mods.function
             && !mods.shift
-            && self.conflict_resolver_conflict_count() > 0
+            && !self.conflict_resolver.nav_targets.is_empty()
         {
             match key {
                 "home" => {
@@ -926,14 +1025,6 @@ impl MainPaneView {
                 }
                 "end" => {
                     self.conflict_jump_last(cx);
-                    handled = true;
-                }
-                "pageup" => {
-                    self.conflict_jump_prev_unresolved(cx);
-                    handled = true;
-                }
-                "pagedown" => {
-                    self.conflict_jump_next_unresolved(cx);
                     handled = true;
                 }
                 _ => {}
@@ -2484,6 +2575,7 @@ impl MainPaneView {
                     }
                     Loadable::Ready(_) => {
                         self.ensure_single_markdown_preview_cache(cx);
+                        self.watch_pending_markdown_preview_images(cx);
                         match &self.worktree_markdown_preview {
                             Loadable::NotLoaded | Loadable::Loading => {
                                 components::empty_state(theme, "Preview", "Loading")
@@ -2503,16 +2595,38 @@ impl MainPaneView {
                                     components::empty_state(theme, "Preview", message)
                                         .into_any_element()
                                 } else {
-                                    let list = uniform_list(
-                                        "worktree_markdown_preview_list",
-                                        document.rows.len(),
-                                        cx.processor(Self::render_markdown_preview_rows),
-                                    )
-                                    .h_full()
-                                    .min_h(px(0.0))
-                                    .track_scroll(&self.worktree_preview_scroll)
-                                    .with_horizontal_sizing_behavior(
-                                        gpui::ListHorizontalSizingBehavior::Unconstrained,
+                                    // A single document lays out as one flowing
+                                    // element tree rather than a uniform row
+                                    // list: text wraps by itself, images sit at
+                                    // their own size, and the gaps around
+                                    // headings are margins.
+                                    self.markdown_preview_wrap
+                                        .clear_list(MarkdownPreviewList::Worktree);
+                                    let document = std::sync::Arc::clone(document);
+                                    let image_base_dir = self
+                                        .markdown_preview_image_base_dir()
+                                        .map(|dir| std::sync::Arc::from(dir.as_path()));
+                                    let body = rows::render_markdown_document(
+                                        &document,
+                                        &rows::MarkdownDocumentContext {
+                                            theme,
+                                            ui_scale_percent,
+                                            editor_font_family: editor_font_family.clone().into(),
+                                            image_base_dir,
+                                            picture_sizes: std::sync::Arc::clone(
+                                                &self.worktree_markdown_preview_picture_sizes,
+                                            ),
+                                            block_scrolls: self
+                                                .worktree_markdown_preview_block_scrolls
+                                                .clone(),
+                                            blocks: self.worktree_markdown_preview_blocks.clone(),
+                                            view: Some(cx.entity()),
+                                            text_region: DiffTextRegion::Inline,
+                                            change_bar_color:
+                                                rows::worktree_markdown_preview_bar_color(
+                                                    self, theme,
+                                                ),
+                                        },
                                     );
 
                                     let scroll_handle =
@@ -2520,6 +2634,10 @@ impl MainPaneView {
                                     let scrollbar_gutter = components::Scrollbar::visible_gutter(
                                         scroll_handle.clone(),
                                         components::ScrollbarAxis::Vertical,
+                                    );
+                                    let edge_gap = crate::ui_scale::design_px_from_percent(
+                                        super::diff::MARKDOWN_PREVIEW_DOCUMENT_EDGE_GAP_PX,
+                                        ui_scale_percent,
                                     );
                                     div()
                                         .id("worktree_markdown_preview_scroll_container")
@@ -2532,24 +2650,24 @@ impl MainPaneView {
                                         .bg(theme.colors.window_bg)
                                         .child(
                                             div()
-                                                .h_full()
+                                                .id("worktree_markdown_preview_document")
+                                                .debug_selector(|| {
+                                                    "worktree_markdown_preview_document".to_string()
+                                                })
+                                                .size_full()
                                                 .min_h(px(0.0))
+                                                .overflow_y_scroll()
+                                                .track_scroll(&scroll_handle)
+                                                .pt(edge_gap)
+                                                .pb(edge_gap)
                                                 .pr(scrollbar_gutter)
-                                                .child(list),
+                                                .child(body),
                                         )
                                         .child(
                                             components::Scrollbar::new(
                                                 "worktree_markdown_preview_scrollbar",
-                                                scroll_handle.clone(),
-                                            )
-                                            .render(theme),
-                                        )
-                                        .child(
-                                            components::Scrollbar::horizontal(
-                                                "worktree_markdown_preview_hscrollbar",
                                                 scroll_handle,
                                             )
-                                            .always_visible()
                                             .render(theme),
                                         )
                                         .into_any_element()
@@ -2582,12 +2700,22 @@ impl MainPaneView {
                             .into_any_element()
                     }
                     Loadable::Ready(line_count) => {
-                        if *line_count == 0 {
+                        let line_count = *line_count;
+                        if line_count == 0 {
                             components::empty_state(theme, "File", "Empty file.").into_any_element()
                         } else {
+                            // Word wrap turns one line into several rows, so the
+                            // projection has to be built before the list is
+                            // asked how long it is.
+                            self.ensure_diff_wrap_visible_rows(window, cx);
+                            let row_count = self
+                                .worktree_preview_visible_len()
+                                .unwrap_or(line_count)
+                                .max(1);
+                            let wrapped = self.worktree_preview_wrap_active();
                             let list = uniform_list(
                                 "worktree_preview_list",
-                                *line_count,
+                                row_count,
                                 cx.processor(Self::render_worktree_preview_rows),
                             )
                             .h_full()
@@ -2625,14 +2753,18 @@ impl MainPaneView {
                                     )
                                     .render(theme),
                                 )
-                                .child(
-                                    components::Scrollbar::horizontal(
-                                        "worktree_preview_hscrollbar",
-                                        scroll_handle,
+                                // Wrapped rows end at the pane, so there is
+                                // nothing left of the line to scroll to.
+                                .when(!wrapped, |container| {
+                                    container.child(
+                                        components::Scrollbar::horizontal(
+                                            "worktree_preview_hscrollbar",
+                                            scroll_handle,
+                                        )
+                                        .always_visible()
+                                        .render(theme),
                                     )
-                                    .always_visible()
-                                    .render(theme),
-                                )
+                                })
                                 .into_any_element()
                         }
                     }

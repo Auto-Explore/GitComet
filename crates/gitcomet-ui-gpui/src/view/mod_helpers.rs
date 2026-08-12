@@ -593,6 +593,28 @@ pub(super) struct DiffTextHitbox {
     pub(super) text_len: usize,
     pub(super) offset_map: Option<DiffTextOffsetMap>,
     pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
+    /// Set by rows that painted their text with wrapping. Those rows cover
+    /// several visual lines, so a click resolves through the layout they were
+    /// painted with rather than through an x offset along one shaped line.
+    pub(super) wrapped: Option<DiffTextWrappedHit>,
+}
+
+/// The wrapped layout a row painted, plus what it takes to read offsets back
+/// in row coordinates.
+pub(super) struct DiffTextWrappedHit {
+    pub(super) layout: gpui::TextLayout,
+    /// The row's raw text, when tabs were expanded for painting.
+    pub(super) untabbed: Option<SharedString>,
+}
+
+impl DiffTextWrappedHit {
+    /// Offset in row coordinates for an offset in the painted text.
+    pub(super) fn row_offset(&self, painted_offset: usize) -> usize {
+        match &self.untabbed {
+            Some(raw) => crate::view::rows::markdown_flow_row_offset(raw, painted_offset),
+            None => painted_offset,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1159,6 +1181,156 @@ pub(super) type LoadableMarkdownDiff =
 
 pub(super) type LoadableImagePreview = Loadable<Option<Arc<gpui::Image>>>;
 
+/// Which markdown preview list a wrap plan belongs to. Split view wraps its
+/// two columns to different widths, and the inline and worktree lists have
+/// their own row sets, so each keeps its own plan.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum MarkdownPreviewList {
+    Worktree,
+    Inline,
+    Old,
+    New,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct MarkdownPreviewWrapKey {
+    pub(in crate::view) width_px: u32,
+    pub(in crate::view) ui_scale_percent: u32,
+    pub(in crate::view) theme_is_dark: bool,
+    pub(in crate::view) editor_font_family_hash: u64,
+    pub(in crate::view) document_rev: u64,
+}
+
+/// Cached visual-row mappings for the wrapped markdown preview lists.
+///
+/// The plans are rebuilt whenever the viewport width, UI scale, font, or the
+/// underlying document changes; the key makes that a cheap equality check on
+/// every frame instead of a re-wrap.
+///
+/// A slot holding a key with no plan means "measured at this key, not
+/// wrapped" — the document was too large to wrap, and the list renders
+/// unwrapped. Keeping the key is what stops that verdict from being
+/// recomputed on every single frame.
+#[derive(Debug)]
+struct MarkdownPreviewWrapSlot {
+    key: MarkdownPreviewWrapKey,
+    /// `None` once the document proved too large to wrap.
+    plan: Option<crate::view::markdown_preview::MarkdownPreviewWrapPlan>,
+}
+
+#[derive(Debug, Default)]
+pub(in crate::view) struct MarkdownPreviewWrapCache {
+    slots: [Option<MarkdownPreviewWrapSlot>; 4],
+}
+
+impl MarkdownPreviewWrapCache {
+    fn slot(list: MarkdownPreviewList) -> usize {
+        match list {
+            MarkdownPreviewList::Worktree => 0,
+            MarkdownPreviewList::Inline => 1,
+            MarkdownPreviewList::Old => 2,
+            MarkdownPreviewList::New => 3,
+        }
+    }
+
+    pub(in crate::view) fn plan(
+        &self,
+        list: MarkdownPreviewList,
+    ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
+        self.slots[Self::slot(list)].as_ref()?.plan.as_ref()
+    }
+
+    /// The plan for `list`, but only while it describes document `document_rev`.
+    ///
+    /// A plan indexes rows of the document it was built from, so readers that
+    /// resolve a list position to a source row must not use one left over from
+    /// an earlier document — the row it names may not exist any more.
+    pub(in crate::view) fn plan_for_rev(
+        &self,
+        list: MarkdownPreviewList,
+        document_rev: u64,
+    ) -> Option<&crate::view::markdown_preview::MarkdownPreviewWrapPlan> {
+        let slot = self.slots[Self::slot(list)].as_ref()?;
+        if slot.key.document_rev != document_rev {
+            return None;
+        }
+        slot.plan.as_ref()
+    }
+
+    pub(in crate::view) fn is_current(
+        &self,
+        list: MarkdownPreviewList,
+        key: MarkdownPreviewWrapKey,
+    ) -> bool {
+        self.slots[Self::slot(list)]
+            .as_ref()
+            .is_some_and(|slot| slot.key == key)
+    }
+
+    pub(in crate::view) fn store(
+        &mut self,
+        list: MarkdownPreviewList,
+        key: MarkdownPreviewWrapKey,
+        plan: Option<crate::view::markdown_preview::MarkdownPreviewWrapPlan>,
+    ) {
+        self.slots[Self::slot(list)] = Some(MarkdownPreviewWrapSlot { key, plan });
+    }
+
+    /// Number of visual rows a list renders, or `None` when it is unwrapped.
+    pub(in crate::view) fn plan_len(&self, list: MarkdownPreviewList) -> Option<usize> {
+        self.plan(list).map(|plan| plan.len())
+    }
+
+    /// True once a list has been measured at some key, whether or not that
+    /// produced a plan.
+    #[cfg(test)]
+    pub(in crate::view) fn has_key(&self, list: MarkdownPreviewList) -> bool {
+        self.slots[Self::slot(list)].is_some()
+    }
+
+    pub(in crate::view) fn clear_list(&mut self, list: MarkdownPreviewList) {
+        self.slots[Self::slot(list)] = None;
+    }
+}
+
+#[cfg(test)]
+mod markdown_preview_wrap_cache_tests {
+    use super::*;
+
+    fn key(width_px: u32) -> MarkdownPreviewWrapKey {
+        MarkdownPreviewWrapKey {
+            width_px,
+            ui_scale_percent: 100,
+            theme_is_dark: false,
+            editor_font_family_hash: 7,
+            document_rev: 1,
+        }
+    }
+
+    #[test]
+    fn storing_no_plan_still_records_the_key_so_the_verdict_is_not_recomputed() {
+        // An oversized document renders unwrapped. Forgetting the key would
+        // make every frame re-attempt the wrap it already knows will fail.
+        let mut cache = MarkdownPreviewWrapCache::default();
+        cache.store(MarkdownPreviewList::Inline, key(800), None);
+
+        assert!(cache.plan(MarkdownPreviewList::Inline).is_none());
+        assert!(cache.is_current(MarkdownPreviewList::Inline, key(800)));
+        assert!(cache.has_key(MarkdownPreviewList::Inline));
+        assert!(!cache.is_current(MarkdownPreviewList::Inline, key(808)));
+    }
+
+    #[test]
+    fn clearing_a_list_drops_both_its_key_and_plan() {
+        let mut cache = MarkdownPreviewWrapCache::default();
+        cache.store(MarkdownPreviewList::Old, key(800), Some(Default::default()));
+        cache.clear_list(MarkdownPreviewList::Old);
+
+        assert!(!cache.has_key(MarkdownPreviewList::Old));
+        assert!(cache.plan(MarkdownPreviewList::Old).is_none());
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ConflictResolverMarkdownPreviewState {
     pub(super) source_hash: Option<u64>,
@@ -1277,6 +1449,27 @@ impl ConflictRowSelection {
     }
 }
 
+/// KDiff3 manual diff help: lines marked in one source column, pending the
+/// Ctrl+Y that pins them against the other columns' marks.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) struct AlignmentLineSelection {
+    /// Line where the mark started.
+    pub(super) anchor: usize,
+    /// Line last marked.
+    pub(super) head: usize,
+}
+
+impl AlignmentLineSelection {
+    /// Half-open line range covered, normalized so start <= end.
+    pub(super) fn line_range(self) -> Range<usize> {
+        self.anchor.min(self.head)..self.anchor.max(self.head) + 1
+    }
+
+    pub(super) fn contains(self, line: usize) -> bool {
+        self.line_range().contains(&line)
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ConflictResolverUiState {
     pub(super) repo_id: Option<RepoId>,
@@ -1285,6 +1478,10 @@ pub(super) struct ConflictResolverUiState {
     pub(super) loaded_file: Option<gitcomet_state::model::ConflictFile>,
     pub(super) conflict_syntax_language: Option<rows::DiffSyntaxLanguage>,
     pub(super) source_hash: Option<u64>,
+    /// The editable output contains preserved worktree text whose conflict
+    /// spans could not be mapped safely onto the stage projection.
+    pub(super) output_is_protected: bool,
+    /// Marker-backed geometry used for reset and source-region rendering.
     pub(super) current: Option<std::sync::Arc<str>>,
     pub(super) marker_segments: Vec<conflict_resolver::ConflictSegment>,
     /// section 30 collapsed context mode: fold unchanged runs in the source columns.
@@ -1302,16 +1499,30 @@ pub(super) struct ConflictResolverUiState {
         std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// Mapping from visible block index to `ConflictSession` region index.
     pub(super) conflict_region_indices: Vec<usize>,
+    /// Mapping from visible marker block index to its semantic merge-plan
+    /// block. Empty for marker-only/fallback sessions.
+    pub(super) display_plan_block_indices: Vec<usize>,
     /// Whether each raw session region includes a diff3 base marker. This is
     /// kept separate from display blocks, whose base may be populated from
     /// the shared ancestor for picking.
     pub(super) conflict_region_marker_has_base: Vec<bool>,
-    pub(super) active_conflict: usize,
+    /// Actionable conflict block currently selected in the displayed marker
+    /// projection. Semantic targets without a displayed block leave this unset.
+    pub(super) active_conflict: Option<usize>,
+    /// Ordered semantic resolver navigation targets.
+    pub(super) nav_targets: Vec<conflict_resolver::ConflictNavTarget>,
+    /// Aligned source rows retained for every original session region before
+    /// manual/automatic resolutions are materialized into plain display text.
+    pub(super) original_region_aligned_ranges: Vec<Option<Range<usize>>>,
     pub(super) hovered_conflict: Option<(usize, ThreeWayColumn)>,
     /// section 30 split: in-progress or completed drag selection of aligned rows
     /// inside one conflict block, used to split that block at the selection
     /// boundary. Cleared whenever the conflict source rebuilds.
     pub(super) row_selection: Option<ConflictRowSelection>,
+    /// KDiff3 manual diff help: lines marked per source column, independent of
+    /// the block-scoped `row_selection` because a manual alignment exists
+    /// precisely to pin lines the automatic alignment put in different blocks.
+    pub(super) alignment_selection: ThreeWaySides<Option<AlignmentLineSelection>>,
     /// Streamed conflict state for the single conflict rendering/runtime path.
     pub(super) mode_state: ConflictModeState,
     pub(super) view_mode: ConflictResolverViewMode,
@@ -1323,6 +1534,14 @@ pub(super) struct ConflictResolverUiState {
     /// section 30 aligned row space: maps visual rows to per-side lines. Identity
     /// (row == line) when alignment is unavailable.
     pub(super) three_way_aligned: conflict_resolver::ThreeWayAlignedMap,
+    /// kdiff3-style minimap column bands, in visible-row space. Empty when no
+    /// alignment is available, which hides the column.
+    pub(super) minimap_bands: Arc<[gitcomet_core::merge::MinimapRowKind]>,
+    /// Exact merge-plan row ranges for the currently visible marker blocks.
+    ///
+    /// `None` is the legacy/current-only fallback where ranges must be
+    /// estimated from marker text.
+    pub(super) merge_plan_aligned_conflict_ranges: Option<Vec<Range<usize>>>,
     /// Whether the three-way visible projection/ranges have been built at
     /// least once for the current conflict source.
     pub(super) three_way_visible_state_ready: bool,
@@ -1349,7 +1568,7 @@ pub(super) struct ConflictResolverUiState {
     /// Bounded on-demand word highlights for giant block-local two-way rows.
     pub(super) two_way_split_word_highlight_cache:
         conflict_resolver::ConflictSplitWordHighlightCache,
-    pub(super) nav_anchor: Option<usize>,
+    pub(super) nav_anchor: Option<conflict_resolver::ConflictNavAnchor>,
     pub(super) hide_resolved: bool,
     /// True when any conflict side contains non-UTF8 binary data.
     pub(super) is_binary_conflict: bool,
@@ -1361,13 +1580,13 @@ pub(super) struct ConflictResolverUiState {
     pub(super) conflict_kind: Option<gitcomet_core::domain::FileConflictKind>,
     /// Last autosolve trace summary shown in resolver UI.
     pub(super) last_autosolve_summary: Option<SharedString>,
-    /// Conflicts that were auto-solved when this resolver file opened.
+    /// KDiff3-style report captured when this resolver file opened.
     ///
-    /// This stays fixed while the user makes manual picks, so the count summary
-    /// describes the open-time autosolve result rather than live current state.
-    pub(super) auto_solved_on_open: Option<usize>,
+    /// This stays fixed while the user makes manual picks, so the toast
+    /// describes the open-time state rather than a later live state.
+    pub(super) open_summary_counts: Option<conflict_resolver::ConflictSummaryCounts>,
     /// True once the one-shot open-summary toast (total / auto-solved /
-    /// remaining, kdiff3-style) has been pushed for this resolver open.
+    /// unsolved, kdiff3-style) has been pushed for this resolver open.
     pub(super) open_summary_announced: bool,
     /// Tracks the last-seen `conflict_rev` from state so we can detect
     /// state-side session changes (e.g. hide-resolved, bulk picks, autosolve)
@@ -1379,10 +1598,6 @@ pub(super) struct ConflictResolverUiState {
     pub(super) resolved_outline: ResolvedOutlineData,
     /// Cached per-line gutter render state for resolved-output preview rows.
     pub(super) resolved_outline_gutter_rows: Vec<conflict_resolver::ResolvedOutputGutterRow>,
-    /// Conflict-to-output anchors used by scroll sync. Rebuilt lazily after
-    /// either the source projection or resolved outline changes.
-    pub(super) conflict_output_row_anchors: Arc<[(f32, f32)]>,
-    pub(super) conflict_output_row_anchors_dirty: bool,
     /// Cached rendered markdown previews for the merge-input sides.
     pub(super) markdown_preview: ConflictResolverMarkdownPreviewState,
     /// Cached image previews for the merge-input sides.
@@ -1402,19 +1617,26 @@ impl Default for ConflictResolverUiState {
             context_fold_reveals: std::collections::HashMap::default(),
             conflict_syntax_language: None,
             source_hash: None,
+            output_is_protected: false,
             current: None,
             marker_segments: Vec::new(),
             conflict_region_indices: Vec::new(),
+            display_plan_block_indices: Vec::new(),
             conflict_region_marker_has_base: Vec::new(),
-            active_conflict: 0,
+            active_conflict: None,
+            nav_targets: Vec::new(),
+            original_region_aligned_ranges: Vec::new(),
             hovered_conflict: None,
             row_selection: None,
+            alignment_selection: ThreeWaySides::default(),
             mode_state: ConflictModeState::default(),
             view_mode: ConflictResolverViewMode::TwoWayDiff,
             three_way_text: ThreeWaySides::default(),
             three_way_line_starts: ThreeWaySides::default(),
             three_way_len: 0,
             three_way_aligned: conflict_resolver::ThreeWayAlignedMap::default(),
+            minimap_bands: Arc::from([]),
+            merge_plan_aligned_conflict_ranges: None,
             three_way_visible_state_ready: false,
             three_way_conflict_ranges: ThreeWaySides::default(),
             three_way_horizontal_measure_rows: [0; 3],
@@ -1432,7 +1654,7 @@ impl Default for ConflictResolverUiState {
             strategy: None,
             conflict_kind: None,
             last_autosolve_summary: None,
-            auto_solved_on_open: None,
+            open_summary_counts: None,
             open_summary_announced: false,
             conflict_rev: 0,
             resolver_pending_recompute_seq: 0,
@@ -1441,8 +1663,6 @@ impl Default for ConflictResolverUiState {
             resolved_output_visible: None,
             resolved_output_visible_dirty: true,
             output_context_fold_reveals: std::collections::HashMap::default(),
-            conflict_output_row_anchors: Arc::from([(0.0, 0.0)]),
-            conflict_output_row_anchors_dirty: true,
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
@@ -1507,6 +1727,142 @@ impl ConflictResolverUiState {
 
     pub(super) fn dispatch_path(&self) -> Option<gitcomet_state::msg::RepoPath> {
         self.shared_path.clone()
+    }
+
+    pub(super) fn selected_nav_target_index(&self) -> Option<usize> {
+        let anchor = self.nav_anchor?;
+        self.nav_targets
+            .iter()
+            .position(|target| target.id == anchor.id)
+    }
+
+    pub(super) fn nav_target_index_for_aligned_row(&self, row: usize) -> Option<usize> {
+        self.nav_targets.iter().position(|target| {
+            target
+                .aligned_rows
+                .as_ref()
+                .is_some_and(|range| range.contains(&row))
+        })
+    }
+
+    pub(super) fn selected_nav_target_contains_aligned_row(&self, row: usize) -> bool {
+        self.selected_nav_target_index()
+            .and_then(|index| self.nav_targets.get(index))
+            .and_then(|target| target.aligned_rows.as_ref())
+            .is_some_and(|range| range.contains(&row))
+    }
+
+    /// Whether the conflict a row belongs to is the selected one.
+    ///
+    /// `conflict_ix` is `None` for a row in no conflict at all, and
+    /// `active_conflict` is `None` whenever nothing is selected — for instance
+    /// right after a pick moves the anchor onto a block that renders no marker.
+    /// Comparing the two options directly made those two `None`s match, which
+    /// painted the active-conflict marker on every row *outside* a conflict.
+    pub(super) fn conflict_is_active(&self, conflict_ix: Option<usize>) -> bool {
+        conflict_ix.is_some() && conflict_ix == self.active_conflict
+    }
+
+    fn nav_target_matches_display(
+        &self,
+        target: &conflict_resolver::ConflictNavTarget,
+        display_conflict_index: usize,
+    ) -> bool {
+        target.display_conflict_index == Some(display_conflict_index)
+            || target.region_index.is_some_and(|region_index| {
+                self.conflict_region_indices
+                    .get(display_conflict_index)
+                    .copied()
+                    == Some(region_index)
+            })
+            || matches!(
+                target.id,
+                conflict_resolver::ConflictNavTargetId::DisplayBlock(index)
+                    if index == display_conflict_index
+            )
+    }
+
+    pub(super) fn select_nav_target(&mut self, target_index: usize) -> bool {
+        let Some(target) = self.nav_targets.get(target_index) else {
+            return false;
+        };
+        self.nav_anchor = Some(target.anchor());
+        self.active_conflict = target.display_conflict_index;
+        true
+    }
+
+    pub(super) fn select_display_conflict(&mut self, display_conflict_index: usize) -> bool {
+        let Some(target_index) = self
+            .nav_targets
+            .iter()
+            .position(|target| self.nav_target_matches_display(target, display_conflict_index))
+        else {
+            return false;
+        };
+        self.nav_anchor = Some(self.nav_targets[target_index].anchor());
+        self.active_conflict = Some(display_conflict_index);
+        true
+    }
+
+    pub(super) fn reconcile_nav_targets(
+        &mut self,
+        targets: Vec<conflict_resolver::ConflictNavTarget>,
+    ) {
+        let previous_targets = std::mem::replace(&mut self.nav_targets, targets);
+        let previous_active = self.active_conflict;
+        let selected = conflict_resolver::reconcile_conflict_nav_target_index(
+            self.nav_anchor,
+            &previous_targets,
+            &self.nav_targets,
+        );
+        let Some(selected) = selected else {
+            self.nav_anchor = None;
+            self.active_conflict = None;
+            return;
+        };
+        let target = &self.nav_targets[selected];
+        self.nav_anchor = Some(target.anchor());
+        self.active_conflict = previous_active
+            .filter(|display| self.nav_target_matches_display(target, *display))
+            .or(target.display_conflict_index);
+    }
+
+    pub(super) fn output_line_for_nav_target_provenance(
+        &self,
+        target: &conflict_resolver::ConflictNavTarget,
+    ) -> Option<usize> {
+        let aligned_rows = target.aligned_rows.as_ref()?;
+        self.resolved_outline.meta.iter().find_map(|meta| {
+            let side = match (self.view_mode, meta.source) {
+                (ConflictResolverViewMode::ThreeWay, conflict_resolver::ResolvedLineSource::A) => {
+                    ThreeWayColumn::Base
+                }
+                (ConflictResolverViewMode::ThreeWay, conflict_resolver::ResolvedLineSource::B) => {
+                    ThreeWayColumn::Ours
+                }
+                (ConflictResolverViewMode::ThreeWay, conflict_resolver::ResolvedLineSource::C) => {
+                    ThreeWayColumn::Theirs
+                }
+                (
+                    ConflictResolverViewMode::TwoWayDiff,
+                    conflict_resolver::ResolvedLineSource::A,
+                ) => ThreeWayColumn::Ours,
+                (
+                    ConflictResolverViewMode::TwoWayDiff,
+                    conflict_resolver::ResolvedLineSource::B,
+                ) => ThreeWayColumn::Theirs,
+                (
+                    ConflictResolverViewMode::TwoWayDiff,
+                    conflict_resolver::ResolvedLineSource::C,
+                )
+                | (_, conflict_resolver::ResolvedLineSource::Manual) => return None,
+            };
+            let source_line = usize::try_from(meta.input_line?).ok()?.checked_sub(1)?;
+            let aligned_row = self.three_way_row_for_side_line(side, source_line);
+            (aligned_rows.contains(&aligned_row)
+                || (aligned_rows.is_empty() && aligned_rows.start == aligned_row))
+                .then_some(meta.output_line as usize)
+        })
     }
 
     pub(super) fn cached_loaded_file_for_target(
@@ -1652,6 +2008,99 @@ impl ConflictResolverUiState {
     pub(super) fn conflict_row_is_selected(&self, row: usize) -> bool {
         self.row_selection
             .is_some_and(|sel| sel.row_range().contains(&row))
+    }
+
+    /// KDiff3 manual diff help: whether the resolver can pin alignments at all.
+    ///
+    /// Shares the row-selection preconditions: a real aligned row space and a
+    /// full-text resolver on non-binary data.
+    pub(super) fn manual_alignment_enabled(&self) -> bool {
+        self.conflict_row_selection_enabled()
+    }
+
+    /// Mark `line` in `column` for a manual alignment.
+    ///
+    /// `extend` grows the column's existing mark from its anchor; otherwise it
+    /// starts a fresh single-line mark. Each column is marked independently —
+    /// that is the whole point, since a manual alignment pins lines the
+    /// automatic alignment placed on different rows.
+    pub(super) fn set_alignment_selection(
+        &mut self,
+        column: ThreeWayColumn,
+        line: usize,
+        extend: bool,
+    ) {
+        let anchor = match self.alignment_selection[column] {
+            Some(selection) if extend => selection.anchor,
+            _ => line,
+        };
+        self.alignment_selection[column] = Some(AlignmentLineSelection { anchor, head: line });
+    }
+
+    /// Drop every pending alignment mark. Returns whether anything was marked.
+    pub(super) fn clear_alignment_selections(&mut self) -> bool {
+        let had_any = self.has_alignment_selection();
+        self.alignment_selection = ThreeWaySides::default();
+        had_any
+    }
+
+    pub(super) fn has_alignment_selection(&self) -> bool {
+        ThreeWayColumn::ALL
+            .iter()
+            .any(|column| self.alignment_selection[*column].is_some())
+    }
+
+    /// Whether `line` of `column` carries a pending alignment mark.
+    pub(super) fn alignment_line_is_selected(&self, column: ThreeWayColumn, line: usize) -> bool {
+        self.alignment_selection[column].is_some_and(|selection| selection.contains(line))
+    }
+
+    /// Build the entry a Ctrl+Y would pin from the current marks.
+    ///
+    /// A column the user left unmarked still needs a position, or the entry
+    /// could not be ordered against the others. The aligned row where the
+    /// marked columns begin gives it one, and it pins an empty range there —
+    /// "the marked lines align against nothing on this side", which is how a
+    /// one-sided block gets forced.
+    ///
+    /// Returns `None` when nothing is marked or the plan cannot be pinned.
+    pub(super) fn manual_alignment_from_selections(
+        &self,
+        has_base: bool,
+    ) -> Option<gitcomet_core::merge::ManualAlignment> {
+        if !self.manual_alignment_enabled() || !self.has_alignment_selection() {
+            return None;
+        }
+        let anchor_row = ThreeWayColumn::ALL
+            .iter()
+            .filter_map(|column| {
+                let selection = self.alignment_selection[*column]?;
+                Some(
+                    self.three_way_aligned
+                        .aligned_range_for_side_range(column.side_index(), selection.line_range())
+                        .start,
+                )
+            })
+            .min()?;
+        let range_for = |column: ThreeWayColumn| match self.alignment_selection[column] {
+            Some(selection) => selection.line_range(),
+            None => {
+                let line = self
+                    .three_way_aligned
+                    .side_line_lower_bound(column.side_index(), anchor_row);
+                line..line
+            }
+        };
+        let base = if has_base {
+            range_for(ThreeWayColumn::Base)
+        } else {
+            0..0
+        };
+        Some(gitcomet_core::merge::ManualAlignment::new(
+            base,
+            range_for(ThreeWayColumn::Ours),
+            range_for(ThreeWayColumn::Theirs),
+        ))
     }
 
     /// section 30 split: the shared aligned-row range of conflict block `conflict_ix`
@@ -1880,6 +2329,7 @@ impl ConflictResolverUiState {
             conflict_resolver::ConflictChoice::Base | conflict_resolver::ConflictChoice::Both => {
                 None
             }
+            _ => None,
         }
     }
 
@@ -1922,6 +2372,13 @@ impl ConflictResolverUiState {
                 )
             }
         }
+    }
+
+    /// Find the visible row for an aligned merge-plan row. Context hidden by a
+    /// fold maps to the fold summary row.
+    pub(super) fn visible_index_for_aligned_row(&self, row: usize) -> Option<usize> {
+        self.three_way_visible_projection()
+            .visible_index_for_source_line(row)
     }
 
     // ----- Two-way split dispatch (giant vs eager) -----
@@ -2062,6 +2519,7 @@ impl ConflictResolverUiState {
     }
 
     /// Map a two-way split visible index back to its conflict index.
+    #[cfg(test)]
     pub(super) fn two_way_split_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => s
@@ -2072,6 +2530,7 @@ impl ConflictResolverUiState {
     }
 
     /// Build unresolved conflict navigation entries for two-way split view.
+    #[cfg(test)]
     pub(super) fn two_way_split_nav_entries(&self) -> Vec<usize> {
         match &self.mode_state {
             ConflictModeState::Streamed(s) => {
@@ -2087,6 +2546,7 @@ impl ConflictResolverUiState {
 
     /// Build unresolved conflict navigation entries for the current two-way
     /// conflict diff view.
+    #[cfg(test)]
     pub(super) fn two_way_nav_entries(&self) -> Vec<usize> {
         if self.two_way_uses_aligned_rows() {
             return conflict_resolver::unresolved_conflict_indices(&self.marker_segments)
@@ -2098,6 +2558,7 @@ impl ConflictResolverUiState {
     }
 
     /// Map a two-way visible index to its conflict index.
+    #[cfg(test)]
     pub(super) fn two_way_conflict_ix_for_visible(&self, visible_ix: usize) -> Option<usize> {
         if self.two_way_uses_aligned_rows() {
             return match self.three_way_visible_item(visible_ix)? {
@@ -2313,43 +2774,32 @@ impl ConflictResolverUiState {
             self.three_way_line_count(ThreeWayColumn::Ours),
             self.three_way_line_count(ThreeWayColumn::Theirs),
         );
-        // section 30 aligned row space: conflict ranges live in aligned rows, shared
-        // by every column. Each block covers the union of its per-side
-        // estimated ranges mapped through the alignment, clamped monotonic.
         let block_count = maps.conflict_ranges[1].len();
-        let mut aligned_ranges: Vec<std::ops::Range<usize>> = Vec::with_capacity(block_count);
-        for block_ix in 0..block_count {
-            let mut start = usize::MAX;
-            let mut end = 0usize;
-            for side in 0..3 {
-                let side_range = &maps.conflict_ranges[side][block_ix];
-                if side_range.is_empty() {
-                    // A side without content contributes no aligned rows to
-                    // the shared block extent.
-                    continue;
-                }
-                let mapped = self
-                    .three_way_aligned
-                    .aligned_range_for_side_range(side, side_range.clone());
-                start = start.min(mapped.start);
-                end = end.max(mapped.end);
-            }
-            if start == usize::MAX {
-                start = end;
-            }
-            if let Some(prev) = aligned_ranges.last() {
-                start = start.max(prev.end);
-                end = end.max(start);
-            }
-            // A zero-length extent is legitimate: a conflict empty on all three
-            // sides (e.g. `<<<<<<<\n=======\n>>>>>>>`) has nothing to show, and a
-            // split sub-block can map entirely within its predecessor's extent —
-            // the monotonic clamp then collapses it into the neighbor's rows.
-            // Such a block renders none of its own rows, which is fine; the
-            // conflict group it belongs to is still reachable. Never fabricate a
-            // row to avoid the empty range.
-            aligned_ranges.push(start..end);
-        }
+        let exact_plan_ranges = self
+            .merge_plan_aligned_conflict_ranges
+            .as_ref()
+            .filter(|ranges| {
+                ranges.len() == block_count
+                    && ranges
+                        .iter()
+                        .all(|range| range.start <= range.end && range.end <= self.three_way_len)
+                    && ranges.windows(2).all(|pair| pair[0].end <= pair[1].start)
+            })
+            .cloned();
+        let aligned_ranges = exact_plan_ranges.unwrap_or_else(|| {
+            // Legacy/current-only fallback: project marker-text offsets back
+            // through the side alignment. Marker text is output space rather
+            // than source space, so this is necessarily an estimate.
+            conflict_resolver::project_conflict_ranges_to_aligned_rows(
+                &self.marker_segments,
+                &self.three_way_aligned,
+                [
+                    self.three_way_line_count(ThreeWayColumn::Base),
+                    self.three_way_line_count(ThreeWayColumn::Ours),
+                    self.three_way_line_count(ThreeWayColumn::Theirs),
+                ],
+            )
+        });
         let three_way_visible_projection =
             conflict_resolver::build_three_way_visible_projection_with_options(
                 self.three_way_len,
@@ -2374,8 +2824,33 @@ impl ConflictResolverUiState {
             }
         }
         self.three_way_visible_state_ready = true;
-        self.conflict_output_row_anchors_dirty = true;
         self.refresh_three_way_horizontal_measure_rows();
+        self.rebuild_minimap_bands();
+    }
+
+    /// Recompute the minimap column's bands for the current projection.
+    ///
+    /// Runs from `rebuild_three_way_visible_state`, after the aligned conflict
+    /// ranges are in place, so a pick recolors the band it settles.
+    pub(super) fn rebuild_minimap_bands(&mut self) {
+        let projection = match &self.mode_state {
+            ConflictModeState::Streamed(s) => &s.three_way_visible_projection,
+        };
+        let resolved =
+            conflict_resolver::resolved_conflict_flags_from_segments(&self.marker_segments);
+        self.minimap_bands = conflict_resolver::build_minimap_bands(
+            &self.three_way_aligned,
+            projection,
+            &self.three_way_conflict_ranges[ThreeWayColumn::Ours],
+            &resolved,
+            conflict_resolver::CONFLICT_BOTTOM_OVERSCROLL_ROWS,
+        )
+        .into();
+    }
+
+    /// Whether the minimap column has anything to show.
+    pub(super) fn has_minimap(&self) -> bool {
+        !self.minimap_bands.is_empty()
     }
 
     /// Rebuild two-way visible state from current marker segments.
@@ -2402,7 +2877,6 @@ impl ConflictResolverUiState {
                 );
             }
         }
-        self.conflict_output_row_anchors_dirty = true;
         self.debug_assert_rendering_mode_invariants();
         self.refresh_two_way_horizontal_measure_rows();
     }
@@ -2458,8 +2932,9 @@ mod conflict_resolver_ui_state_tests {
         Loadable, ThreeWayColumn, ThreeWaySides,
     };
     use crate::view::conflict_resolver::{
-        self, ConflictBlock, ConflictChoice, ConflictResolverViewMode, ConflictSegment,
-        ConflictSplitRowIndex, ThreeWayVisibleItem, TwoWaySplitProjection,
+        self, ConflictBlock, ConflictChoice, ConflictNavTarget, ConflictNavTargetId,
+        ConflictResolverViewMode, ConflictSegment, ConflictSplitRowIndex, ResolvedLineMeta,
+        ResolvedLineSource, ThreeWayVisibleItem, TwoWaySplitProjection,
     };
 
     #[test]
@@ -2581,6 +3056,7 @@ mod conflict_resolver_ui_state_tests {
             theirs: "theirs\n".into(),
             choice: ConflictChoice::Theirs,
             resolved: true,
+            whitespace_only: false,
         })];
         let maps = conflict_resolver::ThreeWayConflictMaps {
             conflict_ranges: [vec![0..3], vec![0..5], vec![0..4]],
@@ -2607,6 +3083,64 @@ mod conflict_resolver_ui_state_tests {
     }
 
     #[test]
+    fn merge_plan_ranges_override_marker_output_offset_estimates() {
+        let block = |ours: &str, theirs: &str| {
+            ConflictSegment::Block(ConflictBlock {
+                base: None,
+                ours: ours.into(),
+                theirs: theirs.into(),
+                choice: ConflictChoice::Ours,
+                resolved: false,
+                whitespace_only: false,
+            })
+        };
+        let exact_ranges = vec![1..3, 4..5, 6..8];
+        let mut state = ConflictResolverUiState {
+            // These text segments are merged-output projections whose line
+            // counts do not represent positions in both immutable sources.
+            marker_segments: vec![
+                ConflictSegment::Text("one-sided resolved output\n".into()),
+                block("local-a\nlocal-b\n", "remote-a\n"),
+                ConflictSegment::Text("another selected-side line\n".into()),
+                block("local-c\n", "remote-c\nremote-extra\n"),
+                ConflictSegment::Text("selected output before final block\n".into()),
+                block("local-d\nlocal-e\n", "remote-d\n"),
+            ],
+            three_way_len: 9,
+            merge_plan_aligned_conflict_ranges: Some(exact_ranges.clone()),
+            ..Default::default()
+        };
+
+        state.rebuild_three_way_visible_state();
+
+        assert_eq!(state.three_way_conflict_ranges.base, exact_ranges);
+        assert_eq!(
+            state.three_way_conflict_ranges.ours,
+            state.three_way_conflict_ranges.base
+        );
+        assert_eq!(
+            state.three_way_conflict_ranges.theirs,
+            state.three_way_conflict_ranges.base
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 1),
+            Some(0)
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 3),
+            None
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 4),
+            Some(1)
+        );
+        assert_eq!(
+            state.conflict_index_for_side_line(ThreeWayColumn::Ours, 7),
+            Some(2)
+        );
+    }
+
+    #[test]
     fn refresh_conflict_has_base_from_segments_refreshes_choice_cache() {
         let mut state = ConflictResolverUiState::default();
         state.marker_segments = vec![
@@ -2617,6 +3151,7 @@ mod conflict_resolver_ui_state_tests {
                 theirs: "theirs\n".into(),
                 choice: ConflictChoice::Ours,
                 resolved: false,
+                whitespace_only: false,
             }),
             ConflictSegment::Block(ConflictBlock {
                 base: Some("base\n".into()),
@@ -2624,6 +3159,7 @@ mod conflict_resolver_ui_state_tests {
                 theirs: "theirs2\n".into(),
                 choice: ConflictChoice::Both,
                 resolved: true,
+                whitespace_only: false,
             }),
         ];
 
@@ -2647,6 +3183,7 @@ mod conflict_resolver_ui_state_tests {
             theirs: "let x=1\nabc\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         })];
         state.rebuild_two_way_visible_state();
 
@@ -2672,6 +3209,7 @@ mod conflict_resolver_ui_state_tests {
             theirs: "let remote_name = value;\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         })];
         state.rebuild_two_way_visible_state();
         let row = state.two_way_split_row_by_source(0).unwrap();
@@ -2695,6 +3233,7 @@ mod conflict_resolver_ui_state_tests {
             theirs: "c\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         })];
         state.three_way_text.ours = "a\nb\n".into();
         state.three_way_text.theirs = "c\n".into();
@@ -2727,6 +3266,7 @@ mod conflict_resolver_ui_state_tests {
                 theirs: "theirs klmnopqrstuv\n".into(),
                 choice: ConflictChoice::Ours,
                 resolved: false,
+                whitespace_only: false,
             }),
             ConflictSegment::Text("end\n".into()),
         ];
@@ -2795,6 +3335,7 @@ mod conflict_resolver_ui_state_tests {
                     theirs: format!("{long_theirs}\n").into(),
                     choice: ConflictChoice::Ours,
                     resolved: false,
+                    whitespace_only: false,
                 }),
                 ConflictSegment::Text("tail\n".into()),
             ],
@@ -2846,6 +3387,7 @@ mod conflict_resolver_ui_state_tests {
                     theirs: "t1\nt2\n".into(),
                     choice: ConflictChoice::Ours,
                     resolved: true,
+                    whitespace_only: false,
                 }),
                 ConflictSegment::Text(format!("tail\n{long_theirs}\n").into()),
             ],
@@ -2907,6 +3449,7 @@ mod conflict_resolver_ui_state_tests {
                     theirs: format!("{long_theirs}\n").into(),
                     choice: ConflictChoice::Ours,
                     resolved: false,
+                    whitespace_only: false,
                 }),
                 ConflictSegment::Text("tail\n".into()),
             ],
@@ -2980,6 +3523,7 @@ mod conflict_resolver_ui_state_tests {
             theirs: "a\nb\nc\nd\ne\n".into(),
             choice: ConflictChoice::Ours,
             resolved: false,
+            whitespace_only: false,
         })];
         let ranges = vec![0..5];
         state.streamed_mut().three_way_visible_projection =
@@ -3001,6 +3545,7 @@ mod conflict_resolver_ui_state_tests {
                 theirs: "c\n".into(),
                 choice: ConflictChoice::Ours,
                 resolved: false,
+                whitespace_only: false,
             }),
         ];
         let index = ConflictSplitRowIndex::new(&segments, 3);
@@ -3115,6 +3660,7 @@ mod conflict_resolver_ui_state_tests {
                     theirs: "t1\nt2\nt3\n".into(),
                     choice: ConflictChoice::Ours,
                     resolved: false,
+                    whitespace_only: false,
                 }),
                 ConflictSegment::Text("tail\n".into()),
             ],
@@ -3167,6 +3713,7 @@ mod conflict_resolver_ui_state_tests {
                     theirs: "shared1\nshared2\n".into(),
                     choice: ConflictChoice::Ours,
                     resolved: false,
+                    whitespace_only: false,
                 }),
                 ConflictSegment::Text("tail\n".into()),
             ],
@@ -3205,6 +3752,100 @@ mod conflict_resolver_ui_state_tests {
         assert_eq!(reverse.row_range(), 1..=3);
         assert_eq!(state.clamp_row_to_conflict_block(0, 0), 1);
         assert_eq!(state.clamp_row_to_conflict_block(0, usize::MAX), 3);
+    }
+
+    #[test]
+    fn alignment_marks_are_independent_per_column_and_extend_from_their_anchor() {
+        let mut state = split_ready_state();
+        assert!(state.manual_alignment_enabled());
+        assert!(!state.has_alignment_selection());
+
+        state.set_alignment_selection(ThreeWayColumn::Ours, 2, false);
+        state.set_alignment_selection(ThreeWayColumn::Theirs, 1, false);
+        assert!(state.alignment_line_is_selected(ThreeWayColumn::Ours, 2));
+        assert!(state.alignment_line_is_selected(ThreeWayColumn::Theirs, 1));
+        assert!(
+            !state.alignment_line_is_selected(ThreeWayColumn::Ours, 1),
+            "marking one column must not mark the same line in another"
+        );
+
+        // Extending backwards from the anchor normalizes the range.
+        state.set_alignment_selection(ThreeWayColumn::Ours, 1, true);
+        assert!(state.alignment_line_is_selected(ThreeWayColumn::Ours, 1));
+        assert!(state.alignment_line_is_selected(ThreeWayColumn::Ours, 2));
+        assert!(!state.alignment_line_is_selected(ThreeWayColumn::Ours, 3));
+
+        // Without extend the mark restarts at the clicked line.
+        state.set_alignment_selection(ThreeWayColumn::Ours, 3, false);
+        assert!(!state.alignment_line_is_selected(ThreeWayColumn::Ours, 1));
+        assert!(state.alignment_line_is_selected(ThreeWayColumn::Ours, 3));
+
+        assert!(state.clear_alignment_selections());
+        assert!(!state.has_alignment_selection());
+        assert!(!state.clear_alignment_selections());
+    }
+
+    #[test]
+    fn an_unmarked_column_pins_an_empty_range_at_its_aligned_position() {
+        let mut state = split_ready_state();
+        state.set_alignment_selection(ThreeWayColumn::Ours, 2, false);
+        state.set_alignment_selection(ThreeWayColumn::Theirs, 1, false);
+
+        let entry = state
+            .manual_alignment_from_selections(true)
+            .expect("two marked columns are enough to pin");
+        assert_eq!(entry.local, 2..3);
+        assert_eq!(entry.remote, 1..2);
+        assert!(
+            entry.base.is_empty(),
+            "the unmarked base column pins nothing, not a guessed range"
+        );
+        assert_eq!(
+            entry.base.start,
+            state
+                .three_way_aligned
+                .side_line_lower_bound(ThreeWayColumn::Base.side_index(), 1),
+            "its empty range still sits where the marked columns start"
+        );
+    }
+
+    #[test]
+    fn a_two_input_pin_leaves_the_base_range_at_the_origin() {
+        let mut state = split_ready_state();
+        state.set_alignment_selection(ThreeWayColumn::Base, 2, false);
+        state.set_alignment_selection(ThreeWayColumn::Ours, 2, false);
+
+        let entry = state
+            .manual_alignment_from_selections(false)
+            .expect("marked columns are enough to pin");
+        assert_eq!(
+            entry.base,
+            0..0,
+            "without a base the plan maps ours/theirs onto A/B, so the base range must stay inert"
+        );
+        assert_eq!(entry.local, 2..3);
+    }
+
+    #[test]
+    fn nothing_marked_pins_nothing() {
+        let state = split_ready_state();
+        assert!(state.manual_alignment_from_selections(true).is_none());
+    }
+
+    #[test]
+    fn a_conflict_without_aligned_rows_cannot_be_pinned() {
+        let mut state = ConflictResolverUiState {
+            strategy: Some(
+                gitcomet_core::conflict_session::ConflictResolverStrategy::FullTextResolver,
+            ),
+            ..Default::default()
+        };
+        assert!(
+            !state.manual_alignment_enabled(),
+            "the identity map has no shared row space to express a pin in"
+        );
+        state.set_alignment_selection(ThreeWayColumn::Ours, 0, false);
+        assert!(state.manual_alignment_from_selections(true).is_none());
     }
 
     #[test]
@@ -3293,6 +3934,7 @@ mod conflict_resolver_ui_state_tests {
                     theirs: "t1\nt2\n".into(),
                     choice: ConflictChoice::Ours,
                     resolved: false,
+                    whitespace_only: false,
                 }),
                 ConflictSegment::Text("tail\n".into()),
             ],
@@ -3428,6 +4070,7 @@ mod conflict_resolver_ui_state_tests {
                 theirs: "theirs\n".into(),
                 choice: ConflictChoice::Ours,
                 resolved: false,
+                whitespace_only: false,
             })
         };
         let mut state = ConflictResolverUiState {
@@ -3442,6 +4085,119 @@ mod conflict_resolver_ui_state_tests {
         state.marker_segments[1] = ConflictSegment::Text("<<<<<<< malformed\n".into());
         assert!(!state.conflict_blocks_have_joinable_context(0, 1));
         assert!(!state.conflict_blocks_have_joinable_context(0, 2));
+    }
+
+    #[test]
+    fn semantic_selection_retains_automatic_target_when_no_marker_block_exists() {
+        let automatic_id = ConflictNavTargetId::PlanBlock(gitcomet_core::merge::MergeBlockId {
+            fingerprint: 1,
+            occurrence: 0,
+        });
+        let conflict_id = ConflictNavTargetId::PlanBlock(gitcomet_core::merge::MergeBlockId {
+            fingerprint: 2,
+            occurrence: 0,
+        });
+        let mut state = ConflictResolverUiState {
+            conflict_region_indices: vec![0],
+            nav_targets: vec![
+                ConflictNavTarget {
+                    id: automatic_id,
+                    order: 0,
+                    aligned_rows: Some(1..2),
+                    region_index: None,
+                    display_conflict_index: None,
+                    is_delta: true,
+                    original_conflict: false,
+                    unresolved: false,
+                },
+                ConflictNavTarget {
+                    id: conflict_id,
+                    order: 1,
+                    aligned_rows: Some(3..4),
+                    region_index: Some(0),
+                    display_conflict_index: Some(0),
+                    is_delta: true,
+                    original_conflict: true,
+                    unresolved: true,
+                },
+            ],
+            ..Default::default()
+        };
+
+        assert!(state.select_nav_target(0));
+        assert_eq!(state.nav_anchor.unwrap().id, automatic_id);
+        assert_eq!(state.selected_nav_target_index(), Some(0));
+        assert_eq!(state.active_conflict, None);
+
+        assert!(state.select_display_conflict(0));
+        assert_eq!(state.nav_anchor.unwrap().id, conflict_id);
+        assert_eq!(state.active_conflict, Some(0));
+    }
+
+    #[test]
+    fn exact_provenance_projects_target_rows_after_output_line_shifts() {
+        let target = ConflictNavTarget {
+            id: ConflictNavTargetId::DisplayBlock(0),
+            order: 0,
+            aligned_rows: Some(2..4),
+            region_index: None,
+            display_conflict_index: None,
+            is_delta: true,
+            original_conflict: false,
+            unresolved: false,
+        };
+        let anchor = target.anchor();
+        let mut state = ConflictResolverUiState {
+            view_mode: ConflictResolverViewMode::ThreeWay,
+            resolved_outline: super::ResolvedOutlineData {
+                meta: vec![ResolvedLineMeta {
+                    output_line: 5,
+                    source: ResolvedLineSource::B,
+                    input_line: Some(3),
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(
+            state.output_line_for_nav_target_provenance(&target),
+            Some(5)
+        );
+        state.resolved_outline.meta[0].output_line = 11;
+        assert_eq!(
+            state.output_line_for_nav_target_provenance(&target),
+            Some(11),
+            "surrounding output insertions shift only the projection"
+        );
+        assert_eq!(target.anchor(), anchor, "the semantic anchor is unchanged");
+    }
+
+    #[test]
+    fn deletion_and_untraceable_manual_output_have_no_output_projection() {
+        let deletion = ConflictNavTarget {
+            id: ConflictNavTargetId::DisplayBlock(0),
+            order: 0,
+            aligned_rows: Some(8..9),
+            region_index: None,
+            display_conflict_index: None,
+            is_delta: true,
+            original_conflict: false,
+            unresolved: false,
+        };
+        let state = ConflictResolverUiState {
+            resolved_outline: super::ResolvedOutlineData {
+                meta: vec![ResolvedLineMeta {
+                    output_line: 3,
+                    source: ResolvedLineSource::Manual,
+                    input_line: None,
+                }],
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        assert_eq!(state.output_line_for_nav_target_provenance(&deletion), None);
     }
 }
 
@@ -3489,6 +4245,7 @@ pub(super) struct TerminalMenuContext {
 pub(super) enum BranchPickerPurpose {
     Checkout,
     Delete,
+    RebaseOnto,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -3594,12 +4351,6 @@ pub(super) enum PopoverKind {
     MergeAbortConfirm {
         repo_id: RepoId,
     },
-    ConflictSaveStageConfirm {
-        repo_id: RepoId,
-        path: std::path::PathBuf,
-        has_conflict_markers: bool,
-        unresolved_blocks: usize,
-    },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,
         name: String,
@@ -3654,6 +4405,10 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         src_ix: usize,
     },
+    /// Actions for a web link clicked in the rendered markdown preview.
+    MarkdownLinkMenu {
+        url: SharedString,
+    },
     DiffEditorMenu {
         repo_id: RepoId,
         area: DiffArea,
@@ -3687,6 +4442,11 @@ pub(super) enum PopoverKind {
         /// Revision-bound target for joining this chunk with its next
         /// neighbour, when one exists.
         join_next_region: Option<ConflictResolverJoinTarget>,
+        /// kdiff3 manual diff help: how many source columns carry a pending
+        /// alignment mark. Zero hides the "align" entry.
+        alignment_marked_columns: usize,
+        /// Whether this file already has pinned alignments to clear.
+        has_manual_alignments: bool,
     },
     ConflictResolverOutputMenu {
         cursor_line: usize,

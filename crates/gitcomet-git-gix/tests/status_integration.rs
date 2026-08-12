@@ -3785,6 +3785,117 @@ fn launch_mergetool_uses_tool_path_override_without_custom_cmd() {
 
 #[cfg(unix)]
 #[test]
+fn launch_mergetool_builtin_tool_gets_merge_mode_arguments() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    // Stand-in for kdiff3: like the real tool it only merges when an output
+    // file is named with `-o`, and otherwise just shows a read-only 3-way diff.
+    let script_path = repo.join("fake-kdiff3.sh");
+    fs::write(
+        &script_path,
+        "#!/bin/sh\n\
+         : > \"$PWD/kdiff3-args\"\n\
+         output=\n\
+         prev=\n\
+         for arg in \"$@\"; do\n\
+         \tprintf '%s\\n' \"$arg\" >> \"$PWD/kdiff3-args\"\n\
+         \tif [ \"$prev\" = \"-o\" ]; then output=$arg; fi\n\
+         \tprev=$arg\n\
+         done\n\
+         [ -n \"$output\" ] || exit 1\n\
+         printf 'merged\\n' > \"$output\"\n",
+    )
+    .unwrap();
+    make_executable(&script_path);
+
+    run_git(repo, &["config", "merge.tool", "kdiff3"]);
+    run_git(
+        repo,
+        &[
+            "config",
+            "mergetool.kdiff3.path",
+            git_path_arg(&script_path).as_str(),
+        ],
+    );
+    run_git(repo, &["config", "mergetool.kdiff3.trustExitCode", "true"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let result = opened.launch_mergetool(Path::new("a.txt")).unwrap();
+
+    assert!(
+        result.success,
+        "kdiff3 should be launched in merge mode: {:?}",
+        result.output
+    );
+    assert_eq!(
+        result.merged_contents.as_deref(),
+        Some("merged\n".as_bytes())
+    );
+    assert_eq!(fs::read_to_string(repo.join("a.txt")).unwrap(), "merged\n");
+
+    let args: Vec<String> = fs::read_to_string(repo.join("kdiff3-args"))
+        .unwrap()
+        .lines()
+        .map(str::to_string)
+        .collect();
+    assert!(args.iter().any(|arg| arg == "--auto"), "{args:?}");
+
+    let output_index = args
+        .iter()
+        .position(|arg| arg == "-o")
+        .expect("merge output flag should be passed");
+    let output_path = Path::new(&args[output_index + 1]);
+    assert!(output_path.is_absolute(), "{args:?}");
+    assert_eq!(output_path.file_name().unwrap(), "a.txt");
+
+    // git's kdiff3 recipe ends with BASE, LOCAL, REMOTE in that order.
+    let tail = &args[args.len() - 3..];
+    assert!(tail[0].contains("_BASE_"), "{args:?}");
+    assert!(tail[1].contains("_LOCAL_"), "{args:?}");
+    assert!(tail[2].contains("_REMOTE_"), "{args:?}");
+
+    let label_index = args
+        .iter()
+        .position(|arg| arg == "--L1")
+        .expect("window labels should be passed");
+    assert_eq!(args[label_index + 1], "a.txt (Base)", "{args:?}");
+}
+
+#[test]
+fn launch_mergetool_rejects_builtin_tool_that_cannot_merge() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    setup_both_modified_text_conflict(repo, "a.txt", "ours\n", "theirs\n");
+
+    run_git(repo, &["config", "merge.tool", "kompare"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let err = opened.launch_mergetool(Path::new("a.txt")).unwrap_err();
+
+    assert!(
+        format!("{err}").contains("cannot merge"),
+        "expected a clear diff-only tool error, got {err}"
+    );
+    assert!(
+        fs::read_to_string(repo.join("a.txt"))
+            .unwrap()
+            .contains("<<<<<<<"),
+        "the conflicted file should be left untouched"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn launch_mergetool_prefers_custom_cmd_over_tool_path_override() {
     if !require_git_shell_for_status_integration_tests() {
         return;
@@ -8950,9 +9061,38 @@ fn resolve_conflict_write_and_stage_clears_conflict() {
         .expect("conflict session");
     assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
     assert_eq!(session.conflict_kind, FileConflictKind::BothModified);
+    let plan = session
+        .merge_plan
+        .as_ref()
+        .expect("full-text Gix session should retain its stage merge plan");
+    assert_eq!(session.region_plan_blocks.len(), session.regions.len());
+    assert!(
+        session
+            .region_plan_blocks
+            .iter()
+            .all(|block_index| plan.blocks.get(*block_index).is_some()),
+        "every displayed region should map to a valid plan block",
+    );
+    let marker_projection = gitcomet_core::merge::render_merge_plan(
+        plan,
+        &gitcomet_core::merge::MergeOptions {
+            style: gitcomet_core::merge::ConflictStyle::Diff3,
+            ..Default::default()
+        },
+    )
+    .output;
+    let worktree_content = fs::read_to_string(repo.join("doc.txt")).unwrap();
+    assert_eq!(session.current_text(), Some(worktree_content.as_str()));
+    assert_eq!(
+        session.marker_projection_text(),
+        Some(marker_projection.as_str())
+    );
+    assert!(
+        marker_projection.contains("|||||||"),
+        "stage-backed three-way geometry should include the ancestor section",
+    );
 
     // 3. Verify worktree file contains conflict markers
-    let worktree_content = fs::read_to_string(repo.join("doc.txt")).unwrap();
     let validation = gitcomet_core::services::validate_conflict_resolution_text(&worktree_content);
     assert!(
         validation.has_conflict_markers,
@@ -9045,17 +9185,13 @@ fn resolve_both_added_conflict_write_and_stage_clears_conflict() {
     assert_eq!(fs::read_to_string(repo.join("new.txt")).unwrap(), resolved);
 }
 
-/// End-to-end test: autosolve Pass 1 correctly resolves trivial regions
-/// using synthetic conflict stages where some regions are trivially
-/// resolvable (one side equals base) while others are genuine conflicts.
+/// End-to-end test: the stage-backed merge plan materializes trivial changes
+/// as automatic context and exposes only genuine conflicts as regions.
 #[test]
 fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
-    use gitcomet_core::conflict_session::{
-        ConflictPayload, ConflictRegionResolution, ConflictSession,
-    };
 
     let dir = tempfile::tempdir().unwrap();
     let repo = dir.path();
@@ -9117,70 +9253,32 @@ fn autosolve_safe_resolves_trivial_conflict_regions_end_to_end() {
     let backend = GixBackend;
     let opened = backend.open(repo).unwrap();
 
-    // Build a ConflictSession from the backend
-    let session_opt = opened.conflict_session(Path::new("multi.txt")).unwrap();
-    // The backend may or may not build the session (depending on status
-    // detection of the synthetic stages). Build one manually if needed.
-    let mut session = session_opt.unwrap_or_else(|| {
-        ConflictSession::from_merged_text(
-            PathBuf::from("multi.txt"),
-            FileConflictKind::BothModified,
-            ConflictPayload::Text("base-r0\nbase-r1\nbase-r2\n".into()),
-            ConflictPayload::Text("ours-r0\nours-r1\nsame-r2\n".into()),
-            ConflictPayload::Text("base-r0\ntheirs-r1\nsame-r2\n".into()),
-            merged_markers,
-        )
-    });
+    let mut session = opened
+        .conflict_session(Path::new("multi.txt"))
+        .unwrap()
+        .expect("stage-backed conflict session");
 
     assert_eq!(session.strategy, ConflictResolverStrategy::FullTextResolver);
-    assert_eq!(session.total_regions(), 3);
-    assert_eq!(
-        session.unsolved_count(),
-        3,
-        "all regions should start unresolved"
-    );
-
-    // Apply auto-resolve Pass 1
-    let auto_resolved = session.auto_resolve_safe();
-    assert_eq!(
-        auto_resolved, 2,
-        "expected 2 trivial regions to be auto-resolved"
-    );
+    assert!(session.merge_plan.is_some());
+    assert_eq!(session.total_regions(), 1);
     assert_eq!(
         session.unsolved_count(),
         1,
-        "1 genuine conflict should remain"
+        "only the genuine conflict should be exposed as a region",
     );
+    assert_eq!(session.current_text(), Some(merged_markers));
+    let projected = session.marker_projection_text().expect("marker projection");
+    assert_eq!(projected.matches("<<<<<<<").count(), 1);
+    assert!(projected.contains("ours-r0\n"));
+    assert!(projected.contains("same-r2\n"));
 
-    // Verify specific rules
-    match &session.regions[0].resolution {
-        ConflictRegionResolution::AutoResolved { rule, content, .. } => {
-            assert_eq!(
-                *rule,
-                gitcomet_core::conflict_session::AutosolveRule::OnlyOursChanged,
-            );
-            assert_eq!(content, "ours-r0\n");
-        }
-        other => panic!("region 0 should be auto-resolved, got {:?}", other),
-    }
-    assert!(
-        !session.regions[1].resolution.is_resolved(),
-        "region 1 (genuine conflict) should remain unresolved"
-    );
-    match &session.regions[2].resolution {
-        ConflictRegionResolution::AutoResolved { rule, content, .. } => {
-            assert_eq!(
-                *rule,
-                gitcomet_core::conflict_session::AutosolveRule::IdenticalSides,
-            );
-            assert_eq!(content, "same-r2\n");
-        }
-        other => panic!("region 2 should be auto-resolved, got {:?}", other),
-    }
-
-    // Navigation should point to the remaining unresolved region
-    assert_eq!(session.next_unresolved_after(0), Some(1));
-    assert_eq!(session.prev_unresolved_before(2), Some(1));
+    // The plan already resolved the trivial stage changes, so the legacy safe
+    // pass has no additional marker region to process.
+    let auto_resolved = session.auto_resolve_safe();
+    assert_eq!(auto_resolved, 0);
+    assert_eq!(session.unsolved_count(), 1);
+    assert_eq!(session.next_unresolved_after(0), Some(0));
+    assert_eq!(session.prev_unresolved_before(0), Some(0));
 }
 
 /// End-to-end test: conflict session for a modify/delete conflict

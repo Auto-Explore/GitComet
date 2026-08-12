@@ -285,6 +285,10 @@ pub(in crate::view) enum ContextMenuAction {
         conflict_ix: usize,
     },
     ConflictResolverSplitSelection,
+    /// kdiff3 manual diff help: pin the marked lines onto one another.
+    ConflictResolverAlignManually,
+    /// kdiff3 manual diff help: drop every pin and replan automatically.
+    ConflictResolverClearManualAlignments,
     ConflictResolverJoinRegions {
         target: ConflictResolverJoinTarget,
     },
@@ -307,6 +311,17 @@ pub(in crate::view) enum ContextMenuAction {
     ConflictResolverOutputPaste,
     CopyText {
         text: String,
+    },
+    /// Copy a link's destination, and say so.
+    ///
+    /// Separate from [`ContextMenuAction::CopyText`] because a link's address
+    /// is never on screen — the document shows its text — so the reader has no
+    /// way to tell the copy happened without being told.
+    CopyLinkAddress {
+        url: String,
+    },
+    OpenWebUrl {
+        url: String,
     },
     CopyDiffSelection {
         text: String,
@@ -378,6 +393,25 @@ enum ContextMenuItem {
         disabled: bool,
         action: Box<ContextMenuAction>,
     },
+    /// A caption plus a segmented control, for settings whose options are
+    /// mutually exclusive and read better side by side than as a checked list
+    /// (the merge tool's view mode). Segments are clicked, not
+    /// keyboard-selected, so the row is skipped by arrow navigation.
+    Segmented {
+        label: SharedString,
+        segments: Vec<ContextMenuSegment>,
+    },
+}
+
+/// One option inside a [`ContextMenuItem::Segmented`] row.
+#[derive(Clone)]
+struct ContextMenuSegment {
+    /// Stable element id, also used as the debug selector.
+    id: SharedString,
+    label: SharedString,
+    tooltip: Option<SharedString>,
+    selected: bool,
+    action: ContextMenuAction,
 }
 
 #[derive(Clone)]

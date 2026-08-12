@@ -24,8 +24,18 @@ pub(super) use build::{
     build_cached_diff_styled_text_with_source_identity, diff_line_colors,
     selectable_cached_diff_text,
 };
+/// Neither is the "are chunks still building?" query: only the resolved output
+/// ever polled it, and the live engine has no pending state to poll.
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) use prepared::has_pending_prepared_diff_syntax_chunk_builds_for_document;
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) use prepared::prepare_diff_syntax_document_in_background_text;
+/// Line-range highlights are no longer a render path — the resolved output is
+/// the only view that ever asked for them, and it now goes through the live
+/// engine. Kept for the diff-scroll bench warmup and its own unit tests; the
+/// production request API is the byte-range one above.
+#[cfg(any(test, feature = "benchmarks"))]
+pub(in crate::view) use prepared::request_syntax_highlights_for_prepared_document_line_range;
 pub(super) use prepared::{
     PreparedDocumentLineStyledText,
     build_cached_diff_styled_text_for_prepared_document_line_nonblocking,
@@ -46,24 +56,22 @@ pub(in crate::view) use prepared::{
     build_cached_diff_styled_text_for_inline_syntax_only_rows_nonblocking,
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
-    has_pending_prepared_diff_syntax_chunk_builds,
-    has_pending_prepared_diff_syntax_chunk_builds_for_document,
-    inject_background_prepared_diff_syntax_document,
+    has_pending_prepared_diff_syntax_chunk_builds, inject_background_prepared_diff_syntax_document,
     prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
     prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
     prepared_diff_syntax_reparse_seed, request_syntax_highlights_for_prepared_document_byte_range,
-    request_syntax_highlights_for_prepared_document_line_range,
 };
 #[cfg(test)]
 pub(in crate::view) use prepared::{
     prepared_diff_syntax_parse_mode, prepared_diff_syntax_source_version,
     syntax_highlights_for_prepared_document_byte_range,
 };
+pub(in crate::view) use syntax::live_syntax_reparse;
 pub(in crate::view) use syntax::{
-    DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode,
-    PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES, diff_syntax_language_for_code_fence_info,
-    diff_syntax_language_for_path,
+    DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument,
+    LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
+    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
 };
 
 pub(super) fn syntax_highlights_for_streamed_line_slice_heuristic(
@@ -531,7 +539,7 @@ const SYNTAX_HIGHLIGHT_STYLE_KINDS: [SyntaxTokenKind; 43] = [
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 4_096;
 const PREPARED_READY_LINE_STYLED_TEXT_CACHE_MAX_ENTRIES: usize = 32_768;
 const SINGLE_LINE_STYLED_TEXT_CACHE_MAX_SOURCE_BYTES: usize = 512;
-const DIFF_WRAP_TAB_EXPANDED_COLUMNS: usize = 4;
+pub(super) const DIFF_WRAP_TAB_EXPANDED_COLUMNS: usize = 4;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct DiffTextSourceIdentity {

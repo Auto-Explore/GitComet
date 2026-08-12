@@ -302,6 +302,53 @@ pub(super) fn model(
         .resolve_workdir_path(repo_id, path)
         .map(|p| path_text_for_copy(&p))
         .unwrap_or_else(|_| path_text_for_copy(path));
+    // The working-tree file is referenced by the current branch: a permalink
+    // points at the last committed version, which is what reviewers can open.
+    let file_permalink = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(
+            |repo| match (&repo.remotes, &repo.head_branch, &repo.remote_branches) {
+                (Loadable::Ready(remotes), Loadable::Ready(head), remote_branches)
+                    if !head.is_empty() && head != "HEAD" =>
+                {
+                    // A `blob/<branch>` permalink only resolves while the branch
+                    // exists on the permalink's remote; a local-only branch would
+                    // point at a nonexistent source, so skip the action there.
+                    let branch_is_pushed = match remote_branches {
+                        Loadable::Ready(remote_branches) => {
+                            crate::view::permalink::branch_exists_on_permalink_remote(
+                                remotes,
+                                remote_branches,
+                                head,
+                            )
+                        }
+                        // Remote branches not loaded yet: keep offering the
+                        // permalink rather than hiding it on incomplete data.
+                        _ => true,
+                    };
+                    branch_is_pushed.then(|| {
+                        crate::view::permalink::file_permalink(
+                            remotes,
+                            head,
+                            &path.display().to_string(),
+                        )
+                    })?
+                }
+                _ => None,
+            },
+        );
+    if let Some(permalink) = file_permalink {
+        items.push(ContextMenuItem::Entry {
+            label: "Copy file permalink".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyText { text: permalink }),
+        });
+    }
     items.push(ContextMenuItem::Entry {
         label: "Copy path".into(),
         icon: Some("icons/copy.svg".into()),

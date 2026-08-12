@@ -158,6 +158,28 @@ pub(super) fn model(
             },
         }),
     });
+    if let Some(permalink) = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| match &repo.remotes {
+            Loadable::Ready(remotes) => crate::view::permalink::file_permalink(
+                remotes,
+                commit_id.as_ref(),
+                &path.display().to_string(),
+            ),
+            _ => None,
+        })
+    {
+        items.push(ContextMenuItem::Entry {
+            label: "Copy file permalink".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyText { text: permalink }),
+        });
+    }
     items.push(ContextMenuItem::Entry {
         label: "Copy path".into(),
         icon: Some("icons/copy.svg".into()),
