@@ -38,7 +38,7 @@ struct ForgeWebBase {
 
 /// The remote web links should be based on: `origin` when present, otherwise
 /// the first remote that has a URL.
-pub(super) fn origin_remote<'a>(remotes: &'a [Remote]) -> Option<&'a Remote> {
+pub(super) fn origin_remote(remotes: &[Remote]) -> Option<&Remote> {
     remotes
         .iter()
         .find(|remote| remote.name == "origin")
@@ -158,14 +158,12 @@ fn parse_remote_url(url: &str) -> Option<ForgeWebBase> {
     // scp-like syntax: `git@github.com:owner/repo.git`. A scheme URL like
     // `https://…` also splits on ':' (`https`, `//…`), so only enter this
     // branch when the whole URL has no `://`.
-    if !url.contains("://") {
-        if let Some((user_host, path)) = url.split_once(':') {
-            if !user_host.contains('/') && path.contains('/') {
+    if !url.contains("://")
+        && let Some((user_host, path)) = url.split_once(':')
+            && !user_host.contains('/') && path.contains('/') {
                 let host = user_host.rsplit('@').next()?;
                 return build_base(host, path, "https");
             }
-        }
-    }
 
     // Scheme URLs: https://, http://, git://, ssh://, git+ssh://.
     let (scheme, rest) = url.split_once("://")?;
