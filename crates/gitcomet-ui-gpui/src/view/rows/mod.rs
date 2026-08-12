@@ -368,7 +368,11 @@ mod status;
 #[cfg(feature = "benchmarks")]
 pub(crate) mod benchmarks;
 
-pub(in crate::view) use self::conflict_resolver::resolved_output_gutter_width;
+pub(in crate::view) use self::conflict_resolver::{
+    resolved_output_gutter_width, resolved_output_line_no_width,
+};
+pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
+pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
 pub(in crate::view) use self::history::{
     MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, markdown_preview_alert_bar_color,
     markdown_preview_alert_label, markdown_preview_flow_image, markdown_preview_highlighted_text,
@@ -399,7 +403,8 @@ pub(in crate::view) use diff_text::{
     diff_wrap_ranges_for_text, drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
     has_pending_prepared_diff_syntax_chunk_builds, inject_background_prepared_diff_syntax_document,
-    live_syntax_reparse, prepare_diff_syntax_document_in_background_text_with_reuse,
+    live_syntax_document_supported, live_syntax_reparse,
+    prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
     prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
     prepared_diff_syntax_reparse_seed, request_syntax_highlights_for_prepared_document_byte_range,

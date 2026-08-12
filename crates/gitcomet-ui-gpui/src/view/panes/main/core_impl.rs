@@ -1038,6 +1038,9 @@ impl MainPaneView {
             // The historical-browse purple frame keys off content-preview mode, which
             // can share a diff_target with a plain diff of the same commit+path.
             repo.diff_state.content_preview.hash(&mut hasher);
+            // Entering or leaving the editor swaps the whole content body and
+            // the toolbar; without this the pane would not re-render for it.
+            repo.diff_state.edit_mode.hash(&mut hasher);
             repo.conflict_state.conflict_rev.hash(&mut hasher);
 
             // Only include status changes when viewing a working tree diff.
@@ -1314,6 +1317,7 @@ impl MainPaneView {
         diff_reveal_whitespace_chars: bool,
         diff_word_wrap: bool,
         diff_show_line_numbers: bool,
+        auto_save_file_edits: bool,
         history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
@@ -1450,6 +1454,36 @@ impl MainPaneView {
                 // every edit even while session state remains deferred.
                 cx.notify();
             });
+
+        let file_editor_scroll = ScrollHandle::new();
+        let file_editor_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    multiline: true,
+                    chromeless: true,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            // The input lays out at its content width inside an
+            // `overflow_scroll` container, which is what gives that container a
+            // horizontal extent to scroll — the same arrangement the resolved
+            // output uses.
+            input.set_content_width_layout(true);
+            input.set_vertical_scroll_handle(Some(file_editor_scroll.clone()));
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(
+                    20.0,
+                    ui_scale::current(cx).percent,
+                )),
+                cx,
+            );
+            input
+        });
+        let file_editor_subscription = cx.observe(&file_editor_input, |this, _input, cx| {
+            this.on_file_editor_edited(cx);
+        });
 
         let diff_search_scroll = ScrollHandle::new();
         let diff_search_input = cx.new(|cx| {
@@ -1724,6 +1758,33 @@ impl MainPaneView {
             worktree_preview_cache_write_blocked_until_rev: None,
             worktree_preview_segments_cache: HashMap::default(),
             diff_preview_is_new_file: false,
+            file_editor_input,
+            _file_editor_input_subscription: file_editor_subscription,
+            file_editor_key: None,
+            file_editor_language: None,
+            file_editor_loading: false,
+            file_editor_loaded_status_rev: 0,
+            file_editor_error: None,
+            file_editor_dirty: false,
+            file_editor_first_dirty_line: None,
+            unsaved_file_edits_rev: 0,
+            file_editor_saved_fingerprint: None,
+            file_editor_stash: HashMap::default(),
+            file_editor_autosave: None,
+            file_editor_live_syntax: None,
+            file_editor_live_syntax_source: None,
+            file_editor_live_syntax_building: None,
+            file_editor_live_syntax_build: None,
+            file_editor_live_syntax_reparse: None,
+            file_editor_bracket_match: None,
+            file_editor_provider_theme_epoch: 1,
+            file_editor_scroll,
+            file_editor_gutter_scroll: UniformListScrollHandle::new(),
+            file_editor_gutter_row_height: px(RESOLVED_OUTPUT_ROW_HEIGHT_PX),
+            file_editor_blame: None,
+            file_editor_blame_width: px(0.0),
+            file_editor_wrap_row_starts: Vec::new(),
+            auto_save_file_edits,
             conflict_resolver_input,
             _conflict_resolver_input_subscription: conflict_resolver_subscription,
             conflict_resolver: ConflictResolverUiState::default(),
@@ -1830,6 +1891,8 @@ impl MainPaneView {
             .conflict_resolved_output_provider_theme_epoch
             .wrapping_add(1)
             .max(1);
+        self.file_editor_provider_theme_epoch =
+            self.file_editor_provider_theme_epoch.wrapping_add(1).max(1);
         self.clear_diff_text_style_caches();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_style_caches();
@@ -1840,6 +1903,9 @@ impl MainPaneView {
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.conflict_resolver_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.file_editor_input
+            .update(cx, |input, cx| input.set_theme(theme, cx));
+        self.rebind_file_editor_highlight_provider(cx);
         if self.conflict_resolved_output_is_streamed() {
             self.conflict_resolved_preview_syntax_language = self
                 .conflict_resolved_preview_path
@@ -1872,6 +1938,15 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) {
         self.conflict_resolver_input.update(cx, |input, cx| {
+            input.set_line_height(
+                Some(ui_scale::design_px_from_percent(20.0, next_percent)),
+                cx,
+            );
+        });
+        // The editor's gutter sizes its rows from the same scale, so leaving
+        // the buffer at the old line height would put the numbers out of step
+        // with the code they label.
+        self.file_editor_input.update(cx, |input, cx| {
             input.set_line_height(
                 Some(ui_scale::design_px_from_percent(20.0, next_percent)),
                 cx,
@@ -5090,6 +5165,9 @@ impl MainPaneView {
         }
 
         self.state = next;
+        // A closed repo tab takes its `RepoId` with it; buffers stashed under it
+        // can never be saved again and would block every future close.
+        self.prune_orphaned_file_editor_stash();
 
         self.sync_conflict_resolver(cx);
         self.ensure_file_image_diff_cache(cx);

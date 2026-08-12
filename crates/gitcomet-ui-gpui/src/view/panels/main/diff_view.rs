@@ -260,6 +260,36 @@ impl MainPaneView {
 
         let mut handled = false;
 
+        // While the editable buffer has focus every keystroke belongs to it, with
+        // one exception: Ctrl/Cmd+S saves. Outside the editor that chord stages
+        // the file, and both meanings can coexist precisely because they are
+        // separated by focus.
+        if self
+            .file_editor_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window)
+        {
+            if (mods.control || mods.platform)
+                && !mods.alt
+                && !mods.shift
+                && !mods.function
+                && key == "s"
+            {
+                self.save_file_editor_buffer(cx);
+                return true;
+            }
+            if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
+                self.toggle_file_editor(window, cx);
+                return true;
+            }
+            // Deliberately *not* Alt+E: on macOS Option+E is the acute-accent
+            // dead key, and swallowing it here would stop the buffer composing
+            // `é`. Escape above is the way out from inside the editor; Alt+E
+            // only enters it, from a view where nothing is being typed.
+            return false;
+        }
+
         // When the editable resolved-output pane is focused the user is typing
         // free text: every text-producing keystroke (space, a/b/c/d, etc.)
         // belongs to that editor, not to the diff/conflict shortcut table.
@@ -779,6 +809,39 @@ impl MainPaneView {
             }
         }
 
+        // Ahead of the file-preview early return below, which would otherwise
+        // swallow it: the toggle has to work from the content view as well as
+        // from a diff. Behind the focused-editor carve-out above, so it never
+        // competes with what the buffer is composing.
+        // Not while a text field owns the keyboard: on macOS Option+E is the
+        // acute-accent dead key, and the search and raw-diff inputs compose with
+        // it exactly as the buffer does. The Ctrl/Cmd branch below excludes the
+        // same two inputs for the same reason.
+        let text_input_focused = self
+            .diff_search_input
+            .read(cx)
+            .focus_handle()
+            .is_focused(window)
+            || self
+                .diff_raw_input
+                .read(cx)
+                .focus_handle()
+                .is_focused(window);
+        if mods.alt
+            && !mods.control
+            && !mods.platform
+            && !mods.function
+            && !mods.shift
+            && key == "e"
+            && !text_input_focused
+            && !self.is_conflict_resolver_active()
+            && !self.is_markdown_preview_active()
+            && self.can_edit_current_target()
+        {
+            self.toggle_file_editor(window, cx);
+            return true;
+        }
+
         let copy_target_is_focused = self
             .diff_raw_input
             .read(cx)
@@ -1231,6 +1294,178 @@ impl MainPaneView {
             })
             .debug_selector(|| "diff_annotate".to_string())
             .gitcomet_tooltip(theme, tooltip)
+    }
+
+    /// The "Edit" toggle, shared by the diff toolbar and the file content view.
+    ///
+    /// Turning it on always goes through `OpenFileEditor`, which re-targets the
+    /// working tree — so pressing Edit on a commit's diff or content opens the
+    /// workspace copy of that file, which is the only copy that can be written.
+    fn file_edit_toggle_button(
+        &self,
+        theme: AppTheme,
+        selected_bg: gpui::Rgba,
+        editing: bool,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let dirty = editing && self.file_editor_is_dirty();
+        let path = self.editable_path_for_current_target();
+        // A rendered preview has no buffer to type into, and a file with no
+        // working-tree path (a range comparison, a whole-tree diff) has nothing
+        // to edit.
+        let blocked_by_preview = self.is_markdown_preview_active();
+        let blocked_by_kind = path
+            .as_ref()
+            .is_some_and(|p| self.content_preview_is_picture(p));
+        let disabled = path.is_none() || blocked_by_preview || blocked_by_kind;
+        let tooltip: SharedString = if blocked_by_preview {
+            "Editing is unavailable in the rendered preview\nSwitch to Text to edit".into()
+        } else if blocked_by_kind {
+            "This file is not text; editing is not supported".into()
+        } else if path.is_none() {
+            "This view has no working-tree file to edit".into()
+        } else if dirty {
+            format!(
+                "Unsaved changes — {} saves",
+                crate::view::shortcut_labels::secondary_shortcut("S")
+            )
+            .into()
+        } else {
+            format!(
+                "Edit the working-tree file ({})",
+                crate::view::shortcut_labels::alt_shortcut("E")
+            )
+            .into()
+        };
+
+        components::Button::new("diff_edit", if dirty { "Edit •" } else { "Edit" })
+            .borderless()
+            .style(components::ButtonStyle::Subtle)
+            .disabled(disabled)
+            .selected(editing)
+            .selected_bg(selected_bg)
+            .on_click(theme, cx, move |this, _e, window, cx| {
+                this.toggle_file_editor(window, cx);
+            })
+            .debug_selector(|| "diff_edit".to_string())
+            .gitcomet_tooltip(theme, tooltip)
+    }
+
+    /// Whether the file on screen has text the editor can open.
+    ///
+    /// Pictures have none — but an SVG showing its Code *is* source, and editing
+    /// it is exactly what that toggle was for. Shared by the toolbar button, the
+    /// Alt+E shortcut and the context-menu entries so the three cannot disagree
+    /// about what is editable.
+    pub(in crate::view) fn can_edit_current_target(&self) -> bool {
+        self.editable_path_for_current_target()
+            .is_some_and(|path| !self.content_preview_is_picture(&path))
+    }
+
+    /// Enter or leave the editor for the file on screen.
+    pub(in crate::view) fn toggle_file_editor(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        if self.is_file_editor_active() {
+            // Whatever is unsaved is either written or kept, never dropped.
+            self.flush_file_editor_buffer(cx);
+            self.store.dispatch(Msg::ExitDiffEditMode { repo_id });
+            self.restore_diff_panel_focus_after_toolbar_action(window, cx);
+            cx.notify();
+            return;
+        }
+        let Some(path) = self.editable_path_for_current_target() else {
+            return;
+        };
+        self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
+        // The buffer is seeded a frame later, so focus has to wait for it.
+        let input = self.file_editor_input.clone();
+        window.on_next_frame(move |window, cx| {
+            let handle = input.read(cx).focus_handle().clone();
+            window.focus(&handle, cx);
+            input.update(cx, |_, cx| cx.notify());
+        });
+        cx.notify();
+    }
+
+    /// Throw the buffer away and leave the editor for the read-only view.
+    ///
+    /// Discarding is the user saying they are done with this edit, so it exits
+    /// the way Escape and the Edit toggle do rather than leaving them parked in
+    /// an editor over text they just abandoned. Deliberately *not* routed
+    /// through `toggle_file_editor`, whose exit path flushes the buffer — it
+    /// would stash the very edits this is dropping.
+    pub(in crate::view) fn discard_file_editor_buffer_and_exit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.discard_file_editor_buffer(cx);
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        self.store.dispatch(Msg::ExitDiffEditMode { repo_id });
+        self.restore_diff_panel_focus_after_toolbar_action(window, cx);
+        cx.notify();
+    }
+
+    /// The explicit "Save" button, shown while editing with auto-save off.
+    fn file_editor_save_button(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        components::Button::new("file_editor_save", "Save")
+            .style(components::ButtonStyle::Outlined)
+            .disabled(!self.file_editor_is_dirty())
+            .on_click(theme, cx, |this, _e, _window, cx| {
+                this.save_file_editor_buffer(cx);
+            })
+            .debug_selector(|| "file_editor_save".to_string())
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "Save the file ({})",
+                    crate::view::shortcut_labels::secondary_shortcut("S")
+                )
+                .into(),
+            )
+    }
+
+    /// "Discard", shown beside Save while editing.
+    ///
+    /// Throws the buffer away and re-reads the file, with no confirmation: the
+    /// button is only enabled while there is something to discard, and it sits
+    /// next to the Save that is the alternative. The close/quit dialog is the
+    /// place that asks, because there the choice is being forced on the user
+    /// rather than made by them.
+    fn file_editor_discard_button(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> impl gpui::IntoElement {
+        let dirty = self.file_editor_is_dirty();
+        components::Button::new("file_editor_discard", "Discard")
+            .style(components::ButtonStyle::Subtle)
+            .borderless()
+            .disabled(!dirty)
+            .on_click(theme, cx, |this, _e, window, cx| {
+                this.discard_file_editor_buffer_and_exit(window, cx);
+            })
+            .debug_selector(|| "file_editor_discard".to_string())
+            .gitcomet_tooltip(
+                theme,
+                if dirty {
+                    "Throw away the unsaved changes and return to the file view".into()
+                } else {
+                    SharedString::from("No unsaved changes")
+                },
+            )
     }
 
     pub(in crate::view) fn open_search_for_active_view(
@@ -2080,7 +2315,17 @@ impl MainPaneView {
         let supports_diff_content_toggle = (inline_submodule_diff_active || !has_submodule_summary)
             && self.supports_diff_content_mode_toggle(is_file_preview);
 
-        if is_file_preview {
+        // Deliberately not gated on `is_file_preview`: that predicate also asks
+        // whether the path is *previewable*, and a file the preview declines
+        // (an unknown extension, say) is still a file the editor can open — it
+        // does its own UTF-8 check and reports the failure in place.
+        let is_file_editor = self.is_file_editor_active()
+            && untracked_directory_notice.is_none()
+            && !has_submodule_summary
+            && !inline_submodule_diff_active;
+        if is_file_editor {
+            self.ensure_file_editor_loaded(cx);
+        } else if is_file_preview {
             self.ensure_selected_file_preview_loaded(cx);
         } else if (has_submodule_summary
             || inline_submodule_diff_active
@@ -2210,7 +2455,7 @@ impl MainPaneView {
                 theme,
                 cx,
             );
-        } else if !is_file_preview {
+        } else if !is_file_preview && !is_file_editor {
             let view_toggle_selected_bg =
                 with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
             let view_toggle_border = with_alpha(
@@ -2382,6 +2627,9 @@ impl MainPaneView {
                         .into(),
                     );
 
+                let diff_edit_btn = self
+                    .file_edit_toggle_button(theme, view_toggle_selected_bg, is_file_editor, cx)
+                    .into_any_element();
                 let diff_annotate_btn =
                     self.diff_annotate_toggle_button(theme, view_toggle_selected_bg, cx);
 
@@ -2405,7 +2653,18 @@ impl MainPaneView {
                     .child(next_hunk_btn)
                     .when_some(next_file_btn, |d, btn| d.child(btn))
                     .child(view_toggle)
-                    .child(diff_annotate_btn);
+                    .child(diff_edit_btn)
+                    .child(diff_annotate_btn)
+                    // `is_file_editor`, not `is_file_editor_active`: edit mode
+                    // can be on while a submodule summary or an
+                    // untracked-directory notice owns the body, and a Save
+                    // control over a body with no buffer is a trap.
+                    // Discard sits before Save, so the pair reads as the two
+                    // ways out of an unsaved buffer in the order they are meant.
+                    .when(is_file_editor && !self.auto_save_file_edits, |d| {
+                        d.child(self.file_editor_discard_button(theme, cx))
+                            .child(self.file_editor_save_button(theme, cx))
+                    });
             } else {
                 controls = controls.when_some(next_file_btn, |d, btn| d.child(btn));
             }
@@ -2414,10 +2673,27 @@ impl MainPaneView {
             // Blame toggle here too so annotations can be walked through history.
             let annotate_selected_bg =
                 with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+            // Reached by the file-content view *and* by the editor, including
+            // for a file the preview declines: an editable buffer must never sit
+            // under Inline/Split and hunk arrows that navigate a diff which is
+            // not on screen.
             controls = controls
                 .when_some(prev_file_btn, |d, btn| d.child(btn))
                 .when_some(next_file_btn, |d, btn| d.child(btn))
-                .child(self.diff_annotate_toggle_button(theme, annotate_selected_bg, cx));
+                .child(self.file_edit_toggle_button(
+                    theme,
+                    annotate_selected_bg,
+                    is_file_editor,
+                    cx,
+                ))
+                .child(self.diff_annotate_toggle_button(theme, annotate_selected_bg, cx))
+                // Saving is explicit only when auto-save is off; with it on the
+                // button would never be enabled long enough to click, and
+                // neither would the Discard beside it.
+                .when(is_file_editor && !self.auto_save_file_edits, |d| {
+                    d.child(self.file_editor_discard_button(theme, cx))
+                        .child(self.file_editor_save_button(theme, cx))
+                });
         }
 
         if !is_conflict_resolver && let Some(preview_kind) = rendered_view_toggle_kind {
@@ -2564,6 +2840,8 @@ impl MainPaneView {
             self.render_submodule_summary(theme, cx)
         } else if let Some(message) = untracked_directory_notice {
             components::empty_state(theme, "Directory", message).into_any_element()
+        } else if is_file_editor {
+            self.render_file_editor(theme, cx)
         } else if is_file_preview {
             if is_markdown_preview_view {
                 match &self.worktree_preview {

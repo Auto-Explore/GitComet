@@ -209,6 +209,10 @@ impl GitCometView {
                             ),
                             diff_word_wrap: Some(this.diff_word_wrap),
                             diff_show_line_numbers: Some(this.diff_show_line_numbers),
+                            // Auto-save is only ever changed from the settings
+                            // window; the main window mirrors it to drive the
+                            // editor, so None keeps the stored value.
+                            auto_save_file_edits: None,
                             mergetool_auto_advance: Some(mergetool_auto_advance),
                             mergetool_collapse_unchanged: Some(mergetool_collapse_unchanged),
                             mergetool_output_scroll_sync: Some(mergetool_output_scroll_sync),

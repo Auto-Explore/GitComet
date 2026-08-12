@@ -65,6 +65,25 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         );
     }
 
+    // Placed with the other file actions rather than up by the palette: the two
+    // are about the file on screen, and the entries above are app-wide.
+    let can_locate = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| Some(repo.id) == this.state.active_repo)
+        .and_then(|repo| repo.open_file_path())
+        .is_some();
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_locate_file",
+        "Show file in explorer",
+        Shortcut::Secondary("Shift+L"),
+        !can_locate,
+        AppMenuAction::LocateFileInExplorer,
+    );
+
     items.push(ContextMenuItem::Separator);
     push_entry(
         &mut items,
@@ -126,6 +145,12 @@ pub(super) fn activate(
         AppMenuAction::CommandPalette => {
             this.close_popover_and_restore_focus(window, cx);
             window.dispatch_action(Box::new(ToggleCommandPalette), cx);
+        }
+        AppMenuAction::LocateFileInExplorer => {
+            this.close_popover_and_restore_focus(window, cx);
+            let _ = this.root_view.update(cx, |root, cx| {
+                root.locate_open_file_in_explorer(cx);
+            });
         }
         AppMenuAction::Settings => {
             this.close_popover_and_restore_focus(window, cx);

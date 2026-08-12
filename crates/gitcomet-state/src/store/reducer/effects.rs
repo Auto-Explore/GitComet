@@ -1333,6 +1333,38 @@ pub(super) fn load_file_browser(
     vec![Effect::LoadFileBrowser { repo_id, source }]
 }
 
+/// Expand every directory on the way to `path` so the file explorer can show it.
+///
+/// Also clears the search query: the filtered view builds its rows from matches
+/// and force-expands their ancestors, ignoring `expanded_dirs` entirely, so a
+/// reveal into a filtered tree would scroll to a row index that does not mean
+/// what the caller computed.
+pub(super) fn reveal_file_browser_path(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // `ancestors()` yields the path itself first — skip it, a file is not a
+    // directory to expand — and stops before the empty root component.
+    for ancestor in path.ancestors().skip(1) {
+        if ancestor.as_os_str().is_empty() {
+            continue;
+        }
+        repo_state
+            .file_browser
+            .expanded_dirs
+            .insert(Arc::new(ancestor.to_path_buf()));
+    }
+    if !repo_state.file_browser.search_query.is_empty() {
+        repo_state.file_browser.search_query.clear();
+    }
+    repo_state.file_browser.bump_rev();
+    Vec::new()
+}
+
 pub(super) fn toggle_file_browser_dir(
     state: &mut AppState,
     repo_id: RepoId,
@@ -3812,6 +3844,49 @@ mod tests {
             repo.file_browser.source,
             FileSource::Branch("main".to_string())
         );
+    }
+
+    #[test]
+    fn reveal_file_browser_path_expands_every_ancestor_and_clears_the_search() {
+        let mut state = AppState::default();
+        let repo_id = RepoId(1);
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.repos[0].file_browser.search_query = "main".to_string();
+        let rev_before = state.repos[0].file_browser.file_browser_rev;
+
+        reveal_file_browser_path(
+            &mut state,
+            repo_id,
+            PathBuf::from("crates/gitcomet-ui-gpui/src/main.rs"),
+        );
+
+        let expanded = &state.repos[0].file_browser.expanded_dirs;
+        for dir in [
+            "crates",
+            "crates/gitcomet-ui-gpui",
+            "crates/gitcomet-ui-gpui/src",
+        ] {
+            assert!(
+                expanded.contains(&Arc::new(PathBuf::from(dir))),
+                "{dir} must be expanded so the file's row is visible"
+            );
+        }
+        assert!(
+            !expanded.contains(&Arc::new(PathBuf::from(
+                "crates/gitcomet-ui-gpui/src/main.rs"
+            ))),
+            "the file itself is not a directory to expand"
+        );
+        assert!(
+            state.repos[0].file_browser.search_query.is_empty(),
+            "a filtered tree builds its rows from matches, so the search has to go"
+        );
+        assert_ne!(state.repos[0].file_browser.file_browser_rev, rev_before);
     }
 
     #[test]

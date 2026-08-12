@@ -7,6 +7,10 @@ const COMMIT_MESSAGE_INPUT_MAX_HEIGHT_PX: f32 = 200.0;
 #[derive(Clone)]
 pub(in crate::view) enum AppMenuAction {
     CommandPalette,
+    /// Reveal the open file in the sidebar's file explorer. Like every other
+    /// variant here, whether it can run is carried by the menu item's own
+    /// `disabled` flag rather than duplicated in the payload.
+    LocateFileInExplorer,
     Settings,
     OpenInCodeEditor {
         path: Option<std::path::PathBuf>,
@@ -57,6 +61,20 @@ pub(in crate::view) enum ContextMenuAction {
     OpenFileContent {
         repo_id: RepoId,
         source: gitcomet_core::domain::FileSource,
+        path: std::path::PathBuf,
+    },
+    /// Open the working-tree file in GitComet's own editor. Carries no source:
+    /// editing is always of the workspace copy, whatever view it was invoked
+    /// from.
+    EditFile {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    /// Throw away the editor's unsaved buffer for this file and reload it from
+    /// disk. Handled in the view rather than dispatched: the buffer lives in
+    /// `MainPaneView`, and the store has no message for it.
+    DiscardFileEdits {
+        repo_id: RepoId,
         path: std::path::PathBuf,
     },
     BrowseRepositoryAtCommit {

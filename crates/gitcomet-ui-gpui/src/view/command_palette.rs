@@ -257,6 +257,14 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
+        id: "locate-file-in-explorer",
+        label: "Show File in Explorer",
+        shortcut: Shortcut::Secondary("Shift+L"),
+        category: "Navigation",
+        keywords: "locate reveal find sidebar tree folder current",
+        requires_repo: true,
+    },
+    CommandEntry {
         id: "open-active-view-search",
         label: "Search in Current View",
         shortcut: Shortcut::Secondary("F"),
@@ -1166,6 +1174,26 @@ mod tests {
             command_list_item_index(&results, 0, true),
             1,
             "search results have one shared header"
+        );
+    }
+
+    #[test]
+    fn locate_file_in_explorer_is_a_repository_command() {
+        assert_eq!(
+            filtered_commands(true, "show file in explorer")
+                .first()
+                .map(|command| command.id),
+            Some("locate-file-in-explorer")
+        );
+        // Also findable by the word the user is more likely to reach for.
+        assert!(
+            filtered_commands(true, "locate")
+                .iter()
+                .any(|command| command.id == "locate-file-in-explorer")
+        );
+        assert!(
+            filtered_commands(false, "show file in explorer").is_empty(),
+            "there is no file to show without a repository"
         );
     }
 

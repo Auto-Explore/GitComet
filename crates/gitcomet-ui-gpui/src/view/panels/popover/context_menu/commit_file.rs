@@ -125,6 +125,16 @@ pub(super) fn model(
         }),
     });
     items.push(ContextMenuItem::Entry {
+        label: "Edit file".into(),
+        icon: Some("icons/pencil.svg".into()),
+        shortcut: None,
+        disabled: crate::view::should_bypass_text_file_preview_for_path(path),
+        action: Box::new(ContextMenuAction::EditFile {
+            repo_id,
+            path: path.to_path_buf(),
+        }),
+    });
+    items.push(ContextMenuItem::Entry {
         label: "Open file location".into(),
         icon: Some("icons/folder.svg".into()),
         shortcut: None,

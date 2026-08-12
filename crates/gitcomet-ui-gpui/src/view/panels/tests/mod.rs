@@ -1191,6 +1191,7 @@ mod comparison;
 mod conflict;
 mod diff_stage_gutter;
 mod file_diff;
+mod file_editor;
 mod file_preview;
 mod file_status;
 mod large_file_diff;

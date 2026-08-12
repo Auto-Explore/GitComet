@@ -2713,6 +2713,76 @@ pub(super) fn patch_split_column_row_canvas(
     .into_any_element()
 }
 
+/// The blame column for one row of the file editor's gutter.
+///
+/// The editor's gutter is otherwise plain divs, but blame is not a label — it
+/// has a hover highlight, a tooltip carrying the commit body, and three click
+/// targets (the message opens commit details, the two icons walk to the file at
+/// that commit and at its parent). All of that lives in [`render_blame_column`],
+/// so the gutter hands it a canvas sized to exactly the annotation column and
+/// gets the same behaviour the diff and preview have.
+///
+/// A row whose `blame.show_text` is false paints only its recency bar and
+/// installs no handlers — which is how the editor represents blame it cannot
+/// stand behind, on the interior lines of a same-commit run and over a buffer
+/// with unsaved edits.
+pub(in crate::view) fn blame_gutter_row_canvas(
+    theme: AppTheme,
+    view: Entity<MainPaneView>,
+    ui_scale_percent: u32,
+    visual_ix: usize,
+    row_height: Pixels,
+    annotation_width: Pixels,
+    annot_hover: Option<(usize, AnnotArea)>,
+    blame: Option<RowBlamePaint>,
+) -> AnyElement {
+    // Same revision key the diff rows build, for the same reason: GPUI keys
+    // element state by id, so a canvas identified by its row index alone keeps
+    // last frame's hitboxes and hover after the blame under it changes.
+    let row_hover = annot_hover.and_then(|(ix, area)| (ix == visual_ix).then_some(area));
+    let revision = mix_blame_revision(0, annotation_width, row_hover, blame.as_ref());
+    keyed_canvas(
+        (
+            gpui::ElementId::from(("file_editor_blame_row_canvas", visual_ix)),
+            format!("{revision:016x}"),
+        ),
+        move |bounds, window, _cx| {
+            build_annot_hitboxes(window, bounds, annotation_width, ui_scale_percent)
+        },
+        move |bounds, annot_hitboxes, window, cx| {
+            let line_metrics = line_metrics(window);
+            let y = center_text_y(bounds, line_metrics.line_height);
+
+            // The whole canvas *is* the annotation column, so it takes the
+            // sidebar colour the diff and preview rows give theirs — not the
+            // editor's own `window_bg`, which left the strip with no edge at all.
+            window.paint_quad(fill(bounds, theme.colors.surface_bg));
+
+            if let Some(blame) = &blame {
+                let when_metrics = line_metrics_annot_when(window);
+                render_blame_column(
+                    blame,
+                    bounds,
+                    annotation_width,
+                    y,
+                    theme,
+                    line_metrics,
+                    when_metrics,
+                    ui_scale_percent,
+                    visual_ix,
+                    annot_hitboxes.as_ref(),
+                    &view,
+                    window,
+                    cx,
+                );
+            }
+        },
+    )
+    .w(annotation_width)
+    .h(row_height)
+    .into_any_element()
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn worktree_preview_row_canvas(
     theme: AppTheme,

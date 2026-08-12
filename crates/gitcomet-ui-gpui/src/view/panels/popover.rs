@@ -42,6 +42,7 @@ mod submodule_remove_confirm;
 mod submodule_remove_picker;
 mod submodule_trust_confirm;
 mod terminal_shutdown_confirm;
+mod unsaved_file_edits_confirm;
 mod worktree_add_prompt;
 mod worktree_open_picker;
 mod worktree_remove_confirm;
@@ -417,6 +418,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ResetPrompt { .. }
             | PopoverKind::PullReconcilePrompt { .. }
             | PopoverKind::TerminalShutdownConfirm(_)
+            | PopoverKind::UnsavedFileEditsConfirm(_)
             | PopoverKind::Repo {
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::RemoveConfirm { .. }),
                 ..
@@ -772,7 +774,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
-        PopoverKind::TerminalShutdownConfirm(_) => Some(DIALOG_440_WIDTH),
+        PopoverKind::TerminalShutdownConfirm(_) | PopoverKind::UnsavedFileEditsConfirm(_) => {
+            Some(DIALOG_440_WIDTH)
+        }
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::MarkdownLinkMenu { .. } | PopoverKind::DiffActionMenu => {
             Some(DIFF_ACTION_MENU_WIDTH)
@@ -1653,7 +1657,17 @@ impl PopoverHost {
         self.popover.clone()
     }
 
+    /// Whether the unsaved-edits confirmation is the popover on screen.
+    ///
+    /// Asked by the close/quit path instead of a mirrored bool: that dialog
+    /// blocks every further close while it is up, and a mirror that missed a
+    /// dismissal wedged the window shut for the rest of the session.
+    pub(in super::super) fn showing_unsaved_file_edits_prompt(&self) -> bool {
+        matches!(self.popover, Some(PopoverKind::UnsavedFileEditsConfirm(_)))
+    }
+
     pub(in super::super) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
+        let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
@@ -1667,6 +1681,9 @@ impl PopoverHost {
         let root_view = self.root_view.clone();
         cx.defer(move |cx| {
             let _ = root_view.update(cx, |root, cx| {
+                if dismissing_unsaved_prompt {
+                    root.clear_pending_unsaved_file_edits_prompt(cx);
+                }
                 root.set_history_refs_hover_item_menu_open(false, cx);
             });
         });
@@ -4025,6 +4042,9 @@ impl PopoverHost {
             }
             PopoverKind::TerminalShutdownConfirm(prompt) => {
                 terminal_shutdown_confirm::panel(self, prompt, cx)
+            }
+            PopoverKind::UnsavedFileEditsConfirm(prompt) => {
+                unsaved_file_edits_confirm::panel(self, prompt, cx)
             }
         };
 

@@ -78,6 +78,7 @@ actions!(
         TerminalSelectAll,
         ToggleCommandPalette,
         CommandPaletteDismiss,
+        LocateFileInExplorer,
     ]
 );
 
@@ -94,7 +95,10 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
             && !mods.control
             && !mods.platform
             && !mods.function
-            && matches!(key, "i" | "s" | "w" | "up" | "down" | "left" | "right"))
+            && matches!(
+                key,
+                "e" | "i" | "s" | "w" | "up" | "down" | "left" | "right"
+            ))
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
@@ -704,6 +708,7 @@ impl GitCometView {
             "decrease-ui-scale" => cx.defer(|cx| cx.dispatch_action(&DecreaseUiScale)),
             "reset-ui-scale" => cx.defer(|cx| cx.dispatch_action(&ResetUiScale)),
             "close-window" => cx.defer(|cx| cx.dispatch_action(&CloseWindow)),
+            "locate-file-in-explorer" => self.locate_open_file_in_explorer(cx),
             "open-repository" => cx.defer(|cx| cx.dispatch_action(&OpenRepository)),
             "switch-repository" => {
                 if let Some(window) = window {
@@ -1313,6 +1318,7 @@ impl GitCometView {
         let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
         let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
         let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
+        let auto_save_file_edits = ui_session.auto_save_file_edits.unwrap_or(false);
         let commit_push_after_enabled = ui_session.commit_push_after_enabled.unwrap_or(false);
         let restored_change_tracking_height = ui_session.change_tracking_height;
         let restored_untracked_height = ui_session.untracked_height;
@@ -1462,6 +1468,7 @@ impl GitCometView {
                 diff_reveal_whitespace_chars,
                 diff_word_wrap,
                 diff_show_line_numbers,
+                auto_save_file_edits,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -1553,6 +1560,12 @@ impl GitCometView {
         let activation_subscription = cx.observe_window_activation(window, |this, window, cx| {
             let now = Instant::now();
             if !window.is_window_active() {
+                // Leaving the app is one of the two moments auto-save has to
+                // mean more than "after a pause": the pending timer would
+                // otherwise fire against a window the user has already left,
+                // and an external edit to the same file could land first.
+                this.main_pane
+                    .update(cx, |pane, cx| pane.flush_file_editor_buffer(cx));
                 // Capture the focused element before the platform blur() fires and clears it.
                 // This is the restore target when opening the palette via a global hotkey while
                 // this window is in the background.
@@ -1791,6 +1804,7 @@ impl GitCometView {
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
+            auto_save_file_edits,
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
@@ -1814,6 +1828,8 @@ impl GitCometView {
             pane_resize: None,
             last_mouse_pos: point(px(0.0), px(0.0)),
             pending_terminal_shutdown_prompt: None,
+            pending_unsaved_file_edits_prompt: None,
+            pending_unsaved_file_edits_flush: None,
             pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
             pending_force_delete_branch_prompt: None,
@@ -1928,6 +1944,19 @@ impl GitCometView {
             .update(cx, |_input, cx| cx.notify());
         self.auth_prompt_secret_input
             .update(cx, |_input, cx| cx.notify());
+        cx.notify();
+    }
+
+    /// Repaint the panes that show which files have unsaved editor buffers.
+    ///
+    /// The main pane owns those buffers and the sidebar draws them, and the two
+    /// are separate entities with no store snapshot between them to carry the
+    /// change — so the pane that changed it says so, here.
+    pub(in crate::view) fn notify_unsaved_file_edits_changed(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.sidebar_pane.update(cx, |_pane, cx| cx.notify());
         cx.notify();
     }
 
@@ -2320,6 +2349,37 @@ impl GitCometView {
 
         self.main_pane
             .update(cx, |pane, cx| pane.set_diff_show_line_numbers(next, cx));
+    }
+
+    /// Show the file the main pane has open in the sidebar's file explorer,
+    /// expanding the folders on the way to it and scrolling it into view.
+    ///
+    /// Switches the sidebar to Files when it is showing Branches — the action is
+    /// reachable from the menu, the palette and a shortcut, so the tree it acts
+    /// on may not even be visible.
+    pub(crate) fn locate_open_file_in_explorer(&mut self, cx: &mut gpui::Context<Self>) {
+        if self.sidebar_collapsed {
+            self.set_sidebar_collapsed(false, cx);
+        }
+        self.sidebar_pane
+            .update(cx, |pane, cx| pane.locate_open_file(cx));
+        cx.notify();
+    }
+
+    /// Mirrors the settings window's auto-save toggle into the pane that owns
+    /// the file editor. The main window never writes this back (the settings
+    /// window is the only writer), so there is no persist call here.
+    pub(in crate::view) fn set_auto_save_file_edits(
+        &mut self,
+        next: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.auto_save_file_edits == next {
+            return;
+        }
+        self.auto_save_file_edits = next;
+        self.main_pane
+            .update(cx, |pane, cx| pane.set_auto_save_file_edits(next, cx));
     }
 
     pub(in crate::view) fn set_history_column_preferences(
@@ -3368,6 +3428,19 @@ impl Render for GitCometView {
             );
         }
 
+        if let Some(prompt) = self.pending_unsaved_file_edits_prompt.take() {
+            let anchor = point(
+                self.last_window_size.width / 2.0,
+                self.last_window_size.height / 2.0,
+            );
+            self.open_popover_at(
+                PopoverKind::UnsavedFileEditsConfirm(prompt),
+                anchor,
+                window,
+                cx,
+            );
+        }
+
         if let Some(prompt) = self.pending_terminal_shutdown_prompt.take() {
             let anchor = point(
                 self.last_window_size.width / 2.0,
@@ -3804,6 +3877,10 @@ impl Render for GitCometView {
                     return;
                 }
                 this.toggle_command_palette(window, cx);
+                cx.stop_propagation();
+            }))
+            .on_action(cx.listener(|this, _: &LocateFileInExplorer, _window, cx| {
+                this.locate_open_file_in_explorer(cx);
                 cx.stop_propagation();
             }))
             .on_action(cx.listener(|this, _: &CommandPaletteDismiss, window, cx| {

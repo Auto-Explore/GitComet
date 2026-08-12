@@ -52,6 +52,8 @@ pub struct Colors {
     pub active: Rgba,
     pub focus_ring: Rgba,
     pub focus_ring_bg: Rgba,
+    /// Background behind the two delimiters of the bracket pair the caret is in.
+    pub bracket_match_bg: Rgba,
     pub scrollbar_thumb: Rgba,
     pub scrollbar_thumb_hover: Rgba,
     pub scrollbar_thumb_active: Rgba,
@@ -487,6 +489,8 @@ struct ThemeFileColors {
     active: ThemeColor,
     focus_ring: ThemeColor,
     focus_ring_bg: ThemeColor,
+    #[serde(default)]
+    bracket_match_bg: Option<ThemeColor>,
     scrollbar_thumb: ThemeColor,
     scrollbar_thumb_hover: ThemeColor,
     scrollbar_thumb_active: ThemeColor,
@@ -649,6 +653,7 @@ impl From<ThemeFile> for AppTheme {
             active,
             focus_ring,
             focus_ring_bg,
+            bracket_match_bg,
             scrollbar_thumb,
             scrollbar_thumb_hover,
             scrollbar_thumb_active,
@@ -689,6 +694,9 @@ impl From<ThemeFile> for AppTheme {
             active: active.into_rgba(),
             focus_ring: focus_ring.into_rgba(),
             focus_ring_bg: focus_ring_bg.into_rgba(),
+            bracket_match_bg: bracket_match_bg
+                .map(ThemeColor::into_rgba)
+                .unwrap_or_else(|| default_bracket_match_bg(is_dark)),
             scrollbar_thumb: scrollbar_thumb.into_rgba(),
             scrollbar_thumb_hover: scrollbar_thumb_hover.into_rgba(),
             scrollbar_thumb_active: scrollbar_thumb_active.into_rgba(),
@@ -874,6 +882,16 @@ fn default_tooltip_bg_theme_color() -> ThemeColor {
 
 fn default_tooltip_text_theme_color() -> ThemeColor {
     ThemeColor::Hex(gpui::rgba(0xffffffff))
+}
+
+/// A neutral wash rather than the accent: the pair sits *behind* code that
+/// already carries a syntax colour, and an accent-tinted box competes with it.
+fn default_bracket_match_bg(is_dark: bool) -> Rgba {
+    if is_dark {
+        gpui::rgba(0xffffff26)
+    } else {
+        gpui::rgba(0x00000021)
+    }
 }
 
 fn default_diff_add_bg(is_dark: bool) -> Rgba {
