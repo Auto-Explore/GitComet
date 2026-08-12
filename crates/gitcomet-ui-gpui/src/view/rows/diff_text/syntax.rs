@@ -354,7 +354,8 @@ pub(in crate::view) use language::{
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
 };
 pub(in crate::view) use live::{
-    LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_reparse,
+    LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_document_supported,
+    live_syntax_reparse,
 };
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;

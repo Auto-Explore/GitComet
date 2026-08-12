@@ -277,6 +277,13 @@ impl MainPaneView {
             .into_any_element()
     }
 
+    /// The Previous/Next file buttons (F1 / F4).
+    ///
+    /// A side is `None` — not merely disabled — when there is no file to step
+    /// to. A disabled arrow reads as "there is more here, but not right now",
+    /// which is wrong for the two states that produce it: a file opened from the
+    /// explorer has no navigation list at all, and the ends of a list have no
+    /// neighbour on that side. Both showed a pair of permanently dead arrows.
     pub(super) fn diff_prev_next_file_buttons(
         &self,
         repo_id: Option<RepoId>,
@@ -284,133 +291,78 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> (Option<AnyElement>, Option<AnyElement>) {
-        let buttons = (|| {
-            let repo_id = repo_id?;
-            if let Some(inline) = self.active_inline_submodule_diff() {
-                let prev_disabled = inline.selected_ix == 0;
-                let next_disabled = inline.selected_ix + 1 >= inline.entries.len();
+        let Some(repo_id) = repo_id else {
+            return (None, None);
+        };
 
-                let prev_tooltip: SharedString = "Previous file (F1)".into();
-                let next_tooltip: SharedString = "Next file (F4)".into();
-
-                let prev_btn = components::Button::new("diff_prev_file", "")
-                    .start_slot(svg_icon(
-                        "icons/arrow_left.svg",
-                        theme.colors.text,
-                        px(14.0),
-                    ))
-                    .style(components::ButtonStyle::Outlined);
-                let prev_btn = if borderless {
-                    prev_btn.borderless()
-                } else {
-                    prev_btn
-                };
-                let prev_btn = prev_btn
-                    .disabled(prev_disabled)
-                    .on_click(theme, cx, move |this, _e, window, cx| {
-                        if this.try_select_adjacent_diff_file(repo_id, -1, window, cx) {
-                            cx.notify();
-                        }
-                    })
-                    .gitcomet_tooltip(theme, prev_tooltip.clone())
-                    .into_any_element();
-
-                let next_btn = components::Button::new("diff_next_file", "")
-                    .start_slot(svg_icon(
-                        "icons/arrow_right.svg",
-                        theme.colors.text,
-                        px(14.0),
-                    ))
-                    .style(components::ButtonStyle::Outlined);
-                let next_btn = if borderless {
-                    next_btn.borderless()
-                } else {
-                    next_btn
-                };
-                let next_btn = next_btn
-                    .disabled(next_disabled)
-                    .on_click(theme, cx, move |this, _e, window, cx| {
-                        if this.try_select_adjacent_diff_file(repo_id, 1, window, cx) {
-                            cx.notify();
-                        }
-                    })
-                    .gitcomet_tooltip(theme, next_tooltip.clone())
-                    .into_any_element();
-
-                return Some((prev_btn, next_btn));
-            }
-            let repo = self.active_repo()?;
+        let (has_prev, has_next) = if let Some(inline) = self.active_inline_submodule_diff() {
+            (
+                inline.selected_ix > 0,
+                inline.selected_ix + 1 < inline.entries.len(),
+            )
+        } else {
+            let Some(repo) = self.active_repo() else {
+                return (None, None);
+            };
             let change_tracking_view = self.active_change_tracking_view(cx);
+            let Some(diff_target) = repo.diff_state.diff_target.as_ref() else {
+                return (None, None);
+            };
+            (
+                status_nav::adjacent_diff_file_target_for_repo(
+                    repo,
+                    diff_target,
+                    change_tracking_view,
+                    -1,
+                )
+                .is_some(),
+                status_nav::adjacent_diff_file_target_for_repo(
+                    repo,
+                    diff_target,
+                    change_tracking_view,
+                    1,
+                )
+                .is_some(),
+            )
+        };
 
-            let diff_target = repo.diff_state.diff_target.as_ref()?;
-            let prev = status_nav::adjacent_diff_file_target_for_repo(
-                repo,
-                diff_target,
-                change_tracking_view,
-                -1,
-            );
-            let next = status_nav::adjacent_diff_file_target_for_repo(
-                repo,
-                diff_target,
-                change_tracking_view,
-                1,
-            );
+        let button = |id: &'static str,
+                      icon: &'static str,
+                      tooltip: &'static str,
+                      delta: i8,
+                      cx: &mut gpui::Context<Self>| {
+            let btn = components::Button::new(id, "")
+                .start_slot(svg_icon(icon, theme.colors.text, px(14.0)))
+                .style(components::ButtonStyle::Outlined);
+            let btn = if borderless { btn.borderless() } else { btn };
+            btn.on_click(theme, cx, move |this, _e, window, cx| {
+                if this.try_select_adjacent_diff_file(repo_id, delta, window, cx) {
+                    cx.notify();
+                }
+            })
+            .gitcomet_tooltip(theme, SharedString::from(tooltip))
+            .into_any_element()
+        };
 
-            let prev_disabled = prev.is_none();
-            let next_disabled = next.is_none();
-
-            let prev_tooltip: SharedString = "Previous file (F1)".into();
-            let next_tooltip: SharedString = "Next file (F4)".into();
-
-            let prev_btn = components::Button::new("diff_prev_file", "")
-                .start_slot(svg_icon(
+        (
+            has_prev.then(|| {
+                button(
+                    "diff_prev_file",
                     "icons/arrow_left.svg",
-                    theme.colors.text,
-                    px(14.0),
-                ))
-                .style(components::ButtonStyle::Outlined);
-            let prev_btn = if borderless {
-                prev_btn.borderless()
-            } else {
-                prev_btn
-            };
-            let prev_btn = prev_btn
-                .disabled(prev_disabled)
-                .on_click(theme, cx, move |this, _e, window, cx| {
-                    if this.try_select_adjacent_diff_file(repo_id, -1, window, cx) {
-                        cx.notify();
-                    }
-                })
-                .gitcomet_tooltip(theme, prev_tooltip.clone())
-                .into_any_element();
-
-            let next_btn = components::Button::new("diff_next_file", "")
-                .start_slot(svg_icon(
+                    "Previous file (F1)",
+                    -1,
+                    cx,
+                )
+            }),
+            has_next.then(|| {
+                button(
+                    "diff_next_file",
                     "icons/arrow_right.svg",
-                    theme.colors.text,
-                    px(14.0),
-                ))
-                .style(components::ButtonStyle::Outlined);
-            let next_btn = if borderless {
-                next_btn.borderless()
-            } else {
-                next_btn
-            };
-            let next_btn = next_btn
-                .disabled(next_disabled)
-                .on_click(theme, cx, move |this, _e, window, cx| {
-                    if this.try_select_adjacent_diff_file(repo_id, 1, window, cx) {
-                        cx.notify();
-                    }
-                })
-                .gitcomet_tooltip(theme, next_tooltip.clone())
-                .into_any_element();
-
-            Some((prev_btn, next_btn))
-        })();
-
-        buttons
-            .map(|(prev, next)| (Some(prev), Some(next)))
-            .unwrap_or((None, None))
+                    "Next file (F4)",
+                    1,
+                    cx,
+                )
+            }),
+        )
     }
 }

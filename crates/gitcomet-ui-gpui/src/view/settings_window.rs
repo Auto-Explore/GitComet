@@ -219,6 +219,7 @@ enum SettingsCategory {
     Terminal,
     ChangeTracking,
     Diff,
+    FileEditing,
     GitLog,
     Tags,
     GitExecutable,
@@ -232,6 +233,7 @@ impl SettingsCategory {
         SettingsCategory::Terminal,
         SettingsCategory::ChangeTracking,
         SettingsCategory::Diff,
+        SettingsCategory::FileEditing,
         SettingsCategory::GitLog,
         SettingsCategory::Tags,
         SettingsCategory::GitExecutable,
@@ -245,6 +247,7 @@ impl SettingsCategory {
             Self::Terminal => "Terminal",
             Self::ChangeTracking => "Change tracking",
             Self::Diff => "Diff",
+            Self::FileEditing => "File editing",
             Self::GitLog => "Git log",
             Self::Tags => "Tags",
             Self::GitExecutable => "Git executable",
@@ -259,6 +262,7 @@ impl SettingsCategory {
             Self::Terminal => "icons/terminal.svg",
             Self::ChangeTracking => "icons/file.svg",
             Self::Diff => "icons/swap.svg",
+            Self::FileEditing => "icons/pencil.svg",
             Self::GitLog => "icons/history.svg",
             Self::Tags => "icons/tag.svg",
             Self::GitExecutable => "icons/git_branch.svg",
@@ -273,6 +277,7 @@ impl SettingsCategory {
             Self::Terminal => "settings_window_nav_terminal",
             Self::ChangeTracking => "settings_window_nav_change_tracking",
             Self::Diff => "settings_window_nav_diff",
+            Self::FileEditing => "settings_window_nav_file_editing",
             Self::GitLog => "settings_window_nav_git_log",
             Self::Tags => "settings_window_nav_tags",
             Self::GitExecutable => "settings_window_nav_git_executable",
@@ -294,6 +299,9 @@ impl SettingsCategory {
             Self::Diff => {
                 "diff mode scroll sync show whitespace changes reveal whitespace characters \
                  word wrap show line numbers unified split"
+            }
+            Self::FileEditing => {
+                "file editing edit file auto save autosave save automatically editor"
             }
             Self::GitLog => {
                 "git log default history mode history columns relative dates show tags graph \
@@ -414,6 +422,7 @@ pub(crate) struct SettingsWindowView {
     diff_reveal_whitespace_chars: bool,
     diff_word_wrap: bool,
     diff_show_line_numbers: bool,
+    auto_save_file_edits: bool,
     diff_scroll_sync: DiffScrollSync,
     history_show_graph: bool,
     history_show_author: bool,
@@ -808,6 +817,7 @@ impl SettingsWindowView {
         let diff_reveal_whitespace_chars = ui_session.diff_reveal_whitespace_chars.unwrap_or(false);
         let diff_word_wrap = ui_session.diff_word_wrap.unwrap_or(false);
         let diff_show_line_numbers = ui_session.diff_show_line_numbers.unwrap_or(true);
+        let auto_save_file_edits = ui_session.auto_save_file_edits.unwrap_or(false);
         let history_show_graph = ui_session.history_show_graph.unwrap_or(true);
         let history_show_author = ui_session.history_show_author.unwrap_or(true);
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
@@ -1039,6 +1049,7 @@ impl SettingsWindowView {
             diff_reveal_whitespace_chars,
             diff_word_wrap,
             diff_show_line_numbers,
+            auto_save_file_edits,
             diff_scroll_sync,
             history_show_graph,
             history_show_author,
@@ -1141,6 +1152,7 @@ impl SettingsWindowView {
             diff_reveal_whitespace_chars: Some(self.diff_reveal_whitespace_chars),
             diff_word_wrap: Some(self.diff_word_wrap),
             diff_show_line_numbers: Some(self.diff_show_line_numbers),
+            auto_save_file_edits: Some(self.auto_save_file_edits),
             // Merge tool settings are managed from the resolver's cog menu;
             // None never overwrites the stored values.
             mergetool_auto_advance: None,
@@ -1856,6 +1868,19 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_diff_show_line_numbers(next, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_auto_save_file_edits(&mut self, next: bool, cx: &mut gpui::Context<Self>) {
+        if self.auto_save_file_edits == next {
+            return;
+        }
+
+        self.auto_save_file_edits = next;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_auto_save_file_edits(next, cx);
         });
         cx.notify();
     }
@@ -4483,6 +4508,25 @@ impl Render for SettingsWindowView {
                         ));
                     }
 
+                    let file_editing_card = self
+                        .card(
+                            "settings_window_file_editing_card",
+                            "File editing",
+                            theme,
+                        )
+                        .child(
+                            self.toggle_row(
+                                "settings_window_auto_save_file_edits",
+                                "Auto-save edits",
+                                self.auto_save_file_edits,
+                                theme,
+                            )
+                            .border_color(no_separator)
+                            .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                                this.set_auto_save_file_edits(!this.auto_save_file_edits, cx);
+                            })),
+                        );
+
                     let mut git_log_card = self
                         .card("settings_window_git_log_card", "Git log", theme)
                         .child(history_default_mode_row);
@@ -4963,6 +5007,7 @@ impl Render for SettingsWindowView {
                         SettingsCategory::Terminal => terminal_card,
                         SettingsCategory::ChangeTracking => change_tracking_card,
                         SettingsCategory::Diff => diff_card,
+                        SettingsCategory::FileEditing => file_editing_card,
                         SettingsCategory::GitLog => git_log_card,
                         SettingsCategory::Tags => tags_card,
                         SettingsCategory::GitExecutable => git_executable_card,
@@ -6933,6 +6978,10 @@ mod tests {
                 "settings_window_change_tracking_card",
             ),
             (SettingsCategory::Diff, "settings_window_diff_card"),
+            (
+                SettingsCategory::FileEditing,
+                "settings_window_file_editing_card",
+            ),
             (SettingsCategory::GitLog, "settings_window_git_log_card"),
             (
                 SettingsCategory::GitExecutable,
@@ -7547,6 +7596,64 @@ mod tests {
                     .read_with(app, |settings, _cx| settings.diff_whitespace_mode)
                     .expect("settings window should remain readable"),
                 next_mode
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn auto_save_file_edits_toggle_reaches_the_main_window(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let (store, events) = AppStore::new(std::sync::Arc::new(TestBackend));
+        let (main_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+            open_settings_window(app);
+        });
+        cx.run_until_parked();
+
+        let settings_window = cx.update(|_window, app| {
+            app.windows()
+                .into_iter()
+                .find_map(|window| window.downcast::<SettingsWindowView>())
+                .expect("settings window should be open")
+        });
+
+        cx.update(|_window, app| {
+            assert!(
+                !main_view.read(app).main_pane.read(app).auto_save_file_edits,
+                "auto-save is off until it is turned on"
+            );
+        });
+
+        // Nested inside a `GitCometView` update, as the deferral regression
+        // tests do: the settings window must not re-enter the main view.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            cx.update(|_window, app| {
+                main_view.update(app, |_view, cx| {
+                    let _ = settings_window.update(cx, |settings, _window, cx| {
+                        settings.set_auto_save_file_edits(true, cx);
+                    });
+                });
+            });
+        }));
+        assert!(
+            result.is_ok(),
+            "the auto-save toggle should not re-enter GitCometView updates"
+        );
+
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            assert!(
+                main_view.read(app).main_pane.read(app).auto_save_file_edits,
+                "the pane that owns the editor must see the new value"
+            );
+            assert!(
+                settings_window
+                    .read_with(app, |settings, _cx| settings.auto_save_file_edits)
+                    .expect("settings window should remain readable")
             );
         });
     }

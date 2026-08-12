@@ -346,7 +346,7 @@ impl PopoverHost {
                 path,
             } => Some(commit_file::model(self, *repo_id, commit_id, path)),
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
-                Some(file_browser_file::model(self, *repo_id, path))
+                Some(file_browser_file::model(self, *repo_id, path, cx))
             }
             PopoverKind::BrowseHistoryMenu { repo_id } => {
                 Some(browse_history::model(self, *repo_id))
@@ -497,6 +497,14 @@ impl PopoverHost {
                     repo_id,
                     source,
                     path,
+                });
+            }
+            ContextMenuAction::EditFile { repo_id, path } => {
+                self.store.dispatch(Msg::OpenFileEditor { repo_id, path });
+            }
+            ContextMenuAction::DiscardFileEdits { repo_id, path } => {
+                self.main_pane.update(cx, |pane, cx| {
+                    pane.discard_file_edits_for(repo_id, &path, cx);
                 });
             }
             ContextMenuAction::BrowseRepositoryAtCommit { repo_id, commit_id } => {

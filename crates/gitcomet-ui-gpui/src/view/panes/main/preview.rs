@@ -6,6 +6,16 @@ use crate::view::markdown_preview::{
 use std::borrow::Cow;
 use std::io::Read;
 
+/// Largest file the editor will open.
+///
+/// Deliberately its own number rather than the tree-sitter parse ceiling: that
+/// one is a *highlighting* budget, and a 3 MB log or CSV is perfectly editable
+/// with the heuristic fallback. This one is about what the buffer itself can
+/// carry — soft wrap in particular still measures the whole document, budgeted
+/// but document-wide (see the note in `text_input/element.rs`), so the editor
+/// keeps an upper bound rather than accepting a file of any size.
+pub(in crate::view) const FILE_EDITOR_MAX_TEXT_BYTES: usize = 32 * 1024 * 1024;
+
 const WORKTREE_PREVIEW_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
 const WORKTREE_PREVIEW_INDEX_LINE_CAPACITY_MAX: usize = 64 * 1024;
 
@@ -72,6 +82,48 @@ fn validate_utf8_chunk_streaming(
             Ok(())
         }
     }
+}
+
+/// Read a working-tree file for the editor.
+///
+/// Shares the preview's reader so both agree on what "editable text" means: it
+/// rejects directories and non-UTF-8 up front.
+///
+/// The size limit is the *editor's*, not the syntax engine's. The reader stops
+/// materializing past the tree-sitter parse ceiling, which is a highlighting
+/// budget — a 3 MB log or CSV is perfectly editable, it just does not get a
+/// tree, and the editor already has a heuristic fallback for exactly that. So
+/// past the ceiling this re-reads the file plainly rather than refusing it.
+pub(super) fn read_worktree_file_for_editing(
+    path: &std::path::Path,
+) -> Result<SharedString, String> {
+    let len = std::fs::metadata(path)
+        .map_err(|e| match e.kind() {
+            // Reachable from a commit's file list: the editor always opens the
+            // workspace copy, and a file deleted since that commit has none.
+            // A raw "No such file or directory (os error 2)" as the editor body
+            // says nothing about why.
+            std::io::ErrorKind::NotFound => {
+                "This file does not exist in the working tree.".to_string()
+            }
+            _ => e.to_string(),
+        })?
+        .len();
+    if len > FILE_EDITOR_MAX_TEXT_BYTES as u64 {
+        return Err(format!(
+            "File is larger than {} MB; editing is not supported.",
+            FILE_EDITOR_MAX_TEXT_BYTES / (1024 * 1024)
+        ));
+    }
+    let indexed = index_utf8_worktree_preview_file(path)?;
+    if let Some(text) = indexed.source_text {
+        return Ok(text);
+    }
+    // Between the parse ceiling and the editor's own limit the indexer stops
+    // materializing, so read it plainly. Already validated as UTF-8 above.
+    std::fs::read_to_string(path)
+        .map(SharedString::from)
+        .map_err(|e| e.to_string())
 }
 
 fn index_utf8_worktree_preview_file(
@@ -258,6 +310,36 @@ impl MainPaneView {
         self.worktree_preview_segments_cache.clear();
     }
 
+    /// Force the read-only preview to re-read `path` from disk.
+    ///
+    /// The preview is otherwise only invalidated when the rendered `DiffTarget`
+    /// *changes* (`apply_state_snapshot`), so a write to the file already on
+    /// screen — which is exactly what saving from the editor is — would leave
+    /// the pre-save text up until the user navigated away and back.
+    pub(in crate::view) fn invalidate_worktree_preview_for_saved_path(
+        &mut self,
+        path: &std::path::Path,
+    ) {
+        // Compared as absolute paths. `Path::ends_with` on a repo-relative path
+        // over-matches — saving root `foo.rs` would also discard a preview of
+        // `deep/dir/foo.rs`.
+        let Some(absolute) = self.absolute_worktree_path(path) else {
+            return;
+        };
+        let matches_preview = self
+            .worktree_preview_path
+            .as_ref()
+            .is_some_and(|shown| *shown == absolute);
+        if !matches_preview {
+            return;
+        }
+        self.worktree_preview_path = None;
+        self.worktree_preview = Loadable::NotLoaded;
+        self.worktree_preview_content_rev = self.worktree_preview_content_rev.wrapping_add(1);
+        self.worktree_preview_syntax_language = None;
+        self.reset_worktree_preview_source_state();
+    }
+
     pub(in super::super::super) fn is_file_diff_target(target: Option<&DiffTarget>) -> bool {
         matches!(
             target,
@@ -291,16 +373,40 @@ impl MainPaneView {
         });
         // File-browser "open content" forces a full-content preview for any file.
         let has_content_preview = self.content_preview_abs_path().is_some_and(|p| {
-            !crate::view::should_bypass_text_file_preview_for_path(&p)
+            !self.content_preview_is_picture(&p)
                 && !p.is_dir()
                 && (p.is_file() || preview_text_file_available)
         });
         has_untracked_preview || has_added_preview || has_deleted_preview || has_content_preview
     }
 
+    /// Whether this content view should be drawn as a picture rather than as
+    /// text.
+    ///
+    /// Images always are; an SVG only while its toggle says Rendered, because
+    /// Code is exactly the request to read (and edit) its source.
+    pub(in crate::view) fn content_preview_is_picture(&self, path: &std::path::Path) -> bool {
+        if !crate::view::should_bypass_text_file_preview_for_path(path) {
+            return false;
+        }
+        match crate::view::preview_path_rendered_kind(path) {
+            Some(RenderedPreviewKind::Svg) => {
+                self.rendered_preview_modes.get(RenderedPreviewKind::Svg)
+                    == RenderedPreviewMode::Rendered
+            }
+            _ => true,
+        }
+    }
+
     /// Returns `true` when the markdown rendered preview is currently shown
     /// (either single-pane file preview or two-sided diff preview).
     pub(in crate::view) fn is_markdown_preview_active(&self) -> bool {
+        // The editor replaces the rendered preview entirely: it is the branch
+        // that wins in the body, so reporting the preview as active here would
+        // grey out Edit and Blame over a buffer that is plainly showing text.
+        if self.is_file_editor_active() {
+            return false;
+        }
         let has_submodule_summary = self
             .active_repo()
             .is_some_and(|repo| !matches!(repo.diff_state.submodule_summary, Loadable::NotLoaded));

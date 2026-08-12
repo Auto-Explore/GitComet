@@ -146,6 +146,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::InteractiveRebaseActionMenu { .. }
         | PopoverKind::InteractiveRebaseAutosquashMenu
         | PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::ConflictResolverInputRowMenu { .. }
         | PopoverKind::ConflictResolverChunkMenu { .. }
         | PopoverKind::ConflictResolverOutputMenu { .. } => state.active_repo,
@@ -357,6 +358,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::AppMenu
         | PopoverKind::AddRepoMenu
         | PopoverKind::TerminalShutdownConfirm(_)
+        | PopoverKind::UnsavedFileEditsConfirm(_)
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
@@ -552,6 +554,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             prompt.summary.terminal_count.hash(hasher);
             prompt.summary.running_command_count.hash(hasher);
             prompt.summary.repo_names.hash(hasher);
+        }
+        PopoverKind::UnsavedFileEditsConfirm(prompt) => {
+            68u8.hash(hasher);
+            prompt.action.hash(hasher);
+            prompt.files.hash(hasher);
         }
         PopoverKind::DiffHunkMenu { repo_id, src_ix } => {
             40u8.hash(hasher);

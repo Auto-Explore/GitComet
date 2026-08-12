@@ -339,7 +339,10 @@ pub(super) fn main_diff_rendered_preview_toggle_kind(
         // Image/Code is orthogonal to the Full/Collapsed diff mode: the
         // rendered image is the whole file either way, and the source is a
         // normal text diff that both modes can show.
-        RenderedPreviewKind::Svg if wants_file_diff || wants_collapsed_diff => {
+        // `is_file_preview` covers the content view an SVG gets when it is
+        // opened from the file explorer: the picture is the whole file there
+        // too, and Code is how you reach its source (and the editor).
+        RenderedPreviewKind::Svg if wants_file_diff || wants_collapsed_diff || is_file_preview => {
             Some(RenderedPreviewKind::Svg)
         }
         RenderedPreviewKind::Markdown if wants_file_diff || is_file_preview => {
@@ -4395,6 +4398,7 @@ pub(super) enum PopoverKind {
     AppMenu,
     AddRepoMenu,
     TerminalShutdownConfirm(TerminalShutdownPrompt),
+    UnsavedFileEditsConfirm(UnsavedFileEditsPrompt),
     TerminalMenu {
         repo_id: RepoId,
         context: TerminalMenuContext,
@@ -4987,6 +4991,25 @@ pub(in crate::view) struct TerminalShutdownPrompt {
     pub(in crate::view) summary: TerminalShutdownSummary,
 }
 
+/// What the window was about to do when unsaved edits were found.
+///
+/// Only the two irreversible ones: switching files keeps the buffer, so it
+/// needs no prompt.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::view) enum UnsavedFileEditsAction {
+    /// Carries the window that asked: the retry can run seconds later, after a
+    /// slow write drains, by which time "the active window" may be another one.
+    CloseWindow(gpui::WindowId),
+    QuitApp,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct UnsavedFileEditsPrompt {
+    pub(in crate::view) action: UnsavedFileEditsAction,
+    /// Display labels, repo-qualified when the list spans more than one repo.
+    pub(in crate::view) files: Vec<SharedString>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct TerminalPanelResizeState {
     pub(super) start_y: Pixels,
@@ -5423,6 +5446,7 @@ pub struct GitCometView {
     pub(super) diff_reveal_whitespace_chars: bool,
     pub(super) diff_word_wrap: bool,
     pub(super) diff_show_line_numbers: bool,
+    pub(super) auto_save_file_edits: bool,
     pub(super) ui_scale_percent: u32,
 
     pub(super) open_repo_panel: bool,
@@ -5456,6 +5480,10 @@ pub struct GitCometView {
 
     pub(super) last_mouse_pos: Point<Pixels>,
     pub(super) pending_terminal_shutdown_prompt: Option<TerminalShutdownPrompt>,
+    pub(super) pending_unsaved_file_edits_prompt: Option<UnsavedFileEditsPrompt>,
+    /// Waits for the dispatched writes to drain before the close/quit it was
+    /// asked to retry.
+    pub(super) pending_unsaved_file_edits_flush: Option<gpui::Task<()>>,
     pub(super) pending_quit_other_views: Vec<gpui::WeakEntity<GitCometView>>,
     pub(super) pending_pull_reconcile_prompt: Option<RepoId>,
     pub(super) pending_force_delete_branch_prompt: Option<(RepoId, String)>,

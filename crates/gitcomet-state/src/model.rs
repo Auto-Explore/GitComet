@@ -416,6 +416,12 @@ pub struct ViewHistoryEntry {
 pub struct MainViewSnapshot {
     pub diff_target: Option<DiffTarget>,
     pub content_preview: bool,
+    /// Whether the file was open in the editor rather than the read-only
+    /// content view. Recorded so back/forward can step *into* and *out of* edit
+    /// mode: without it, opening the editor on the file already on screen
+    /// produced a snapshot identical to the read-only one and deduped away, so
+    /// neither direction could cross that boundary.
+    pub edit_mode: bool,
     pub selected_commit: Option<CommitId>,
     /// The comparison the details pane is showing, if any. Without this a
     /// back/forward step could neither reproduce a comparison nor leave one:
@@ -882,6 +888,11 @@ pub struct DiffState {
     /// preview (the same renderer used for added/removed files — syntax
     /// highlighted, no green/red) rather than a diff. Set by `OpenFileContent`.
     pub content_preview: bool,
+    /// When true, the file-content view is the editable buffer rather than the
+    /// read-only preview. Only ever set together with `content_preview`, and
+    /// only for a `WorkingTree` target — editing is always of the file on disk.
+    /// Set by `OpenFileEditor`, cleared by `ExitDiffEditMode`.
+    pub edit_mode: bool,
     pub diff_target_rev: u64,
     pub diff_state_rev: u64,
     /// A reload of the *same* target is in flight and the content still on
@@ -911,6 +922,7 @@ impl Default for DiffState {
         Self {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             diff_target_rev: 0,
             diff_state_rev: 0,
             diff_reload_in_flight: false,
@@ -1474,6 +1486,22 @@ impl RepoState {
         }
     }
 
+    /// The repo-relative path of the file the main pane is showing, whatever
+    /// form it is showing it in — a diff, the read-only content view, or the
+    /// editor.
+    ///
+    /// Used by the file explorer to mark the open file and by the locate action
+    /// to decide what to reveal. Deliberately not gated on `content_preview`:
+    /// a diff of a file still means that file is the one open.
+    pub fn open_file_path(&self) -> Option<&std::path::Path> {
+        match self.diff_state.diff_target.as_ref()? {
+            DiffTarget::WorkingTree { path, .. } => Some(path.as_path()),
+            DiffTarget::Commit { path, .. } | DiffTarget::CommitRange { path, .. } => {
+                path.as_deref()
+            }
+        }
+    }
+
     pub fn status_entry_for_path(
         &self,
         area: DiffArea,
@@ -1793,6 +1821,7 @@ impl RepoState {
         MainViewSnapshot {
             diff_target: self.diff_state.diff_target.clone(),
             content_preview: self.diff_state.content_preview,
+            edit_mode: self.diff_state.edit_mode,
             selected_commit: self.history_state.selected_commit.clone(),
             range_selection: self.history_state.range_selection.clone(),
         }
@@ -1804,6 +1833,7 @@ impl RepoState {
     pub(crate) fn main_view_snapshot_matches(&self, other: &MainViewSnapshot) -> bool {
         self.diff_state.diff_target == other.diff_target
             && self.diff_state.content_preview == other.content_preview
+            && self.diff_state.edit_mode == other.edit_mode
             && self.history_state.selected_commit == other.selected_commit
             && self.history_state.range_selection == other.range_selection
     }
@@ -1886,12 +1916,14 @@ mod tests {
         let history_view = MainViewSnapshot {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             selected_commit: None,
             range_selection: None,
         };
         let commit_view = MainViewSnapshot {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
         };
@@ -1900,6 +1932,7 @@ mod tests {
                 commit_id: CommitId("aaa".into()),
                 path: Some(PathBuf::from("src/lib.rs")),
             }),
+            edit_mode: false,
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
@@ -1929,6 +1962,7 @@ mod tests {
         // adding a step or dropping forward history.
         let reloaded_file_view = MainViewSnapshot {
             content_preview: true,
+            edit_mode: false,
             ..file_view.clone()
         };
         h.reconcile(reloaded_file_view.clone(), false);
@@ -2080,12 +2114,14 @@ mod tests {
         let history_log = MainViewSnapshot {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             selected_commit: None,
             range_selection: None,
         };
         let commit_view = MainViewSnapshot {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
         };
@@ -2094,6 +2130,7 @@ mod tests {
                 commit_id: CommitId("aaa".into()),
                 path: Some(PathBuf::from("src/lib.rs")),
             }),
+            edit_mode: false,
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
@@ -2126,6 +2163,7 @@ mod tests {
                 path: PathBuf::from("a.txt"),
                 area: DiffArea::Unstaged,
             }),
+            edit_mode: false,
             content_preview: false,
             selected_commit: None,
             range_selection: None,
@@ -2135,6 +2173,7 @@ mod tests {
                 path: PathBuf::from("b.txt"),
                 area: DiffArea::Unstaged,
             }),
+            edit_mode: false,
             content_preview: false,
             selected_commit: None,
             range_selection: None,
@@ -2144,6 +2183,7 @@ mod tests {
         let empty = MainViewSnapshot {
             diff_target: None,
             content_preview: false,
+            edit_mode: false,
             selected_commit: None,
             range_selection: None,
         };
@@ -2156,6 +2196,7 @@ mod tests {
         // collapse — it overwrites in place.
         let changed = MainViewSnapshot {
             content_preview: true,
+            edit_mode: false,
             ..view_b.clone()
         };
         h.reconcile(changed.clone(), false);

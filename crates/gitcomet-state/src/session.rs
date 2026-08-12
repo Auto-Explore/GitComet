@@ -41,6 +41,7 @@ pub struct UiSession {
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
+    pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
     pub mergetool_output_scroll_sync: Option<bool>,
@@ -178,6 +179,7 @@ struct UiSessionFile {
     diff_reveal_whitespace_chars: Option<bool>,
     diff_word_wrap: Option<bool>,
     diff_show_line_numbers: Option<bool>,
+    auto_save_file_edits: Option<bool>,
     mergetool_auto_advance: Option<bool>,
     mergetool_collapse_unchanged: Option<bool>,
     mergetool_output_scroll_sync: Option<bool>,
@@ -295,6 +297,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         diff_reveal_whitespace_chars: file.diff_reveal_whitespace_chars,
         diff_word_wrap: file.diff_word_wrap,
         diff_show_line_numbers: file.diff_show_line_numbers,
+        auto_save_file_edits: file.auto_save_file_edits,
         mergetool_auto_advance: file.mergetool_auto_advance,
         mergetool_collapse_unchanged: file.mergetool_collapse_unchanged,
         mergetool_output_scroll_sync: file.mergetool_output_scroll_sync,
@@ -611,6 +614,7 @@ pub struct UiSettings {
     pub diff_reveal_whitespace_chars: Option<bool>,
     pub diff_word_wrap: Option<bool>,
     pub diff_show_line_numbers: Option<bool>,
+    pub auto_save_file_edits: Option<bool>,
     pub mergetool_auto_advance: Option<bool>,
     pub mergetool_collapse_unchanged: Option<bool>,
     pub mergetool_output_scroll_sync: Option<bool>,
@@ -733,6 +737,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.diff_word_wrap {
             file.diff_word_wrap = Some(value);
+        }
+        if let Some(value) = settings.auto_save_file_edits {
+            file.auto_save_file_edits = Some(value);
         }
         if let Some(value) = settings.diff_show_line_numbers {
             file.diff_show_line_numbers = Some(value);
@@ -3467,6 +3474,47 @@ mod tests {
         assert_eq!(loaded.diff_show_line_numbers, Some(false));
         assert_eq!(loaded.mergetool_show_line_numbers, Some(false));
         assert_eq!(loaded.mergetool_view_three_way, Some(false));
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_auto_save_file_edits() {
+        let dir = unique_session_test_dir("auto-save-file-edits");
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        // Absent from the file means "not chosen yet", which the UI reads as off.
+        assert_eq!(load_from_path(&path).auto_save_file_edits, None);
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                auto_save_file_edits: Some(true),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+        assert_eq!(load_from_path(&path).auto_save_file_edits, Some(true));
+
+        // A later write that says nothing about the toggle must not clear it.
+        persist_ui_settings_to_path(
+            UiSettings {
+                diff_word_wrap: Some(true),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist unrelated ui settings");
+        assert_eq!(load_from_path(&path).auto_save_file_edits, Some(true));
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                auto_save_file_edits: Some(false),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist ui settings");
+        assert_eq!(load_from_path(&path).auto_save_file_edits, Some(false));
     }
 
     #[test]

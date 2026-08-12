@@ -117,6 +117,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RefreshBranches { .. }
             | Msg::LoadFileBrowser { .. }
             | Msg::OpenFileContent { .. }
+            | Msg::OpenFileEditor { .. }
             | Msg::OpenFileAtCommitParent { .. }
             | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
@@ -591,7 +592,12 @@ pub(crate) fn fill_select_diff_inline(
     content_preview: bool,
     effects: &mut SelectDiffEffects,
 ) {
-    diff_selection::fill_select_diff_inline(state, repo_id, target, content_preview, effects)
+    let mode = if content_preview {
+        diff_selection::ContentViewMode::Preview
+    } else {
+        diff_selection::ContentViewMode::Diff
+    };
+    diff_selection::fill_select_diff_inline(state, repo_id, target, mode, effects)
 }
 
 #[inline]
@@ -739,6 +745,10 @@ fn is_view_navigation(msg: &Msg) -> bool {
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
             | Msg::OpenFileContent { .. }
+            | Msg::OpenFileEditor { .. }
+            // Leaving the editor is a destination of its own, so Back returns to
+            // the editor rather than skipping past it to whatever preceded it.
+            | Msg::ExitDiffEditMode { .. }
             | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
             | Msg::ResetBrowseToLive { .. }
@@ -1007,6 +1017,9 @@ fn reduce_inner(
         Msg::SetFileBrowserSearch { repo_id, query } => {
             effects::set_file_browser_search(state, repo_id, query)
         }
+        Msg::RevealFileBrowserPath { repo_id, path } => {
+            effects::reveal_file_browser_path(state, repo_id, path)
+        }
         Msg::SetFileBrowserSource { repo_id, source } => {
             effects::set_file_browser_source(state, repo_id, source)
         }
@@ -1015,6 +1028,10 @@ fn reduce_inner(
             source,
             path,
         } => diff_selection::open_file_content(state, repo_id, source, path),
+        Msg::OpenFileEditor { repo_id, path } => {
+            diff_selection::open_file_editor(state, repo_id, path)
+        }
+        Msg::ExitDiffEditMode { repo_id } => diff_selection::exit_diff_edit_mode(state, repo_id),
         Msg::OpenFileAtCommitParent {
             repo_id,
             commit_id,

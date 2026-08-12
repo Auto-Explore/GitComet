@@ -4,12 +4,12 @@ use crate::ui_scale;
 use crate::view::{
     DiffNextFile, DiffNextSearchMatchOrChange, DiffPrevFile, DiffPrevSearchMatchOrChange,
     FocusedMergetoolLabels, FocusedMergetoolViewConfig, GitCometView, GitCometViewConfig,
-    GitCometViewMode, InitialRepositoryLaunchMode, MainPaneView, OpenActiveViewSearch,
-    PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev, SettingsWindowView,
-    StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll, TextInputCommitSubmit,
-    TextInputDiffNextChange, TextInputDiffNextFile, TextInputDiffNextSearchMatchOrChange,
-    TextInputDiffPrevChange, TextInputDiffPrevFile, TextInputDiffPrevSearchMatchOrChange,
-    ToggleCommandPalette, is_diff_shortcut_candidate,
+    GitCometViewMode, InitialRepositoryLaunchMode, LocateFileInExplorer, MainPaneView,
+    OpenActiveViewSearch, PopoverPromptDismiss, PopoverPromptTabNext, PopoverPromptTabPrev,
+    SettingsWindowView, StartupCrashReport, TerminalCopy, TerminalPaste, TerminalSelectAll,
+    TextInputCommitSubmit, TextInputDiffNextChange, TextInputDiffNextFile,
+    TextInputDiffNextSearchMatchOrChange, TextInputDiffPrevChange, TextInputDiffPrevFile,
+    TextInputDiffPrevSearchMatchOrChange, ToggleCommandPalette, is_diff_shortcut_candidate,
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::GitBackend;
@@ -667,6 +667,13 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(|_: &ToggleCommandPalette, cx| {
         cx.defer(toggle_command_palette_in_active_or_existing_window);
     });
+    cx.on_action(|_: &LocateFileInExplorer, cx| {
+        cx.defer(|cx| {
+            let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
+                view.locate_open_file_in_explorer(cx);
+            });
+        });
+    });
 
     cx.on_action(|_: &Close, cx| {
         cx.defer(|cx| {
@@ -816,6 +823,7 @@ fn bind_app_keys(cx: &mut App) {
         KeyBinding::new("secondary-shift-a", SwitchRepository, None),
         KeyBinding::new("secondary-f", OpenActiveViewSearch, None),
         KeyBinding::new("secondary-p", ToggleCommandPalette, None),
+        KeyBinding::new("secondary-shift-l", LocateFileInExplorer, None),
         KeyBinding::new("secondary-w", Close, None),
         KeyBinding::new("secondary-shift-w", CloseWindow, None),
         KeyBinding::new("secondary-pageup", PreviousRepository, None),
@@ -1186,7 +1194,9 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
         .and_then(|entry| {
             entry
                 .view
-                .update(cx, |view, cx| view.request_close_window_or_warn(cx))
+                .update(cx, |view, cx| {
+                    view.request_close_window_or_warn(window_id, cx)
+                })
                 .ok()
         })
         .unwrap_or(false);
@@ -1196,10 +1206,43 @@ pub(crate) fn close_window_or_warn(window: &mut Window, cx: &mut App) {
     }
 }
 
+/// Close a specific window, honouring its own warnings.
+///
+/// The unsaved-edits retry needs this rather than "the active window": it can
+/// run seconds after the prompt (a slow write drains first), by which time the
+/// user may have clicked into another window — and closing that one instead is
+/// not what they asked for.
+pub(crate) fn close_window_by_id_or_warn(cx: &mut App, window_id: gpui::WindowId) {
+    let handled = normal_gitcomet_window_by_id(cx, window_id)
+        .and_then(|entry| {
+            entry
+                .view
+                .update(cx, |view, cx| {
+                    view.request_close_window_or_warn(window_id, cx)
+                })
+                .ok()
+        })
+        .unwrap_or(false);
+    if handled {
+        return;
+    }
+    mark_clean_shutdown_if_last_window(cx);
+    if let Some(entry) = normal_gitcomet_window_by_id(cx, window_id) {
+        let _ = entry
+            .handle
+            .update(cx, |_, window, _| window.remove_window());
+    }
+}
+
 pub(crate) fn close_active_window_or_warn(cx: &mut App) {
-    let handled =
-        update_active_normal_gitcomet_window(cx, |view, cx| view.request_close_window_or_warn(cx))
-            .unwrap_or(false);
+    let active_window_id = cx.active_window().map(|window| window.window_id());
+    let handled = active_window_id
+        .and_then(|window_id| {
+            update_active_normal_gitcomet_window(cx, move |view, cx| {
+                view.request_close_window_or_warn(window_id, cx)
+            })
+        })
+        .unwrap_or(false);
     if !handled {
         close_active_window(cx);
     }
@@ -1214,6 +1257,26 @@ pub(crate) fn quit_app_or_warn(cx: &mut App) {
         mark_clean_shutdown(cx);
         cx.quit();
         return;
+    }
+
+    // Unsaved editor buffers are asked about before the terminal summary, and
+    // before the no-running-commands shortcut below: a quit with nothing running
+    // is the common case and used to exit straight past them. Every window is
+    // offered the prompt, because each holds its own buffers.
+    for entry in &entries {
+        let queued = entry
+            .view
+            .update(cx, |view, cx| {
+                view.request_quit_unsaved_file_edits_prompt(cx)
+            })
+            .unwrap_or(false);
+        if queued {
+            entry
+                .handle
+                .update(cx, |_, window, _| window.activate_window())
+                .ok();
+            return;
+        }
     }
 
     let mut terminal_count = 0usize;
@@ -1935,6 +1998,7 @@ mod tests {
                 ))
                 .on_action(record_action_listener!(crate::view::OpenActiveViewSearch))
                 .on_action(record_action_listener!(crate::view::ToggleCommandPalette))
+                .on_action(record_action_listener!(crate::view::LocateFileInExplorer))
                 .on_action(record_action_listener!(NewWindow))
                 .on_action(record_action_listener!(OpenSettings))
                 .on_action(record_action_listener!(OpenInCodeEditor))
@@ -2390,6 +2454,10 @@ mod tests {
             ("secondary-shift-a", SwitchRepository.name()),
             ("secondary-f", crate::view::OpenActiveViewSearch.name()),
             ("secondary-p", crate::view::ToggleCommandPalette.name()),
+            (
+                "secondary-shift-l",
+                crate::view::LocateFileInExplorer.name(),
+            ),
             ("secondary-w", Close.name()),
             ("secondary-shift-w", CloseWindow.name()),
             ("secondary-pageup", PreviousRepository.name()),

@@ -350,6 +350,12 @@ pub enum Msg {
         repo_id: RepoId,
         query: String,
     },
+    /// Expand every directory leading to `path` in the file explorer, so the
+    /// row for that file becomes visible. Clears any active file search.
+    RevealFileBrowserPath {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
     SetFileBrowserSource {
         repo_id: RepoId,
         source: FileSource,
@@ -358,6 +364,19 @@ pub enum Msg {
         repo_id: RepoId,
         source: FileSource,
         path: PathBuf,
+    },
+    /// Open `path` as an editable buffer over the working-tree file. Always
+    /// edits the workspace copy, so it re-targets the working tree even when it
+    /// was invoked from a commit's file list.
+    OpenFileEditor {
+        repo_id: RepoId,
+        path: PathBuf,
+    },
+    /// Leave the editor, keeping the file on screen as a read-only content
+    /// view. *Entering* the editor always goes through `OpenFileEditor`, which
+    /// re-targets the working tree — there is no "turn it on here" counterpart.
+    ExitDiffEditMode {
+        repo_id: RepoId,
     },
     /// Open the given file as it was in the parent of `commit_id` (the
     /// revision just before that commit's change). The parent is resolved
