@@ -668,14 +668,53 @@ pub(super) fn refresh_primary_effects(repo_state: &mut RepoState) -> Vec<Effect>
     effects
 }
 
+/// The request for a fresh first page of `repo_state`'s history, under whatever
+/// scope and author filter it currently has.
+pub(super) fn first_page_log_request(repo_state: &RepoState) -> crate::model::PendingLogLoad {
+    crate::model::PendingLogLoad {
+        scope: repo_state.history_state.history_scope,
+        author: repo_state.history_state.history_author_filter.clone(),
+        limit: DEFAULT_LOG_PAGE_SIZE,
+        cursor: None,
+    }
+}
+
+/// Requests `load` and returns the effect that starts it, or `None` when it was
+/// coalesced into a walk already in flight. The effect carries the sequence
+/// number the request was given, which is how its replies are recognised.
+pub(super) fn request_log_effect(
+    repo_state: &mut RepoState,
+    load: crate::model::PendingLogLoad,
+) -> Option<Effect> {
+    let repo_id = repo_state.id;
+    let seq = repo_state.loads_in_flight.request_log(load.clone())?;
+    let crate::model::PendingLogLoad {
+        scope,
+        author,
+        limit,
+        cursor,
+    } = load;
+    Some(Effect::LoadLog {
+        repo_id,
+        seq,
+        scope,
+        author,
+        limit,
+        cursor,
+    })
+}
+
 pub(super) fn append_refresh_primary_effects(
     repo_state: &mut RepoState,
     effects: &mut impl EffectAccumulator,
 ) {
     let repo_id = repo_state.id;
-    let scope = repo_state.history_state.history_scope;
+    let log_request = first_page_log_request(repo_state);
 
-    if repo_state.loads_in_flight.request_primary_refresh_batch() {
+    if let Some(seq) = repo_state
+        .loads_in_flight
+        .request_primary_refresh_batch(log_request.clone())
+    {
         repo_state.set_log_loading_more(false);
         effects.push_effect(Effect::LoadHeadBranch { repo_id });
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
@@ -683,9 +722,11 @@ pub(super) fn append_refresh_primary_effects(
         effects.push_effect(Effect::LoadStatus { repo_id });
         effects.push_effect(Effect::LoadLog {
             repo_id,
-            scope,
-            limit: DEFAULT_LOG_PAGE_SIZE,
-            cursor: None,
+            seq,
+            scope: log_request.scope,
+            author: log_request.author,
+            limit: log_request.limit,
+            cursor: log_request.cursor,
         });
         return;
     }
@@ -704,19 +745,11 @@ pub(super) fn append_refresh_primary_effects(
     }
     append_requested_rebase_and_merge_refresh_effects(repo_state, effects);
     append_requested_status_refresh_effects(repo_state, effects);
-    if repo_state
-        .loads_in_flight
-        .request_log(scope, DEFAULT_LOG_PAGE_SIZE, None)
-    {
+    if let Some(effect) = request_log_effect(repo_state, log_request) {
         // Block pagination while a refresh log load is in flight, to avoid concurrent LogLoaded
         // merges with different cursors.
         repo_state.set_log_loading_more(false);
-        effects.push_effect(Effect::LoadLog {
-            repo_id,
-            scope,
-            limit: DEFAULT_LOG_PAGE_SIZE,
-            cursor: None,
-        });
+        effects.push_effect(effect);
     }
 }
 
@@ -759,18 +792,10 @@ pub(super) fn append_refresh_full_effects(
         effects.push_effect(Effect::LoadUpstreamDivergence { repo_id });
     }
     append_requested_status_refresh_effects(repo_state, effects);
-    if repo_state.loads_in_flight.request_log(
-        repo_state.history_state.history_scope,
-        DEFAULT_LOG_PAGE_SIZE,
-        None,
-    ) {
+    let log_request = first_page_log_request(repo_state);
+    if let Some(effect) = request_log_effect(repo_state, log_request) {
         repo_state.set_log_loading_more(false);
-        effects.push_effect(Effect::LoadLog {
-            repo_id,
-            scope: repo_state.history_state.history_scope,
-            limit: DEFAULT_LOG_PAGE_SIZE,
-            cursor: None,
-        });
+        effects.push_effect(effect);
     }
     if repo_state
         .loads_in_flight

@@ -95,6 +95,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RepoActivated { .. }
             | Msg::RepoExternallyChanged { .. }
             | Msg::SetHistoryScope { .. }
+            | Msg::SetHistoryAuthorFilter { .. }
             | Msg::LoadMoreHistory { .. }
             | Msg::SelectCommit { .. }
             | Msg::CompareCommitRange { .. }
@@ -886,6 +887,9 @@ fn reduce_inner(
         }
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
+        }
+        Msg::SetHistoryAuthorFilter { repo_id, author } => {
+            external_and_history::set_history_author_filter(state, repo_id, author)
         }
         Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
             repo_management::set_fetch_prune_deleted_remote_tracking_branches(
@@ -1838,10 +1842,17 @@ fn reduce_inner(
         }
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
+            seq,
             scope,
             cursor,
             result,
-        }) => external_and_history::log_loaded(state, repo_id, scope, cursor, result),
+        }) => external_and_history::log_loaded(state, repo_id, seq, scope, cursor, result),
+        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+            repo_id,
+            seq,
+            commits,
+            scanned,
+        }) => external_and_history::log_chunk_loaded(state, repo_id, seq, commits, scanned),
         Msg::Internal(crate::msg::InternalMsg::TagsLoaded { repo_id, result }) => {
             effects::tags_loaded(state, repo_id, result)
         }

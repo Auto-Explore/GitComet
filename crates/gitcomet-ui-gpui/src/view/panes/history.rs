@@ -955,6 +955,9 @@ impl HistoryView {
             repo.log_rev.hash(&mut hasher);
             repo.history_state.log_rev.hash(&mut hasher);
             repo.history_state.history_scope.hash(&mut hasher);
+            // A running walk reports progress without changing the log, and the
+            // header prints that count — so it has to repaint on its own.
+            repo.history_state.log_scan_progress.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.detached_head_commit.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);

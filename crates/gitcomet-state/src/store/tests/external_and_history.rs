@@ -1,5 +1,37 @@
 use super::*;
 
+/// Production always reaches `LogLoaded` through `request_log`, which records the
+/// walk as the active one so replies from a superseded walk can be dropped.
+/// Tests that dispatch `LogLoaded` directly have to declare it the same way, and
+/// send the sequence number it hands back.
+/// The sequence number of the log walk the repository already has in flight —
+/// what a reply from that walk has to carry. For tests where earlier reduces
+/// dispatched the load; [`expect_log_reply`] is for tests that dispatch none.
+fn active_log_seq(repo_state: &RepoState) -> crate::model::LogLoadSeq {
+    repo_state
+        .loads_in_flight
+        .active_log_seq()
+        .expect("a log walk is in flight")
+}
+
+fn expect_log_reply(
+    repo_state: &mut RepoState,
+    scope: LogScope,
+    author: Option<&str>,
+    cursor: Option<LogCursor>,
+) -> crate::model::LogLoadSeq {
+    repo_state.loads_in_flight.clear();
+    repo_state
+        .loads_in_flight
+        .request_log(crate::model::PendingLogLoad {
+            scope,
+            author: author.map(str::to_owned),
+            limit: 200,
+            cursor,
+        })
+        .expect("a declared log walk starts immediately")
+}
+
 fn test_force_push_lease() -> gitcomet_core::services::ForcePushLease {
     gitcomet_core::services::ForcePushLease {
         remote: "origin".to_string(),
@@ -554,12 +586,14 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
         }),
     );
     let history_scope = state.repos[0].history_state.history_scope;
+    let seq = active_log_seq(&state.repos[0]);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
@@ -803,12 +837,14 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
     ));
 
     let history_scope = state.repos[0].history_state.history_scope;
+    let seq = active_log_seq(&state.repos[0]);
     let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
@@ -823,7 +859,8 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
             repo_id: RepoId(1),
             scope,
             limit: 200,
-            cursor: None
+            cursor: None,
+            ..
         }] if *scope == history_scope
     ));
 }
@@ -1355,8 +1392,10 @@ fn load_more_history_emits_paginated_load_log_effect() {
         [Effect::LoadLog {
             repo_id: RepoId(1),
             scope: LogScope::CurrentBranch,
+            author: None,
             limit: 200,
-            cursor: Some(_)
+            cursor: Some(_),
+            ..
         }]
     ));
 }
@@ -1516,12 +1555,18 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
         }],
         next_cursor: None,
     })));
-    assert!(
-        repo_state
-            .loads_in_flight
-            .request_log(LogScope::FullReachable, 200, None)
-    );
+    let seq = repo_state
+        .loads_in_flight
+        .request_log(crate::model::PendingLogLoad {
+            scope: LogScope::FullReachable,
+            author: None,
+            limit: 200,
+            cursor: None,
+        })
+        .expect("the first walk starts immediately");
 
+    // Each switch supersedes the walk in flight and is dispatched at once,
+    // rather than queueing behind a walk that may run for tens of seconds.
     let effects = reduce(
         &mut repos,
         &id_alloc,
@@ -1531,14 +1576,17 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
             scope: LogScope::AllBranches,
         },
     );
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::PersistRepoHistoryMode {
-            repo_id: Some(RepoId(1)),
-            mode: LogScope::AllBranches,
-            ..
-        }]
-    ));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog {
+                scope: LogScope::AllBranches,
+                cursor: None,
+                ..
+            }
+        )),
+        "expected the scope switch to start its load immediately, got {effects:?}"
+    );
 
     let effects = reduce(
         &mut repos,
@@ -1549,26 +1597,32 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
             scope: LogScope::NoMerges,
         },
     );
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::PersistRepoHistoryMode {
-            repo_id: Some(RepoId(1)),
-            mode: LogScope::NoMerges,
-            ..
-        }]
-    ));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog {
+                scope: LogScope::NoMerges,
+                cursor: None,
+                ..
+            }
+        )),
+        "expected the second scope switch to start immediately too, got {effects:?}"
+    );
     assert_eq!(
         state.repos[0].history_state.history_scope,
         LogScope::NoMerges
     );
     assert!(state.repos[0].log.is_loading());
 
+    // The first walk finally answers. It is superseded, so it must neither land
+    // in the log nor disturb the walk that replaced it.
     let effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: LogScope::FullReachable,
             cursor: None,
             result: Ok(LogPage {
@@ -1581,16 +1635,12 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
     assert!(state.repos[0].log.is_loading());
     assert!(!state.repos[0].history_state.log_loading_more);
     assert!(
-        matches!(
-            effects.as_slice(),
-            [Effect::LoadLog {
-                repo_id: RepoId(1),
-                scope: LogScope::NoMerges,
-                limit: 200,
-                cursor: None,
-            }]
-        ),
-        "expected stale result to replay the latest pending scope switch, got {effects:?}"
+        effects.is_empty(),
+        "a superseded reply must not schedule anything, got {effects:?}"
+    );
+    assert!(
+        !state.repos[0].loads_in_flight.is_active_log_reply(seq),
+        "the superseded walk must no longer be the active one"
     );
 }
 
@@ -1663,12 +1713,24 @@ fn log_loaded_appends_when_loading_more() {
     repo_state.history_state.log_loading_more = true;
     let log_before = (repo_state.log_rev, repo_state.history_state.log_rev);
 
+    let seq = expect_log_reply(
+        &mut state.repos[0],
+        LogScope::CurrentBranch,
+        None,
+        Some(LogCursor {
+            last_seen: CommitId("c1".into()),
+            resume_from: None,
+            resume_token: None,
+        }),
+    );
+
     let _effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: LogScope::CurrentBranch,
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
@@ -1731,12 +1793,15 @@ fn log_loaded_reconciles_commit_multi_selection() {
         anchor_log_rev: Some(repo_state.history_state.log_rev),
     };
 
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
+
     let _effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: LogScope::CurrentBranch,
             cursor: None,
             result: Ok(LogPage {
@@ -1784,12 +1849,24 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
     })));
     repo_state.history_state.log_loading_more = true;
 
+    let seq = expect_log_reply(
+        &mut state.repos[0],
+        LogScope::CurrentBranch,
+        None,
+        Some(LogCursor {
+            last_seen: CommitId("c1".into()),
+            resume_from: None,
+            resume_token: None,
+        }),
+    );
+
     let _effects = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: LogScope::CurrentBranch,
             cursor: Some(LogCursor {
                 last_seen: CommitId("c1".into()),
@@ -1876,12 +1953,14 @@ fn log_loaded_clears_retained_scope_switch_log() {
             .is_some()
     );
 
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::AllBranches, None, None);
     let _ = reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: LogScope::AllBranches,
             cursor: None,
             result: Ok(LogPage {
@@ -1931,6 +2010,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
         .collect();
     let last_seen = commits.last().expect("last commit").id.clone();
     let history_scope = state.repos[0].history_state.history_scope;
+    let seq = expect_log_reply(&mut state.repos[0], history_scope, None, None);
 
     let _effects = reduce(
         &mut repos,
@@ -1938,6 +2018,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: RepoId(1),
+            seq,
             scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
@@ -1976,6 +2057,7 @@ fn log_loaded_bumps_log_rev() {
 
     let log_before = (state.repos[0].log_rev, state.repos[0].history_state.log_rev);
     let history_scope = state.repos[0].history_state.history_scope;
+    let seq = expect_log_reply(&mut state.repos[0], history_scope, None, None);
 
     reduce(
         &mut repos,
@@ -1983,6 +2065,7 @@ fn log_loaded_bumps_log_rev() {
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
+            seq,
             scope: history_scope,
             cursor: None,
             result: Ok(LogPage {
@@ -2034,12 +2117,14 @@ fn detached_head_target_tracks_current_branch_log_head() {
         }),
     );
 
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
+            seq,
             scope: LogScope::CurrentBranch,
             cursor: None,
             result: Ok(LogPage {
@@ -2120,12 +2205,14 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
             }),
         );
 
+        let seq = expect_log_reply(&mut state.repos[0], scope, None, None);
         reduce(
             &mut repos,
             &id_alloc,
             &mut state,
             Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                 repo_id,
+                seq,
                 scope,
                 cursor: None,
                 result: Ok(LogPage {
@@ -2337,5 +2424,321 @@ fn external_tags_change_without_git_state_flag_reloads_tags() {
             .iter()
             .any(|e| matches!(e, Effect::LoadTags { repo_id: id } if *id == repo_id)),
         "expected LoadTags effect when only the tags flag is set"
+    );
+}
+
+/// Picking an author while a walk is already running must dispatch the new load
+/// at once. Queueing it behind the old walk is what made filtering feel frozen
+/// on a large repository, where a walk runs for tens of seconds and the
+/// repo-load pool has one or two threads.
+#[test]
+fn author_filter_change_starts_its_load_while_a_walk_is_in_flight() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let scope = state.repos[0].history_state.history_scope;
+    let unfiltered = expect_log_reply(&mut state.repos[0], scope, None, None);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetHistoryAuthorFilter {
+            repo_id: RepoId(1),
+            author: Some("alice".to_string()),
+        },
+    );
+
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadLog { author: Some(author), cursor: None, .. } if author == "alice"
+        )),
+        "expected the filter change to start its load immediately, got {effects:?}"
+    );
+    assert!(
+        !state.repos[0]
+            .loads_in_flight
+            .is_active_log_reply(unfiltered),
+        "the unfiltered walk it replaced is no longer the active one"
+    );
+}
+
+/// A walk cancelled because a newer filter replaced it is routine, not a
+/// failure: it must not raise a diagnostic or blank the history out.
+#[test]
+fn cancelled_log_reply_is_not_reported_as_an_error() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let scope = state.repos[0].history_state.history_scope;
+    let seq = expect_log_reply(&mut state.repos[0], scope, Some("alice"), None);
+    state.repos[0].history_state.history_author_filter = Some("alice".to_string());
+    state.repos[0].set_log(Loadable::Loading);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope,
+            cursor: None,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Cancelled,
+            )),
+        }),
+    );
+
+    assert!(
+        state.repos[0].diagnostics.is_empty(),
+        "a cancelled walk must not raise a diagnostic, got {:?}",
+        state.repos[0].diagnostics
+    );
+    assert!(
+        !matches!(state.repos[0].log, Loadable::Error(_)),
+        "a cancelled walk must not blank the history out"
+    );
+    assert!(effects.is_empty(), "nothing to schedule, got {effects:?}");
+}
+
+/// Partial pages land as they are found, so a filter that has to walk a large
+/// history shows what it has instead of the previous filter's rows.
+#[test]
+fn log_chunks_replace_the_page_progressively() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let scope = state.repos[0].history_state.history_scope;
+    let seq = expect_log_reply(&mut state.repos[0], scope, Some("alice"), None);
+    state.repos[0].history_state.history_author_filter = Some("alice".to_string());
+    state.repos[0].set_log(Loadable::Loading);
+
+    let commit = |id: &str| Commit {
+        id: CommitId(id.into()),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: id.into(),
+        author: "alice".into(),
+        time: SystemTime::UNIX_EPOCH,
+    };
+    let mut chunk = |commits: Vec<Commit>, scanned: u64, state: &mut AppState| {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+                repo_id: RepoId(1),
+                seq,
+                commits,
+                scanned,
+            }),
+        );
+    };
+
+    // A partial page shows through the retained slot while the walk runs. It is
+    // deliberately not `Ready`: the walk has not answered "is there more?" yet,
+    // and a `Ready` page with no cursor would answer "no" on its behalf.
+    let partial = |state: &AppState| {
+        state.repos[0]
+            .history_state
+            .retained_log_while_loading
+            .clone()
+    };
+
+    // Nothing found yet: only the progress readout moves.
+    chunk(Vec::new(), 50_000, &mut state);
+    assert!(state.repos[0].log.is_loading());
+    assert!(partial(&state).is_none());
+    assert_eq!(state.repos[0].history_state.log_scan_progress, Some(50_000));
+
+    chunk(vec![commit("c1")], 90_000, &mut state);
+    assert!(state.repos[0].log.is_loading());
+    assert_eq!(
+        partial(&state)
+            .expect("the first chunk shows its commits")
+            .commits
+            .len(),
+        1
+    );
+
+    // Chunks are prefixes of one another, so a later one simply replaces.
+    chunk(vec![commit("c1"), commit("c2")], 140_000, &mut state);
+    assert_eq!(
+        partial(&state)
+            .expect("the second chunk extends the page")
+            .commits
+            .len(),
+        2
+    );
+    assert_eq!(
+        state.repos[0].history_state.log_scan_progress,
+        Some(140_000)
+    );
+
+    // The finished page clears the progress.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![commit("c1"), commit("c2"), commit("c3")],
+                next_cursor: None,
+            }),
+        }),
+    );
+    let Loadable::Ready(page) = &state.repos[0].log else {
+        panic!("expected the finished page");
+    };
+    assert_eq!(page.commits.len(), 3);
+    assert_eq!(state.repos[0].history_state.log_scan_progress, None);
+}
+
+/// Chunks from a walk that a newer filter superseded must not paint rows for
+/// the filter the user has already moved off.
+#[test]
+fn superseded_log_chunks_are_ignored() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let scope = state.repos[0].history_state.history_scope;
+    let superseded = expect_log_reply(&mut state.repos[0], scope, Some("alice"), None);
+    // A newer filter takes over; the walk above is cancelled but still running.
+    state.repos[0]
+        .loads_in_flight
+        .request_log(crate::model::PendingLogLoad {
+            scope,
+            author: Some("bob".to_string()),
+            limit: 200,
+            cursor: None,
+        })
+        .expect("the newer filter starts at once");
+    state.repos[0].set_log(Loadable::Loading);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+            repo_id: RepoId(1),
+            seq: superseded,
+            commits: vec![Commit {
+                id: CommitId("stale".into()),
+                parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                summary: "stale".into(),
+                author: "alice".into(),
+                time: SystemTime::UNIX_EPOCH,
+            }],
+            scanned: 10,
+        }),
+    );
+
+    assert!(
+        state.repos[0].log.is_loading(),
+        "a superseded chunk must not paint rows"
+    );
+    assert!(
+        state.repos[0]
+            .history_state
+            .retained_log_while_loading
+            .is_none(),
+        "a superseded chunk must not paint rows"
+    );
+    assert_eq!(state.repos[0].history_state.log_scan_progress, None);
+}
+
+/// A cancelled walk's reply never reaches the reducer — the repo-load guard
+/// drops it — so whoever cancels has to take the progress readout down, or the
+/// "Scanning history…" banner sits there with a frozen count.
+#[test]
+fn cancelling_repo_loads_clears_the_scan_progress() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let scope = state.repos[0].history_state.history_scope;
+    let seq = expect_log_reply(&mut state.repos[0], scope, Some("alice"), None);
+    state.repos[0].set_log(Loadable::Loading);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+            repo_id: RepoId(1),
+            seq,
+            commits: Vec::new(),
+            scanned: 400_000,
+        }),
+    );
+    assert_eq!(
+        state.repos[0].history_state.log_scan_progress,
+        Some(400_000)
+    );
+
+    // A completed action invalidates every load in flight, the walk included.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoActionFinished {
+            repo_id: RepoId(1),
+            action: RepoActionKind::CheckoutBranch,
+            result: Ok(()),
+        }),
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CancelRepoLoads { .. })),
+        "the completed action must cancel the loads in flight, got {effects:?}"
+    );
+    assert_eq!(
+        state.repos[0].history_state.log_scan_progress, None,
+        "the banner must not outlive the walk it was counting for"
     );
 }

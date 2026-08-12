@@ -397,7 +397,7 @@ impl AppStore {
                         );
                         repo_monitors.stop_all();
                         for token in repo_task_tokens.values() {
-                            token.cancellation.cancel();
+                            token.cancel();
                         }
                         repo_task_tokens.clear();
                     }
@@ -409,7 +409,7 @@ impl AppStore {
                                 repo_id,
                                 token.load_epoch
                             );
-                            token.cancellation.cancel();
+                            token.cancel();
                         }
                     }
                     Msg::CloseRepos { repo_ids, .. } => {
@@ -421,7 +421,7 @@ impl AppStore {
                                     repo_id,
                                     token.load_epoch
                                 );
-                                token.cancellation.cancel();
+                                token.cancel();
                             }
                         }
                     }
@@ -775,7 +775,7 @@ impl AppStore {
             }
 
             for token in repo_task_tokens.values() {
-                token.cancellation.cancel();
+                token.cancel();
             }
             repo_monitors.stop_all();
         });

@@ -13,7 +13,7 @@ use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
 use rustc_hash::FxHashMap as HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use super::RepoId;
 use super::executor::TaskExecutor;
@@ -24,6 +24,12 @@ use super::worker_channel::StoreWorkerSender;
 pub(super) struct RepoTaskToken {
     pub(super) load_epoch: u64,
     pub(super) cancellation: CancellationToken,
+    /// Cancellation for the *current* log walk alone. An author-filtered walk
+    /// on a large repository runs for tens of seconds and the repo-load pool
+    /// has one or two threads, so a superseded walk has to be stopped for its
+    /// replacement to start at all — but stopping it must not disturb the
+    /// repository's other loads, which share [`Self::cancellation`].
+    log_cancellation: Arc<Mutex<CancellationToken>>,
 }
 
 impl RepoTaskToken {
@@ -31,7 +37,30 @@ impl RepoTaskToken {
         Self {
             load_epoch,
             cancellation: CancellationToken::new(),
+            log_cancellation: Arc::new(Mutex::new(CancellationToken::new())),
         }
+    }
+
+    /// Cancels the log walk in flight, if any, and hands out the token for the
+    /// walk that replaces it.
+    fn take_over_log(&self) -> CancellationToken {
+        let mut slot = self
+            .log_cancellation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        slot.cancel();
+        let next = CancellationToken::new();
+        *slot = next.clone();
+        next
+    }
+
+    /// Cancels every task running under this token, log walks included.
+    pub(super) fn cancel(&self) {
+        self.cancellation.cancel();
+        self.log_cancellation
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .cancel();
     }
 }
 
@@ -129,7 +158,7 @@ fn ensure_repo_task_token(
             previous.load_epoch,
             load_epoch
         );
-        previous.cancellation.cancel();
+        previous.cancel();
     } else {
         repo_load_trace::trace!(
             "repo_load_token create repo_id={:?} load_epoch={}",
@@ -149,6 +178,21 @@ fn repo_load_context(
     let token = ensure_repo_task_token(thread_state, repo_task_tokens, repo_id)?;
     let msg_tx = msg_tx.with_repo_load_guard(repo_id, token.load_epoch, token.cancellation.clone());
     Some((msg_tx, token.cancellation))
+}
+
+/// Like [`repo_load_context`], but for the log walk: the returned token covers
+/// this walk alone, and taking it cancels whichever walk it replaces. Messages
+/// still ride the repository-wide guard, so a cancelled walk's reply arrives
+/// and is dropped by the reducer rather than vanishing silently.
+fn log_load_context(
+    thread_state: &Arc<RwLock<Arc<AppState>>>,
+    repo_task_tokens: &mut HashMap<RepoId, RepoTaskToken>,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+) -> Option<(StoreWorkerSender, CancellationToken)> {
+    let token = ensure_repo_task_token(thread_state, repo_task_tokens, repo_id)?;
+    let msg_tx = msg_tx.with_repo_load_guard(repo_id, token.load_epoch, token.cancellation.clone());
+    Some((msg_tx, token.take_over_log()))
 }
 
 fn effect_requires_available_git(effect: &Effect) -> bool {
@@ -198,6 +242,7 @@ fn send_unavailable_git_effect_result(
         | Effect::PersistRecentRepo { .. }
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
+        | Effect::PersistRepoHistoryAuthorFilter { .. }
         | Effect::CancelRepoLoads { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
@@ -256,11 +301,13 @@ fn send_unavailable_git_effect_result(
         )),
         Effect::LoadLog {
             repo_id,
+            seq,
             scope,
             cursor,
             ..
         } => send(Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
+            seq,
             scope,
             cursor,
             result: Err(git_unavailable_error(runtime)),
@@ -1317,6 +1364,32 @@ pub(super) fn schedule_effect(
                 }
             });
         }
+        Effect::PersistRepoHistoryAuthorFilter {
+            repo_id,
+            workdir,
+            author,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) = session::persist_repo_history_author_filter_to_path(
+                    &workdir,
+                    author.as_deref(),
+                    &session_file_path,
+                ) {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
         Effect::PersistRepoHistoryModesBatch {
             repo_id,
             updates,
@@ -1372,7 +1445,7 @@ pub(super) fn schedule_effect(
                 .is_some_and(|token| token.load_epoch == load_epoch)
                 && let Some(token) = repo_task_tokens.remove(&repo_id)
             {
-                token.cancellation.cancel();
+                token.cancel();
             }
         }
         Effect::LoadBranches { repo_id } => {
@@ -1481,19 +1554,23 @@ pub(super) fn schedule_effect(
         }
         Effect::LoadLog {
             repo_id,
+            seq,
             scope,
+            author,
             limit,
             cursor,
         } => {
             if let Some((msg_tx, cancellation)) =
-                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+                log_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_log(
                     repo_load_executor,
                     repos,
                     msg_tx,
                     repo_id,
+                    seq,
                     scope,
+                    author,
                     limit,
                     cursor,
                     cancellation,

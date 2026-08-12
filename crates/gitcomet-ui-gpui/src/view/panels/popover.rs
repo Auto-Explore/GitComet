@@ -3,6 +3,7 @@ use gitcomet_core::services::InteractiveRebaseAction;
 
 mod add_repo_menu;
 mod app_menu;
+mod author_filter;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
@@ -107,6 +108,10 @@ const CONFLICT_INPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.
 const CONFLICT_CHUNK_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 220.0, 360.0);
 const CONFLICT_OUTPUT_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(240.0, 200.0, 300.0);
 const STASH_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(220.0, 180.0, 360.0);
+/// Wider than the sibling column menus: it carries a search box, and author
+/// names run long — "Firstname Middlename Lastname" truncates at the menu
+/// default.
+const HISTORY_AUTHOR_FILTER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(320.0, 240.0, 420.0);
 const REPO_TAB_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(360.0);
 const PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(420.0, 420.0, 820.0);
 const LARGE_PICKER_WIDTH: PopoverWidthSpec = PopoverWidthSpec::range(520.0, 520.0, 820.0);
@@ -160,6 +165,7 @@ pub(in super::super) struct PopoverHost {
     _workspace_picker_search_input_subscription: Option<gpui::Subscription>,
     _submodule_picker_search_input_subscription: Option<gpui::Subscription>,
     _file_history_search_input_subscription: Option<gpui::Subscription>,
+    _history_author_filter_search_input_subscription: Option<gpui::Subscription>,
     _squash_message_input_subscription: gpui::Subscription,
     _squash_description_input_subscription: gpui::Subscription,
     _prompt_input_subscriptions: Vec<gpui::Subscription>,
@@ -208,6 +214,13 @@ pub(in super::super) struct PopoverHost {
     pending_worktree_add_prefill: Option<(String, String)>,
     submodule_picker_selected_index: Option<usize>,
     file_history_selected_index: Option<usize>,
+    history_author_filter_selected_index: Option<usize>,
+    /// Author suggestions for the history author filter, keyed by repository and
+    /// the log revision they were collected from. Collecting them walks the
+    /// whole accumulated log, and the popover re-renders on every mouse move
+    /// over it, so the result has to outlive the frame. See
+    /// [`author_filter::suggestions`].
+    history_author_suggestions: Option<(RepoId, u64, std::sync::Arc<[SharedString]>)>,
     /// Row models for the two badge pickers, rebuilt only when the repository
     /// data behind them changes rather than on every frame. See
     /// [`rows_cache`] — a hover moving between rows re-renders this whole view.
@@ -218,6 +231,7 @@ pub(in super::super) struct PopoverHost {
     branch_picker_search_input: Option<Entity<components::TextInput>>,
     remote_picker_search_input: Option<Entity<components::TextInput>>,
     file_history_search_input: Option<Entity<components::TextInput>>,
+    history_author_filter_search_input: Option<Entity<components::TextInput>>,
     worktree_picker_search_input: Option<Entity<components::TextInput>>,
     workspace_picker_search_input: Option<Entity<components::TextInput>>,
     submodule_picker_search_input: Option<Entity<components::TextInput>>,
@@ -722,6 +736,7 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
+        | PopoverKind::HistoryAuthorFilter { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::ChangeTrackingSettings
         | PopoverKind::TerminalMenu { .. }
@@ -868,6 +883,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::UiScalePicker
         | PopoverKind::DiffHunkMenu { .. } => Some(NARROW_CONTEXT_MENU_WIDTH),
+        PopoverKind::HistoryAuthorFilter { .. } => Some(HISTORY_AUTHOR_FILTER_WIDTH),
         PopoverKind::ChangeTrackingSettings => Some(CHANGE_TRACKING_MENU_WIDTH),
         PopoverKind::DiffEditorMenu { .. } => Some(DIFF_EDITOR_MENU_WIDTH),
         PopoverKind::ConflictResolverInputRowMenu { .. } => Some(CONFLICT_INPUT_MENU_WIDTH),
@@ -916,6 +932,25 @@ impl PopoverHost {
         app: &App,
     ) -> FocusHandle {
         self.create_branch_input.read(app).focus_handle()
+    }
+
+    /// The history author filter's search box, once its popover has opened it.
+    #[cfg(test)]
+    pub(in crate::view) fn history_author_filter_search_input_for_test(
+        &self,
+    ) -> Option<&Entity<components::TextInput>> {
+        self.history_author_filter_search_input.as_ref()
+    }
+
+    /// Scrolls the author dropdown to a displayed row exactly as its keyboard
+    /// navigation does.
+    #[cfg(test)]
+    pub(in crate::view) fn scroll_history_author_filter_to_item_for_test(
+        &mut self,
+        ix: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.scroll_history_author_filter_to_row(ix, cx);
     }
 
     fn sync_titlebar_app_menu_state(&self, cx: &mut gpui::Context<Self>) {
@@ -1542,6 +1577,7 @@ impl PopoverHost {
             _workspace_picker_search_input_subscription: None,
             _submodule_picker_search_input_subscription: None,
             _file_history_search_input_subscription: None,
+            _history_author_filter_search_input_subscription: None,
             _stash_picker_search_input_subscription: None,
             _squash_message_input_subscription: squash_message_input_subscription,
             _squash_description_input_subscription: squash_description_input_subscription,
@@ -1572,12 +1608,15 @@ impl PopoverHost {
             pending_worktree_add_prefill: None,
             submodule_picker_selected_index: None,
             file_history_selected_index: None,
+            history_author_filter_selected_index: None,
+            history_author_suggestions: None,
             branch_picker_rows_cache: rows_cache::RowsCache::default(),
             workspace_picker_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
             file_history_search_input: None,
+            history_author_filter_search_input: None,
             worktree_picker_search_input: None,
             workspace_picker_search_input: None,
             submodule_picker_search_input: None,
@@ -1678,6 +1717,7 @@ impl PopoverHost {
                 &self.branch_picker_search_input,
                 &self.remote_picker_search_input,
                 &self.file_history_search_input,
+                &self.history_author_filter_search_input,
                 &self.worktree_picker_search_input,
                 &self.workspace_picker_search_input,
                 &self.submodule_picker_search_input,
@@ -2853,6 +2893,9 @@ impl PopoverHost {
                     | PopoverKind::StashPrompt
                     | PopoverKind::CommitPrompt { .. }
                     | PopoverKind::StashPickerPrompt { .. }
+                    // Opened from the AUTHOR column header, which stays
+                    // highlighted while its dropdown is up.
+                    | PopoverKind::HistoryAuthorFilter { .. }
                     // Action-bar badges stay lit while their picker is open.
                     // Scoped to Checkout: the Delete picker is opened from the
                     // sidebar context menu, whose invoker must still be cleared.
@@ -2876,6 +2919,7 @@ impl PopoverHost {
         self.workspace_picker_selected_index = None;
         self.submodule_picker_selected_index = None;
         self.file_history_selected_index = None;
+        self.history_author_filter_selected_index = None;
         // Rows are keyed by the data they were built from, so a stale slot can
         // only be reused when that data is unchanged. Dropping them on open still
         // keeps the memory from outliving the picker that needed it.
@@ -3224,6 +3268,9 @@ impl PopoverHost {
                         path: path.clone(),
                         limit: 200,
                     });
+                }
+                PopoverKind::HistoryAuthorFilter { .. } => {
+                    self.ensure_history_author_filter_search_input(window, cx);
                 }
                 PopoverKind::PushSetUpstreamPrompt { repo_id, .. } => {
                     let theme = self.theme;
@@ -3817,6 +3864,7 @@ impl PopoverHost {
             PopoverKind::HistoryBranchFilter { repo_id } => {
                 self.context_menu_view(PopoverKind::HistoryBranchFilter { repo_id }, cx)
             }
+            PopoverKind::HistoryAuthorFilter { repo_id } => author_filter::panel(self, repo_id, cx),
             PopoverKind::DiffContentModeSettings => {
                 self.context_menu_view(PopoverKind::DiffContentModeSettings, cx)
             }

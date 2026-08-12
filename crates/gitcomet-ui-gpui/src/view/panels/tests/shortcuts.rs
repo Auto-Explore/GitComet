@@ -930,6 +930,378 @@ fn history_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppC
     );
 }
 
+fn author_filter_fixture_repo(repo_id: RepoId) -> RepoState {
+    author_filter_repo_with_authors(repo_id, &["Alice", "Bob"])
+}
+
+fn author_filter_repo_with_authors(repo_id: RepoId, authors: &[&str]) -> RepoState {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_author_filter",
+        std::process::id()
+    ));
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &CommitId("deadbeefdeadbeef".into()));
+    let commits = authors
+        .iter()
+        .enumerate()
+        .map(|(index, author)| gitcomet_core::domain::Commit {
+            id: CommitId(format!("deadbeefdeadbee{index}").into()),
+            parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+            summary: format!("commit {index}").into(),
+            author: (*author).into(),
+            time: std::time::SystemTime::UNIX_EPOCH,
+        })
+        .collect();
+    let log_page: Loadable<std::sync::Arc<gitcomet_core::domain::LogPage>> = Loadable::Ready(
+        gitcomet_core::domain::LogPage {
+            commits,
+            next_cursor: None,
+        }
+        .into(),
+    );
+    repo.log = log_page.clone();
+    repo.history_state.log = log_page;
+    repo
+}
+
+fn author_filter_repo_with_many_authors(repo_id: RepoId, count: usize) -> RepoState {
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_author_filter_many",
+        std::process::id()
+    ));
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &CommitId("deadbeefdeadbeef".into()));
+    let log_page: Loadable<std::sync::Arc<gitcomet_core::domain::LogPage>> = Loadable::Ready(
+        gitcomet_core::domain::LogPage {
+            commits: (0..count)
+                .map(|ix| gitcomet_core::domain::Commit {
+                    id: CommitId(format!("{ix:016x}").into()),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                    summary: "msg".into(),
+                    author: format!("author {ix:04}").into(),
+                    time: std::time::SystemTime::UNIX_EPOCH,
+                })
+                .collect(),
+            next_cursor: None,
+        }
+        .into(),
+    );
+    repo.log = log_page.clone();
+    repo.history_state.log = log_page;
+    repo
+}
+
+/// Every author must be reachable by scrolling, however many there are. The
+/// list is virtualized, so far-down rows are not built until they are scrolled
+/// to — but they do exist, rather than being cut off the end of the list.
+#[gpui::test]
+fn history_author_filter_scrolls_to_every_author(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    const AUTHORS: usize = 500;
+    // Row 0 is "All authors", so the last author sits at row `AUTHORS`.
+    const LAST_ROW: &str = "picker_prompt_item_500";
+
+    let repo_id = RepoId(716);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_repo_with_many_authors(repo_id, AUTHORS)),
+    );
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds("picker_prompt_item_1").is_some(),
+        "the first author must render"
+    );
+    assert!(
+        cx.debug_bounds(LAST_ROW).is_none(),
+        "a row far below the viewport must not be built until it is scrolled to"
+    );
+
+    cx.update(|_window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| {
+            host.scroll_history_author_filter_to_item_for_test(AUTHORS, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds(LAST_ROW).is_some(),
+        "scrolling to the end of the list must render the last author"
+    );
+}
+
+/// The author dropdown is a picker: its search box takes focus as the popover
+/// opens, so the user can start typing without clicking into it first.
+#[gpui::test]
+fn history_author_filter_focuses_its_search_box_and_narrows_the_list(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(712);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_fixture_repo(repo_id)),
+    );
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    let search_is_focused = cx.update(|window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .history_author_filter_search_input_for_test()
+            .is_some_and(|input| input.read(app).focus_handle().is_focused(window))
+    });
+    assert!(
+        search_is_focused,
+        "opening the author filter must focus its search box"
+    );
+
+    // Rows: "All authors" (index 0) then the loaded authors, alphabetically.
+    assert!(cx.debug_bounds("picker_prompt_item_0").is_some());
+    assert!(cx.debug_bounds("picker_prompt_item_1").is_some());
+    assert!(cx.debug_bounds("picker_prompt_item_2").is_some());
+
+    cx.simulate_keystrokes("b o");
+    draw_and_drain_test_window(cx);
+
+    let query = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .history_author_filter_search_input_for_test()
+            .map(|input| input.read(app).text().to_string())
+            .unwrap_or_default()
+    });
+    assert_eq!(query, "bo", "keystrokes must reach the search box");
+    // Every author is handed to the picker, which does the narrowing; the
+    // selectors carry each row's original index — "All authors" 0, `Alice` 1,
+    // `Bob` 2 — so only `Bob`'s survives.
+    assert!(
+        cx.debug_bounds("picker_prompt_item_2").is_some(),
+        "`Bob` must survive the query"
+    );
+    assert!(
+        cx.debug_bounds("picker_prompt_item_1").is_none(),
+        "`Alice` must be filtered out"
+    );
+    assert!(
+        cx.debug_bounds("picker_prompt_item_0").is_none(),
+        "`All authors` does not match the query either"
+    );
+}
+
+/// The AUTHOR column header stays highlighted while its dropdown is up. The
+/// dropdown is a picker rather than a context menu, so it has to opt into
+/// keeping the invoker active explicitly.
+#[gpui::test]
+fn history_author_filter_keeps_its_header_highlighted(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(714);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_fixture_repo(repo_id)),
+    );
+
+    let invoker: SharedString = "history_author_filter_header".into();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.set_active_context_menu_invoker(Some(invoker.clone()), cx);
+        });
+    });
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    let active = cx.update(|_window, app| view.read(app).active_context_menu_invoker.clone());
+    assert_eq!(
+        active.as_deref(),
+        Some("history_author_filter_header"),
+        "the AUTHOR header must stay highlighted while its dropdown is open"
+    );
+}
+
+/// The dropdown carries a search box and full author names, so it is wider than
+/// the sibling column menus (which sit at 220 design px).
+#[gpui::test]
+fn history_author_filter_is_wide_enough_for_full_names(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(717);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_fixture_repo(repo_id)),
+    );
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    let width = debug_width(cx, "app_popover");
+    assert!(
+        width >= 300.0,
+        "the author dropdown must stay wide enough for full author names, got {width}"
+    );
+}
+
+/// Enter applies the highlighted suggestion, and closes the popover.
+#[gpui::test]
+fn history_author_filter_applies_the_selected_author(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(713);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_fixture_repo(repo_id)),
+    );
+    // Arrow keys and Enter reach the search box through actions, which need the
+    // text-input keymap installed.
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    cx.simulate_keystrokes("b o");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("down");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+    wait_until(cx, "the author filter to be applied", |cx| {
+        cx.update(|_window, _app| {
+            store_for_assert
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.history_state.history_author_filter.clone())
+                == Some("Bob".to_string())
+        })
+    });
+
+    let popover_open = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .is_kind_open(&PopoverKind::HistoryAuthorFilter { repo_id })
+    });
+    assert!(!popover_open, "applying a filter must close the dropdown");
+}
+
+/// Suggestions only cover the commits loaded so far, and the backend filter is
+/// a substring match, so a name that is not in the list is still applied as
+/// typed rather than being a dead end.
+#[gpui::test]
+fn history_author_filter_applies_free_form_text(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(715);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_fixture_repo(repo_id)),
+    );
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    // Neither loaded author matches, so nothing is highlighted to apply.
+    cx.simulate_keystrokes("c a r");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+
+    wait_until(cx, "the typed author filter to be applied", |cx| {
+        cx.update(|_window, _app| {
+            store_for_assert
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.history_state.history_author_filter.clone())
+                == Some("car".to_string())
+        })
+    });
+}
+
+/// Typing narrows the list without moving the selection, so the index can end up
+/// past the end. The dropdown clamps it when it decides which row to highlight,
+/// and Enter has to land on that same row rather than falling back to the raw
+/// query — which would apply a filter the user never highlighted.
+#[gpui::test]
+fn history_author_filter_enter_applies_the_row_the_list_highlights(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_assert = store.clone();
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(718);
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(author_filter_repo_with_authors(
+            repo_id,
+            &["Barb", "Bob", "boberta"],
+        )),
+    );
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    open_popover_for_test(cx, &view, PopoverKind::HistoryAuthorFilter { repo_id });
+    draw_and_drain_test_window(cx);
+
+    // "b" matches all three; three Downs land on the last of them.
+    cx.simulate_keystrokes("b");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("down down down");
+    draw_and_drain_test_window(cx);
+
+    // "bo" narrows to two, leaving the selection past the end.
+    cx.simulate_keystrokes("o");
+    draw_and_drain_test_window(cx);
+    cx.simulate_keystrokes("enter");
+
+    wait_until(cx, "the highlighted author to be applied", |cx| {
+        cx.update(|_window, _app| {
+            store_for_assert
+                .snapshot()
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| repo.history_state.history_author_filter.clone())
+                == Some("boberta".to_string())
+        })
+    });
+}
+
 #[gpui::test]
 fn repo_operation_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
