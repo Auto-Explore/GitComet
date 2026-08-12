@@ -80,6 +80,14 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
+        id: "rebase",
+        label: "Rebase Onto",
+        shortcut: Shortcut::None,
+        category: "Branch",
+        keywords: "rebase onto history rewrite",
+        requires_repo: true,
+    },
+    CommandEntry {
         id: "pull",
         label: "Pull",
         shortcut: Shortcut::None,
@@ -427,7 +435,6 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     // TODO: "checkout-remote-branch" - Checkout Remote Branch
     // TODO: "delete-remote-branch"   - Delete Remote Branch
     // TODO: "merge"                  - Merge Branch/Ref
-    // TODO: "rebase"                 - Rebase Onto
     // TODO: "delete-tag"             - Delete Tag
     // TODO: "remove-remote"          - Remove Remote
     // TODO: "edit-remote-url"        - Edit Remote URL
@@ -1207,6 +1214,16 @@ mod tests {
         assert!(
             filtered_commands(false, "rename branch").is_empty(),
             "Rename Branch requires an active repository"
+        );
+    }
+
+    #[test]
+    fn rebase_onto_is_available_for_repository_commands() {
+        let matches = filtered_commands(true, "rebase onto");
+        assert_eq!(matches.first().map(|command| command.id), Some("rebase"));
+        assert!(
+            filtered_commands(false, "rebase onto").is_empty(),
+            "Rebase Onto requires an active repository"
         );
     }
 }

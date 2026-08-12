@@ -129,6 +129,55 @@ pub(super) fn model(
         }),
     });
 
+    let file_permalink = this
+        .state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| {
+            let remotes = match &repo.remotes {
+                Loadable::Ready(remotes) => remotes,
+                _ => return None,
+            };
+            // The browsed source decides the permalink reference: the commit
+            // or branch being browsed, or the current branch for the working
+            // directory.
+            let (reference, is_branch) = match &source {
+                FileSource::Commit(commit_id) => (commit_id.as_ref().to_string(), false),
+                FileSource::Branch(name) => (name.clone(), true),
+                FileSource::WorkingDirectory => match &repo.head_branch {
+                    Loadable::Ready(head) if !head.is_empty() && head != "HEAD" => {
+                        (head.clone(), true)
+                    }
+                    _ => return None,
+                },
+            };
+            // A branch permalink is a `blob/<branch>` link that only resolves
+            // while the branch exists on the permalink's remote. For a
+            // local-only branch (never pushed) it would point at a nonexistent
+            // source, so don't offer the action in that case.
+            if is_branch
+                && let Loadable::Ready(remote_branches) = &repo.remote_branches
+                && !crate::view::permalink::branch_exists_on_permalink_remote(
+                    remotes,
+                    remote_branches,
+                    &reference,
+                )
+            {
+                return None;
+            }
+            crate::view::permalink::file_permalink(remotes, &reference, &path.display().to_string())
+        });
+    if let Some(permalink) = file_permalink {
+        items.push(ContextMenuItem::Entry {
+            label: "Copy file permalink".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyText { text: permalink }),
+        });
+    }
+
     items.push(ContextMenuItem::Separator);
     items.push(ContextMenuItem::Entry {
         label: "Copy path".into(),

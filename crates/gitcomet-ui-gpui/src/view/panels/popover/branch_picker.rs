@@ -12,8 +12,16 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             purpose: BranchPickerPurpose::Delete
         })
     );
+    let is_rebase_onto = matches!(
+        this.popover,
+        Some(PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::RebaseOnto
+        })
+    );
     let title = if is_delete {
         "Delete Branch"
+    } else if is_rebase_onto {
+        "Rebase Onto"
     } else {
         "Checkout Branch"
     };
@@ -38,7 +46,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     let branch_names = branches
                         .iter()
                         .filter_map(|b| {
-                            if is_delete && head_branch == Some(b.name.as_str()) {
+                            // The current branch cannot be rebased onto itself;
+                            // deleting it is impossible too.
+                            if (is_delete || is_rebase_onto) && head_branch == Some(b.name.as_str())
+                            {
                                 None
                             } else {
                                 Some(b.name.clone())
