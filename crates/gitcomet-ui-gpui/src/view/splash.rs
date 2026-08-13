@@ -12,6 +12,12 @@ const CONTENT_CARD_GAP_PX: f32 = 8.0;
 /// Bottom margin the main content card leaves for the bottom bar. The collapsed
 /// section popover matches it so its top/bottom gaps read symmetric.
 const CONTENT_CARD_BOTTOM_MARGIN_PX: f32 = 2.0;
+/// Width of the panel a collapsed-rail section (Local/Remote branches,
+/// Worktrees, Submodules, Stashes) opens into. Wider than the expanded
+/// sidebar's 280px default: the rail's popover is transient and floats over the
+/// canvas, so it can afford the room that branch names, worktree paths and
+/// stash summaries want, without the pane's permanent cost.
+const COLLAPSED_POPOVER_WIDTH_PX: f32 = 340.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
 /// Corner radius of the main content card — squarer than the shared `panel`
@@ -1042,7 +1048,7 @@ impl GitCometView {
             .ml(scaled_px(6.0))
             .top(scaled_px(4.0))
             .bottom(scaled_px(4.0) + px(CONTENT_CARD_BOTTOM_MARGIN_PX))
-            .w(scaled_px(268.0))
+            .w(scaled_px(COLLAPSED_POPOVER_WIDTH_PX))
             .flex()
             .flex_col()
             .child(panel)
