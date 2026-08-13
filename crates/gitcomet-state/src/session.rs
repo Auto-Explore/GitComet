@@ -547,14 +547,39 @@ pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
     persist_recent_repo_to_path(workdir, &path)
 }
 
+/// Storage key for a repository path in the recents list.
+///
+/// Canonicalized so the key matches the workdir the store holds for an open
+/// repository, which is canonicalized on open (see
+/// `gitcomet_state::store::canonicalize_path`). The repo picker relies on plain
+/// equality between the two to keep a still-open repository out of the
+/// "recently closed" section; on macOS, where the temp and home directories are
+/// reached through symlinks, an uncanonicalized key would compare unequal to the
+/// very same directory and the repository would be listed twice.
+///
+/// Falls back to the path as given when it cannot be canonicalized, so a
+/// repository that has since been deleted or unmounted still round-trips and
+/// stays removable from the list.
+fn recent_repo_storage_key(workdir: &Path) -> String {
+    path_storage_key(&gitcomet_core::path_utils::canonicalize_or_original(
+        workdir.to_path_buf(),
+    ))
+}
+
 pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
     with_session_file_persist_lock(|| {
         let mut file = load_file(session_file_path).unwrap_or_default();
         file.version = CURRENT_SESSION_FILE_VERSION;
 
-        let workdir_key = path_storage_key(workdir);
+        let workdir_key = recent_repo_storage_key(workdir);
+        // `raw_key` also drops the entry an older build wrote uncanonicalized,
+        // so re-opening a repository heals the list instead of duplicating it.
+        let raw_key = path_storage_key(workdir);
         let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
-        recent_repos.retain(|path| path.trim() != workdir_key);
+        recent_repos.retain(|path| {
+            let path = path.trim();
+            path != workdir_key && path != raw_key
+        });
         recent_repos.retain(|path| !path.trim().is_empty());
         recent_repos.insert(0, workdir_key);
         if recent_repos.len() > MAX_RECENT_REPOS {
@@ -577,11 +602,19 @@ pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> i
         let mut file = load_file(session_file_path).unwrap_or_default();
         file.version = CURRENT_SESSION_FILE_VERSION;
 
-        let workdir_key = path_storage_key(workdir);
+        // Must key exactly as `persist_recent_repo_to_path` does, or removal
+        // silently misses entries written in the other form.
+        let workdir_key = recent_repo_storage_key(workdir);
+        let raw_key = path_storage_key(workdir);
         let Some(recent_repos) = file.recent_repos.as_mut() else {
             return Ok(());
         };
-        recent_repos.retain(|path| path.trim() != workdir_key);
+        // `raw_key` also clears entries left by older builds, which stored the
+        // path uncanonicalized.
+        recent_repos.retain(|path| {
+            let path = path.trim();
+            path != workdir_key && path != raw_key
+        });
 
         persist_to_path(session_file_path, &file)
     })
@@ -2778,8 +2811,16 @@ mod tests {
         persist_recent_repo_to_path(&repo_b, &path).expect("persist second repo");
         persist_recent_repo_to_path(&repo_a, &path).expect("move repo to front");
 
+        // Recents are stored canonicalized so they compare equal to the workdir
+        // an open repository carries.
+        let canonical = |path: &std::path::Path| {
+            gitcomet_core::path_utils::canonicalize_or_original(path.to_path_buf())
+        };
         let loaded = load_from_path(&path);
-        assert_eq!(loaded.recent_repos, vec![repo_a, repo_b]);
+        assert_eq!(
+            loaded.recent_repos,
+            vec![canonical(&repo_a), canonical(&repo_b)]
+        );
     }
 
     #[test]
@@ -2816,6 +2857,51 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.recent_repos, vec![repo_a]);
+    }
+
+    #[test]
+    fn remove_recent_repo_drops_entries_written_uncanonicalized() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-legacy-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo);
+        let canonical = gitcomet_core::path_utils::canonicalize_or_original(repo.clone());
+        // Only meaningful where the temp directory is reached through a symlink
+        // (macOS /var -> /private/var); elsewhere the two forms coincide.
+        if canonical == repo {
+            return;
+        }
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                // The uncanonicalized form an older build would have written.
+                recent_repos: Some(vec![path_storage_key(&repo)]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        remove_recent_repo_to_path(&repo, &path).expect("remove legacy recent repo");
+
+        let loaded = load_from_path(&path);
+        assert!(
+            loaded.recent_repos.is_empty(),
+            "legacy uncanonicalized entry should have been removed, got {:?}",
+            loaded.recent_repos
+        );
     }
 
     #[test]

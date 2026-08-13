@@ -107,6 +107,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadConflictFile { .. }
             | Msg::LoadReflog { .. }
             | Msg::LoadRecentCommitMessages { .. }
+            | Msg::LoadHoverCommitMessage { .. }
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
@@ -1001,6 +1002,9 @@ fn reduce_inner(
             mode,
         } => effects::load_conflict_file(state, repo_id, path, mode),
         Msg::LoadReflog { repo_id } => effects::load_reflog(state, repo_id),
+        Msg::LoadHoverCommitMessage { repo_id, commit_id } => {
+            effects::load_hover_commit_message(state, repo_id, commit_id)
+        }
         Msg::LoadRecentCommitMessages { repo_id, limit } => {
             effects::load_recent_commit_messages(state, repo_id, limit)
         }
@@ -1904,6 +1908,11 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::MergeCommitMessageLoaded { repo_id, result }) => {
             external_and_history::merge_commit_message_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
+            repo_id,
+            commit_id,
+            result,
+        }) => effects::hover_commit_message_loaded(state, repo_id, commit_id, result),
         Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
             repo_id,
             path,

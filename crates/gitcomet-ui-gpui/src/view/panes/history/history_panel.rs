@@ -68,6 +68,9 @@ impl HistoryView {
             .on_scroll_wheel(move |_event, _window, cx| {
                 let _ = root_view_for_scroll.update(cx, |root, cx| {
                     root.close_history_refs_hover(cx);
+                    // Rows move out from under the pointer while scrolling, so
+                    // an open card would end up describing a different commit.
+                    root.dismiss_commit_message_hover(cx);
                 });
             });
             let list = restrict_scroll_to_vertical_axis(list);

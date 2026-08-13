@@ -3,8 +3,9 @@ use gpui::{AnyElement, Div, Stateful};
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
-type TextHighlight = (std::ops::Range<usize>, gpui::HighlightStyle);
-type TextHighlights = Vec<TextHighlight>;
+use crate::view::commit_message_text::{
+    TextHighlights, commit_link_style, commit_message_summary_highlights,
+};
 type MessageLinks = Arc<[components::MessageLink]>;
 type CommitMessageLinkHighlights = (TextHighlights, MessageLinks);
 
@@ -121,53 +122,6 @@ fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
         .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
         .child(value)
         .into_any_element()
-}
-
-/// Emphasis for the commit message's summary line (everything before the first
-/// newline), skipping stretches already claimed by link highlights so the
-/// resulting highlight set stays sorted and non-overlapping.
-fn commit_message_summary_highlights(
-    message: &str,
-    theme: AppTheme,
-    link_highlights: &[TextHighlight],
-) -> TextHighlights {
-    let summary_end = message.find('\n').unwrap_or(message.len());
-    if summary_end == 0 {
-        return Vec::new();
-    }
-    let style = gpui::HighlightStyle {
-        color: Some(theme.colors.emphasis_text.into()),
-        font_weight: Some(FontWeight::SEMIBOLD),
-        ..gpui::HighlightStyle::default()
-    };
-
-    let mut out = Vec::new();
-    let mut cursor = 0usize;
-    for (range, _) in link_highlights
-        .iter()
-        .filter(|(range, _)| range.start < summary_end)
-    {
-        if range.start > cursor {
-            out.push((cursor..range.start.min(summary_end), style));
-        }
-        cursor = cursor.max(range.end);
-    }
-    if cursor < summary_end {
-        out.push((cursor..summary_end, style));
-    }
-    out
-}
-
-fn commit_link_style(theme: AppTheme) -> gpui::HighlightStyle {
-    gpui::HighlightStyle {
-        color: Some(theme.colors.accent.into()),
-        underline: Some(gpui::UnderlineStyle {
-            thickness: px(1.0),
-            color: Some(theme.colors.accent.into()),
-            wavy: false,
-        }),
-        ..gpui::HighlightStyle::default()
-    }
 }
 
 fn commit_message_link_highlights(message: &str, theme: AppTheme) -> CommitMessageLinkHighlights {

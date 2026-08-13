@@ -32,6 +32,8 @@ pub(super) struct HistoryBaseCache {
 pub(super) struct HistoryDecorationCache {
     pub(super) request: HistoryDecorationCacheRequest,
     pub(super) row_vms: Arc<[HistoryDecorationRowVm]>,
+    /// Branch names referenced by [`HistoryDecorationRowVm::lane_branch`].
+    pub(super) branch_names: Arc<[SharedString]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -331,6 +333,11 @@ pub(super) struct HistoryDecorationRowVm {
     pub(super) branches_text: HistoryTextVm,
     pub(super) tag_names: Arc<[HistoryTextVm]>,
     pub(super) ref_items: Arc<[HistoryRefListItem]>,
+    /// Branch this commit belongs to, as an index into
+    /// [`HistoryDecorationCache::branch_names`]. Inherited down the lane from
+    /// the branch head that started it, so unlabelled commits can still say
+    /// which branch they are on.
+    pub(super) lane_branch: Option<u16>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1043,6 +1050,83 @@ pub(super) fn branch_sidebar_cache_store(
     });
 }
 
+/// Which rows lie on the first-parent chain of the branch picked in the sidebar.
+///
+/// Deliberately its own cache rather than a field on [`HistoryBaseCache`]:
+/// folding the selection into that cache's request would rebuild the whole graph
+/// -- up to 50k rows -- on every branch click, where the chain walk itself is
+/// O(chain depth).
+#[derive(Clone, Debug)]
+pub(super) struct HistoryBranchChainCache {
+    pub(super) repo_id: RepoId,
+    pub(super) log_fingerprint: u64,
+    /// Tip the chain was walked from. The chain depends only on the tip, so two
+    /// branches pointing at the same commit share a result.
+    pub(super) tip: Option<CommitId>,
+    /// One bit per index into the log page's `commits`, set when that commit is
+    /// on the chain. Indexed by commit index, which is what the row renderer
+    /// already resolves through `visible_indices`.
+    pub(super) on_chain: Arc<[u64]>,
+}
+
+impl HistoryBranchChainCache {
+    pub(super) fn is_empty(&self) -> bool {
+        self.tip.is_none()
+    }
+}
+
+/// Whether `commit_ix` is on the chain, against the bitset built by
+/// [`build_history_branch_chain_bits`].
+#[inline]
+pub(super) fn branch_chain_contains(bits: &[u64], commit_ix: usize) -> bool {
+    bits.get(commit_ix / 64)
+        .is_some_and(|word| word & (1u64 << (commit_ix % 64)) != 0)
+}
+
+/// Marks every commit reachable from `tip` by following first parents, for as
+/// far as the loaded page goes.
+///
+/// Builds an id lookup once -- the tip can sit anywhere in the page, so it is
+/// needed regardless -- then walks down. The first parent of a commit is almost
+/// always the very next row, which the walk takes without a lookup.
+pub(super) fn build_history_branch_chain_bits(commits: &[Commit], tip: &CommitId) -> Arc<[u64]> {
+    let mut id_to_index: HashMap<&str, usize> =
+        HashMap::with_capacity_and_hasher(commits.len(), Default::default());
+    for (ix, commit) in commits.iter().enumerate() {
+        // First occurrence wins, matching the row the history actually shows.
+        id_to_index.entry(commit.id.as_ref()).or_insert(ix);
+    }
+
+    let Some(mut ix) = id_to_index.get(tip.as_ref()).copied() else {
+        return Arc::from(Vec::new());
+    };
+
+    let mut bits = vec![0u64; commits.len().div_ceil(64)];
+    loop {
+        bits[ix / 64] |= 1u64 << (ix % 64);
+
+        let Some(parent) = commits[ix].parent_ids.first() else {
+            break;
+        };
+        let next = if commits
+            .get(ix + 1)
+            .is_some_and(|commit| commit.id.as_ref() == parent.as_ref())
+        {
+            Some(ix + 1)
+        } else {
+            id_to_index.get(parent.as_ref()).copied()
+        };
+        // Only ever walk downwards, so a parent that resolves above the current
+        // row ends the chain instead of looping forever.
+        match next {
+            Some(next) if next > ix => ix = next,
+            _ => break,
+        }
+    }
+
+    Arc::from(bits)
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct HistoryWorktreeSummaryCache {
     pub(super) repo_id: RepoId,
@@ -1106,6 +1190,56 @@ mod tests {
             author: "author".into(),
             time: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    fn chain_indices(commits: &[Commit], tip: &str) -> Vec<usize> {
+        let bits = build_history_branch_chain_bits(commits, &commit_id(tip));
+        (0..commits.len())
+            .filter(|ix| branch_chain_contains(&bits, *ix))
+            .collect()
+    }
+
+    #[test]
+    fn branch_chain_follows_first_parents_only() {
+        // `merge` has two parents; only the first-parent side is the branch's
+        // own line, so the side branch at index 1 must stay out.
+        let commits = vec![
+            commit("merge", &["base", "side"], "merge"),
+            commit("side", &["base"], "side work"),
+            commit("base", &["root"], "base"),
+            commit("root", &[], "root"),
+        ];
+
+        assert_eq!(chain_indices(&commits, "merge"), vec![0, 2, 3]);
+        assert_eq!(chain_indices(&commits, "side"), vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn branch_chain_walks_past_commits_that_are_not_the_next_row() {
+        // The first parent is not the adjacent row, so the walk has to resolve
+        // it through the id lookup rather than falling through to `ix + 1`.
+        let commits = vec![
+            commit("feature", &["base"], "feature"),
+            commit("other", &[], "unrelated"),
+            commit("base", &[], "base"),
+        ];
+
+        assert_eq!(chain_indices(&commits, "feature"), vec![0, 2]);
+    }
+
+    #[test]
+    fn branch_chain_is_empty_when_the_tip_is_not_in_the_page() {
+        let commits = vec![commit("a", &[], "a")];
+        assert!(chain_indices(&commits, "missing").is_empty());
+    }
+
+    #[test]
+    fn branch_chain_terminates_when_a_parent_resolves_above_the_tip() {
+        // A parent that resolves to an earlier row would loop forever if the
+        // walk did not insist on moving downwards.
+        let commits = vec![commit("base", &[], "base"), commit("tip", &["base"], "tip")];
+
+        assert_eq!(chain_indices(&commits, "tip"), vec![1]);
     }
 
     #[test]

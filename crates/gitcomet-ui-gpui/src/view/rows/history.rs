@@ -3,6 +3,7 @@ use super::diff_text::*;
 use super::history_canvas;
 use super::*;
 
+use crate::view::caches::branch_chain_contains;
 use crate::view::markdown_preview::{
     MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineImage, MarkdownInlineStyle,
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
@@ -2721,6 +2722,11 @@ impl HistoryView {
         let (show_working_tree_summary_row, worktree_counts) =
             this.ensure_history_worktree_summary_cache();
         let stash_ids = this.ensure_history_stash_ids_cache();
+        // Cloned out of `this` so the row loop below can borrow it immutably
+        // alongside the repo snapshot; it is an `Arc` bitset, so this is cheap.
+        let branch_chain = this
+            .ensure_history_branch_chain_cache()
+            .map(|cache| cache.on_chain.clone());
 
         let Some(repo) = this.active_repo() else {
             return Vec::new();
@@ -2796,8 +2802,18 @@ impl HistoryView {
                     || stash_ids
                         .as_ref()
                         .is_some_and(|ids| ids.contains(&commit.id));
+                // `None` when no branch is picked: every row then renders at full
+                // strength rather than every row being dimmed.
+                let on_branch_chain = branch_chain
+                    .as_ref()
+                    .map(|bits| branch_chain_contains(bits, commit_ix));
                 let when = base_row_vm.when.resolve(display_key);
                 let short_sha = base_row_vm.short_sha.resolve();
+
+                let lane_branch_name = decoration_row_vm
+                    .lane_branch
+                    .and_then(|ix| cache.decorations.branch_names.get(usize::from(ix)))
+                    .cloned();
 
                 Some(history_table_row(
                     theme,
@@ -2821,6 +2837,8 @@ impl HistoryView {
                     Arc::clone(&decoration_row_vm.tag_names),
                     Arc::clone(&decoration_row_vm.ref_items),
                     selected_branch,
+                    on_branch_chain,
+                    lane_branch_name,
                     base_row_vm.author.clone(),
                     base_row_vm.summary.clone(),
                     when,
@@ -2845,8 +2863,11 @@ fn history_worktree_node_color(
     graph_rows
         .and_then(|rows| rows.first())
         .and_then(|row| {
+            // Column 0 can be a hole, whose `color_ix` is a real palette index
+            // rather than a lane's colour.
             row.lanes_now
                 .first()
+                .filter(|lane| lane.is_active())
                 .map(|lane| history_graph::lane_color(theme, lane.color_ix))
         })
         .unwrap_or_else(|| history_graph::lane_color(theme, 0))
@@ -2883,6 +2904,12 @@ fn history_table_row(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
+    // `Some(true)` when a branch is picked in the sidebar and this row sits on
+    // its first-parent chain; `None` when no branch is picked.
+    on_branch_chain: Option<bool>,
+    // Branch this commit belongs to, shown as a faded badge while the row is
+    // hovered. Inherited down the lane, so unlabelled commits have one too.
+    lane_branch_name: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
@@ -2919,6 +2946,8 @@ fn history_table_row(
         tag_names,
         ref_items,
         selected_branch,
+        on_branch_chain,
+        lane_branch_name,
         author,
         summary,
         when,
