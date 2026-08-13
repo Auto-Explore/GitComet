@@ -8,6 +8,9 @@ pub(super) enum WorkspaceRow {
     Worktree(std::path::PathBuf),
     /// Hand off to the Add-worktree dialog, prefilled from the query.
     CreateNew,
+    /// The nth entry of the row menu floating over the picker, which takes the
+    /// arrow keys while it is up.
+    RowAction(usize),
 }
 
 /// Rows the picker displays, in render order, paired with what each one does
@@ -162,6 +165,24 @@ pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
     }
 }
 
+/// Everything [`rows`] reads, digested for the cache. Mirrors the
+/// `RepoPopoverKind::Worktree` arm of [`super::fingerprint`], which tracks HEAD
+/// as well because the create row names the ref it would branch from. No
+/// relative dates on these rows, so the clock stays out of it: they say what is
+/// checked out and where, not when.
+pub(super) fn rows_signature(repo: &RepoState) -> u64 {
+    use std::hash::Hash;
+
+    super::rows_cache::signature(|hasher| {
+        repo.id.hash(hasher);
+        repo.head_branch_rev.hash(hasher);
+        repo.worktrees_rev.hash(hasher);
+        super::rows_cache::loadable_kind(&repo.open).hash(hasher);
+        // The picker marks the row whose path is the active workdir.
+        repo.spec.workdir.hash(hasher);
+    })
+}
+
 /// The cached rows for `query`: the items, the filtered layout, and the payload
 /// behind each row. Every caller goes through this, so a frame that only
 /// repaints reuses the rows instead of rebuilding them.
@@ -173,7 +194,11 @@ pub(super) fn cached(
     let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
         return super::rows_cache::CachedRows::empty();
     };
-    let key = super::rows_cache::RowsCacheKey::for_workspace(repo, query);
+    let key = super::rows_cache::RowsCacheKey::new(
+        super::rows_cache::RowsCacheOwner::Workspace,
+        rows_signature(repo),
+        query,
+    );
     super::rows_cache::get_or_build(&this.workspace_picker_rows_cache, key, |_now| {
         let built = rows(repo, query);
         (built.items, built.rows, built.marked_index)
@@ -196,6 +221,8 @@ pub(super) fn activate(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match row {
+        // Menu entries never reach here: they run through the row menu itself.
+        WorkspaceRow::RowAction(_) => {}
         WorkspaceRow::Worktree(path) => {
             let is_current = this
                 .state
@@ -259,6 +286,7 @@ pub(super) fn panel(
     let query = search.read_with(cx, |input, _| input.text().trim().to_string());
     let built = cached(this, repo_id, &query);
     let row_payloads = Rc::clone(&built.payloads);
+    let menu_payloads = Rc::clone(&built.payloads);
 
     components::context_menu(
         theme,
@@ -268,15 +296,34 @@ pub(super) fn panel(
             .prebuilt_items(Rc::clone(&built.items), Rc::clone(&built.layout))
             // Long ref lists render only what is on screen; keyboard
             // navigation scrolls by the row geometry to match
-            // (`scroll_picker_prompt_to_row`).
-            .windowed_rows()
             .tooltip_host(this.tooltip_host.clone())
             // Only reachable when the repo is gone: the create row always
             // matches, so a present repo never yields an empty list.
             .empty_text("No repository")
             .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
-            .selected_index(this.workspace_picker_selected_index)
+            .selected_index(
+                // While a row menu is open the arrow keys walk its entries, so
+                // the list's highlight marks the invoking row instead.
+                this.picker_row_menu
+                    .as_ref()
+                    .map(|menu| menu.display_index)
+                    .or(this.workspace_picker_selected_index),
+            )
             .marked_index(built.marked_index)
+            // Right-click offers the worktree its sidebar row offers, floating
+            // over the picker rather than replacing it.
+            .on_context_menu(cx.listener(
+                move |this, event: &components::PickerPromptContextMenuEvent, _window, cx| {
+                    let Some(row) = menu_payloads.get(event.original_index).cloned() else {
+                        return;
+                    };
+                    let target = picker_row_menu::PickerRowMenuTarget::Worktree { repo_id, row };
+                    if !target.has_menu(this) {
+                        return;
+                    }
+                    picker_row_menu::open(this, target, event.display_index, event.position, cx);
+                },
+            ))
             .render(
                 theme,
                 ui_scale_percent,

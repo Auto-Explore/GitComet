@@ -119,8 +119,11 @@ impl PickerPromptFrameFixture {
         self.draw_frame(true)
     }
 
-    /// Cost of the same frame with the list unwindowed, which builds elements for
-    /// every matched row: the behaviour before the list was windowed.
+    /// Cost of the same frame with every matched row turned into an element:
+    /// the behaviour before the list was windowed. Reached by handing the picker
+    /// a viewport tall enough to hold the whole list, which is the same test
+    /// `PickerPromptGeometry::window` applies — a list that fits is never
+    /// windowed.
     pub fn run_frame_full_list(&mut self) -> u64 {
         self.run_frame_full_list_with_metrics().0
     }
@@ -135,13 +138,13 @@ impl PickerPromptFrameFixture {
         let layout = Rc::new(layout);
         let hash = hash_picker_rows(&items, &layout);
 
-        let max_height = px(PICKER_LIST_MAX_HEIGHT_PX);
         let geometry = PickerPromptGeometry::new(&items, &layout, 100u32);
-        let rendered = if windowed {
-            geometry.visible_rows(px(0.0), max_height)
+        let max_height = if windowed {
+            px(PICKER_LIST_MAX_HEIGHT_PX)
         } else {
-            0..layout.item_indices.len()
+            geometry.total_height()
         };
+        let rendered = geometry.visible_rows(px(0.0), max_height);
         let mut metrics = self.base_metrics();
         metrics.rows_matched = layout.item_indices.len() as u64;
         metrics.rows_rendered = rendered.len() as u64;
@@ -151,7 +154,13 @@ impl PickerPromptFrameFixture {
         let query = self.query.clone();
         self.window
             .update(&mut self.cx, |view, _window, cx| {
-                view.set_rows(Rc::clone(&items), Rc::clone(&layout), windowed, &query, cx);
+                view.set_rows(
+                    Rc::clone(&items),
+                    Rc::clone(&layout),
+                    max_height,
+                    &query,
+                    cx,
+                );
             })
             .expect("picker benchmark window should stay open");
         self.cx
@@ -265,7 +274,9 @@ pub struct PickerPromptBenchView {
     scroll_handle: ScrollHandle,
     items: Rc<[PickerPromptItem]>,
     layout: Rc<PickerPromptLayout>,
-    windowed: bool,
+    /// Viewport the list is drawn into. A benchmark measuring an unwindowed
+    /// frame makes this as tall as the whole list.
+    max_height: Pixels,
 }
 
 impl PickerPromptBenchView {
@@ -286,7 +297,7 @@ impl PickerPromptBenchView {
             scroll_handle: ScrollHandle::new(),
             items: Rc::from(Vec::new()),
             layout: Rc::new(PickerPromptLayout::default()),
-            windowed: true,
+            max_height: px(PICKER_LIST_MAX_HEIGHT_PX),
         }
     }
 
@@ -294,13 +305,13 @@ impl PickerPromptBenchView {
         &mut self,
         items: Rc<[PickerPromptItem]>,
         layout: Rc<PickerPromptLayout>,
-        windowed: bool,
+        max_height: Pixels,
         query: &str,
         cx: &mut gpui::Context<Self>,
     ) {
         self.items = items;
         self.layout = layout;
-        self.windowed = windowed;
+        self.max_height = max_height;
         let current = self.query_input.read(cx).text().to_string();
         if current != query {
             let query = query.to_string();
@@ -314,12 +325,9 @@ impl PickerPromptBenchView {
 
 impl Render for PickerPromptBenchView {
     fn render(&mut self, _window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
-        let mut picker = PickerPrompt::new(self.query_input.clone(), self.scroll_handle.clone())
+        PickerPrompt::new(self.query_input.clone(), self.scroll_handle.clone())
             .prebuilt_items(Rc::clone(&self.items), Rc::clone(&self.layout))
-            .max_height(px(PICKER_LIST_MAX_HEIGHT_PX));
-        if self.windowed {
-            picker = picker.windowed_rows();
-        }
-        picker.render(self.theme, 100u32, cx, |_, _, _, _, _| {})
+            .max_height(self.max_height)
+            .render(self.theme, 100u32, cx, |_, _, _, _, _| {})
     }
 }
