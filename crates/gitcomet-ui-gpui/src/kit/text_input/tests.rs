@@ -429,6 +429,87 @@ impl Render for ScrolledPlainInputView {
 }
 
 #[gpui::test]
+fn mouse_drag_resolves_its_press_after_an_invalidated_layout(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: false,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha beta gamma", cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    let (anchor_position, target_position) = cx.update(|_window, app| {
+        let input = input.read(app);
+        let bounds = input.layout.bounds.expect("text input bounds");
+        let y = bounds.center().y;
+        let position_for_offset = |wanted| {
+            (0..f32::from(bounds.size.width).ceil() as usize)
+                .map(|x| point(bounds.left() + px(x as f32), y))
+                .find(|position| input.index_for_mouse_position(*position) == wanted)
+                .unwrap_or_else(|| panic!("a hit position for offset {wanted}"))
+        };
+        (position_for_offset(6), position_for_offset(10))
+    });
+
+    // Replace the text and press before the next paint. The old implementation
+    // resolved this temporarily layout-less press as byte zero.
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text("alpha beta gamma delta", cx);
+            assert!(input.layout.last.is_none());
+            input.on_mouse_down(
+                &MouseDownEvent {
+                    position: anchor_position,
+                    modifiers: gpui::Modifiers::default(),
+                    button: MouseButton::Left,
+                    click_count: 1,
+                    first_mouse: false,
+                },
+                window,
+                cx,
+            );
+            assert_eq!(
+                input.selection.range,
+                input.text().len()..input.text().len(),
+                "the unavailable layout must not invent a selection from byte zero"
+            );
+        });
+        let _ = window.draw(app);
+    });
+
+    let expected = cx.update(|_window, app| {
+        let input = input.read(app);
+        let anchor = input.index_for_mouse_position(anchor_position);
+        let target = input.index_for_mouse_position(target_position);
+        anchor.min(target)..anchor.max(target)
+    });
+    assert!(expected.start > 0);
+    cx.simulate_mouse_move(
+        target_position,
+        Some(MouseButton::Left),
+        gpui::Modifiers::default(),
+    );
+    cx.update(|_window, app| {
+        assert_eq!(input.read(app).selection.range, expected);
+    });
+    cx.simulate_mouse_up(
+        target_position,
+        MouseButton::Left,
+        gpui::Modifiers::default(),
+    );
+}
+
+#[gpui::test]
 fn plain_multiline_layout_shapes_only_the_viewport_of_a_large_document(
     cx: &mut gpui::TestAppContext,
 ) {
