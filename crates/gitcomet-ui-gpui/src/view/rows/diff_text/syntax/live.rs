@@ -2010,6 +2010,60 @@ mod injection_tests {
         );
     }
 
+    fn vue_document(text: &str) -> LiveSyntaxDocument {
+        LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::Vue,
+            Rope::from_str(text),
+            Vec::new().into(),
+            None,
+        )
+        .expect("vue live document should build")
+    }
+
+    /// The editor uses this layer engine rather than `prepared.rs`, so Vue's
+    /// script/style/interpolation injections need covering here too.
+    #[test]
+    fn vue_sections_are_highlighted_by_their_own_grammars() {
+        let text = concat!(
+            "<template>\n",
+            "  <p v-if=\"count > 10\">{{ count }}</p>\n",
+            "</template>\n",
+            "\n",
+            "<script setup lang=\"ts\">\n",
+            "const count = 42;\n",
+            "</script>\n",
+            "\n",
+            "<style lang=\"scss\">\n",
+            ".wrapper { color: red; }\n",
+            "</style>\n",
+        );
+        let document = vue_document(text);
+        assert!(
+            !document.injections.is_empty(),
+            "the SFC should produce injected layers"
+        );
+
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let highlights = snapshot.highlights_for_byte_range(0..text.len());
+
+        // `const` can only be coloured by the injected TypeScript layer: the Vue
+        // grammar sees the whole script body as one `raw_text` node.
+        assert!(
+            !styles_for(&highlights, text, "const").is_empty(),
+            "expected the injected TypeScript layer to highlight `const`: {highlights:?}"
+        );
+        // Likewise `color` comes from the injected CSS layer.
+        assert!(
+            !styles_for(&highlights, text, "color").is_empty(),
+            "expected the injected CSS layer to highlight `color`: {highlights:?}"
+        );
+        // And the root Vue grammar still highlights the template markup.
+        assert!(
+            !styles_for(&highlights, text, "template").is_empty(),
+            "the host grammar must keep highlighting its own tags"
+        );
+    }
+
     /// A document whose language has no injection query must be unaffected.
     #[test]
     fn languages_without_injections_build_no_layers() {

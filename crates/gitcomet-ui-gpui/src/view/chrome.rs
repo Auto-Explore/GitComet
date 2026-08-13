@@ -5,9 +5,11 @@ use std::rc::Rc;
 
 pub(super) const CLIENT_SIDE_DECORATION_INSET_PX: f32 = 10.0;
 pub(super) const TITLE_BAR_HEIGHT_PX: f32 = 38.0;
-/// Empty title-bar width kept beside repository tabs so the window always has
-/// an easy-to-hit drag surface, even when the tab strip overflows.
-const REPO_TABS_TRAILING_DRAG_WIDTH_PX: f32 = 64.0;
+/// Empty title-bar width kept beside repository tabs so a full tab strip still
+/// leaves somewhere to grab the window. Deliberately near the smallest usable
+/// grab target: every pixel here is width the tab strip can never use, so it
+/// narrows tabs before the bar is even full.
+const REPO_TABS_TRAILING_DRAG_WIDTH_PX: f32 = 24.0;
 const MACOS_TRAFFIC_LIGHTS_SAFE_INSET_PX: f32 = 78.0;
 #[cfg(test)]
 pub(super) const CLIENT_SIDE_DECORATION_INSET: Pixels = px(CLIENT_SIDE_DECORATION_INSET_PX);
@@ -678,60 +680,6 @@ impl Render for TitleBarView {
             crate::app::close_window_or_warn(window, cx);
         }));
 
-        let free_badge_bg = with_alpha(
-            theme.colors.text_muted,
-            if theme.is_dark { 0.22 } else { 0.16 },
-        );
-        let free_badge_border = with_alpha(
-            theme.colors.text_muted,
-            if theme.is_dark { 0.34 } else { 0.28 },
-        );
-        let free_badge_text =
-            with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 });
-        let free_badge_hover_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
-        let free_badge_hover_border =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.42 } else { 0.34 });
-        let free_badge_active_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.20 });
-        let free_badge_active_border =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.58 } else { 0.46 });
-        let free_badge_tooltip: SharedString = "See GitComet editions".into();
-        let free_badge = div()
-            .id("free_badge")
-            .debug_selector(|| "titlebar_free_badge".to_string())
-            .h(scaled_px(18.0))
-            .px(scaled_px(6.0))
-            .flex()
-            .items_center()
-            .justify_center()
-            .rounded(px(theme.radii.pill))
-            .cursor(CursorStyle::PointingHand)
-            .bg(free_badge_bg)
-            .border_1()
-            .border_color(free_badge_border)
-            .text_size(scaled_px(11.0))
-            .line_height(scaled_px(12.0))
-            .font_weight(FontWeight::NORMAL)
-            .text_color(free_badge_text)
-            .hover(move |s| {
-                s.bg(free_badge_hover_bg)
-                    .border_color(free_badge_hover_border)
-                    .text_color(theme.colors.accent)
-            })
-            .active(move |s| {
-                s.bg(free_badge_active_bg)
-                    .border_color(free_badge_active_border)
-                    .text_color(theme.colors.accent)
-            })
-            .block_mouse_except_scroll()
-            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
-                cx.stop_propagation();
-                cx.open_url(EDITIONS_URL);
-            }))
-            .gitcomet_tooltip(theme, free_badge_tooltip.clone())
-            .child("FREE");
-
         // Leading and trailing clusters center on the full bar height; tab
         // labels compensate for their bottom fusion (see `Tab::render`) so
         // icons and tab text share the bar's true midline.
@@ -821,7 +769,6 @@ impl Render for TitleBarView {
                     .items_center()
                     .h_full()
                     .gap(scaled_px(4.0))
-                    .child(free_badge)
                     .when(!is_macos, |d| d.child(min).child(max).child(close))
                     .pr(scaled_px(8.0)),
             )

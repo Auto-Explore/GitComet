@@ -4609,7 +4609,9 @@ fn load_log_effect_uses_history_mode_api() {
         msg_tx,
         Effect::LoadLog {
             repo_id,
+            seq: 1,
             scope: LogScope::NoMerges,
+            author: None,
             limit: 20,
             cursor: Some(cursor.clone()),
         },
@@ -4621,11 +4623,13 @@ fn load_log_effect_uses_history_mode_api() {
     match msg {
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id: got_repo_id,
+            seq,
             scope,
             cursor: got_cursor,
             result: Ok(page),
         }) => {
             assert_eq!(got_repo_id, repo_id);
+            assert_eq!(seq, 1, "the reply carries the sequence of its request");
             assert_eq!(scope, LogScope::NoMerges);
             assert_eq!(got_cursor, Some(cursor));
             assert!(page.commits.is_empty());
@@ -4986,7 +4990,9 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::LoadLog {
                 repo_id,
+                seq: 1,
                 scope: LogScope::CurrentBranch,
+                author: None,
                 limit: 20,
                 cursor: None,
             },
@@ -4995,7 +5001,9 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
         (
             Effect::LoadLog {
                 repo_id,
+                seq: 2,
                 scope: LogScope::AllBranches,
+                author: None,
                 limit: 20,
                 cursor: Some(LogCursor {
                     last_seen: CommitId("cursor".into()),

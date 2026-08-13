@@ -23,10 +23,24 @@ pub(crate) fn bench_git_ops(c: &mut Criterion) {
         env_usize("GITCOMET_BENCH_GIT_FILE_HISTORY_REQUESTED_COMMITS", 200);
     let file_history_touch_every = env_usize("GITCOMET_BENCH_GIT_FILE_HISTORY_TOUCH_EVERY", 10);
 
+    let log_author_filter_total_commits =
+        env_usize("GITCOMET_BENCH_GIT_LOG_AUTHOR_FILTER_COMMITS", 100_000);
+    let log_author_filter_requested_commits =
+        env_usize("GITCOMET_BENCH_GIT_LOG_AUTHOR_FILTER_REQUESTED", 200);
+    // Rare enough that a 200-commit page cannot be filled without walking the
+    // whole 100k history — the shape that was taking tens of seconds.
+    let log_author_filter_rare_every =
+        env_usize("GITCOMET_BENCH_GIT_LOG_AUTHOR_FILTER_EVERY", 2_000);
+
     let status_dirty = GitOpsFixture::status_dirty(status_files, status_dirty_files);
     let log_walk = GitOpsFixture::log_walk(log_commits, log_commits);
     let log_walk_shallow =
         GitOpsFixture::log_walk(log_shallow_total_commits, log_shallow_requested_commits);
+    let log_walk_author_filter = GitOpsFixture::log_walk_author_filter(
+        log_author_filter_total_commits,
+        log_author_filter_requested_commits,
+        log_author_filter_rare_every,
+    );
     let status_clean = GitOpsFixture::status_clean(status_clean_files);
     let ref_enumerate = GitOpsFixture::ref_enumerate(ref_count);
     let diff_rename = GitOpsFixture::diff_rename_heavy(diff_rename_files);
@@ -53,6 +67,10 @@ pub(crate) fn bench_git_ops(c: &mut Criterion) {
     group.bench_function(
         BenchmarkId::from_parameter("log_walk_100k_commits_shallow"),
         |b| b.iter(|| log_walk_shallow.run()),
+    );
+    group.bench_function(
+        BenchmarkId::from_parameter("log_walk_author_filter_100k_commits"),
+        |b| b.iter(|| log_walk_author_filter.run()),
     );
     group.bench_function(BenchmarkId::from_parameter("status_clean_10k_files"), |b| {
         b.iter(|| status_clean.run())

@@ -202,6 +202,12 @@ pub enum Msg {
         repo_id: RepoId,
         scope: LogScope,
     },
+    /// Restricts the history to commits authored by `author` (case-insensitive
+    /// match on the author name). `None` clears the filter.
+    SetHistoryAuthorFilter {
+        repo_id: RepoId,
+        author: Option<String>,
+    },
     SetFetchPruneDeletedRemoteTrackingBranches {
         repo_id: RepoId,
         enabled: bool,
@@ -970,9 +976,20 @@ pub enum InternalMsg {
     },
     LogLoaded {
         repo_id: RepoId,
+        seq: crate::model::LogLoadSeq,
         scope: LogScope,
         cursor: Option<LogCursor>,
         result: Result<LogPage, Error>,
+    },
+    /// A partially built log page, reported while the walk is still running so
+    /// an author filter on a large repository shows what it has found instead
+    /// of nothing. `commits` is the page so far — successive chunks are
+    /// prefixes of each other — and `scanned` counts commits visited.
+    LogChunkLoaded {
+        repo_id: RepoId,
+        seq: crate::model::LogLoadSeq,
+        commits: Vec<Commit>,
+        scanned: u64,
     },
     TagsLoaded {
         repo_id: RepoId,

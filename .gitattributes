@@ -25,6 +25,8 @@ NOTICE      text eol=lf
 crates/gitcomet-core/tests/fixtures/merge/*.txt -text
 # Third-party font files ship with their own line endings.
 crates/gitcomet-ui-gpui/assets/fonts/** -text
+# Vendored tree-sitter grammars are upstream sources, not our code.
+vendor/** linguist-vendored
 
 *.bat       text eol=crlf
 *.cmd       text eol=crlf

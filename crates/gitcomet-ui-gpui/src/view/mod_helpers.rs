@@ -4535,6 +4535,9 @@ pub(super) enum PopoverKind {
     HistoryBranchFilter {
         repo_id: RepoId,
     },
+    HistoryAuthorFilter {
+        repo_id: RepoId,
+    },
     DiffContentModeSettings,
     ChangeTrackingSettings,
     UiScalePicker,

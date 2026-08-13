@@ -467,12 +467,15 @@ pub(super) fn schedule_load_upstream_divergence(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_log(
     executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    seq: crate::model::LogLoadSeq,
     scope: LogScope,
+    author: Option<String>,
     limit: usize,
     cursor: Option<LogCursor>,
     cancellation: CancellationToken,
@@ -487,12 +490,36 @@ pub(super) fn schedule_load_log(
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
-                repo.log_history_mode_page_cancellable(scope, limit, cursor_ref, &cancellation)
+                // Report the page as it fills in. Finding one page of a rare
+                // author means walking the whole history — over ten seconds on
+                // a repository with a million commits — and the user should not
+                // be looking at the previous filter's rows for all of it.
+                let chunk_tx = msg_tx.clone();
+                let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
+                    send_or_log(
+                        &chunk_tx,
+                        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+                            repo_id,
+                            seq,
+                            commits: chunk.commits,
+                            scanned: chunk.scanned,
+                        }),
+                    );
+                };
+                repo.log_history_mode_page_streaming(
+                    scope,
+                    author.as_deref(),
+                    limit,
+                    cursor_ref,
+                    &cancellation,
+                    &mut on_chunk,
+                )
             };
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
+                    seq,
                     scope,
                     cursor,
                     result,
@@ -504,6 +531,7 @@ pub(super) fn schedule_load_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
+                    seq,
                     scope,
                     cursor: cursor_on_missing,
                     result: Err(missing_repo_error(repo_id)),

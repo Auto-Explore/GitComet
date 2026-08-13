@@ -7,6 +7,7 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         }
         "markdown-inline" | "markdown_inline" => DiffSyntaxLanguage::MarkdownInline,
         "html" | "htm" => DiffSyntaxLanguage::Html,
+        "vue" => DiffSyntaxLanguage::Vue,
         "xml" | "svg" | "xsl" | "xslt" | "xsd" | "xhtml" | "plist" | "csproj" | "fsproj"
         | "vbproj" | "sln" | "props" | "targets" | "resx" | "xaml" | "wsdl" | "rss" | "atom"
         | "opml" | "glade" | "ui" | "iml" => DiffSyntaxLanguage::Xml,
@@ -207,6 +208,11 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
+        )),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Vue => Some((
+            tree_sitter_vue::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(VUE_HIGHLIGHTS_QUERY, VUE_INJECTIONS_QUERY),
         )),
         #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Css => Some((
@@ -454,6 +460,95 @@ macro_rules! highlight_spec_entry {
     }};
 }
 
+/// Builds the highlight specs an injection query can reach, so the render path
+/// does not have to.
+///
+/// `init_highlight_spec` compiles a grammar's queries, and for the big grammars
+/// that is not cheap: measured cold on this machine, TypeScript is ~86ms, Tsx
+/// ~80ms, Rust ~48ms, JavaScript ~30ms (Vue's own is ~3ms, Css ~0.5ms). None of
+/// it is covered by `DIFF_SYNTAX_FOREGROUND_PARSE_BUDGET_NON_TEST` -- that
+/// budget interrupts `parse`, not `Query::new` -- so whichever thread first
+/// needs a spec pays the whole cost inline.
+///
+/// For a root document that lands during prepare, which is already off the UI
+/// thread or already budgeted. Injected languages are the problem: their specs
+/// are first touched by `ensure_injection_cached`, which runs while building
+/// line tokens for lines that are about to be drawn. Vue makes that sharply
+/// worse than other languages, because a single `.vue` file reaches three specs
+/// -- Vue for the template, TypeScript for `<script lang="ts">` plus every
+/// interpolation and directive, Css for `<style>` -- where a `.ts` file reaches
+/// one. Scrolling from the template into the script block was an ~86ms stall.
+///
+/// Targets are read back off the compiled injection query rather than listed
+/// here, so this keeps working when a query changes. It only sees
+/// `#set! injection.language` targets, not the ones carried in an
+/// `@injection.language` capture (Vue's `lang="scss"`), which is fine: the
+/// captured ones resolve to Css, and Css is one of the cheap specs.
+fn warm_reachable_highlight_specs(language: DiffSyntaxLanguage) {
+    let Some(spec) = tree_sitter_highlight_spec(language) else {
+        return;
+    };
+    let Some(injection_query) = spec.injection_query.as_ref() else {
+        return;
+    };
+    for pattern_ix in 0..injection_query.pattern_count() {
+        for setting in injection_query.property_settings(pattern_ix) {
+            if setting.key.as_ref() != "injection.language" {
+                continue;
+            }
+            let Some(target) = setting
+                .value
+                .as_deref()
+                .and_then(injection_language_from_name)
+            else {
+                continue;
+            };
+            let _ = tree_sitter_highlight_spec(target);
+        }
+    }
+}
+
+fn highlight_spec_warmup_sender() -> Option<&'static std::sync::mpsc::Sender<DiffSyntaxLanguage>> {
+    static SENDER: OnceLock<Option<std::sync::mpsc::Sender<DiffSyntaxLanguage>>> = OnceLock::new();
+    SENDER
+        .get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel::<DiffSyntaxLanguage>();
+            let builder = std::thread::Builder::new().name("gitcomet-syntax-warm".to_string());
+            let _handle = builder
+                .spawn(move || {
+                    while let Ok(language) = rx.recv() {
+                        warm_reachable_highlight_specs(language);
+                    }
+                })
+                .ok()?;
+            Some(tx)
+        })
+        .as_ref()
+}
+
+/// Asks the warm-up thread to build the specs `language` can inject into.
+///
+/// Cheap and idempotent: at most one request per language per process. Racing
+/// the render path is harmless -- `OnceLock::get_or_init` makes the loser wait
+/// on the winner instead of duplicating the work -- so the worst case is the
+/// status quo and the common case (a `.vue` opens showing its template, and the
+/// script block is not drawn until the user scrolls) hides the cost entirely.
+pub(super) fn request_highlight_spec_warmup(language: DiffSyntaxLanguage) {
+    static REQUESTED: OnceLock<Mutex<HashSet<DiffSyntaxLanguage>>> = OnceLock::new();
+    let requested = REQUESTED.get_or_init(|| Mutex::new(HashSet::default()));
+    {
+        let Ok(mut requested) = requested.lock() else {
+            return;
+        };
+        if !requested.insert(language) {
+            return;
+        }
+    }
+    if let Some(sender) = highlight_spec_warmup_sender() {
+        let _ = sender.send(language);
+    }
+}
+
 pub(super) fn tree_sitter_highlight_spec(
     language: DiffSyntaxLanguage,
 ) -> Option<&'static TreesitterHighlightSpec> {
@@ -464,6 +559,8 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::MarkdownInline => highlight_spec_entry!(MarkdownInline),
         #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
         #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Css => highlight_spec_entry!(Css),
         #[cfg(any(test, feature = "syntax-extra"))]
