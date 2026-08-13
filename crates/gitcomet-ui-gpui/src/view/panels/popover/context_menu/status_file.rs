@@ -103,6 +103,12 @@ pub(super) fn model(
         );
     }
 
+    // Same helper the dialog seeds itself from, so the entry can never offer an
+    // action the dialog would then refuse.
+    let can_add_to_gitignore = this
+        .add_to_gitignore_target(repo_id, area, &path.to_path_buf(), cx)
+        .is_some();
+
     // Keep context menu opening fast. Validate precisely when the action runs instead.
     let can_discard_worktree_changes = if is_conflicted {
         false
@@ -331,6 +337,28 @@ pub(super) fn model(
             shortcut: Some(secondary_shortcut("D").into()),
             disabled: !can_discard_worktree_changes,
             action: Box::new(ContextMenuAction::DiscardWorktreeChangesSelectionOrPath {
+                repo_id,
+                area,
+                path: path.to_path_buf(),
+            }),
+        });
+    }
+
+    // Only untracked paths: `.gitignore` has no effect on anything already in
+    // the index, so offering this for a tracked file would write a line that
+    // changes nothing and leave the row exactly where it was. Hidden rather
+    // than disabled — there is no action to explain.
+    if can_add_to_gitignore {
+        items.push(ContextMenuItem::Entry {
+            label: if use_selection {
+                format!("Add {selected_count} files to .gitignore…").into()
+            } else {
+                "Add to .gitignore…".into()
+            },
+            icon: Some("icons/unlink.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::AddToGitignoreSelectionOrPath {
                 repo_id,
                 area,
                 path: path.to_path_buf(),

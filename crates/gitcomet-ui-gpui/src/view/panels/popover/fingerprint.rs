@@ -172,6 +172,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
+        | PopoverKind::AddToGitignorePrompt { repo_id, .. }
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::RebaseOntoConfirm { repo_id, .. }
@@ -355,6 +356,10 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
+        // Its contents are computed once when it opens and then owned by the
+        // text input. Re-hashing status would rebuild the dialog under the
+        // user's cursor when a refresh lands mid-edit.
+        | PopoverKind::AddToGitignorePrompt { .. }
         | PopoverKind::DiffContentModeSettings
         | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
@@ -534,6 +539,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             path,
         } => {
             34u8.hash(hasher);
+            repo_id.hash(hasher);
+            hash_diff_area(*area, hasher);
+            path.hash(hasher);
+        }
+        PopoverKind::AddToGitignorePrompt {
+            repo_id,
+            area,
+            path,
+        } => {
+            82u8.hash(hasher);
             repo_id.hash(hasher);
             hash_diff_area(*area, hasher);
             path.hash(hasher);

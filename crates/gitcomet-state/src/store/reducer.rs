@@ -157,6 +157,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DiscardWorktreeChangesPath { .. }
             | Msg::DiscardWorktreeChangesPaths { .. }
             | Msg::SaveWorktreeFile { .. }
+            | Msg::AppendGitignorePatterns { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
@@ -523,6 +524,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // persisted reword messages) on disk; continue it with the staged
         // auth like the cherry-pick commands above.
         RepoCommandKind::InteractiveRebase { .. } => Msg::RebaseContinue { repo_id },
+        // Writes `.gitignore` on the local filesystem, so it never fails for
+        // want of credentials — and this replay path exists only to re-run a
+        // command after an auth prompt. Retaining `patterns` would make a replay
+        // possible; there is just nothing here that an auth prompt could fix.
+        RepoCommandKind::AppendGitignorePatterns { .. } => return None,
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
@@ -1377,6 +1383,10 @@ fn reduce_inner(
         } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::save_worktree_file(repo_id, path, contents, stage)
+        }
+        Msg::AppendGitignorePatterns { repo_id, patterns } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
         }
         Msg::Commit {
             repo_id,

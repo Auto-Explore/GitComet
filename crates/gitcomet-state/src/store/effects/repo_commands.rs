@@ -14,6 +14,8 @@ use std::sync::Arc;
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
 use super::util::{RepoMap, send_or_log, spawn_with_repo};
 
+const GITIGNORE_FILE_NAME: &str = gitcomet_core::gitignore::FILE_NAME;
+
 fn schedule_repo_command<F>(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -127,6 +129,71 @@ pub(super) fn schedule_save_worktree_file(
                     relative_path.display(),
                     if stage { " (staged)" } else { "" }
                 ),
+                stdout: String::new(),
+                stderr: String::new(),
+                exit_code: Some(0),
+            })
+        },
+    );
+}
+
+/// Append patterns to the repository-root `.gitignore`.
+///
+/// The read and the write happen in the same worker closure on purpose. Doing
+/// the read in the UI would mean holding the file's contents across a
+/// user-visible dialog and then writing the whole thing back, clobbering any
+/// competing edit from the file editor, an external editor, or another window.
+pub(super) fn schedule_append_gitignore_patterns(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    patterns: Vec<String>,
+) {
+    let command_patterns = patterns.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::AppendGitignorePatterns {
+            patterns: command_patterns,
+        },
+        move |repo| {
+            // Routed through the same guard as every other worktree write, even
+            // though the name is a constant, so the invariant holds by
+            // construction rather than by reading this function.
+            let relative_path = normalize_worktree_relative_path(Path::new(GITIGNORE_FILE_NAME))?;
+            let full = repo.spec().workdir.join(&relative_path);
+
+            // Read bytes and convert explicitly: `read_to_string` would report a
+            // Latin-1 `.gitignore` as a bare `InvalidData` I/O error, which tells
+            // the user nothing about what to do next. Never rewrite it lossily.
+            let existing = match std::fs::read(&full) {
+                Ok(bytes) => String::from_utf8(bytes).map_err(|_| {
+                    Error::new(ErrorKind::Backend(format!(
+                        "{GITIGNORE_FILE_NAME} is not valid UTF-8; edit it manually"
+                    )))
+                })?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
+                Err(e) => return Err(Error::new(ErrorKind::Io(e.kind()))),
+            };
+
+            let Some(updated) = gitcomet_core::gitignore::append_patterns(&existing, &patterns)
+            else {
+                return Ok(CommandOutput {
+                    command: format!("Update {GITIGNORE_FILE_NAME}"),
+                    stdout: gitcomet_core::gitignore::NOTHING_TO_ADD.to_string(),
+                    stderr: String::new(),
+                    exit_code: Some(0),
+                });
+            };
+
+            std::fs::write(&full, updated.as_bytes())
+                .map_err(|e| Error::new(ErrorKind::Io(e.kind())))?;
+
+            Ok(CommandOutput {
+                command: format!("Update {GITIGNORE_FILE_NAME}"),
                 stdout: String::new(),
                 stderr: String::new(),
                 exit_code: Some(0),

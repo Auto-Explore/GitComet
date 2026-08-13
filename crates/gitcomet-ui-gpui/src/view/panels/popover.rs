@@ -2,6 +2,7 @@ use super::*;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 mod add_repo_menu;
+mod add_to_gitignore_prompt;
 mod app_menu;
 mod author_filter;
 mod branch_picker;
@@ -243,6 +244,19 @@ pub(in super::super) struct PopoverHost {
     create_tag_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,
+    /// One `.gitignore` line per row. Multiline so a multi-file selection and a
+    /// single file share one code path, and so the field reads like the file it
+    /// is about to become.
+    gitignore_patterns_input: Entity<components::TextInput>,
+    gitignore_patterns_scroll: ScrollHandle,
+    /// Which scope's patterns the input was last prefilled with. Only a prefill
+    /// shortcut — submit reads the input, never this.
+    gitignore_scope: gitcomet_core::gitignore::GitignoreScope,
+    /// Computed once when the dialog opens, so a status refresh arriving
+    /// mid-edit cannot change the offered scopes under the user.
+    gitignore_suggestions: Option<gitcomet_core::gitignore::GitignoreSuggestions>,
+    /// The paths the dialog is about, for the "Ignore <file>" body text.
+    gitignore_paths: Vec<std::path::PathBuf>,
     squash_message_input: Entity<components::TextInput>,
     squash_description_input: Entity<components::TextInput>,
     squash_description_scroll: ScrollHandle,
@@ -464,6 +478,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
+            | PopoverKind::AddToGitignorePrompt { .. }
             | PopoverKind::StageConflictMarkersConfirm { .. }
             | PopoverKind::ResetPrompt { .. }
             | PopoverKind::PullReconcilePrompt { .. }
@@ -790,7 +805,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CherryPickCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
-        PopoverKind::PullReconcilePrompt { .. } => Some(DIALOG_440_WIDTH),
+        PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {
+            Some(DIALOG_440_WIDTH)
+        }
         PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Remote(
@@ -1126,6 +1143,23 @@ impl PopoverHost {
                 cx,
             );
             input.set_vertical_scroll_handle(Some(create_tag_message_scroll.clone()));
+            input
+        });
+
+        let gitignore_patterns_scroll = ScrollHandle::new();
+        let gitignore_patterns_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/file".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    min_lines: 3,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(gitignore_patterns_scroll.clone()));
             input
         });
 
@@ -1627,6 +1661,11 @@ impl PopoverHost {
             create_tag_input,
             create_tag_message_input,
             create_tag_message_scroll,
+            gitignore_patterns_input,
+            gitignore_patterns_scroll,
+            gitignore_scope: gitcomet_core::gitignore::GitignoreScope::File,
+            gitignore_suggestions: None,
+            gitignore_paths: Vec::new(),
             squash_message_input,
             squash_description_input,
             squash_description_scroll,
@@ -1691,6 +1730,7 @@ impl PopoverHost {
             &self.rebase_onto_input,
             &self.create_tag_input,
             &self.create_tag_message_input,
+            &self.gitignore_patterns_input,
             &self.squash_message_input,
             &self.squash_description_input,
             &self.remote_name_input,
@@ -3332,6 +3372,17 @@ impl PopoverHost {
                     // Tab/Esc still reach Cancel.
                     window.focus(&self.rebase_onto_submit_focus_handle, cx);
                 }
+                // Must sit above the generic confirm-dialog arm below, which
+                // would otherwise swallow it and park focus on the tab group
+                // instead of the pattern field.
+                PopoverKind::AddToGitignorePrompt {
+                    repo_id,
+                    area,
+                    path,
+                } => {
+                    let (repo_id, area, path) = (*repo_id, *area, path.clone());
+                    self.prepare_add_to_gitignore(repo_id, area, &path, window, cx);
+                }
                 k if popover_is_confirm_dialog(k) => {
                     window.focus(&self.prompt_tab_group_focus_handle, cx);
                 }
@@ -3835,6 +3886,11 @@ impl PopoverHost {
                 area,
                 path,
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::AddToGitignorePrompt {
+                repo_id,
+                area,
+                path,
+            } => add_to_gitignore_prompt::panel(self, repo_id, area, path.clone(), cx),
             PopoverKind::StageConflictMarkersConfirm {
                 repo_id,
                 paths,

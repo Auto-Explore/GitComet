@@ -2259,6 +2259,27 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut repos,
         &id_alloc,
         &mut state,
+        Msg::AppendGitignorePatterns {
+            repo_id,
+            patterns: vec!["/build/out.log".to_string(), "*.tmp".to_string()],
+        },
+    );
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::AppendGitignorePatterns {
+                repo_id: RepoId(1),
+                patterns,
+            }] if patterns.as_slice() == ["/build/out.log", "*.tmp"]
+        ),
+        "the patterns must reach the effect verbatim: the reducer is not allowed \
+         to re-derive or reorder them"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
         Msg::RebaseContinue { repo_id },
     );
     assert!(matches!(

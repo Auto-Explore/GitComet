@@ -593,6 +593,12 @@ pub enum Msg {
         contents: String,
         stage: bool,
     },
+    /// Append patterns to the repository-root `.gitignore`, creating it when
+    /// absent. Patterns already present are skipped, so re-running is a no-op.
+    AppendGitignorePatterns {
+        repo_id: RepoId,
+        patterns: Vec<String>,
+    },
     Commit {
         repo_id: RepoId,
         message: String,

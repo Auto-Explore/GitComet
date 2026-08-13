@@ -365,6 +365,13 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::AppendGitignorePatterns { repo_id, patterns } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::AppendGitignorePatterns { patterns },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadFileHistory { repo_id, path, .. } => {
             send(Msg::Internal(crate::msg::InternalMsg::FileHistoryLoaded {
                 repo_id,
@@ -1645,6 +1652,11 @@ pub(super) fn schedule_effect(
         } => repo_commands::schedule_save_worktree_file(
             executor, repos, msg_tx, repo_id, path, contents, stage,
         ),
+        Effect::AppendGitignorePatterns { repo_id, patterns } => {
+            repo_commands::schedule_append_gitignore_patterns(
+                executor, repos, msg_tx, repo_id, patterns,
+            )
+        }
         Effect::LoadFileHistory {
             repo_id,
             path,
