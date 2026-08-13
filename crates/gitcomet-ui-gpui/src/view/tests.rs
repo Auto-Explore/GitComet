@@ -3513,8 +3513,12 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
         .debug_bounds("repo_tab_close_fade_1")
         .expect("expected a fade before the overlaid close button");
     let close_trailing_inset = repo_tab_bounds.right() - close_bounds.right();
+    // The tab's own side padding plus its border; tracked from the constant so
+    // padding tweaks do not need this number re-derived by hand.
+    let tab_side_padding = px(crate::view::panels::REPO_TAB_SIDE_PADDING_PX);
     assert!(
-        close_trailing_inset >= px(10.0) && close_trailing_inset <= px(12.0),
+        close_trailing_inset >= tab_side_padding
+            && close_trailing_inset <= tab_side_padding + px(2.0),
         "expected close button at the end of the tab inside its trailing padding, got \
          {close_trailing_inset:?}"
     );

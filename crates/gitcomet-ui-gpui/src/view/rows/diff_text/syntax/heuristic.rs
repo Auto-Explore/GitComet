@@ -159,12 +159,17 @@ const HEURISTIC_POWERSHELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicB
 
 pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> HeuristicCommentConfig {
     match language {
-        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml => HeuristicCommentConfig {
-            line_comment: None,
-            hash_comment: false,
-            block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
-            visual_basic_line_comment: false,
-        },
+        // Vue's root grammar is html-like, so it uses html comments here rather
+        // than `//`: a template line such as `<img src="//cdn…">` must not be
+        // greyed out as a comment.
+        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml | DiffSyntaxLanguage::Vue => {
+            HeuristicCommentConfig {
+                line_comment: None,
+                hash_comment: false,
+                block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
+                visual_basic_line_comment: false,
+            }
+        }
         DiffSyntaxLanguage::FSharp => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: false,
@@ -258,7 +263,9 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
 
 fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<HeuristicBlockCommentKind> {
     match language {
-        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml => Some(HeuristicBlockCommentKind::Html),
+        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml | DiffSyntaxLanguage::Vue => {
+            Some(HeuristicBlockCommentKind::Html)
+        }
         DiffSyntaxLanguage::FSharp => Some(HeuristicBlockCommentKind::FSharp),
         DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
         DiffSyntaxLanguage::PowerShell => Some(HeuristicBlockCommentKind::PowerShell),
@@ -1257,8 +1264,12 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         | DiffSyntaxLanguage::Regex
         | DiffSyntaxLanguage::Diff
         | DiffSyntaxLanguage::GitCommit => false,
+        // Vue stays with the markup languages rather than the JS ones: a `.vue`
+        // template is full of attributes named `class`, `for`, `template` and so
+        // on, which would otherwise all render as keywords.
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
+        | DiffSyntaxLanguage::Vue
         | DiffSyntaxLanguage::Css
         | DiffSyntaxLanguage::Toml => matches!(ident, "true" | "false"),
         DiffSyntaxLanguage::Json | DiffSyntaxLanguage::Yaml => {

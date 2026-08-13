@@ -51,6 +51,10 @@ const GOWORK_HIGHLIGHTS_QUERY: &str = include_str!("queries/gowork_highlights.sc
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
+#[cfg(any(test, feature = "syntax-web"))]
+const VUE_HIGHLIGHTS_QUERY: &str = include_str!("queries/vue_highlights.scm");
+#[cfg(any(test, feature = "syntax-web"))]
+const VUE_INJECTIONS_QUERY: &str = include_str!("queries/vue_injections.scm");
 #[cfg(any(test, feature = "syntax-repo"))]
 const MARKDOWN_HIGHLIGHTS_QUERY: &str = tree_sitter_md::HIGHLIGHT_QUERY_BLOCK;
 #[cfg(any(test, feature = "syntax-repo"))]
@@ -198,6 +202,7 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     Markdown,
     MarkdownInline,
     Html,
+    Vue,
     Css,
     Hcl,
     Bicep,
@@ -626,6 +631,31 @@ mod tests {
         prepare_test_document(DiffSyntaxLanguage::Markdown, &lines.join("\n"))
     }
 
+    fn prepare_vue_document(lines: &[&str]) -> PreparedSyntaxDocument {
+        prepare_test_document(DiffSyntaxLanguage::Vue, &lines.join("\n"))
+    }
+
+    /// Kinds of every token overlapping `fragment` within `line_ix`. Token ranges
+    /// on a prepared document are line-relative, including tokens remapped back
+    /// from an injection, so this works across the injection boundary.
+    fn token_kinds_for_line_fragment(
+        doc: PreparedSyntaxDocument,
+        line_ix: usize,
+        line_text: &str,
+        fragment: &str,
+    ) -> Vec<SyntaxTokenKind> {
+        let start = line_text
+            .find(fragment)
+            .unwrap_or_else(|| panic!("fragment {fragment:?} should appear in {line_text:?}"));
+        let end = start + fragment.len();
+        syntax_tokens_for_prepared_document_line(doc, line_ix)
+            .unwrap_or_else(|| panic!("line {line_ix} tokens should be available"))
+            .iter()
+            .filter(|token| token.range.start < end && token.range.end > start)
+            .map(|token| token.kind)
+            .collect()
+    }
+
     #[test]
     fn treesitter_line_length_guard() {
         assert!(super::should_use_treesitter_for_line("fn main() {}"));
@@ -875,6 +905,19 @@ mod tests {
         assert_eq!(
             diff_syntax_language_for_path("main.tsx"),
             Some(DiffSyntaxLanguage::Tsx)
+        );
+    }
+
+    #[test]
+    fn vue_extension_is_supported() {
+        assert_eq!(
+            diff_syntax_language_for_path("src/components/App.vue"),
+            Some(DiffSyntaxLanguage::Vue)
+        );
+        // The same alias table backs injections and fenced code info strings.
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("vue"),
+            Some(DiffSyntaxLanguage::Vue)
         );
     }
 
@@ -1406,6 +1449,63 @@ mod tests {
         assert_eq!(auto_again, auto);
     }
 
+    /// Pins a deliberate limitation rather than an achievement.
+    ///
+    /// The heuristic tokenizer is per-line and has no notion of which SFC
+    /// section a line belongs to, so Vue has to pick one comment/keyword
+    /// dialect for the whole file. It is grouped with Html/Xml, which is right
+    /// for the template -- `<img src="//cdn/x">` must not grey out as a line
+    /// comment, and attributes named `class`/`for` must not render as keywords
+    /// -- but it means `<script>` bodies get no `//` comments and no JS
+    /// keywords when tree-sitter is unavailable.
+    ///
+    /// This only bites the fallback paths: files over
+    /// TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES, over-long lines, and builds without
+    /// `syntax-web`. If that ever stops being acceptable, the fix is section
+    /// tracking in the streamed heuristic state, not flipping the dialect --
+    /// flipping it just moves the damage into the template.
+    #[test]
+    fn vue_heuristic_fallback_uses_the_markup_dialect_for_the_whole_file() {
+        let template_line = r#"  <img class="logo" src="//cdn.example.com/logo.png">"#;
+        let tokens = syntax_tokens_for_line(
+            template_line,
+            DiffSyntaxLanguage::Vue,
+            DiffSyntaxMode::HeuristicOnly,
+        );
+        assert!(
+            !tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "a protocol-relative URL in a template must not be greyed out as a `//` comment: \
+             {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(template_line, &tokens, SyntaxTokenKind::Keyword, "class"),
+            "template attribute names must not render as JS keywords: {tokens:?}"
+        );
+
+        // The accepted cost, asserted so a future change to
+        // `heuristic_comment_config` cannot flip it unnoticed.
+        let script_line = "const count = 42; // note";
+        let tokens = syntax_tokens_for_line(
+            script_line,
+            DiffSyntaxLanguage::Vue,
+            DiffSyntaxMode::HeuristicOnly,
+        );
+        assert!(
+            !tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "known limitation: the heuristic cannot see that this line is inside <script>, so \
+             `//` is not a comment here. If this now fails, the dialect was changed -- re-check \
+             the template assertions above: {tokens:?}"
+        );
+        assert!(
+            !has_token_kind_and_text(script_line, &tokens, SyntaxTokenKind::Keyword, "const"),
+            "known limitation: `const` is not a keyword in the markup dialect: {tokens:?}"
+        );
+    }
+
     #[test]
     fn single_line_syntax_cache_isolated_by_language_for_same_markup_text() {
         reset_ts_parser_test_state();
@@ -1789,6 +1889,357 @@ mod tests {
         assert!(
             tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
             "embedded CSS should highlight properties inside style=, got: {tokens:?}"
+        );
+    }
+
+    /// A single-file component covering every Vue injection path at once.
+    /// Line indices are asserted against by the tests below, so keep them stable.
+    const VUE_SFC_FIXTURE: &[&str] = &[
+        /* 0 */ "<template>",
+        /* 1 */ r#"  <div :class="wrapperClass">"#,
+        /* 2 */ r#"    <button v-if="count > 10">{{ count + 1 }}</button>"#,
+        /* 3 */ "  </div>",
+        /* 4 */ "</template>",
+        /* 5 */ "",
+        /* 6 */ r#"<script setup lang="ts">"#,
+        /* 7 */ "const count = 42;",
+        /* 8 */ "</script>",
+        /* 9 */ "",
+        /* 10 */ r#"<style lang="scss">"#,
+        /* 11 */ ".wrapper { color: red; }",
+        /* 12 */ "</style>",
+    ];
+
+    #[test]
+    fn prepared_vue_document_highlights_template_natively() {
+        // The Vue grammar inherits html, so <template> is parsed by the root
+        // grammar rather than through an injection. That matters because the
+        // injection engine is depth-1 only.
+        let doc = prepare_vue_document(VUE_SFC_FIXTURE);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("template line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Tag),
+            "template markup should highlight tag names, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_vue_document_highlights_script_setup_via_typescript_injection() {
+        let doc = prepare_vue_document(VUE_SFC_FIXTURE);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 7)
+            .expect("script line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "<script setup lang=\"ts\"> body should highlight keywords, got: {tokens:?}"
+        );
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number),
+            "<script setup lang=\"ts\"> body should highlight numbers, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_vue_document_highlights_scss_style_block_via_css_injection() {
+        // "scss" resolves to DiffSyntaxLanguage::Css through the shared alias table.
+        let doc = prepare_vue_document(VUE_SFC_FIXTURE);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 11)
+            .expect("style line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "<style lang=\"scss\"> body should highlight properties, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_vue_document_highlights_interpolation_via_typescript_injection() {
+        let doc = prepare_vue_document(VUE_SFC_FIXTURE);
+        let kinds = token_kinds_for_line_fragment(doc, 2, VUE_SFC_FIXTURE[2], "count + 1");
+
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Operator),
+            "{{{{ }}}} interpolation should highlight operators, got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Number),
+            "{{{{ }}}} interpolation should highlight numbers, got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_vue_document_highlights_directive_value_as_expression_not_string() {
+        // The html base rule `(attribute_value) @string` would otherwise colour the
+        // whole directive expression as a string; vue_highlights.scm overrides it
+        // with @variable so the TypeScript injection shows through.
+        let doc = prepare_vue_document(VUE_SFC_FIXTURE);
+        let kinds = token_kinds_for_line_fragment(doc, 2, VUE_SFC_FIXTURE[2], "count > 10");
+
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Operator),
+            "v-if expression should highlight operators, got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Number),
+            "v-if expression should highlight numbers, got: {kinds:?}"
+        );
+        assert!(
+            !kinds.contains(&SyntaxTokenKind::String),
+            "v-if expression must not fall back to the html string rule, got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_vue_document_highlights_directive_name_as_attribute() {
+        // `@tag.attribute` has to map to Attribute; without an explicit arm the
+        // dotted-suffix trimming would silently resolve it to Tag.
+        let doc = prepare_vue_document(VUE_SFC_FIXTURE);
+        let kinds = token_kinds_for_line_fragment(doc, 2, VUE_SFC_FIXTURE[2], "v-if");
+
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Attribute),
+            "directive names should highlight as attributes, got: {kinds:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_vue_document_highlights_plain_script_via_javascript_injection() {
+        // No `lang` attribute: this falls through to the inherited html_tags rule,
+        // which is guarded by `#not-match? "\\slang\\s*="` so it cannot also fire
+        // for the `lang="ts"` case above.
+        let lines = ["<script>", "const value = 1;", "</script>"];
+        let doc = prepare_vue_document(&lines);
+
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("script line tokens should be available");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Keyword),
+            "plain <script> body should highlight keywords, got: {tokens:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_vue_document_highlights_slot_shorthand_sigil() {
+        // `#` is the v-slot shorthand. Upstream captures `:`, `.` and `@` but not
+        // `#`, which leaves it as the one unstyled sigil on the tag.
+        let line = r#"  <MyComp #footer="{ row }">"#;
+        let doc = prepare_vue_document(&["<template>", line, "</template>"]);
+        let kinds = token_kinds_for_line_fragment(doc, 1, line, "#");
+
+        assert!(
+            kinds.contains(&SyntaxTokenKind::PunctuationSpecial),
+            "the v-slot `#` shorthand should highlight like `:` and `@`, got: {kinds:?}"
+        );
+    }
+
+    /// Regression guard for the injection-per-directive blowup. Without the
+    /// `#not-match?` guards in vue_injections.scm every directive and every
+    /// interpolation became its own injected layer: ~5 per line here, which
+    /// overruns TS_INJECTION_CACHE_MAX_ENTRIES (32) and evicts half the cache
+    /// mid-render, so scrolling re-parses everything.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_plain_binding_directives_produce_no_injections() {
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = vec!["<template>".to_string(), "  <ul>".to_string()];
+        for ix in 0..30 {
+            lines.push(format!(
+                "    <li :key=\"row{ix}.id\" :class=\"row{ix}.cls\" \
+                 v-model=\"form.field{ix}\" @click=\"select{ix}\">{{{{ row{ix}.label }}}}</li>"
+            ));
+        }
+        lines.push("  </ul>".to_string());
+        lines.push("</template>".to_string());
+        let line_count = lines.len();
+
+        let doc = prepare_test_document(DiffSyntaxLanguage::Vue, &lines.join("\n"));
+        for line_ix in 0..line_count {
+            let _ = syntax_tokens_for_prepared_document_line(doc, line_ix);
+        }
+
+        let cached = TS_INJECTION_CACHE.with(|cache| cache.borrow().len());
+        assert_eq!(
+            cached, 0,
+            "{line_count} lines of bare identifier / dotted-path bindings need no TypeScript \
+             parse -- vue_highlights.scm already colours them -- but {cached} injection cache \
+             entries were created (cap is {TS_INJECTION_CACHE_MAX_ENTRIES})"
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// The other half of the guard above: skipping plain bindings must not cost
+    /// highlighting for the expressions the injection actually exists to serve.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_expression_directives_still_inject_typescript() {
+        let line = r#"  <button v-if="count > 10" @click="submit($event, 'now')">"#;
+        let doc = prepare_vue_document(&["<template>", line, "</template>"]);
+
+        let kinds = token_kinds_for_line_fragment(doc, 1, line, "count > 10");
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Number),
+            "an expression directive must still be parsed as TypeScript, got: {kinds:?}"
+        );
+
+        // `PreparedSyntaxDocument` is Copy, so the first handle is still usable.
+        let kinds = token_kinds_for_line_fragment(doc, 1, line, "'now'");
+        assert!(
+            kinds.contains(&SyntaxTokenKind::String),
+            "a call argument inside a directive should be parsed as TypeScript, got: {kinds:?}"
+        );
+    }
+
+    /// Capturing the whole `(interpolation)` node paints the expression inside
+    /// it, not just the braces. Upstream relies on a companion `(raw_text) @none`
+    /// rule to punch the body back out, but `none` emits no token in this
+    /// engine, so the outer capture wins outright. That was invisible while
+    /// every interpolation was injected -- the injection carved the body out --
+    /// and became visible the moment plain interpolations stopped injecting.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_plain_interpolation_does_not_paint_its_expression_as_a_sigil() {
+        let line = r#"  <p>{{ msg }}</p>"#;
+        let doc = prepare_vue_document(&["<template>", line, "</template>"]);
+
+        let braces = token_kinds_for_line_fragment(doc, 1, line, "{{");
+        assert!(
+            braces.contains(&SyntaxTokenKind::PunctuationSpecial),
+            "the interpolation delimiters should be sigil-coloured, got: {braces:?}"
+        );
+
+        let body = token_kinds_for_line_fragment(doc, 1, line, "msg");
+        assert!(
+            !body.contains(&SyntaxTokenKind::PunctuationSpecial),
+            "the expression inside `{{{{ }}}}` must not inherit the delimiter colour, \
+             got: {body:?}"
+        );
+    }
+
+    /// The Vue grammar allows `v-if=ok` as well as `v-if="ok"`. Only the quoted
+    /// form has a `quoted_attribute_value`, so the unquoted one used to fall
+    /// through both the @variable override and the injection, landing on the
+    /// html `(attribute_value) @string` rule -- the exact miscolouring the
+    /// override exists to prevent.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_unquoted_directive_value_is_not_coloured_as_a_string() {
+        let line = r#"  <p v-if=ok>x</p>"#;
+        let doc = prepare_vue_document(&["<template>", line, "</template>"]);
+        let kinds = token_kinds_for_line_fragment(doc, 1, line, "ok");
+
+        assert!(
+            !kinds.contains(&SyntaxTokenKind::String),
+            "an unquoted directive value is an expression, not a string: {kinds:?}"
+        );
+        assert!(
+            !kinds.is_empty(),
+            "an unquoted directive value should still be coloured, got nothing"
+        );
+    }
+
+    /// `<script type="module" lang="ts">` matches a `type=` base rule and a
+    /// `lang=` vue rule over the same `raw_text`. prepared.rs tolerates the
+    /// duplicate by accident, but live.rs keeps both layers and interleaves
+    /// their captures at equal depth, so the editor colours the block
+    /// arbitrarily. The `lang` veto on the `type=` rules keeps it to one.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_script_with_both_type_and_lang_injects_exactly_one_language() {
+        let text = "<script type=\"module\" lang=\"ts\">\nconst x: number = 1;\n</script>\n";
+
+        let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, VUE_INJECTIONS_QUERY)
+            .expect("vendored Vue injections.scm should compile");
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang)
+            .expect("vendored Vue grammar should load");
+        let tree = parser.parse(text, None).expect("script should parse");
+
+        let mut cursor = tree_sitter::QueryCursor::new();
+        cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+        let mut patterns = Vec::new();
+        {
+            let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
+            tree_sitter::StreamingIterator::advance(&mut matches);
+            while let Some(m) = matches.get() {
+                patterns.push(m.pattern_index);
+                tree_sitter::StreamingIterator::advance(&mut matches);
+            }
+        }
+
+        assert_eq!(
+            patterns.len(),
+            1,
+            "a script carrying both `type` and `lang` must match exactly one injection \
+             pattern, matched {patterns:?}"
+        );
+
+        // …and it must be the TypeScript one, not the `type="module"` javascript one.
+        let doc = prepare_test_document(DiffSyntaxLanguage::Vue, text);
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("script body should have prepared tokens");
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Type || t.kind == SyntaxTokenKind::TypeBuiltin),
+            "`lang=\"ts\"` should win over `type=\"module\"`, so the `: number` annotation \
+             should be typed: {tokens:?}"
+        );
+    }
+
+    /// The directive guard does not cover the inherited attribute rules, so
+    /// those had to stop injecting unconditionally too. Inline `style=` was both
+    /// the worst offender and actively wrong (the CSS grammar reads an attribute
+    /// body as a stylesheet, making `color` a type selector), so it was dropped.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_static_inline_styles_do_not_flood_the_injection_cache() {
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = vec!["<template>".to_string()];
+        for ix in 0..40 {
+            lines.push(format!("  <div style=\"color: red\" id=\"d{ix}\">x</div>"));
+        }
+        lines.push("</template>".to_string());
+        let line_count = lines.len();
+
+        let doc = prepare_test_document(DiffSyntaxLanguage::Vue, &lines.join("\n"));
+        for line_ix in 0..line_count {
+            let _ = syntax_tokens_for_prepared_document_line(doc, line_ix);
+        }
+
+        let cached = TS_INJECTION_CACHE.with(|cache| cache.borrow().len());
+        assert_eq!(
+            cached, 0,
+            "static inline styles should not inject at all, but {cached} cache entries were \
+             created from {line_count} lines (cap is {TS_INJECTION_CACHE_MAX_ENTRIES})"
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// A skipped injection still has to leave the value coloured -- that is the
+    /// premise the skip rests on.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_plain_binding_directives_are_still_coloured_by_the_host_grammar() {
+        let line = r#"  <div :class="wrapperClass">{{ label }}</div>"#;
+        let doc = prepare_vue_document(&["<template>", line, "</template>"]);
+
+        let kinds = token_kinds_for_line_fragment(doc, 1, line, "wrapperClass");
+        assert!(
+            !kinds.is_empty(),
+            "a directive value skipped by the injection guard must still be coloured by \
+             vue_highlights.scm, got nothing"
+        );
+        assert!(
+            !kinds.contains(&SyntaxTokenKind::String),
+            "…and must not fall back to the html `(attribute_value) @string` rule, got: {kinds:?}"
         );
     }
 
@@ -3717,6 +4168,426 @@ mod tests {
             .expect("vendored HTML injections.scm should compile");
     }
 
+    /// The Vue grammar is the one grammar we vendor rather than pull from
+    /// crates.io, so nothing external will tell us when it stops matching the
+    /// workspace `tree-sitter`. It binds through `tree-sitter-language`, which
+    /// means a tree-sitter upgrade only stays safe while this holds.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vendored_vue_grammar_is_abi_compatible_with_workspace_tree_sitter() {
+        let vue: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
+        let abi = vue.abi_version();
+        assert!(
+            (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                .contains(&abi),
+            "vendored Vue grammar ABI {abi} is outside the range this tree-sitter supports \
+             ({}..={}); regenerate vendor/tree-sitter-vue with a newer tree-sitter-cli",
+            tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+            tree_sitter::LANGUAGE_VERSION,
+        );
+    }
+
+    // There is deliberately no test comparing the vendored ABI against the
+    // crates.io grammars'. Being *older* than tree-sitter-html is not a defect
+    // -- ABI versions stay supported across a wide range, which is exactly what
+    // the test above checks. Asserting `vue.abi >= html.abi` would instead turn
+    // any routine `cargo update` that bumps an unrelated grammar into a red CI
+    // while Vue still parses perfectly.
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vendored_vue_grammar_parses_with_workspace_tree_sitter() {
+        let source = concat!(
+            "<template>\n",
+            "  <p v-if=\"ok\">{{ msg }}</p>\n",
+            "</template>\n",
+            "\n",
+            "<script setup lang=\"ts\">\n",
+            "const msg: string = 'hi';\n",
+            "</script>\n",
+        );
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_vue::LANGUAGE.into())
+            .expect("vendored Vue grammar should load into the workspace tree-sitter");
+        let tree = parser
+            .parse(source, None)
+            .expect("vendored Vue grammar should parse an SFC");
+        assert!(
+            !tree.root_node().has_error(),
+            "vendored Vue grammar produced an ERROR node for a well-formed SFC: {}",
+            tree.root_node().to_sexp(),
+        );
+    }
+
+    /// Every language the Vue injections name has to be a language this
+    /// repository actually ships a grammar for, or the injection silently
+    /// no-ops. Reading the targets back off the compiled query keeps this
+    /// honest when the query changes.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_injection_targets_resolve_to_working_grammars() {
+        let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, VUE_INJECTIONS_QUERY)
+            .expect("vendored Vue injections.scm should compile");
+
+        let mut checked = 0;
+        for pattern_ix in 0..query.pattern_count() {
+            for setting in query.property_settings(pattern_ix) {
+                if setting.key.as_ref() != "injection.language" {
+                    continue;
+                }
+                let Some(value) = setting.value.as_deref() else {
+                    continue;
+                };
+                let language =
+                    diff_syntax_language_for_code_fence_info(value).unwrap_or_else(|| {
+                        panic!("vue_injections.scm names an unknown injection language {value:?}")
+                    });
+                assert!(
+                    tree_sitter_highlight_spec(language).is_some(),
+                    "vue_injections.scm injects {value:?}, but {language:?} has no grammar wired up",
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked >= 5,
+            "expected several `#set! injection.language` targets in vue_injections.scm, found {checked}"
+        );
+    }
+
+    /// The point of `request_highlight_spec_warmup` is to keep the expensive
+    /// specs off the render path, and the expensive one a `.vue` file reaches is
+    /// TypeScript (~86ms cold to compile, against Vue's own ~3ms). The warm-up
+    /// discovers its targets by walking `#set! injection.language` on the
+    /// compiled query, so a query edit that moved TypeScript behind an
+    /// `@injection.language` capture would silently stop warming it and put the
+    /// stall back. Assert it stays reachable the way the warm-up can see it.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_spec_warmup_reaches_typescript_through_a_set_directive() {
+        let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, VUE_INJECTIONS_QUERY)
+            .expect("vendored Vue injections.scm should compile");
+
+        let mut warmable = Vec::new();
+        for pattern_ix in 0..query.pattern_count() {
+            for setting in query.property_settings(pattern_ix) {
+                if setting.key.as_ref() != "injection.language" {
+                    continue;
+                }
+                if let Some(language) = setting
+                    .value
+                    .as_deref()
+                    .and_then(diff_syntax_language_for_code_fence_info)
+                {
+                    warmable.push(language);
+                }
+            }
+        }
+
+        assert!(
+            warmable.contains(&DiffSyntaxLanguage::TypeScript),
+            "TypeScript must stay reachable from a `#set! injection.language` in \
+             vue_injections.scm, or the warm-up cannot pre-build the one spec that \
+             actually costs anything. Reachable targets: {warmable:?}"
+        );
+        for language in warmable {
+            assert!(
+                tree_sitter_highlight_spec(language).is_some(),
+                "the warm-up would try to build {language:?}, which has no grammar wired up",
+            );
+        }
+    }
+
+    /// The warm-up runs on its own thread and races the render path by design.
+    /// This is a smoke test for the plumbing: repeated requests must be cheap and
+    /// must not deadlock against `OnceLock::get_or_init` on this thread.
+    #[test]
+    fn highlight_spec_warmup_requests_are_idempotent() {
+        for _ in 0..3 {
+            for language in [
+                DiffSyntaxLanguage::Vue,
+                DiffSyntaxLanguage::Html,
+                DiffSyntaxLanguage::Markdown,
+                DiffSyntaxLanguage::Rust,
+            ] {
+                request_highlight_spec_warmup(language);
+            }
+        }
+
+        // Touching a warmed language from this thread must still return a spec,
+        // whether this thread or the warm-up thread won the race.
+        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Vue).is_some());
+        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::TypeScript).is_some());
+    }
+
+    /// `lang="…"` values are read out of the document at runtime, so unlike the
+    /// `#set!` targets above they cannot be enumerated from the query. Drive
+    /// them end to end instead: build a real SFC for each value and check the
+    /// block actually came out highlighted. Asserting on
+    /// `diff_syntax_language_for_code_fence_info` alone would not do -- that is
+    /// only half the path, and it would keep passing if the query rule that
+    /// forwards the attribute were deleted.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_lang_attribute_values_highlight_their_block() {
+        // (lang, block body, tag, kind the injected grammar must produce)
+        let cases: &[(&str, &str, &str, SyntaxTokenKind)] = &[
+            (
+                "css",
+                ".a { color: red; }",
+                "style",
+                SyntaxTokenKind::Property,
+            ),
+            (
+                "scss",
+                ".a { color: red; }",
+                "style",
+                SyntaxTokenKind::Property,
+            ),
+            (
+                "less",
+                ".a { color: red; }",
+                "style",
+                SyntaxTokenKind::Property,
+            ),
+            (
+                "postcss",
+                ".a { color: red; }",
+                "style",
+                SyntaxTokenKind::Property,
+            ),
+            (
+                "sass",
+                ".a { color: red; }",
+                "style",
+                SyntaxTokenKind::Property,
+            ),
+            (
+                "ts",
+                "const value = 42;",
+                "script",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                "js",
+                "const value = 42;",
+                "script",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                "tsx",
+                "const value = 42;",
+                "script",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                "jsx",
+                "const value = 42;",
+                "script",
+                SyntaxTokenKind::Keyword,
+            ),
+            // Not in any `#any-of?` list anywhere: it resolves purely through the
+            // shared alias table, which is the whole point of forwarding the
+            // attribute verbatim rather than enumerating values in the query.
+            (
+                "typescript",
+                "const value = 42;",
+                "script",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                "mts",
+                "const value = 42;",
+                "script",
+                SyntaxTokenKind::Keyword,
+            ),
+        ];
+
+        for (lang, body, tag, expected) in cases {
+            let text = format!("<{tag} lang=\"{lang}\">\n{body}\n</{tag}>");
+            let doc = prepare_test_document(DiffSyntaxLanguage::Vue, &text);
+            let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+                .unwrap_or_else(|| panic!("`lang=\"{lang}\"` body should have prepared tokens"));
+            assert!(
+                tokens.iter().any(|t| t.kind == *expected),
+                "`<{tag} lang=\"{lang}\">` should inject a grammar producing {expected:?}, \
+                 got: {tokens:?}"
+            );
+        }
+    }
+
+    /// The failure mode this guards is specific: the html base rules are vetoed
+    /// by `#not-match? "\\slang\\s*="`, so a `lang` the vue rules do not handle
+    /// used to lose the fallback *and* match nothing, leaving the block with no
+    /// highlighting whatsoever.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_unknown_lang_attribute_does_not_silently_disable_highlighting() {
+        // A value no grammar in this repo can serve: no injection is the correct
+        // outcome, and the surrounding markup must keep working. (Asserting only
+        // `is_some()` here would be vacuous -- a blank block returns `Some(vec![])`.)
+        let doc = prepare_vue_document(&["<script lang=\"coffee\">", "x = 1", "</script>"]);
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 0)
+            .expect("the opening tag should have prepared tokens");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Tag),
+            "an unservable lang must not disturb the host grammar: {tokens:?}"
+        );
+
+        // …and the servable-but-unenumerated case really does highlight.
+        let doc =
+            prepare_vue_document(&["<style lang=\"pcss\">", ".a { color: red; }", "</style>"]);
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("style body should have prepared tokens");
+        assert!(
+            tokens.iter().any(|t| t.kind == SyntaxTokenKind::Property),
+            "`lang=\"pcss\"` resolves to Css through the alias table and must highlight: \
+             {tokens:?}"
+        );
+    }
+
+    /// The tree-sitter parser is a thread-local reused across languages, with a
+    /// fast path that skips `set_language`. Adding a grammar that is loaded a
+    /// different way (vendored, not from crates.io) should not disturb that.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_documents_interleave_with_other_language_documents() {
+        let vue = prepare_vue_document(VUE_SFC_FIXTURE);
+        let html = prepare_html_document(&["<style>", "body { color: red; }", "</style>"]);
+        let vue_again = prepare_vue_document(VUE_SFC_FIXTURE);
+
+        assert!(
+            syntax_tokens_for_prepared_document_line(html, 1)
+                .expect("html line tokens should be available")
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Property),
+            "an HTML document prepared after a Vue one should still highlight"
+        );
+        for doc in [vue, vue_again] {
+            assert!(
+                syntax_tokens_for_prepared_document_line(doc, 7)
+                    .expect("vue script line tokens should be available")
+                    .iter()
+                    .any(|t| t.kind == SyntaxTokenKind::Keyword),
+                "Vue documents should still highlight when interleaved with other languages"
+            );
+        }
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vendored_vue_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, VUE_HIGHLIGHTS_QUERY)
+            .expect("vendored Vue highlights.scm should compile");
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vendored_vue_injections_query_compiles() {
+        let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
+        tree_sitter::Query::new(&lang, VUE_INJECTIONS_QUERY)
+            .expect("vendored Vue injections.scm should compile");
+    }
+
+    /// vue_highlights.scm inlines queries/html_highlights.scm, because the Vue
+    /// grammar inherits html and TreesitterQueryAsset takes a single source.
+    /// Nothing structural keeps the copy honest, so an edit to the html file
+    /// that is not mirrored here would silently skip .vue files.
+    ///
+    /// The check is order-sensitive on purpose. Rule order is load-bearing:
+    /// `normalize_non_overlapping_tokens` resolves overlaps last-capture-wins,
+    /// so the html `(attribute_value) @string` rule has to come *before* the
+    /// `@variable` directive override for the override to take effect. A
+    /// per-line containment check would pass on a reordered copy.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_highlights_query_embeds_the_html_base_verbatim() {
+        fn rules(query: &str) -> Vec<&str> {
+            query
+                .lines()
+                .map(str::trim_end)
+                .filter(|line| !line.is_empty() && !line.trim_start().starts_with(';'))
+                .collect()
+        }
+
+        let html_rules = rules(HTML_HIGHLIGHTS_QUERY);
+        let vue_rules = rules(VUE_HIGHLIGHTS_QUERY);
+        assert!(
+            !html_rules.is_empty(),
+            "html_highlights.scm should not be comment-only"
+        );
+
+        let embedded = vue_rules
+            .windows(html_rules.len())
+            .any(|window| window == html_rules.as_slice());
+        assert!(
+            embedded,
+            "vue_highlights.scm must contain queries/html_highlights.scm as a contiguous, \
+             in-order block -- the Vue grammar inherits html, and rule order decides which \
+             capture wins. Mirror the change into the `--- html base ---` section.\n\
+             expected block:\n{html_rules:#?}\nvue rules:\n{vue_rules:#?}"
+        );
+    }
+
+    /// `configure_query_cursor` caps in-progress matches at TS_QUERY_MATCH_LIMIT
+    /// and nothing consults `did_exceed_match_limit`, so an overflow silently
+    /// drops injections. The Vue injection query has the most patterns of any in
+    /// the repo and anchors several on very common template nodes, which makes
+    /// it the one most likely to hit the cap.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn vue_injection_query_stays_under_the_match_limit_on_a_dense_template() {
+        let mut lines = vec!["<template>".to_string(), "  <ul>".to_string()];
+        for ix in 0..120 {
+            lines.push(format!(
+                "    <li v-if=\"n{ix} > {ix}\" :key=\"k{ix}\" :class=\"[a{ix}, b{ix}]\" \
+                 @click.stop=\"pick{ix}($event)\" #row=\"{{ v{ix} }}\">{{{{ n{ix} + 1 }}}}</li>"
+            ));
+        }
+        lines.push("  </ul>".to_string());
+        lines.push("</template>".to_string());
+        let text = lines.join("\n");
+
+        let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, VUE_INJECTIONS_QUERY)
+            .expect("vendored Vue injections.scm should compile");
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang)
+            .expect("vendored Vue grammar should load");
+        let tree = parser
+            .parse(&text, None)
+            .expect("dense template should parse");
+
+        let mut cursor = tree_sitter::QueryCursor::new();
+        cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+        let mut matched = 0usize;
+        {
+            let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
+            tree_sitter::StreamingIterator::advance(&mut matches);
+            while matches.get().is_some() {
+                matched += 1;
+                tree_sitter::StreamingIterator::advance(&mut matches);
+            }
+        }
+
+        assert!(
+            !cursor.did_exceed_match_limit(),
+            "the Vue injection query overflowed the {TS_QUERY_MATCH_LIMIT}-match in-progress \
+             pool on a {}-line template; tree-sitter discards matches on overflow, so some \
+             directives and interpolations would silently lose highlighting",
+            lines.len(),
+        );
+        assert!(
+            matched > 0,
+            "the dense template should produce injection matches at all"
+        );
+    }
+
     #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_javascript_query_compiles() {
@@ -4010,6 +4881,8 @@ mod tests {
             tree_sitter_html::LANGUAGE.into(),
             HTML_HIGHLIGHTS_QUERY,
         );
+        #[cfg(any(test, feature = "syntax-web"))]
+        assert_capture_names_are_supported(tree_sitter_vue::LANGUAGE.into(), VUE_HIGHLIGHTS_QUERY);
         #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(tree_sitter_css::LANGUAGE.into(), CSS_HIGHLIGHTS_QUERY);
         #[cfg(any(test, feature = "syntax-shell"))]
@@ -5830,6 +6703,7 @@ mod tests {
             DiffSyntaxLanguage::Markdown,
             DiffSyntaxLanguage::MarkdownInline,
             DiffSyntaxLanguage::Html,
+            DiffSyntaxLanguage::Vue,
             DiffSyntaxLanguage::Css,
             DiffSyntaxLanguage::Hcl,
             DiffSyntaxLanguage::Bicep,
@@ -5882,25 +6756,15 @@ mod tests {
         }
     }
 
-    #[cfg(not(any(test, feature = "syntax-web")))]
-    #[test]
-    fn disabled_web_grammars_fall_back_to_none() {
-        assert!(tree_sitter_grammar(DiffSyntaxLanguage::Html).is_none());
-        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).is_none());
-        assert!(tree_sitter_grammar(DiffSyntaxLanguage::JavaScript).is_none());
-        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::JavaScript).is_none());
-        assert!(tree_sitter_grammar(DiffSyntaxLanguage::Jsdoc).is_none());
-        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Jsdoc).is_none());
-        assert!(tree_sitter_grammar(DiffSyntaxLanguage::Regex).is_none());
-        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Regex).is_none());
-    }
-
-    #[cfg(not(any(test, feature = "syntax-xml")))]
-    #[test]
-    fn disabled_xml_grammar_falls_back_to_none() {
-        assert!(tree_sitter_grammar(DiffSyntaxLanguage::Xml).is_none());
-        assert!(tree_sitter_highlight_spec(DiffSyntaxLanguage::Xml).is_none());
-    }
+    // There are deliberately no `disabled_*_grammars_fall_back_to_none` tests.
+    // Absence of a feature-gated grammar cannot be observed from `cargo test`:
+    // the grammar arms are gated `any(test, feature = ...)` precisely so tests
+    // see every language, and a `#[cfg(not(any(test, ...)))]` test placed inside
+    // `#[cfg(test)] mod tests` is stripped before it is even type-checked. The
+    // check that does bite is a build without the feature:
+    //   cargo build -p gitcomet-ui-gpui --no-default-features --features syntax-minimal
+    // Grammar/spec agreement per language is covered by
+    // `grammar_and_highlight_spec_agree_on_supported_languages` above.
 
     #[cfg(any(test, feature = "syntax-rust"))]
     #[test]

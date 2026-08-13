@@ -16,6 +16,16 @@ pub const ICON_PAD_X_PX: f32 = 6.0;
 /// rounded background reads as an inset pill/card rather than a full-bleed band.
 pub const ROW_HIGHLIGHT_INSET_PX: f32 = 6.0;
 
+/// Trailing close/remove affordance shared by repository tabs and the picker
+/// rows that can drop an entry: a small hit box holding a danger-tinted X,
+/// whose plate is the danger colour at these alphas. Both live off the same
+/// tokens so the two buttons stay visually identical.
+pub const REMOVE_BUTTON_ICON: &str = "icons/repo_tab_close.svg";
+pub const REMOVE_BUTTON_SIZE_PX: f32 = 18.0;
+pub const REMOVE_BUTTON_ICON_SIZE_PX: f32 = 12.0;
+pub const REMOVE_BUTTON_HOVER_ALPHA: f32 = 0.18;
+pub const REMOVE_BUTTON_PRESSED_ALPHA: f32 = 0.26;
+
 pub fn control_height(scale: impl Into<UiScale>) -> gpui::Pixels {
     scale.into().px(CONTROL_HEIGHT_PX)
 }

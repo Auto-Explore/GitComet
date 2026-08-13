@@ -535,6 +535,10 @@ pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::PopoverHost;
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
+/// Layout guards outside this module assert against the tab padding, so they
+/// follow the constant instead of hardcoding the current value.
+#[cfg(test)]
+pub(in crate::view) use repo_tabs_bar::REPO_TAB_SIDE_PADDING_PX;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
 #[allow(unused_imports)]
 pub(in crate::view) use repo_tabs_bar::repo_tab_insert_before_for_drag_cursor;
