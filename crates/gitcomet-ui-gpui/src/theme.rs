@@ -1286,8 +1286,8 @@ mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
         GRAPH_LANE_PALETTE_SIZE, Rgba, available_themes, content_header_bg, derived_syntax_color,
-        has_theme_key, load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
-        runtime_themes_with_dir, theme_label, with_alpha,
+        has_theme_key, load_theme_specs_from_json, merged_theme_options,
+        resolved_runtime_themes_dir, runtime_themes_with_dir, theme_label, with_alpha,
     };
     use std::{fs, path::PathBuf};
     use tempfile::tempdir;
