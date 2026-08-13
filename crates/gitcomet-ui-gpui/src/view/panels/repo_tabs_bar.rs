@@ -101,7 +101,7 @@ const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
 const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
 const REPO_TAB_LABEL_GAP_PX: f32 = 6.0;
 const REPO_TAB_CLOSE_FADE_WIDTH_PX: f32 = 16.0;
-pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 12.0;
+pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 14.0;
 const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
 const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
 const REPO_TAB_HOVER_BOX_RADIUS_PX: f32 = 4.0;
@@ -935,10 +935,10 @@ impl Render for RepoTabsBarView {
                                 format!("repo_tab_separator_after_{}", repo_id.0)
                             })
                             .absolute()
-                            // Each tab has 4px horizontal margins. Paint in
-                            // their shared gap so the divider sits between the
-                            // two idle tab shapes rather than on either one.
-                            .right(scaled_px(-4.0))
+                            // Paint in the margin the two neighbouring tabs
+                            // share, so the divider sits in their gap rather
+                            // than on either tab shape.
+                            .right(scaled_px(-components::Tab::HORIZONTAL_MARGIN_PX))
                             .top(scaled_px(7.0))
                             .w(px(1.0))
                             .h(scaled_px(16.0))

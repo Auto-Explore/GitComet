@@ -2361,6 +2361,33 @@ fn focused_mergetool_keeps_titlebar_actions_without_repo_tabs_or_command_palette
 }
 
 #[gpui::test]
+fn sidebar_resize_handle_straddles_the_content_card_edge(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+    store.replace_snapshot_for_test(Arc::new(view_state_with_active_ready_repo(RepoId(1))));
+    sync_view_snapshot(cx, &view);
+
+    let sidebar = cx
+        .debug_bounds("sidebar_pane")
+        .expect("expected the sidebar pane");
+    let handle = cx
+        .debug_bounds("pane_resize_sidebar")
+        .expect("expected the sidebar resize handle");
+
+    // The same rule the details handle follows: the grab strip is centered on
+    // the boundary it drags, so its grip lands on the rule rather than beside
+    // it. Without this the strip hangs entirely inside the content card.
+    assert_eq!(
+        handle.center().x,
+        sidebar.right(),
+        "sidebar resize handle must straddle the sidebar/card boundary"
+    );
+}
+
+#[gpui::test]
 fn sidebar_expand_after_collapse_does_not_reenter_root_update(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));

@@ -1111,6 +1111,7 @@ impl GitCometView {
                         .child(
                             div()
                                 .id("sidebar_pane")
+                                .debug_selector(|| "sidebar_pane".to_string())
                                 .relative()
                                 .w(self.sidebar_render_width)
                                 .min_h(px(0.0))
@@ -1208,20 +1209,32 @@ impl GitCometView {
                                 .child(card_corner_caps(
                                     px((theme.radii.panel - 1.0).max(0.0)),
                                     theme.colors.sidebar_bg,
-                                ))
-                                .child(
-                                    // Sidebar resize grab strip overlaying the card's
-                                    // left edge, so the boundary consumes no layout
-                                    // space of its own.
-                                    div().absolute().left_0().top_0().bottom_0().child(
-                                        self.pane_resize_handle(
-                                            theme,
-                                            "pane_resize_sidebar",
-                                            PaneResizeHandle::Sidebar,
-                                            cx,
-                                        ),
-                                    ),
-                                ),
+                                )),
+                        )
+                        .child(
+                            // Sidebar resize grab strip, straddling the card's left
+                            // edge the way the details strip straddles its boundary,
+                            // so the grip centers on the rule instead of sitting
+                            // beside it. It hangs off the row rather than the card
+                            // because the card clips its overflow, and it matches the
+                            // card's bottom margin so both strips end on the same
+                            // line. Absolute, so the boundary still consumes no
+                            // layout space of its own.
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+                                .left(
+                                    (self.sidebar_render_width
+                                        - self.pane_resize_handle_width() / 2.0)
+                                        .max(px(0.0)),
+                                )
+                                .child(self.pane_resize_handle(
+                                    theme,
+                                    "pane_resize_sidebar",
+                                    PaneResizeHandle::Sidebar,
+                                    cx,
+                                )),
                         )
                         // Scrim only while open (not during fade-out).
                         .when(popover_open.is_some(), |d| {

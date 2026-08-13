@@ -149,8 +149,13 @@ impl Tab {
     const TAB_BOTTOM_FUSE_PAD_PX: f32 = 4.0;
     const TAB_TOP_PADDING_PX: f32 = 2.0;
     const TAB_HORIZONTAL_PADDING_PX: f32 = 10.0;
-    const TAB_HORIZONTAL_MARGIN_PX: f32 = 4.0;
-    const TAB_BOTTOM_CURVE_RADIUS_PX: f32 = 8.0;
+    /// Half the gutter between two neighbouring tabs. Public so anything
+    /// painted into that shared gap (the idle-tab separator) tracks it.
+    pub const HORIZONTAL_MARGIN_PX: f32 = 3.0;
+    /// The selected tab's lower curves flare this far past its box on each
+    /// side. Kept at the full gutter width so the curve lands exactly on the
+    /// neighbouring tab's edge instead of stopping short or running under it.
+    const TAB_BOTTOM_CURVE_RADIUS_PX: f32 = Self::HORIZONTAL_MARGIN_PX * 2.0;
     /// Tabs shrink no further than this before the strip scrolls.
     const TAB_MIN_WIDTH_PX: f32 = 102.0;
 
@@ -280,7 +285,7 @@ impl Tab {
             .group("tab")
             .h(scaled_px(TAB_HEIGHT_PX))
             .min_w(scaled_px(Self::TAB_MIN_WIDTH_PX))
-            .mx(scaled_px(Self::TAB_HORIZONTAL_MARGIN_PX))
+            .mx(scaled_px(Self::HORIZONTAL_MARGIN_PX))
             .px(horizontal_padding)
             .pt(scaled_px(Self::TAB_TOP_PADDING_PX))
             .pb(scaled_px(Self::TAB_BOTTOM_FUSE_PAD_PX))
