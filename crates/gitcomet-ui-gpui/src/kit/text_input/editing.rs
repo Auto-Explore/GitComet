@@ -2787,8 +2787,11 @@ impl TextInput {
     ) -> gpui::Stateful<Div> {
         let mut row = div()
             // The label is unique among the menu's rows, and the id is what
-            // makes the hover fill below actually repaint.
-            .id(SharedString::from(format!("text_input_ctx_menu_{label}")))
+            // makes the hover fill below actually repaint. Taken straight from
+            // the `'static` label -- ids are scoped to the input's own stateful
+            // root, and building one per render with `format!` would allocate a
+            // string that never changes.
+            .id(ElementId::from(label))
             .h(px(24.0))
             .w_full()
             .px_2()

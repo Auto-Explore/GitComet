@@ -193,15 +193,75 @@ fn history_row_is_selected_branch_tip(
         .any(|item| history_ref_is_selected_branch(&item.kind, selected_branch))
 }
 
-/// The commit summary carries the sidebar's branch selection: on the revealed
-/// tip it lifts from body text to `emphasis_text`. This is the cue that reads
-/// from across the window, and unlike the ref chips it works the same whether
-/// the branch is checked out or not.
-fn history_summary_color(theme: AppTheme, is_selected_branch_tip: bool) -> gpui::Rgba {
-    if is_selected_branch_tip {
-        selected_branch_label_color(theme)
+/// How far an unrelated row's lane colour is pushed toward muted, so the message
+/// border and the graph-column fade recede with the text instead of staying
+/// fully saturated on rows that have nothing to do with the selection.
+const UNRELATED_LANE_COLOR_MIX: f32 = 0.75;
+
+/// The commit summary carries the history's own selection.
+///
+/// `related_to_selection` is `None` when no single commit is selected, and only
+/// then does the row render as ordinary body text. While a commit *is* selected
+/// the column splits in two: the commit, everything it descends from and its
+/// direct children go to full contrast (pure white on a dark theme, pure black
+/// on a light one), and everything else drops to muted -- so the selected
+/// commit's line of history reads as a continuous run.
+///
+/// A row background tint was tried first and was far too intrusive: it washed
+/// most of the list and fought with the table's own shading for selection, HEAD
+/// and hover. Moving only the message text leaves all of that legible underneath.
+///
+/// The revealed branch tip keeps `emphasis_text` when nothing is selected, so it
+/// still reads while the relation cache has not caught up.
+fn history_summary_color(
+    theme: AppTheme,
+    is_selected_branch_tip: bool,
+    related_to_selection: Option<bool>,
+) -> gpui::Rgba {
+    match related_to_selection {
+        Some(true) => full_contrast_text(theme),
+        // All the way to muted: against pure white/black on the related rows,
+        // anything short of this left the two too close to separate at a glance.
+        Some(false) => theme.colors.text_muted,
+        None if is_selected_branch_tip => selected_branch_label_color(theme),
+        None => theme.colors.text,
+    }
+}
+
+/// Summary colour for a row, given only its relation to the selection. The
+/// working-tree summary row has no refs, so it needs the relation rule without
+/// the branch-tip case.
+pub(super) fn selection_related_summary_color(
+    theme: AppTheme,
+    related_to_selection: Option<bool>,
+) -> gpui::Rgba {
+    history_summary_color(theme, false, related_to_selection)
+}
+
+/// Lane colour muted to match an unrelated row, shared with the working-tree
+/// summary row so its connector recedes with the history it joins.
+pub(super) fn selection_related_lane_color(
+    theme: AppTheme,
+    lane_color: gpui::Rgba,
+    related_to_selection: Option<bool>,
+) -> gpui::Rgba {
+    if related_to_selection == Some(false) {
+        crate::theme::mix_colors(
+            lane_color,
+            theme.colors.text_muted,
+            UNRELATED_LANE_COLOR_MIX,
+        )
     } else {
-        theme.colors.text
+        lane_color
+    }
+}
+
+/// Pure white or pure black, whichever the theme's appearance calls for.
+fn full_contrast_text(theme: AppTheme) -> gpui::Rgba {
+    if theme.is_dark {
+        gpui::rgb(0xffffff)
+    } else {
+        gpui::rgb(0x000000)
     }
 }
 
@@ -291,6 +351,8 @@ pub(super) fn history_commit_row_canvas(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
+    related_to_selection: Option<bool>,
+    lane_branch_name: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
@@ -420,6 +482,43 @@ pub(super) fn history_commit_row_canvas(
                 size((summary_right - x).max(px(0.0)), bounds.size.height),
             );
 
+            // Rows unrelated to the selection mute their lane colour too: a
+            // full-strength border and fade on a dimmed row read as louder than
+            // the history they are supposed to sit behind.
+            let node_color = selection_related_lane_color(
+                theme,
+                history_graph::lane_color(theme, graph_row.node_color_ix),
+                related_to_selection,
+            );
+
+            // A lane-coloured wash across the right of the graph column, fading
+            // into the border on the message cell so a commit's dot and its
+            // message read as one unit. Painted before the lanes so the strokes
+            // stay crisp on top of it, and a single gradient quad either way.
+            //
+            // `graph_bounds.right()` is exactly `summary_bounds.left()`, so the
+            // gradient ends where the border begins.
+            if show_graph && show_graph_color_marker && graph_bounds.size.width > px(0.0) {
+                let fade_w = graph_bounds
+                    .size
+                    .width
+                    .min(scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX));
+                window.paint_quad(fill(
+                    Bounds::new(
+                        point(graph_bounds.right() - fade_w, graph_bounds.top()),
+                        size(fade_w, graph_bounds.size.height),
+                    ),
+                    gpui::linear_gradient(
+                        90.0,
+                        gpui::linear_color_stop(with_alpha(node_color, 0.0), 0.0),
+                        gpui::linear_color_stop(
+                            with_alpha(node_color, HISTORY_GRAPH_FADE_ALPHA),
+                            1.0,
+                        ),
+                    ),
+                ));
+            }
+
             if show_graph {
                 window.with_content_mask(
                     Some(ContentMask {
@@ -458,6 +557,48 @@ pub(super) fn history_commit_row_canvas(
                 .iter()
                 .filter(|item| !matches!(item.kind, HistoryRefListItemKind::Tag { .. }))
                 .count();
+            // While the row is hovered, name the branch it belongs to in the ref
+            // column. Only for rows that carry no ref of their own: those
+            // already say which branch they are, and a badge would collide with
+            // their chips. This is the gap the feature fills -- the ref column
+            // is empty on the great majority of rows.
+            if tag_names.is_empty()
+                && branch_ref_count == 0
+                && hitbox.is_hovered(window)
+                && let Some(name) = lane_branch_name.as_ref()
+                && !name.is_empty()
+                && branch_content_bounds.size.width >= scaled_px(HISTORY_BRANCH_BADGE_MIN_W_PX)
+            {
+                let shaped = shape_truncated_line_cached_from(
+                    window,
+                    &base_style,
+                    xxs_font,
+                    name,
+                    fx_hash_str(name.as_ref()),
+                    branch_content_bounds.size.width,
+                    with_alpha(node_color, HISTORY_BRANCH_BADGE_ALPHA),
+                    None,
+                    // Keeps the leaf of `origin/feature/long-name` readable.
+                    TruncateFrom::Start,
+                );
+                let text_y = bounds.top() + (bounds.size.height - xxs_line_height) * 0.5;
+                window.with_content_mask(
+                    Some(ContentMask {
+                        bounds: branch_content_bounds,
+                    }),
+                    |window| {
+                        let _ = shaped.paint(
+                            point(branch_content_bounds.left(), text_y),
+                            xxs_line_height,
+                            gpui::TextAlign::Left,
+                            None,
+                            window,
+                            cx,
+                        );
+                    },
+                );
+            }
+
             if !tag_names.is_empty() || branch_ref_count > 0 {
                 window.with_content_mask(
                     Some(ContentMask {
@@ -647,27 +788,26 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            let node_color = graph_row
-                .lanes_now
-                .get(usize::from(graph_row.node_col))
-                .map(|lane| history_graph::lane_color(theme, lane.color_ix))
-                .unwrap_or(theme.colors.text_muted);
-
             let mut summary_text_left = summary_bounds.left() + cell_pad_x;
             if show_graph_color_marker {
-                // A rounded lane-color pill with clear air before the text so it
-                // reads as a deliberate marker, not a stray glyph.
-                let marker_w = scaled_px(3.0);
-                let marker_h = scaled_px(14.0);
-                let y = bounds.top() + (bounds.size.height - marker_h) * 0.5;
+                // A lane-coloured border down the left edge of the message cell,
+                // where the graph column's fade lands. Inset vertically so
+                // consecutive rows read as separate borders rather than as one
+                // continuous stripe down the list.
+                let border_w = scaled_px(HISTORY_MESSAGE_BORDER_W_PX);
+                let inset_y = scaled_px(HISTORY_MESSAGE_BORDER_INSET_Y_PX);
+                let border_h = (bounds.size.height - inset_y * 2.0).max(px(0.0));
                 window.paint_quad(
                     fill(
-                        Bounds::new(point(summary_bounds.left(), y), size(marker_w, marker_h)),
+                        Bounds::new(
+                            point(summary_bounds.left(), bounds.top() + inset_y),
+                            size(border_w, border_h),
+                        ),
                         node_color,
                     )
-                    .corner_radii(marker_w * 0.5),
+                    .corner_radii(border_w * 0.5),
                 );
-                summary_text_left = summary_bounds.left() + marker_w + scaled_px(6.0);
+                summary_text_left = summary_bounds.left() + border_w + scaled_px(6.0);
             }
 
             let summary_text_bounds = Bounds::new(
@@ -685,7 +825,7 @@ pub(super) fn history_commit_row_canvas(
                     summary.shared(),
                     summary.text_hash(),
                     summary_text_bounds.size.width.max(px(0.0)),
-                    history_summary_color(theme, is_selected_branch_tip),
+                    history_summary_color(theme, is_selected_branch_tip, related_to_selection),
                     None,
                 );
                 window.with_content_mask(
@@ -874,9 +1014,16 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
+            // One move listener for both hover affordances. They share the
+            // row-level hit test below and differ only in which cell they watch,
+            // and a second closure per row would re-box its whole capture set on
+            // every frame.
             window.on_mouse_event({
                 let view = view.clone();
                 let commit_id = commit_id.clone();
+                let summary = summary.shared().clone();
+                let hover_author = author.shared().clone();
+                let hover_when = when.shared().clone();
                 let ref_items = Arc::clone(&ref_items);
                 let hitbox = hitbox.clone();
                 move |event: &gpui::MouseMoveEvent, phase, window, cx| {
@@ -884,24 +1031,56 @@ pub(super) fn history_commit_row_canvas(
                     // row owns the pointer: window-level listeners run whatever
                     // is painted on top, so anything overlaying the history (the
                     // collapsed sidebar's popover, a panel, a menu) must win.
-                    if phase != DispatchPhase::Bubble
-                        || ref_items.is_empty()
-                        || !hitbox.is_hovered(window)
-                        || !branch_bounds.contains(&event.position)
-                    {
+                    if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
                         return;
                     }
 
-                    view.update(cx, |this, cx| {
-                        this.show_history_refs_hover(
-                            repo_id,
-                            commit_id.clone(),
-                            branch_bounds,
-                            Arc::clone(&ref_items),
-                            event.position,
-                            window,
-                            cx,
-                        );
+                    if !ref_items.is_empty() && branch_bounds.contains(&event.position) {
+                        view.update(cx, |this, cx| {
+                            this.show_history_refs_hover(
+                                repo_id,
+                                commit_id.clone(),
+                                branch_bounds,
+                                Arc::clone(&ref_items),
+                                event.position,
+                                window,
+                                cx,
+                            );
+                        });
+                        return;
+                    }
+
+                    // The card is scoped to the message cell rather than the
+                    // whole row: it is about the message, and pointing at the
+                    // graph, the refs, the author or the date should not summon
+                    // it. Closing is driven centrally from the window root, so
+                    // rows the pointer merely passes over do no work.
+                    if !summary_bounds.contains(&event.position) {
+                        return;
+                    }
+                    // Deliberately no "is the card already open on this commit"
+                    // shortcut here. Answering it means reading the root view
+                    // and the hover host, and `Entity::read` aborts the process
+                    // when its target is mid-update -- which the `cx.defer`
+                    // below exists precisely because it can be. `show` is
+                    // already a no-op for a card that is open on this commit.
+                    let next = CommitMessageHoverState {
+                        repo_id,
+                        commit_id: commit_id.clone(),
+                        summary: summary.clone(),
+                        author: hover_author.clone(),
+                        when: hover_when.clone(),
+                        source_bounds: summary_bounds,
+                        source_pointer_x: event.position.x,
+                    };
+                    let view = view.clone();
+                    let pointer = event.position;
+                    // Deferred so the update does not nest inside whatever
+                    // update is already in flight on the root view.
+                    cx.defer(move |cx| {
+                        view.update(cx, |this, cx| {
+                            this.show_commit_message_hover(next, pointer, cx)
+                        });
                     });
                 }
             });
@@ -1132,10 +1311,80 @@ mod tests {
     }
 
     #[test]
+    fn commits_related_to_the_selection_go_to_full_contrast() {
+        let dark = AppTheme::gitcomet_dark();
+        let on_chain = history_summary_color(dark, false, Some(true));
+        assert_eq!((on_chain.r, on_chain.g, on_chain.b), (1.0, 1.0, 1.0));
+
+        let light = AppTheme::gitcomet_light();
+        let on_chain = history_summary_color(light, false, Some(true));
+        assert_eq!((on_chain.r, on_chain.g, on_chain.b), (0.0, 0.0, 0.0));
+
+        for theme in [dark, light] {
+            let on_chain = history_summary_color(theme, false, Some(true));
+            // Has to actually move off body text, or the cue says nothing.
+            assert_ne!(on_chain, theme.colors.text);
+            // The relation covers the tip too, so it wins over tip styling.
+            assert_eq!(history_summary_color(theme, true, Some(true)), on_chain);
+        }
+    }
+
+    #[test]
+    fn rows_unrelated_to_the_selection_recede_behind_it() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let off = history_summary_color(theme, false, Some(false));
+            let on = history_summary_color(theme, false, Some(true));
+
+            // Pushed all the way to muted, and clearly apart from both the
+            // related rows' full contrast and ordinary body text.
+            assert_eq!(off, theme.colors.text_muted);
+            assert_ne!(off, theme.colors.text);
+            assert_ne!(off, on);
+        }
+    }
+
+    #[test]
+    fn the_uncommitted_changes_row_follows_the_history_it_connects_to() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let lane = history_graph::lane_color(theme, 0);
+
+            // Nothing selected: the connector keeps its lane colour and the
+            // label its body text, exactly as before the feature existed.
+            assert_eq!(selection_related_lane_color(theme, lane, None), lane);
+            assert_eq!(
+                selection_related_summary_color(theme, None),
+                theme.colors.text
+            );
+
+            // On the selected chain: full contrast, matching the commit rows.
+            assert_eq!(selection_related_lane_color(theme, lane, Some(true)), lane);
+            assert_eq!(
+                selection_related_summary_color(theme, Some(true)),
+                full_contrast_text(theme)
+            );
+
+            // Off it: both recede, so the lane does not break at the top of a
+            // dimmed run.
+            assert_ne!(selection_related_lane_color(theme, lane, Some(false)), lane);
+            assert_eq!(
+                selection_related_summary_color(theme, Some(false)),
+                theme.colors.text_muted
+            );
+        }
+    }
+
+    #[test]
+    fn summaries_are_plain_body_text_while_nothing_is_selected() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            assert_eq!(history_summary_color(theme, false, None), theme.colors.text);
+        }
+    }
+
+    #[test]
     fn selected_branch_tip_summary_is_brighter_than_body_text() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-            let plain = history_summary_color(theme, false);
-            let tip = history_summary_color(theme, true);
+            let plain = history_summary_color(theme, false, None);
+            let tip = history_summary_color(theme, true, None);
             assert_ne!(
                 (plain.r, plain.g, plain.b, plain.a),
                 (tip.r, tip.g, tip.b, tip.a),

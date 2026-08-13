@@ -37,6 +37,11 @@ impl CopySource {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ClipboardBackend {
     Gpui,
+    /// Only ever selected by `select_clipboard_backend` under WSLg, so on a
+    /// non-Linux build nothing constructs it -- the variant stays so
+    /// `write_text` keeps one shape across platforms and the selection rules
+    /// stay unit-testable everywhere.
+    #[allow(dead_code)]
     X11,
 }
 
@@ -56,6 +61,9 @@ pub(crate) fn read_text<T: 'static>(cx: &gpui::Context<T>) -> Option<String> {
     cx.read_from_clipboard().and_then(|item| item.text())
 }
 
+/// Pure decision function, so it is exercised by this module's tests on every
+/// platform; only the Linux `clipboard_backend` actually calls it at runtime.
+#[allow(dead_code)]
 fn select_clipboard_backend(
     is_wsl: bool,
     wayland_available: bool,
@@ -174,6 +182,10 @@ fn write_text_to_x11(text: &str) {
     }
 }
 
+/// Pure over its `create`/`store` callbacks, so it is exercised by this
+/// module's tests on every platform; only `write_text_to_x11` calls it at
+/// runtime, and that exists on Linux alone.
+#[allow(dead_code)]
 fn replace_clipboard_owner<Clipboard, Error>(
     active: &mut Option<Clipboard>,
     create: impl FnOnce() -> Result<Clipboard, Error>,

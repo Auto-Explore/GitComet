@@ -135,6 +135,10 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    LoadHoverCommitMessage {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     /// Resolve a possibly abbreviated commit reference and load its details in
     /// one call, so a reveal can show the commit before the log reaches it.
     ResolveCommitForReveal {

@@ -66,6 +66,7 @@ pub struct UiSession {
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_relative_dates: Option<bool>,
+    pub history_highlight_commit_chain: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -206,6 +207,7 @@ struct UiSessionFile {
     terminal_action_bar_target: Option<String>,
     history_show_tags: Option<bool>,
     history_relative_dates: Option<bool>,
+    history_highlight_commit_chain: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
@@ -327,6 +329,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         terminal_action_bar_target: file.terminal_action_bar_target,
         history_show_tags: file.history_show_tags,
         history_relative_dates: file.history_relative_dates,
+        history_highlight_commit_chain: file.history_highlight_commit_chain,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
@@ -576,18 +579,44 @@ pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
     persist_recent_repo_to_path(workdir, &path)
 }
 
+/// Storage key for a repository path in the recents list.
+///
+/// Canonicalized so the key matches the workdir the store holds for an open
+/// repository, which is canonicalized on open (see
+/// `gitcomet_state::store::canonicalize_path`). The repo picker relies on plain
+/// equality between the two to keep a still-open repository out of the
+/// "recently closed" section; on macOS, where the temp and home directories are
+/// reached through symlinks, an uncanonicalized key would compare unequal to the
+/// very same directory and the repository would be listed twice.
+///
+/// Falls back to the path as given when it cannot be canonicalized, so a
+/// repository that has since been deleted or unmounted still round-trips.
+///
+/// That fallback is one-way: once the directory is gone the canonical form it
+/// was stored under can no longer be reconstructed from the path alone. Removal
+/// therefore normalizes the *stored* side too rather than relying on this key
+/// alone -- see [`remove_recent_repo_to_path`].
+fn recent_repo_storage_key(workdir: &Path) -> String {
+    path_storage_key(&gitcomet_core::path_utils::canonicalize_or_original(
+        workdir.to_path_buf(),
+    ))
+}
+
 pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
     with_session_file_persist_lock(|| {
         let mut file = load_file(session_file_path).unwrap_or_default();
         file.version = CURRENT_SESSION_FILE_VERSION;
 
-        let workdir_key = path_storage_key(workdir);
+        let workdir_key = recent_repo_storage_key(workdir);
+        let raw_key = path_storage_key(workdir);
         let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
         // Blanks go, and a key a hand-edited file padded is normalized in place
         // so the promotion below still recognizes it as the same repository.
+        // The uncanonicalized form an older build wrote goes too, so re-opening
+        // a repository heals the list instead of duplicating it.
         recent_repos.retain_mut(|path| {
             let trimmed = path.trim();
-            if trimmed.is_empty() {
+            if trimmed.is_empty() || trimmed == raw_key {
                 return false;
             }
             if trimmed.len() != path.len() {
@@ -613,11 +642,38 @@ pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> i
         let mut file = load_file(session_file_path).unwrap_or_default();
         file.version = CURRENT_SESSION_FILE_VERSION;
 
-        let workdir_key = path_storage_key(workdir);
+        // Must key exactly as `persist_recent_repo_to_path` does, or removal
+        // silently misses entries written in the other form.
+        let workdir_key = recent_repo_storage_key(workdir);
+        let raw_key = path_storage_key(workdir);
         let Some(recent_repos) = file.recent_repos.as_mut() else {
             return Ok(());
         };
-        recent_repos.retain(|path| path.trim() != workdir_key);
+        // `raw_key` also clears entries left by older builds, which stored the
+        // path uncanonicalized. Entries are normalized on their own side as
+        // well, so an entry and a caller that spell the same directory
+        // differently -- one through a symlink, one not -- still match: keying
+        // off `workdir` alone cannot bridge that once the directory is gone,
+        // because `canonicalize` no longer resolves it.
+        recent_repos.retain(|path| {
+            let path = path.trim();
+            if path == workdir_key || path == raw_key {
+                return false;
+            }
+            // Through the storage-key decoder, not `Path::new`: a non-UTF-8
+            // workdir is stored hex-encoded, and canonicalizing that encoding
+            // as a literal path would quietly never match.
+            let decoded = path_from_storage_key(path);
+            // Only absolute entries are resolved. A relative one -- which only
+            // a hand-edited file can produce -- would canonicalize against the
+            // process working directory and could match a repository the user
+            // never asked to forget.
+            if !decoded.is_absolute() {
+                return true;
+            }
+            let normalized = recent_repo_storage_key(&decoded);
+            normalized != workdir_key && normalized != raw_key
+        });
 
         persist_to_path(session_file_path, &file)
     })
@@ -720,6 +776,7 @@ pub struct UiSettings {
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_relative_dates: Option<bool>,
+    pub history_highlight_commit_chain: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -873,6 +930,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.history_show_tags {
             file.history_show_tags = Some(value);
+        }
+        if let Some(value) = settings.history_highlight_commit_chain {
+            file.history_highlight_commit_chain = Some(value);
         }
         if let Some(value) = settings.history_relative_dates {
             file.history_relative_dates = Some(value);
@@ -2870,8 +2930,63 @@ mod tests {
         persist_recent_repo_to_path(&repo_b, &path).expect("persist second repo");
         persist_recent_repo_to_path(&repo_a, &path).expect("move repo to front");
 
+        // Recents are stored canonicalized so they compare equal to the workdir
+        // an open repository carries.
+        let canonical = |path: &std::path::Path| {
+            gitcomet_core::path_utils::canonicalize_or_original(path.to_path_buf())
+        };
         let loaded = load_from_path(&path);
-        assert_eq!(loaded.recent_repos, vec![repo_a, repo_b]);
+        assert_eq!(
+            loaded.recent_repos,
+            vec![canonical(&repo_a), canonical(&repo_b)]
+        );
+    }
+
+    #[test]
+    fn history_highlight_commit_chain_round_trips_and_defaults_to_unset() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-highlight-chain-setting-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let session_file = dir.join("session.json");
+
+        // Absent from the file, so the UI applies its own default rather than
+        // the setting silently reading as "off".
+        assert_eq!(
+            load_from_path(&session_file).history_highlight_commit_chain,
+            None
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_highlight_commit_chain: Some(false),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist highlight setting");
+        assert_eq!(
+            load_from_path(&session_file).history_highlight_commit_chain,
+            Some(false)
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_highlight_commit_chain: Some(true),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("re-enable highlight setting");
+        assert_eq!(
+            load_from_path(&session_file).history_highlight_commit_chain,
+            Some(true)
+        );
     }
 
     #[test]
@@ -2952,64 +3067,6 @@ mod tests {
         assert_eq!(load_from_path(&path).pinned_repos, vec![repo_a]);
     }
 
-    /// A UI holding its own copy of the recents has to be able to apply a bump
-    /// without re-reading the file, and the copy has to still match the file
-    /// afterwards — including at the cap, where the file drops its tail.
-    #[test]
-    fn promote_recent_repo_matches_the_file_at_the_cap() {
-        let dir = env::temp_dir().join(format!(
-            "gitcomet-promote-recent-cap-test-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::SystemTime::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
-        let _ = fs::create_dir_all(&dir);
-        let path = dir.join("session.json");
-
-        // One more repository than the list can hold, so the cap is in play.
-        let repos: Vec<PathBuf> = (0..=MAX_RECENT_REPOS)
-            .map(|ix| dir.join(format!("repo-{ix}")))
-            .collect();
-        for repo in &repos {
-            persist_recent_repo_to_path(repo, &path).expect("record repo as recent");
-        }
-
-        let mut cached = load_from_path(&path).recent_repos;
-        assert_eq!(cached.len(), MAX_RECENT_REPOS);
-
-        // The one the cap pushed off comes back to the front, on both sides.
-        let evicted = repos[0].clone();
-        assert!(!cached.contains(&evicted));
-        promote_recent_repo(&mut cached, &evicted);
-        persist_recent_repo_to_path(&evicted, &path).expect("re-record the evicted repo");
-
-        assert_eq!(
-            cached.len(),
-            MAX_RECENT_REPOS,
-            "the in-memory list has to honour the same cap the file does"
-        );
-        assert_eq!(
-            cached,
-            load_from_path(&path).recent_repos,
-            "a promoted cache must match what the next load returns"
-        );
-
-        // Re-promoting something already listed moves it without growing the list.
-        let already_listed = cached[3].clone();
-        promote_recent_repo(&mut cached, &already_listed);
-        assert_eq!(cached.len(), MAX_RECENT_REPOS);
-        assert_eq!(cached.first(), Some(&already_listed));
-        assert_eq!(
-            cached
-                .iter()
-                .filter(|path| **path == already_listed)
-                .count(),
-            1
-        );
-    }
-
     /// The stored keys are written trimmed, but a hand-edited file can pad them.
     /// A padded copy is still the same repository, so it must not survive the
     /// promotion as a second entry.
@@ -3082,6 +3139,64 @@ mod tests {
         );
     }
 
+    /// A UI holding its own copy of the recents has to be able to apply a bump
+    /// without re-reading the file, and the copy has to still match the file
+    /// afterwards — including at the cap, where the file drops its tail.
+    #[test]
+    fn promote_recent_repo_matches_the_file_at_the_cap() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-promote-recent-cap-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        // One more repository than the list can hold, so the cap is in play.
+        let repos: Vec<PathBuf> = (0..=MAX_RECENT_REPOS)
+            .map(|ix| dir.join(format!("repo-{ix}")))
+            .collect();
+        for repo in &repos {
+            persist_recent_repo_to_path(repo, &path).expect("record repo as recent");
+        }
+
+        let mut cached = load_from_path(&path).recent_repos;
+        assert_eq!(cached.len(), MAX_RECENT_REPOS);
+
+        // The one the cap pushed off comes back to the front, on both sides.
+        let evicted = repos[0].clone();
+        assert!(!cached.contains(&evicted));
+        promote_recent_repo(&mut cached, &evicted);
+        persist_recent_repo_to_path(&evicted, &path).expect("re-record the evicted repo");
+
+        assert_eq!(
+            cached.len(),
+            MAX_RECENT_REPOS,
+            "the in-memory list has to honour the same cap the file does"
+        );
+        assert_eq!(
+            cached,
+            load_from_path(&path).recent_repos,
+            "a promoted cache must match what the next load returns"
+        );
+
+        // Re-promoting something already listed moves it without growing the list.
+        let already_listed = cached[3].clone();
+        promote_recent_repo(&mut cached, &already_listed);
+        assert_eq!(cached.len(), MAX_RECENT_REPOS);
+        assert_eq!(cached.first(), Some(&already_listed));
+        assert_eq!(
+            cached
+                .iter()
+                .filter(|path| **path == already_listed)
+                .count(),
+            1
+        );
+    }
+
     #[test]
     fn persist_ui_settings_round_trips_repo_picker_collapsed_sections() {
         let dir = env::temp_dir().join(format!(
@@ -3127,6 +3242,205 @@ mod tests {
         assert_eq!(
             load_from_path(&path).repo_picker_collapsed_sections,
             collapsed
+        );
+    }
+
+    #[test]
+    fn remove_recent_repo_drops_entries_written_uncanonicalized() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-legacy-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo);
+        let canonical = gitcomet_core::path_utils::canonicalize_or_original(repo.clone());
+        // Only meaningful where the temp directory is reached through a symlink
+        // (macOS /var -> /private/var); elsewhere the two forms coincide.
+        if canonical == repo {
+            return;
+        }
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                // The uncanonicalized form an older build would have written.
+                recent_repos: Some(vec![path_storage_key(&repo)]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        remove_recent_repo_to_path(&repo, &path).expect("remove legacy recent repo");
+
+        let loaded = load_from_path(&path);
+        assert!(
+            loaded.recent_repos.is_empty(),
+            "legacy uncanonicalized entry should have been removed, got {:?}",
+            loaded.recent_repos
+        );
+    }
+
+    /// The mirror of the case above: the caller spells the repository one way
+    /// and the stored entry spells it another. Matching on the caller's key
+    /// alone misses it, so removal normalizes the stored side too.
+    #[test]
+    fn remove_recent_repo_matches_an_entry_spelled_through_a_symlink() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-normalized-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo);
+        let canonical = gitcomet_core::path_utils::canonicalize_or_original(repo.clone());
+        // Only meaningful where the temp directory is reached through a symlink
+        // (macOS /var -> /private/var); elsewhere the two forms coincide.
+        if canonical == repo {
+            return;
+        }
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                // Stored uncanonicalized, while the caller below passes the
+                // canonical form -- so neither of the two keys built from the
+                // caller's path matches this string.
+                recent_repos: Some(vec![path_storage_key(&repo)]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        remove_recent_repo_to_path(&canonical, &path).expect("remove recent repo");
+
+        let loaded = load_from_path(&path);
+        assert!(
+            loaded.recent_repos.is_empty(),
+            "an entry that resolves to the same directory should have been removed, got {:?}",
+            loaded.recent_repos
+        );
+    }
+
+    /// Storage keys are not paths: a non-UTF-8 workdir is stored hex-encoded
+    /// behind [`SESSION_PATH_BYTES_PREFIX`], so normalizing an entry has to run
+    /// it back through [`path_from_storage_key`] first. Reading the encoded key
+    /// as a literal path makes it look relative, and the entry is skipped.
+    ///
+    /// Exercised with an encoded key for a *UTF-8* path, which the encoder
+    /// itself never produces but a hand-edited or older file can hold: APFS
+    /// rejects the invalid bytes outright, so a genuinely non-UTF-8 directory
+    /// cannot be created to test against.
+    #[cfg(unix)]
+    #[test]
+    fn remove_recent_repo_normalizes_an_encoded_entry_through_its_decoder() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-encoded-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo);
+        let canonical = gitcomet_core::path_utils::canonicalize_or_original(repo.clone());
+        // Only meaningful where the two spellings differ (macOS /var -> /private/var):
+        // the entry has to need normalizing, not just decoding.
+        if canonical == repo {
+            return;
+        }
+
+        let encoded = format!(
+            "{SESSION_PATH_BYTES_PREFIX}{}",
+            hex_encode(repo.as_os_str().as_encoded_bytes())
+        );
+        assert_eq!(
+            path_from_storage_key(&encoded),
+            repo,
+            "the fixture has to decode back to the repository it names"
+        );
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                recent_repos: Some(vec![encoded]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        remove_recent_repo_to_path(&canonical, &path).expect("remove recent repo");
+
+        let loaded = load_from_path(&path);
+        assert!(
+            loaded.recent_repos.is_empty(),
+            "an encoded entry naming the same directory should have been removed, got {:?}",
+            loaded.recent_repos
+        );
+    }
+
+    /// Entries a hand-edited file can hold that must never be resolved against
+    /// the process working directory.
+    #[test]
+    fn remove_recent_repo_leaves_relative_entries_alone() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-relative-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                recent_repos: Some(vec![".".to_string(), "../elsewhere".to_string()]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        // `.` resolves to whatever directory the test process happens to be in.
+        // Removing some unrelated repository must not take it with it.
+        remove_recent_repo_to_path(&dir.join("repo-a"), &path).expect("remove recent repo");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.recent_repos.len(),
+            2,
+            "relative entries must survive an unrelated removal, got {:?}",
+            loaded.recent_repos
         );
     }
 

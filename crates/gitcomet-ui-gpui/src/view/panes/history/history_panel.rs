@@ -30,6 +30,9 @@ impl HistoryView {
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        // Scheduled here rather than from the row builder: the walk goes to a
+        // background task, and the row builder runs during layout.
+        self.ensure_history_related_commits_cache(show_working_tree_summary_row, cx);
         let repo = self.active_repo();
         let commits_count = self
             .history_cache
@@ -68,6 +71,9 @@ impl HistoryView {
             .on_scroll_wheel(move |_event, _window, cx| {
                 let _ = root_view_for_scroll.update(cx, |root, cx| {
                     root.close_history_refs_hover(cx);
+                    // Rows move out from under the pointer while scrolling, so
+                    // an open card would end up describing a different commit.
+                    root.dismiss_commit_message_hover(cx);
                 });
             });
             let list = restrict_scroll_to_vertical_axis(list);

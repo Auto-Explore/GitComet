@@ -196,10 +196,22 @@ impl GraphLanePalette {
         }
     }
 
-    #[cfg(test)]
     pub fn as_slice(&self) -> &[Rgba] {
         let len = usize::from(self.len).max(1);
         &self.colors[..len]
+    }
+
+    /// Colour for a lane index, wrapping at the palette's own length.
+    ///
+    /// A custom theme may supply fewer than [`GRAPH_LANE_PALETTE_SIZE`] colours,
+    /// leaving the rest of the backing array transparent black, while lane
+    /// indices are handed out cyclically over the full palette size. Indexing
+    /// the array directly would therefore paint invisible lanes; wrapping at
+    /// `len` reuses the theme's colours instead.
+    #[inline]
+    pub fn color_at(&self, ix: u8) -> Rgba {
+        let slice = self.as_slice();
+        slice[usize::from(ix) % slice.len()]
     }
 }
 
@@ -1285,9 +1297,10 @@ pub(crate) fn blame_unstaged_color(theme: AppTheme) -> Rgba {
 mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
-        GRAPH_LANE_PALETTE_SIZE, Rgba, available_themes, content_header_bg, derived_syntax_color,
-        has_theme_key, load_theme_specs_from_json, merged_theme_options,
-        resolved_runtime_themes_dir, runtime_themes_with_dir, theme_label, with_alpha,
+        GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, Rgba, ThemeColor, available_themes,
+        content_header_bg, derived_syntax_color, has_theme_key, load_theme_specs_from_json,
+        merged_theme_options, resolved_runtime_themes_dir, runtime_themes_with_dir, theme_label,
+        with_alpha,
     };
     use std::{fs, path::PathBuf};
     use tempfile::tempdir;
@@ -1454,6 +1467,47 @@ mod tests {
         );
         assert_eq!(theme.syntax.variable, None);
         assert_eq!(theme.radii.panel, 2.0);
+    }
+
+    #[test]
+    fn short_custom_lane_palettes_wrap_instead_of_painting_transparent_lanes() {
+        let palette = GraphLanePalette::from_theme_colors(
+            true,
+            Some(vec![
+                ThemeColor::Hex(gpui::rgba(0x112233ff)),
+                ThemeColor::Hex(gpui::rgba(0x445566ff)),
+                ThemeColor::Hex(gpui::rgba(0x778899ff)),
+            ]),
+            None,
+        );
+        assert_eq!(palette.as_slice().len(), 3);
+
+        // Lane indices are handed out cyclically over the full palette size, so
+        // a three-colour theme must keep reusing its own colours rather than
+        // reading the transparent tail of the backing array.
+        for ix in 0..(GRAPH_LANE_PALETTE_SIZE as u8) {
+            let color = palette.color_at(ix);
+            assert_eq!(color, palette.as_slice()[usize::from(ix) % 3]);
+            assert!(color.a > 0.0, "lane {ix} would be invisible");
+        }
+    }
+
+    #[test]
+    fn generated_lane_palette_matches_the_ramp_the_graph_used_to_hardcode() {
+        // `lane_color` now reads the theme palette; built-in themes must keep
+        // rendering exactly as before.
+        for is_dark in [true, false] {
+            let palette = GraphLanePalette::generated(is_dark);
+            let light = if is_dark { 0.62 } else { 0.45 };
+            for ix in 0..(GRAPH_LANE_PALETTE_SIZE as u8) {
+                let hue = (f32::from(ix) * 0.13) % 1.0;
+                assert_eq!(
+                    palette.color_at(ix),
+                    gpui::hsla(hue, 0.75, light, 1.0).into(),
+                    "lane {ix} (is_dark={is_dark})"
+                );
+            }
+        }
     }
 
     #[test]

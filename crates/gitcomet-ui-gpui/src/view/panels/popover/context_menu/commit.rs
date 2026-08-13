@@ -76,8 +76,7 @@ fn multi_cherry_pick_plan(
         });
         let color_ix = graph_rows
             .get(page_ix)
-            .and_then(|row| row.lanes_now.get(usize::from(row.node_col)))
-            .map(|lane| lane.color_ix)
+            .map(|row| row.node_color_ix)
             .unwrap_or(0);
         source_colors.push((commit.id.as_ref().to_string(), color_ix));
     }

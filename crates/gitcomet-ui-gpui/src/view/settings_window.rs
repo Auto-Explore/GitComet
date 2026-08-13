@@ -429,6 +429,7 @@ pub(crate) struct SettingsWindowView {
     history_show_date: bool,
     history_show_sha: bool,
     history_relative_dates: bool,
+    history_highlight_commit_chain: bool,
     history_show_tags: bool,
     history_tag_fetch_mode: GitLogTagFetchMode,
     default_history_mode: HistoryMode,
@@ -823,6 +824,8 @@ impl SettingsWindowView {
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
         let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
+        let history_highlight_commit_chain =
+            ui_session.history_highlight_commit_chain.unwrap_or(true);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_history_mode = ui_session.default_history_mode.unwrap_or_default();
@@ -1056,6 +1059,7 @@ impl SettingsWindowView {
             history_show_date,
             history_show_sha,
             history_relative_dates,
+            history_highlight_commit_chain,
             history_show_tags,
             history_tag_fetch_mode,
             default_history_mode,
@@ -1168,6 +1172,7 @@ impl SettingsWindowView {
             history_show_date: Some(self.history_show_date),
             history_show_sha: Some(self.history_show_sha),
             history_relative_dates: Some(self.history_relative_dates),
+            history_highlight_commit_chain: Some(self.history_highlight_commit_chain),
             history_show_tags: Some(self.history_show_tags),
             history_tag_fetch_mode: Some(self.history_tag_fetch_mode),
             default_history_mode: Some(self.default_history_mode),
@@ -1909,6 +1914,18 @@ impl SettingsWindowView {
         self.persist_preferences(cx);
         self.update_main_windows(cx, move |view, _window, cx| {
             view.set_history_column_preferences(show_graph, show_author, show_date, show_sha, cx);
+        });
+        cx.notify();
+    }
+
+    fn set_history_highlight_commit_chain(&mut self, enabled: bool, cx: &mut gpui::Context<Self>) {
+        if self.history_highlight_commit_chain == enabled {
+            return;
+        }
+        self.history_highlight_commit_chain = enabled;
+        self.persist_preferences(cx);
+        self.update_main_windows(cx, move |view, _window, cx| {
+            view.set_history_highlight_commit_chain(enabled, cx);
         });
         cx.notify();
     }
@@ -3647,7 +3664,21 @@ impl Render for SettingsWindowView {
                             this.toggle_section(SettingsSection::GitLogColumns, cx);
                         }));
 
-    let relative_dates_row = self
+    let highlight_commit_chain_row = self
+                        .toggle_row(
+                            "settings_window_git_log_highlight_commit_chain",
+                            "Highlight selected commit chain",
+                            self.history_highlight_commit_chain,
+                            theme,
+                        )
+                        .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
+                            this.set_history_highlight_commit_chain(
+                                !this.history_highlight_commit_chain,
+                                cx,
+                            );
+                        }));
+
+                    let relative_dates_row = self
                         .toggle_row(
                             "settings_window_git_log_relative_dates",
                             "Relative dates in history view",
@@ -4680,6 +4711,7 @@ impl Render for SettingsWindowView {
                         );
                     }
 
+                    git_log_card = git_log_card.child(highlight_commit_chain_row);
                     git_log_card = git_log_card.child(relative_dates_row);
                     git_log_card = git_log_card.child(show_history_tags_row);
                     if self.history_show_tags {

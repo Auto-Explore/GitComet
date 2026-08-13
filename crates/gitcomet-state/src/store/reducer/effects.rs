@@ -1211,6 +1211,54 @@ pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> 
     }
 }
 
+pub(super) fn load_hover_commit_message(
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    // Already showing or fetching this commit: hovering the same row again must
+    // not re-issue the read.
+    if repo_state
+        .hover_commit_message
+        .as_ref()
+        .is_some_and(|(id, state)| *id == commit_id && !matches!(state, Loadable::Error(_)))
+    {
+        return Vec::new();
+    }
+    repo_state.set_hover_commit_message(commit_id.clone(), Loadable::Loading);
+    vec![Effect::LoadHoverCommitMessage { repo_id, commit_id }]
+}
+
+pub(super) fn hover_commit_message_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    commit_id: CommitId,
+    result: std::result::Result<String, Error>,
+) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
+        // A result for a commit the pointer has already left is stale.
+        && repo_state
+            .hover_commit_message
+            .as_ref()
+            .is_some_and(|(id, _)| *id == commit_id)
+    {
+        let value = match result {
+            Ok(message) => Loadable::Ready(Arc::from(message.as_str())),
+            // Deliberately not a diagnostic: a hover that loses its race with a
+            // background fetch is not something to tell the user about.
+            Err(e) => Loadable::Error(e.to_string()),
+        };
+        repo_state.set_hover_commit_message(commit_id, value);
+    }
+    Vec::new()
+}
+
 pub(super) fn load_recent_commit_messages(
     state: &mut AppState,
     repo_id: RepoId,

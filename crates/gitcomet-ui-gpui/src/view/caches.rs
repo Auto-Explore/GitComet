@@ -32,6 +32,8 @@ pub(super) struct HistoryBaseCache {
 pub(super) struct HistoryDecorationCache {
     pub(super) request: HistoryDecorationCacheRequest,
     pub(super) row_vms: Arc<[HistoryDecorationRowVm]>,
+    /// Branch names referenced by [`HistoryDecorationRowVm::lane_branch`].
+    pub(super) branch_names: Arc<[SharedString]>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -331,6 +333,11 @@ pub(super) struct HistoryDecorationRowVm {
     pub(super) branches_text: HistoryTextVm,
     pub(super) tag_names: Arc<[HistoryTextVm]>,
     pub(super) ref_items: Arc<[HistoryRefListItem]>,
+    /// Branch this commit belongs to, as an index into
+    /// [`HistoryDecorationCache::branch_names`]. Inherited down the lane from
+    /// the branch head that started it, so unlabelled commits can still say
+    /// which branch they are on.
+    pub(super) lane_branch: Option<u16>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1043,6 +1050,208 @@ pub(super) fn branch_sidebar_cache_store(
     });
 }
 
+/// Which rows are related to the commit selected in the history.
+///
+/// "Related" is the selected commit, everything it descends from, and its direct
+/// children -- the shape you want when asking "where does this commit sit?".
+/// Deliberately its own cache rather than a field on [`HistoryBaseCache`]:
+/// folding the selection into that cache's request would rebuild the entire
+/// graph -- up to 50k rows -- on every arrow-key press.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct HistoryRelatedCommitsCacheRequest {
+    pub(super) repo_id: RepoId,
+    pub(super) log_fingerprint: u64,
+    /// Commit the relation is computed around.
+    pub(super) anchor: Option<CommitId>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistoryRelatedCommitsCache {
+    pub(super) request: HistoryRelatedCommitsCacheRequest,
+    /// One bit per index into the log page's `commits`, set when that commit is
+    /// related to the anchor. Indexed by commit index, which is what the row
+    /// renderer already resolves through `visible_indices`.
+    pub(super) related: Arc<[u64]>,
+}
+
+impl HistoryRelatedCommitsCache {
+    /// Nothing to highlight. Either there is no anchor, or the anchor is not in
+    /// the current page and the bitset came back empty -- which must read as
+    /// "no selection to relate to" rather than "every row is unrelated", or a
+    /// selection left over from a narrower reload would dim the whole list.
+    pub(super) fn is_empty(&self) -> bool {
+        self.request.anchor.is_none() || self.related.is_empty()
+    }
+}
+
+/// Whether `commit_ix` is related to the anchor, against the bitset built by
+/// [`build_history_related_commit_bits`].
+#[inline]
+pub(super) fn related_commit_contains(bits: &[u64], commit_ix: usize) -> bool {
+    bits.get(commit_ix / 64)
+        .is_some_and(|word| word & (1u64 << (commit_ix % 64)) != 0)
+}
+
+/// Marks the anchor's whole chain: the commit itself, every commit it descends
+/// from, and every commit that descends from it.
+///
+/// Relies on the log-order invariant the graph also relies on: a commit's
+/// parents sit at *higher* indices than it does. Ancestors are therefore a
+/// single sweep downward through the list and descendants a single sweep upward
+/// -- no queue, no revisiting -- and the first parent can be taken as the next
+/// row without a lookup, which is the common case. The id map is built lazily,
+/// so a linear history never pays for it.
+///
+/// The two directions are accumulated separately and combined at the end. Sharing
+/// one bitset would let the descendant sweep mistake an *ancestor* of the anchor
+/// for one of its descendants: a sibling branch forking off that ancestor has a
+/// marked parent without descending from the anchor at all.
+/// Bitset of `anchor_ix` and everything it descends from.
+///
+/// Split out because branch attribution needs containment ("is this commit in
+/// `dev`?") without the descendant half.
+fn ancestor_bits<'a>(
+    commits: &'a [Commit],
+    anchor_ix: usize,
+    id_to_index: &mut Option<HashMap<&'a str, usize>>,
+) -> Vec<u64> {
+    let mut bits = vec![0u64; commits.len().div_ceil(64)];
+    bits[anchor_ix / 64] |= 1u64 << (anchor_ix % 64);
+
+    for (ix, commit) in commits.iter().enumerate().skip(anchor_ix) {
+        if bits[ix / 64] & (1u64 << (ix % 64)) == 0 {
+            continue;
+        }
+        for (parent_pos, parent) in commit.parent_ids.iter().enumerate() {
+            let parent_id = parent.as_ref();
+            let resolved = if parent_pos == 0
+                && commits
+                    .get(ix + 1)
+                    .is_some_and(|next| next.id.as_ref() == parent_id)
+            {
+                Some(ix + 1)
+            } else {
+                index_of(id_to_index, commits, parent_id)
+            };
+            // Only ever downwards, so a parent resolving above cannot loop.
+            if let Some(parent_ix) = resolved.filter(|&parent_ix| parent_ix > ix) {
+                bits[parent_ix / 64] |= 1u64 << (parent_ix % 64);
+            }
+        }
+    }
+    bits
+}
+
+/// Commits contained in each branch whose tip is listed, in the order given: the
+/// tip itself and everything it descends from. An empty bitset stands in for a
+/// tip that is not in the page.
+///
+/// Takes every tip at once so the one id -> index map `ancestor_bits` builds
+/// lazily is shared across them. That map holds an entry per commit in the page,
+/// so building one per tip would hash every commit id again for each branch.
+pub(super) fn build_history_branch_containment_bits<'t>(
+    commits: &[Commit],
+    tips: impl IntoIterator<Item = &'t CommitId>,
+) -> Vec<Arc<[u64]>> {
+    let mut id_to_index: Option<HashMap<&str, usize>> = None;
+    tips.into_iter()
+        .map(|tip| {
+            let tip_id = tip.as_ref();
+            let Some(tip_ix) = commits
+                .iter()
+                .position(|commit| commit.id.as_ref() == tip_id)
+            else {
+                return Arc::from(Vec::new());
+            };
+            Arc::from(ancestor_bits(commits, tip_ix, &mut id_to_index))
+        })
+        .collect()
+}
+
+/// Shared by the ancestor pass and the relation builder; a free fn because the
+/// map borrows from `commits` and a closure cannot name that lifetime.
+fn index_of<'a>(
+    map: &mut Option<HashMap<&'a str, usize>>,
+    commits: &'a [Commit],
+    id: &str,
+) -> Option<usize> {
+    map.get_or_insert_with(|| {
+        let mut built: HashMap<&'a str, usize> =
+            HashMap::with_capacity_and_hasher(commits.len(), Default::default());
+        for (ix, commit) in commits.iter().enumerate() {
+            // First occurrence wins, matching the row the history shows.
+            built.entry(commit.id.as_ref()).or_insert(ix);
+        }
+        built
+    })
+    .get(id)
+    .copied()
+}
+
+pub(super) fn build_history_related_commit_bits(
+    commits: &[Commit],
+    anchor: &CommitId,
+) -> Arc<[u64]> {
+    #[inline]
+    fn mark(bits: &mut [u64], ix: usize) {
+        bits[ix / 64] |= 1u64 << (ix % 64);
+    }
+    #[inline]
+    fn is_marked(bits: &[u64], ix: usize) -> bool {
+        bits[ix / 64] & (1u64 << (ix % 64)) != 0
+    }
+
+    let anchor_id = anchor.as_ref();
+    let Some(anchor_ix) = commits
+        .iter()
+        .position(|commit| commit.id.as_ref() == anchor_id)
+    else {
+        return Arc::from(Vec::new());
+    };
+
+    let words = commits.len().div_ceil(64);
+    let mut id_to_index: Option<HashMap<&str, usize>> = None;
+    let resolve = |ix: usize, parent_pos: usize, parent: &CommitId, map: &mut _| {
+        let parent_id = parent.as_ref();
+        if parent_pos == 0
+            && commits
+                .get(ix + 1)
+                .is_some_and(|next| next.id.as_ref() == parent_id)
+        {
+            return Some(ix + 1);
+        }
+        index_of(map, commits, parent_id)
+    };
+
+    // Ancestors: downward through the list, so every parent is already resolved
+    // by the time its child is reached.
+    let mut ancestors = ancestor_bits(commits, anchor_ix, &mut id_to_index);
+
+    // Descendants: upward through the list. A commit descends from the anchor if
+    // any of its parents does, and those parents sit at higher indices, which
+    // this order has already decided.
+    let mut descendants = vec![0u64; words];
+    mark(&mut descendants, anchor_ix);
+    for ix in (0..anchor_ix).rev() {
+        let descends = commits[ix]
+            .parent_ids
+            .iter()
+            .enumerate()
+            .any(|(parent_pos, parent)| {
+                resolve(ix, parent_pos, parent, &mut id_to_index)
+                    .is_some_and(|parent_ix| parent_ix > ix && is_marked(&descendants, parent_ix))
+            });
+        if descends {
+            mark(&mut descendants, ix);
+        }
+    }
+
+    for (word, descendant_word) in ancestors.iter_mut().zip(descendants) {
+        *word |= descendant_word;
+    }
+    Arc::from(ancestors)
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct HistoryWorktreeSummaryCache {
     pub(super) repo_id: RepoId,
@@ -1106,6 +1315,113 @@ mod tests {
             author: "author".into(),
             time: SystemTime::UNIX_EPOCH,
         }
+    }
+
+    fn related_indices(commits: &[Commit], anchor: &str) -> Vec<usize> {
+        let bits = build_history_related_commit_bits(commits, &commit_id(anchor));
+        (0..commits.len())
+            .filter(|ix| related_commit_contains(&bits, *ix))
+            .collect()
+    }
+
+    #[test]
+    fn related_commits_are_the_anchor_its_ancestors_and_all_its_descendants() {
+        //   0 child_a   \
+        //   1 child_b    > both have `anchor` as a parent
+        //   2 anchor
+        //   3 parent
+        //   4 root
+        let commits = vec![
+            commit("child_a", &["anchor"], "a"),
+            commit("child_b", &["anchor"], "b"),
+            commit("anchor", &["parent"], "anchor"),
+            commit("parent", &["root"], "parent"),
+            commit("root", &[], "root"),
+        ];
+
+        assert_eq!(related_indices(&commits, "anchor"), vec![0, 1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn descendants_run_the_whole_way_up_not_just_one_row() {
+        //   0 grandchild
+        //   1 child
+        //   2 anchor
+        //   3 root
+        let commits = vec![
+            commit("grandchild", &["child"], "gc"),
+            commit("child", &["anchor"], "c"),
+            commit("anchor", &["root"], "anchor"),
+            commit("root", &[], "root"),
+        ];
+
+        assert_eq!(related_indices(&commits, "anchor"), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn a_merge_child_is_related_without_dragging_in_its_other_side() {
+        // `merge` descends from the anchor, so it is related -- but the branch
+        // it merges in does not, and neither does that branch's own base.
+        let commits = vec![
+            commit("merge", &["anchor", "side"], "merge"),
+            commit("side", &["side_base"], "side work"),
+            commit("anchor", &["root"], "anchor"),
+            commit("side_base", &["root"], "side base"),
+            commit("root", &[], "root"),
+        ];
+
+        let related = related_indices(&commits, "anchor");
+        assert!(related.contains(&0), "the merge descends from the anchor");
+        assert!(related.contains(&2), "the anchor itself is related");
+        assert!(related.contains(&4), "the anchor's ancestor is related");
+        assert!(!related.contains(&1), "the merged-in side is not");
+        assert!(!related.contains(&3), "nor that side's own base");
+    }
+
+    #[test]
+    fn a_sibling_forking_off_a_shared_ancestor_is_not_a_descendant() {
+        // `sibling` hangs off `root`, which the anchor also descends from. A
+        // marked parent alone must not make it related -- it is neither an
+        // ancestor nor a descendant of the anchor.
+        let commits = vec![
+            commit("sibling", &["root"], "sibling"),
+            commit("anchor", &["root"], "anchor"),
+            commit("root", &[], "root"),
+        ];
+
+        assert_eq!(related_indices(&commits, "anchor"), vec![1, 2]);
+    }
+
+    #[test]
+    fn ancestors_follow_every_parent_of_a_merge() {
+        // A merge in the anchor's own history pulls in both sides: they are all
+        // commits the anchor descends from.
+        let commits = vec![
+            commit("anchor", &["left", "right"], "merge"),
+            commit("left", &["root"], "left"),
+            commit("right", &["root"], "right"),
+            commit("root", &[], "root"),
+        ];
+
+        assert_eq!(related_indices(&commits, "anchor"), vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn unrelated_branches_stay_unmarked() {
+        let commits = vec![
+            commit("other_tip", &["other_base"], "other"),
+            commit("anchor", &["root"], "anchor"),
+            commit("other_base", &[], "other base"),
+            commit("root", &[], "root"),
+        ];
+
+        assert_eq!(related_indices(&commits, "anchor"), vec![1, 3]);
+    }
+
+    #[test]
+    fn nothing_is_related_when_the_anchor_is_not_in_the_page() {
+        let commits = vec![commit("a", &[], "a")];
+        assert!(related_indices(&commits, "missing").is_empty());
     }
 
     #[test]

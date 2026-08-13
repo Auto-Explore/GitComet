@@ -1155,6 +1155,57 @@ pub(super) fn schedule_load_merge_commit_message(
     );
 }
 
+pub(super) fn schedule_load_hover_commit_message(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    commit_id: gitcomet_core::domain::CommitId,
+) {
+    let fallback_id = commit_id.clone();
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-hover-commit-message",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            // `commit_messages` is message-only by design, so hovering a row
+            // does not pay for the tree diff `commit_details` computes.
+            let result = repo
+                .commit_messages(std::slice::from_ref(&commit_id))
+                .and_then(|mut messages| {
+                    if messages.is_empty() {
+                        Err(Error::new(ErrorKind::Backend(format!(
+                            "no message for commit {}",
+                            commit_id.as_ref()
+                        ))))
+                    } else {
+                        Ok(messages.remove(0))
+                    }
+                });
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
+                    repo_id,
+                    commit_id,
+                    result,
+                }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
+                    repo_id,
+                    commit_id: fallback_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
 pub(super) fn schedule_load_commit_details(
     executor: &TaskExecutor,
     repos: &RepoMap,
