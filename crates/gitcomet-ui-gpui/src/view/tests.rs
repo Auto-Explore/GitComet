@@ -4485,3 +4485,77 @@ fn clicking_a_file_with_unsaved_edits_opens_the_editor(cx: &mut gpui::TestAppCon
         );
     });
 }
+
+#[gpui::test]
+fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    let branch = |name: &str| gitcomet_core::domain::Branch {
+        name: name.to_string(),
+        target: CommitId("1111111111111111".into()),
+        upstream: None,
+        divergence: None,
+    };
+    let worktree = |path: &str, branch: &str| gitcomet_core::domain::Worktree {
+        path: PathBuf::from(path),
+        head: None,
+        branch: Some(branch.to_string()),
+        detached: false,
+    };
+    // Names and badge labels of deliberately different widths: the badges are
+    // pushed against the trailing edge, so none of that may reach their right
+    // edge.
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![
+        branch("alpha"),
+        branch("beta"),
+        branch("gamma-with-a-much-longer-name"),
+    ]));
+    state.repos[0].branches_rev = 1;
+    state.repos[0].worktrees = Loadable::Ready(Arc::new(vec![
+        worktree("/tmp/wt-alpha", "alpha"),
+        worktree("/tmp/wt-beta-considerably-longer", "beta"),
+        worktree("/tmp/g", "gamma-with-a-much-longer-name"),
+    ]));
+    state.repos[0].worktrees_rev = 1;
+    state.repos[0].branch_sidebar_rev = 1;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    let sidebar = cx
+        .debug_bounds("sidebar_pane")
+        .expect("expected the sidebar pane");
+    let badges: Vec<_> = (0..12usize)
+        .filter_map(|ix| {
+            let selector: &'static str =
+                Box::leak(format!("branch_workspace_badge_{ix}").into_boxed_str());
+            cx.debug_bounds(selector)
+        })
+        .collect();
+    assert!(
+        badges.len() >= 3,
+        "expected a worktree badge on each branch that has one, got {}",
+        badges.len()
+    );
+
+    let first_right = badges[0].right();
+    for badge in &badges {
+        assert_eq!(
+            badge.right(),
+            first_right,
+            "worktree badges must share one right edge regardless of label width"
+        );
+    }
+
+    // What is left between the badges and the pane edge is the reserved `⋮`
+    // slot, the gap before it, and the row-highlight inset — nothing else.
+    let trailing_gap = sidebar.right() - first_right;
+    assert!(
+        trailing_gap <= px(30.0),
+        "worktree badges should sit close to the pane's right edge, got {trailing_gap:?}"
+    );
+}

@@ -319,6 +319,22 @@ impl SidebarPaneView {
         const BRANCH_TREE_ICON_SLOT_PX: f32 = 16.0;
         const BRANCH_TREE_GAP_PX: f32 = 4.0;
         const BRANCH_BADGE_GAP_PX: f32 = 3.0;
+        /// Widest a branch row's worktree pill may grow before its label starts
+        /// truncating. Wide enough for the folder names worktrees usually carry,
+        /// narrow enough that the pill plus the trailing slot always fit the
+        /// pane — which is what keeps every row's badge on one right edge.
+        const BRANCH_WORKTREE_BADGE_MAX_W_PX: f32 = 140.0;
+        /// How much of the row's shared child gap the `⋮` slot claws back, so
+        /// the button sits tight against the badge before it. Bounded by
+        /// `BRANCH_TREE_GAP_PX`: pulling the whole gap would butt the two
+        /// together.
+        const BRANCH_MENU_DOTS_PULL_PX: f32 = 3.0;
+        /// Width of the trailing `⋮` slot, and with it how far every trailing
+        /// badge sits from the pane's right edge — the slot is reserved in the
+        /// row layout even while the button is hidden. Kept at the button's own
+        /// size so it adds no slack of its own; the button already centers a
+        /// 16px icon in 20px.
+        const BRANCH_MENU_DOTS_SLOT_PX: f32 = 20.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
@@ -488,7 +504,13 @@ impl SidebarPaneView {
             // while hidden, so revealing the button on hover never shifts the row.
             let mut slot = div()
                 .flex_none()
-                .w(scaled_px(24.0))
+                .w(scaled_px(BRANCH_MENU_DOTS_SLOT_PX))
+                // The row spaces its children evenly, which is right for the
+                // tree columns but leaves the `⋮` drifting off the trailing
+                // badge. Pull it back so the pair reads as one trailing
+                // cluster; the button keeps its full width, so this costs no
+                // hit area.
+                .ml(scaled_px(-BRANCH_MENU_DOTS_PULL_PX))
                 .flex()
                 .items_center()
                 .justify_center();
@@ -1070,7 +1092,10 @@ impl SidebarPaneView {
                                             .items_center()
                                             .gap(scaled_px(3.0))
                                             .px(scaled_px(6.0))
-                                            .rounded(px(theme.radii.pill))
+                                            // Same control radius as the branch
+                                            // rows' worktree badge; the two are
+                                            // the same chip in two lists.
+                                            .rounded(px(theme.radii.control))
                                             .border_1()
                                             .border_color(branch_badge_colors.border)
                                             .bg(if worktree_tab_open {
@@ -1876,7 +1901,11 @@ impl SidebarPaneView {
                             .items_center()
                             .gap(scaled_px(3.0))
                             .px(scaled_px(6.0))
-                            .rounded(px(theme.radii.pill))
+                            // Squared off on the control radius the buttons and
+                            // tabs use, rather than the fully-round `pill` the
+                            // decorative chips (upstream, submodule) keep: this
+                            // badge is a click target, so it reads as one.
+                            .rounded(px(theme.radii.control))
                             .border_1()
                             .border_color(badge_colors.border)
                             .bg(if has_active_workspace {
@@ -1887,8 +1916,30 @@ impl SidebarPaneView {
                             .text_size(scaled_px(11.0))
                             .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
+                            // A worktree folder can outrun the pane. Cap and
+                            // truncate the pill rather than let it grow past
+                            // the trailing slot, which would shove this row's
+                            // badge right of every other row's and break the
+                            // shared right edge. An absolute cap, not a
+                            // percentage: the pill's containing block is the
+                            // accessory run, which is itself sized by this
+                            // pill.
+                            .max_w(scaled_px(BRANCH_WORKTREE_BADGE_MAX_W_PX))
+                            .overflow_hidden()
                             .child(svg_icon(WORKTREE_ICON_PATH, badge_colors.text, 9.0))
-                            .child(workspace_badge_label)
+                            .child(
+                                div().min_w(px(0.0)).overflow_hidden().child(
+                                    components::TruncatedText::new(workspace_badge_label)
+                                        .id(("branch_workspace_badge_text", ix))
+                                        .text_size(scaled_px(11.0))
+                                        // Explicit color: TruncatedText resolves an
+                                        // unset one from the ambient text style in a
+                                        // deferred measure closure that never sees the
+                                        // pill's `.text_color`.
+                                        .text_color(badge_colors.text)
+                                        .render(cx),
+                                ),
+                            )
                             .hover(move |s| {
                                 if workspace_menu_active {
                                     s.bg(worktree_badge_palette.active_bg)

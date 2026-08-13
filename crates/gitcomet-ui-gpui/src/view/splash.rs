@@ -14,6 +14,16 @@ const CONTENT_CARD_GAP_PX: f32 = 8.0;
 const CONTENT_CARD_BOTTOM_MARGIN_PX: f32 = 2.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
 
+/// Corner radius of the main content card — squarer than the shared `panel`
+/// radius the floating dialogs and splash cards keep. This surface is chrome
+/// fused to the tab strip above it and the sidebar beside it, not a card
+/// floating on the canvas, so it takes the same radius as the controls
+/// (buttons, tabs) it sits among. The corner caps derive from this, so both
+/// move together.
+fn main_content_card_radius(theme: AppTheme) -> f32 {
+    theme.radii.control
+}
+
 struct SplashInteractiveColors {
     base: gpui::Rgba,
     hover: gpui::Rgba,
@@ -1139,7 +1149,7 @@ impl GitCometView {
                                 .mb(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
                                 .mr(px(CONTENT_CARD_GAP_PX))
                                 .relative()
-                                .rounded(px(theme.radii.panel))
+                                .rounded(px(main_content_card_radius(theme)))
                                 .border_1()
                                 .border_color(theme.colors.border)
                                 .overflow_hidden()
@@ -1207,7 +1217,7 @@ impl GitCometView {
                                         )),
                                 )
                                 .child(card_corner_caps(
-                                    px((theme.radii.panel - 1.0).max(0.0)),
+                                    px((main_content_card_radius(theme) - 1.0).max(0.0)),
                                     theme.colors.sidebar_bg,
                                 )),
                         )
