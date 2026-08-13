@@ -73,14 +73,13 @@ fn generated_patterns_are_honoured_by_git() {
     // a character class, a `*`/`?` that would glob, a leading `#` that would be
     // a comment without the anchor, a leading `!` that would negate, and a
     // trailing space git strips unless it is quoted.
-    let names = [
-        "build/out[1].log",
-        "build/wild*card.txt",
-        "build/what?.txt",
-        "#notes.txt",
-        "!important.txt",
-        "trailing ",
-    ];
+    let mut names = vec!["build/out[1].log", "#notes.txt", "!important.txt"];
+    // Windows refuses to create `*`, `?` or trailing-space names at all, so the
+    // glob and trailing-space rules can only be proven against real git on the
+    // other platforms; `gitignore`'s unit tests still pin their exact strings.
+    if !cfg!(windows) {
+        names.extend(["build/wild*card.txt", "build/what?.txt", "trailing "]);
+    }
     // Never matched by any pattern below: if a stray `*` or an over-broad
     // folder rule slipped in, this file would vanish and the test would catch it.
     let control = "build/keep.txt";
@@ -101,7 +100,7 @@ fn generated_patterns_are_honoured_by_git() {
         gitignore::append_patterns("", &patterns).expect("expected patterns to be appended");
     fs::write(repo.join(gitignore::FILE_NAME), &contents).expect("write .gitignore");
 
-    for name in names {
+    for &name in &names {
         assert!(
             is_ignored(&repo, Path::new(name)),
             "git does not honour the generated pattern for {name:?}; .gitignore was:\n{contents}"
@@ -117,7 +116,7 @@ fn generated_patterns_are_honoured_by_git() {
         still_untracked.contains(&control.to_string()),
         "the control file should still be listed, got {still_untracked:?}"
     );
-    for name in names {
+    for &name in &names {
         assert!(
             !still_untracked.iter().any(|path| path == name),
             "{name:?} should have dropped out of the untracked list, got {still_untracked:?}"
