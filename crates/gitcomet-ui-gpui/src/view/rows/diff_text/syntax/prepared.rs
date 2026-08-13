@@ -1530,6 +1530,10 @@ pub(in super::super) fn prepare_treesitter_document_with_budget_reuse_text(
     old_document: Option<PreparedSyntaxDocument>,
     edit_hint: Option<DiffSyntaxEdit>,
 ) -> PrepareTreesitterDocumentResult {
+    // Before the source-identity fast path: the specs this language injects into
+    // are needed later, by the render path, whether or not this document is
+    // already cached.
+    request_highlight_spec_warmup(language);
     let line_count = normalized_treesitter_line_starts(text.as_ref(), line_starts.as_ref()).len();
     if let Some(identity) =
         prepared_document_source_identity_for_shared_text(language, mode, text.as_ref(), line_count)
@@ -1645,6 +1649,7 @@ pub(in super::super) fn prepare_treesitter_document_in_background_text_with_repa
     reparse_seed: Option<PreparedSyntaxReparseSeed>,
     edit_hint: Option<DiffSyntaxEdit>,
 ) -> Option<PreparedSyntaxDocumentData> {
+    request_highlight_spec_warmup(language);
     let input = treesitter_document_input_from_shared_text(text, line_starts);
     let (old_document, old_tree_state) = match reparse_seed {
         Some(seed) => (Some(seed.document), Some(seed.tree_state)),

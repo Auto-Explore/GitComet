@@ -30,6 +30,7 @@ syntax-web = [
     "dep:tree-sitter-jsdoc",
     "dep:tree-sitter-regex",
     "dep:tree-sitter-typescript",
+    "dep:tree-sitter-vue",
 ]
 syntax-rust = ["dep:tree-sitter-rust"]
 syntax-python = ["dep:tree-sitter-python"]
@@ -133,6 +134,7 @@ tree-sitter-sequel = { workspace = true, optional = true }
 tree-sitter-swift = { workspace = true, optional = true }
 tree-sitter-toml-ng = { workspace = true, optional = true }
 tree-sitter-typescript = { workspace = true, optional = true }
+tree-sitter-vue = { workspace = true, optional = true }
 tree-sitter-xml = { workspace = true, optional = true }
 tree-sitter-yaml = { workspace = true, optional = true }
 tree-sitter-zig = { workspace = true, optional = true }
@@ -197,6 +199,7 @@ tree-sitter-sequel = { workspace = true }
 tree-sitter-swift = { workspace = true }
 tree-sitter-toml-ng = { workspace = true }
 tree-sitter-typescript = { workspace = true }
+tree-sitter-vue = { workspace = true }
 tree-sitter-xml = { workspace = true }
 tree-sitter-yaml = { workspace = true }
 tree-sitter-zig = { workspace = true }
