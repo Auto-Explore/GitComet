@@ -1214,14 +1214,35 @@ impl SidebarPaneView {
         // `theme.colors.hover` is nearly identical to the sidebar chrome bg,
         // so use the standard text-tinted overlay that reads on hover.
         let tab_hover_bg = theme.hover_overlay();
+        // Lifts the active chip, which already carries `active_section` and so
+        // cannot show the plain overlay the inactive one uses.
+        let tab_active_hover_bg = crate::theme::mix_colors(
+            theme.colors.active_section,
+            theme.colors.text,
+            if theme.is_dark { 0.08 } else { 0.05 },
+        );
+        // Same value as `ButtonStyle::Subtle`'s hover border, so the chips match
+        // the locate button sharing their strip.
+        let tab_hover_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.45 } else { 0.32 },
+        );
 
+        // The ids are load-bearing, not just for tests: gpui only allocates the
+        // element state that makes a `.hover()` repaint the view for *stateful*
+        // elements. On a bare `div()` the hover style is computed but nothing
+        // ever asks for a new frame, so it never reaches the screen.
         let branches_tab = div()
+            .id("sidebar_tab_branches")
+            .debug_selector(|| "sidebar_tab_branches".to_string())
             .flex()
             .flex_row()
             .items_center()
             .px(scaled_px(8.0))
             .h(scaled_px(22.0))
             .rounded(px(theme.radii.control))
+            .border_1()
+            .border_color(gpui::transparent_black())
             .when(mode == SidebarMode::Branches, |d| {
                 d.bg(theme.colors.active_section)
                     .text_color(theme.colors.text)
@@ -1231,10 +1252,11 @@ impl SidebarPaneView {
                     .text_color(theme.colors.text_muted)
             })
             .hover(move |d| {
+                let d = d.border_color(tab_hover_border);
                 if mode != SidebarMode::Branches {
                     d.bg(tab_hover_bg)
                 } else {
-                    d
+                    d.bg(tab_active_hover_bg)
                 }
             })
             .cursor(CursorStyle::PointingHand)
@@ -1250,12 +1272,16 @@ impl SidebarPaneView {
             );
 
         let files_tab = div()
+            .id("sidebar_tab_files")
+            .debug_selector(|| "sidebar_tab_files".to_string())
             .flex()
             .flex_row()
             .items_center()
             .px(scaled_px(8.0))
             .h(scaled_px(22.0))
             .rounded(px(theme.radii.control))
+            .border_1()
+            .border_color(gpui::transparent_black())
             .when(mode == SidebarMode::Files, |d| {
                 // Carry the tint onto the active chip too, so it does not read
                 // as a neutral hole punched in a tinted bar.
@@ -1271,10 +1297,11 @@ impl SidebarPaneView {
                     .text_color(theme.colors.text_muted)
             })
             .hover(move |d| {
+                let d = d.border_color(tab_hover_border);
                 if mode != SidebarMode::Files {
                     d.bg(tab_hover_bg)
                 } else {
-                    d
+                    d.bg(tab_active_hover_bg)
                 }
             })
             .cursor(CursorStyle::PointingHand)

@@ -767,6 +767,15 @@ impl SelectionState {
 
 pub(super) struct InteractionState {
     pub(super) is_selecting: bool,
+    /// Fixed document endpoint for the mouse drag in progress. Keyboard
+    /// selections can infer their anchor from `range` + `reversed`, but a mouse
+    /// drag must not let repeated move handlers or a direction change move it.
+    pub(super) mouse_selection_anchor: Option<usize>,
+    /// Window position of the initiating press while the text layout is
+    /// temporarily unavailable. A text replacement invalidates layout before
+    /// the next paint; resolving that press to byte 0 caused a one-frame
+    /// selection from the top of the document.
+    pub(super) pending_mouse_selection_anchor: Option<Point<Pixels>>,
     pub(super) suppress_right_click: bool,
     pub(super) context_menu: Option<TextInputContextMenuState>,
     pub(super) vertical_motion_x: Option<Pixels>,
@@ -796,6 +805,8 @@ impl InteractionState {
     pub(super) fn new() -> Self {
         Self {
             is_selecting: false,
+            mouse_selection_anchor: None,
+            pending_mouse_selection_anchor: None,
             suppress_right_click: false,
             context_menu: None,
             vertical_motion_x: None,

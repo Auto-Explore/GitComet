@@ -2350,7 +2350,7 @@ fn diff_row(
             .items_center()
             .justify_between()
             .px_2()
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(crate::theme::content_header_bg(theme))
             .border_b_1()
             .border_color(theme.colors.border)
             .text_sm()
@@ -2618,7 +2618,7 @@ fn collapsed_inline_header_row(
             let header_bg = if selected {
                 focused_diff_neutral_row_bg(theme)
             } else {
-                theme.colors.surface_bg_elevated
+                crate::theme::content_header_bg(theme)
             };
             // Pin the header content to the viewport while the background
             // band spans the full scrollable width, so horizontal scrolling
@@ -3004,7 +3004,7 @@ fn patch_split_header_row(
                 .items_center()
                 .justify_between()
                 .px_2()
-                .bg(theme.colors.surface_bg_elevated)
+                .bg(crate::theme::content_header_bg(theme))
                 .border_b_1()
                 .border_color(theme.colors.border)
                 .text_sm()
@@ -3151,7 +3151,7 @@ fn collapsed_split_header_row(
             let header_bg = if selected {
                 focused_diff_neutral_row_bg(theme)
             } else {
-                theme.colors.surface_bg_elevated
+                crate::theme::content_header_bg(theme)
             };
             // Pin the header content to the viewport while the background
             // band spans the full scrollable width, so horizontal scrolling

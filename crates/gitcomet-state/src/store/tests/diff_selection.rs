@@ -2565,6 +2565,92 @@ fn exiting_edit_mode_keeps_the_file_on_screen() {
 }
 
 #[test]
+fn exiting_edit_mode_restores_the_originating_diff_or_content_preview() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+
+    let path = PathBuf::from("src/main.rs");
+    let commit_id = CommitId("deadbeef".into());
+    let commit_target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(path.clone()),
+    };
+
+    // A diff remains a diff, including its historical target, after editing
+    // the working-tree copy.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id,
+            target: commit_target.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileEditor {
+            repo_id,
+            path: path.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExitDiffEditMode { repo_id },
+    );
+    assert_eq!(state.repos[0].diff_state.diff_target, Some(commit_target));
+    assert!(!state.repos[0].diff_state.content_preview);
+    assert!(!state.repos[0].diff_state.edit_mode);
+
+    // A full-content preview returns to that preview and its original commit,
+    // rather than being forced into the working-tree preview.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileContent {
+            repo_id,
+            source: FileSource::Commit(commit_id.clone()),
+            path: path.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenFileEditor { repo_id, path },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ExitDiffEditMode { repo_id },
+    );
+    assert_eq!(
+        state.repos[0].diff_state.diff_target,
+        Some(DiffTarget::Commit {
+            commit_id,
+            path: Some(PathBuf::from("src/main.rs")),
+        })
+    );
+    assert!(state.repos[0].diff_state.content_preview);
+    assert!(!state.repos[0].diff_state.edit_mode);
+}
+
+#[test]
 fn global_nav_realigns_viewer_history_onto_restored_file_view() {
     // Regression: a global (mouse) navigation that lands on a file-content view
     // must reposition the in-viewer file-version history (`view_history`) onto

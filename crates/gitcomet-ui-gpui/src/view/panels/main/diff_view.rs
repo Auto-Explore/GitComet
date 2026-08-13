@@ -261,9 +261,9 @@ impl MainPaneView {
         let mut handled = false;
 
         // While the editable buffer has focus every keystroke belongs to it, with
-        // one exception: Ctrl/Cmd+S saves. Outside the editor that chord stages
-        // the file, and both meanings can coexist precisely because they are
-        // separated by focus.
+        // one exception: Ctrl/Cmd+S saves and returns to the originating view.
+        // Outside the editor that chord stages the file, and both meanings can
+        // coexist precisely because they are separated by focus.
         if self
             .file_editor_input
             .read(cx)
@@ -276,7 +276,7 @@ impl MainPaneView {
                 && !mods.function
                 && key == "s"
             {
-                self.save_file_editor_buffer(cx);
+                self.save_file_editor_buffer_and_exit(window, cx);
                 return true;
             }
             if key == "escape" && !mods.control && !mods.alt && !mods.platform && !mods.function {
@@ -1393,7 +1393,7 @@ impl MainPaneView {
         cx.notify();
     }
 
-    /// Throw the buffer away and leave the editor for the read-only view.
+    /// Throw the buffer away and restore the view that opened the editor.
     ///
     /// Discarding is the user saying they are done with this edit, so it exits
     /// the way Escape and the Edit toggle do rather than leaving them parked in
@@ -1414,6 +1414,30 @@ impl MainPaneView {
         cx.notify();
     }
 
+    /// Save the editable buffer and restore the view that opened it.
+    pub(in crate::view) fn save_file_editor_buffer_and_exit(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // The toolbar button is disabled in these states, but the keyboard
+        // shortcut can still arrive. A no-op save must not unexpectedly act as
+        // an editor-close shortcut.
+        if self.file_editor_loading
+            || !self.file_editor_is_dirty()
+            || self.file_editor_key.is_none()
+        {
+            return;
+        }
+        self.save_file_editor_buffer(cx);
+        let Some(repo_id) = self.active_repo_id() else {
+            return;
+        };
+        self.store.dispatch(Msg::ExitDiffEditMode { repo_id });
+        self.restore_diff_panel_focus_after_toolbar_action(window, cx);
+        cx.notify();
+    }
+
     /// The explicit "Save" button, shown while editing with auto-save off.
     fn file_editor_save_button(
         &self,
@@ -1423,14 +1447,14 @@ impl MainPaneView {
         components::Button::new("file_editor_save", "Save")
             .style(components::ButtonStyle::Outlined)
             .disabled(!self.file_editor_is_dirty())
-            .on_click(theme, cx, |this, _e, _window, cx| {
-                this.save_file_editor_buffer(cx);
+            .on_click(theme, cx, |this, _e, window, cx| {
+                this.save_file_editor_buffer_and_exit(window, cx);
             })
             .debug_selector(|| "file_editor_save".to_string())
             .gitcomet_tooltip(
                 theme,
                 format!(
-                    "Save the file ({})",
+                    "Save the file and return ({})",
                     crate::view::shortcut_labels::secondary_shortcut("S")
                 )
                 .into(),
@@ -1461,7 +1485,7 @@ impl MainPaneView {
             .gitcomet_tooltip(
                 theme,
                 if dirty {
-                    "Throw away the unsaved changes and return to the file view".into()
+                    "Throw away the unsaved changes and return to the previous view".into()
                 } else {
                     SharedString::from("No unsaved changes")
                 },
@@ -3104,12 +3128,20 @@ impl MainPaneView {
                                 "Theirs (deleted)".into()
                             };
 
+                            // The body reserves this gutter for its vertical scrollbar; the
+                            // header has to reserve it too or the two halves split a wider
+                            // box than the rows do and the labels drift off their columns.
+                            let compare_scrollbar_gutter = components::Scrollbar::visible_gutter(
+                                self.diff_scroll.clone(),
+                                components::ScrollbarAxis::Vertical,
+                            );
                             let columns_header = components::split_columns_header(
                                 theme,
                                 ui_scale_percent,
                                 ours_label,
                                 theirs_label,
-                            );
+                            )
+                            .pr(compare_scrollbar_gutter);
 
                             let diff_len = self.conflict_resolver.two_way_split_visible_len();
 
@@ -3150,10 +3182,7 @@ impl MainPaneView {
                                                 div()
                                                     .h_full()
                                                     .min_h(px(0.0))
-                                                    .pr(components::Scrollbar::visible_gutter(
-                                                        self.diff_scroll.clone(),
-                                                        components::ScrollbarAxis::Vertical,
-                                                    ))
+                                                    .pr(compare_scrollbar_gutter)
                                                     .child(list),
                                             )
                                             .child(
@@ -3497,12 +3526,17 @@ impl MainPaneView {
                                                     "diff_split_columns_header".to_string()
                                                 })
                                                 .w_full()
+                                                // Same right inset as the body below, so both rows
+                                                // divide the identical content box and the column
+                                                // divider lines up. Padding keeps the band and its
+                                                // bottom border full-bleed.
+                                                .pr(shared_scrollbar_gutter)
                                                 .h(components::control_height(ui_scale_percent))
                                                 .flex()
                                                 .items_center()
                                                 .text_xs()
                                                 .text_color(theme.colors.text_muted)
-                                                .bg(theme.colors.surface_bg_elevated)
+                                                .bg(crate::theme::content_header_bg(theme))
                                                 .border_b_1()
                                                 .border_color(theme.colors.border)
                                                 .child(
@@ -3710,7 +3744,7 @@ impl MainPaneView {
             .w_full()
             .h_full()
             .min_h(px(0.0))
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(crate::theme::content_header_bg(theme))
             .when(diff_editor_menu_active, |d| d.bg(theme.colors.active))
             .track_focus(&self.diff_panel_focus_handle)
             .on_action(
@@ -3784,9 +3818,12 @@ impl MainPaneView {
                     .h(components::control_height_md(ui_scale_percent))
                     .px_2()
                     .bg(if historical_browse {
-                        crate::theme::historical_header_bg(theme, theme.colors.surface_bg_elevated)
+                        crate::theme::historical_header_bg(
+                            theme,
+                            crate::theme::content_header_bg(theme),
+                        )
                     } else {
-                        theme.colors.surface_bg_elevated
+                        crate::theme::content_header_bg(theme)
                     })
                     .border_b_1()
                     .border_color(theme.colors.border),

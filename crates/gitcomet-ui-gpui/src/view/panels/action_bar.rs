@@ -516,7 +516,6 @@ impl Render for ActionBarView {
             icon_muted
         };
         let mut pull_main = components::Button::new("pull_main", "Pull")
-            .borderless()
             .rounded_left()
             .start_slot(if pull_loading {
                 spinner(("pull_spinner", active_repo_key), pull_color).into_any_element()
@@ -524,7 +523,6 @@ impl Render for ActionBarView {
                 icon("icons/arrow_down.svg", pull_color).into_any_element()
             })
             .style(components::ButtonStyle::Subtle)
-            .no_hover_border()
             .disabled(!pull_default_enabled);
         if pull_count > 0 {
             pull_main = pull_main.end_slot(count_badge(pull_count, pull_color));
@@ -541,11 +539,9 @@ impl Render for ActionBarView {
             icon_muted
         };
         let pull_menu = components::Button::new("pull_menu", "")
-            .borderless()
             .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", pull_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
-            .no_hover_border()
             .selected(pull_picker_active)
             .selected_bg(menu_selected_bg);
 
@@ -614,15 +610,13 @@ impl Render for ActionBarView {
             })
             .gitcomet_tooltip(theme, terminal_tooltip);
         let mut push_main = components::Button::new("push_main", "Push")
-            .borderless()
             .rounded_left()
             .start_slot(if push_loading {
                 spinner(("push_spinner", active_repo_key), push_color).into_any_element()
             } else {
                 icon("icons/arrow_up.svg", push_color).into_any_element()
             })
-            .style(components::ButtonStyle::Subtle)
-            .no_hover_border();
+            .style(components::ButtonStyle::Subtle);
         if push_count > 0 {
             push_main = push_main.end_slot(count_badge(push_count, push_color));
         }
@@ -638,11 +632,9 @@ impl Render for ActionBarView {
             icon_muted
         };
         let push_menu = components::Button::new("push_menu", "")
-            .borderless()
             .rounded_right()
             .start_slot(icon("icons/chevron_down.svg", push_menu_icon_color))
             .style(components::ButtonStyle::Subtle)
-            .no_hover_border()
             .selected(push_picker_active)
             .selected_bg(menu_selected_bg);
 

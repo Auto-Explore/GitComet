@@ -5,52 +5,30 @@ use super::*;
 /// centerline, so every saved pixel goes to the content area.
 const BOTTOM_STATUS_BAR_HEIGHT_PX: f32 = 26.0;
 
-/// Pill worn by the branding chips on the bar's trailing end. Same chrome the
-/// edition badge had while it lived in the title bar, so every chip here reads
-/// as one family.
+/// Shared shape for the branding links on the bar's trailing end. No plate and
+/// no outline — beside the wordmark and the version number these read as links,
+/// and a badge each would turn the corner into a row of buttons. Hover is
+/// carried entirely by the accent tint, which the Discord glyph picks up through
+/// `group_hover` on this element's group.
 fn status_bar_chip(
     id: &'static str,
     theme: AppTheme,
     ui_scale_percent: u32,
 ) -> gpui::Stateful<gpui::Div> {
     let scaled_px = |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-    let bg = with_alpha(
-        theme.colors.text_muted,
-        if theme.is_dark { 0.22 } else { 0.16 },
-    );
-    let border = with_alpha(
-        theme.colors.text_muted,
-        if theme.is_dark { 0.34 } else { 0.28 },
-    );
-    let hover_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
-    let hover_border = with_alpha(theme.colors.accent, if theme.is_dark { 0.42 } else { 0.34 });
-    let active_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.20 });
-    let active_border = with_alpha(theme.colors.accent, if theme.is_dark { 0.58 } else { 0.46 });
 
     div()
         .id(id)
         .group(id)
         .debug_selector(move || id.to_string())
         .h(scaled_px(18.0))
-        .px(scaled_px(6.0))
+        .px(scaled_px(4.0))
         .flex()
         .items_center()
         .justify_center()
-        .rounded(px(theme.radii.pill))
         .cursor(CursorStyle::PointingHand)
-        .bg(bg)
-        .border_1()
-        .border_color(border)
-        .hover(move |s| {
-            s.bg(hover_bg)
-                .border_color(hover_border)
-                .text_color(theme.colors.accent)
-        })
-        .active(move |s| {
-            s.bg(active_bg)
-                .border_color(active_border)
-                .text_color(theme.colors.accent)
-        })
+        .hover(move |s| s.text_color(theme.colors.accent))
+        .active(move |s| s.text_color(theme.colors.accent))
 }
 
 pub(in super::super) struct BottomStatusBarView {
@@ -257,10 +235,22 @@ impl Render for BottomStatusBarView {
         // GPUI paints an SVG as a mask tinted by the text color, so the mark's
         // own brand blue never reaches the screen — an untinted mark renders
         // invisible. Tint it with the accent so it stays legible in every theme.
+        //
+        // The color lives on the link itself and the wordmark inherits it, so
+        // one `.hover()` on this stateful element tints the text. A style on the
+        // stateless child could not do it: gpui only repaints on hover for
+        // elements that carry state, so the child's own hover would compute a
+        // tint that never reaches the screen.
         let brand = div()
+            .id("bottom_status_bar_brand_link")
+            .debug_selector(|| "bottom_status_bar_brand_link".to_string())
             .flex()
             .items_center()
             .gap(scaled_px(4.0))
+            .cursor(CursorStyle::PointingHand)
+            .text_color(theme.colors.text_muted)
+            .hover(move |s| s.text_color(theme.colors.accent))
+            .active(move |s| s.text_color(theme.colors.accent))
             .child(svg_icon(
                 "icons/gitcomet_mark.svg",
                 theme.colors.accent,
@@ -271,9 +261,13 @@ impl Render for BottomStatusBarView {
                     .debug_selector(|| "bottom_status_bar_brand".to_string())
                     .text_size(scaled_px(11.0))
                     .line_height(scaled_px(12.0))
-                    .text_color(theme.colors.text_muted)
                     .child("GitComet"),
-            );
+            )
+            .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
+                cx.stop_propagation();
+                cx.open_url(WEBSITE_URL);
+            }))
+            .gitcomet_tooltip(theme, "Open gitcomet.dev".into());
 
         let version_label: SharedString = format!("v{}", env!("CARGO_PKG_VERSION")).into();
         let version_link = div()

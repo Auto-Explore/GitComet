@@ -878,6 +878,10 @@ impl CommandPaletteView {
                         let command_id: SharedString = command.id.into();
                         let command_id_for_click = command_id.clone();
                         let command_row = div()
+                            // Without an id gpui never repaints on mouse-move,
+                            // so the hover fill below would be computed and
+                            // dropped every frame.
+                            .id(("command_palette_row", command_index))
                             .h(row_height)
                             .w_full()
                             .flex()

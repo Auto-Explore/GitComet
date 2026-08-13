@@ -383,9 +383,9 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
     },
-    /// Leave the editor, keeping the file on screen as a read-only content
-    /// view. *Entering* the editor always goes through `OpenFileEditor`, which
-    /// re-targets the working tree — there is no "turn it on here" counterpart.
+    /// Leave the editor, restoring the diff or read-only content preview that
+    /// opened it. *Entering* always goes through `OpenFileEditor`, which
+    /// re-targets the working tree while retaining that return destination.
     ExitDiffEditMode {
         repo_id: RepoId,
     },
