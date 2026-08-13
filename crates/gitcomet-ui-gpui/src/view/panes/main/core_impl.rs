@@ -1150,6 +1150,13 @@ impl MainPaneView {
         }
 
         self.clear_diff_selection_or_exit(repo_id, cx);
+        // Resolve and show the commit immediately; the history walk below only
+        // has to find its row. Without this the details pane would sit on the
+        // working tree — or flip in and out of it — for the whole walk.
+        self.store.dispatch(Msg::RevealCommit {
+            repo_id,
+            reference: commit_id.clone(),
+        });
         self.history_view.update(cx, |view, cx| {
             view.request_reveal_commit(repo_id, commit_id, fallback_scope, cx);
         });
@@ -4587,6 +4594,24 @@ impl MainPaneView {
             let _ = window_handle.update(cx, |_, window, cx| {
                 let _ = root_view.update(cx, |root, cx| {
                     root.open_popover_at(kind, anchor, window, cx);
+                });
+            });
+        });
+    }
+
+    pub(in crate::view) fn open_popover_for_bounds(
+        &mut self,
+        kind: PopoverKind,
+        anchor_bounds: Bounds<Pixels>,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let root_view = self.root_view.clone();
+        let window_handle = window.window_handle();
+        cx.defer(move |cx| {
+            let _ = window_handle.update(cx, |_, window, cx| {
+                let _ = root_view.update(cx, |root, cx| {
+                    root.open_popover_for_bounds(kind, anchor_bounds, window, cx);
                 });
             });
         });

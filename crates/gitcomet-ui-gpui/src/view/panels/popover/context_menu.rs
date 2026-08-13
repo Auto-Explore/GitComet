@@ -7,6 +7,7 @@ mod change_tracking_settings;
 mod commit;
 mod commit_file;
 mod commit_options;
+mod commit_sha_link;
 mod conflict_resolver_chunk;
 mod conflict_resolver_input_row;
 mod conflict_resolver_output;
@@ -16,7 +17,6 @@ mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
 mod history_branch_filter;
-mod markdown_link;
 mod mergetool_settings;
 mod previous_commit_messages;
 mod pull;
@@ -31,6 +31,7 @@ mod submodule_section;
 mod tag;
 mod terminal;
 mod ui_scale_picker;
+mod web_link;
 mod worktree;
 mod worktree_section;
 
@@ -347,7 +348,12 @@ impl PopoverHost {
                 repo_id,
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::Menu { name }),
             } => Some(remote::model(self, *repo_id, name)),
-            PopoverKind::MarkdownLinkMenu { url } => Some(markdown_link::model(url)),
+            PopoverKind::WebLinkMenu { url } => Some(web_link::model(url)),
+            PopoverKind::CommitShaLinkMenu {
+                repo_id,
+                commit_id,
+                allow_navigate,
+            } => Some(commit_sha_link::model(*repo_id, commit_id, *allow_navigate)),
             PopoverKind::StashMenu {
                 repo_id,
                 index,
@@ -541,6 +547,16 @@ impl PopoverHost {
             ContextMenuAction::BrowseRepositoryAtCommit { repo_id, commit_id } => {
                 self.store
                     .dispatch(Msg::BrowseRepositoryAtCommit { repo_id, commit_id });
+            }
+            ContextMenuAction::RevealHistoryCommit { repo_id, commit_id } => {
+                self.main_pane.update(cx, |main, cx| {
+                    main.reveal_history_commit(
+                        repo_id,
+                        commit_id,
+                        Some(gitcomet_core::domain::LogScope::AllBranches),
+                        cx,
+                    );
+                });
             }
             ContextMenuAction::ResetBrowseToLive { repo_id } => {
                 self.store.dispatch(Msg::ResetBrowseToLive { repo_id });

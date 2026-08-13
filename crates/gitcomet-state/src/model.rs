@@ -768,6 +768,12 @@ pub struct HistoryState {
     pub retained_blame_while_loading: Option<Shared<Vec<BlameLine>>>,
     pub selected_commit: Option<CommitId>,
     pub selected_commit_rev: u64,
+    /// The commit a "reveal in history" is currently walking toward.
+    ///
+    /// It is selected the moment the reveal starts, before the log has paged far
+    /// enough to contain its row, so page reconciliation has to be told not to
+    /// mistake "not loaded yet" for "no longer exists".
+    pub reveal_target: Option<CommitId>,
     pub commit_details: Loadable<Shared<CommitDetails>>,
     pub commit_details_rev: u64,
     pub multi_selection: CommitMultiSelection,
@@ -819,6 +825,7 @@ impl Default for HistoryState {
             retained_blame_while_loading: None,
             selected_commit: None,
             selected_commit_rev: 0,
+            reveal_target: None,
             commit_details: Loadable::NotLoaded,
             commit_details_rev: 0,
             multi_selection: CommitMultiSelection::default(),
@@ -1689,7 +1696,17 @@ impl RepoState {
         self.bump_log_revs();
     }
 
+    pub(crate) fn set_reveal_target(&mut self, v: Option<CommitId>) {
+        self.history_state.reveal_target = v;
+    }
+
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
+        // Selecting anything other than the commit a reveal is walking toward
+        // means the user moved on, and the reveal's exemption from page
+        // reconciliation retires with it.
+        if self.history_state.reveal_target != v {
+            self.history_state.reveal_target = None;
+        }
         if v.is_none() {
             // Clearing the selection always dissolves any multi-selection too;
             // every clear site (scope change, repo switch, diff selection)
