@@ -6194,6 +6194,113 @@ fn bottom_status_bar_zoom_button_keeps_icon_at_default_scale_and_opens_picker(
     );
 }
 
+/// The bottom bar only exists in full chrome, so every branding test needs an
+/// active repository before the bar is drawn at all.
+fn open_repo_for_bottom_status_bar_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: RepoId,
+    workdir_suffix: &str,
+) {
+    let commit_id = CommitId("1122334455667788".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_{workdir_suffix}",
+        std::process::id()
+    ));
+    let repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+
+    apply_state(cx, view, app_state_with_active_repo(repo));
+    draw_and_drain_test_window(cx);
+}
+
+#[gpui::test]
+fn bottom_status_bar_free_badge_opens_editions_page_and_updates_tooltip_on_hover(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    open_repo_for_bottom_status_bar_test(cx, &view, RepoId(710), "bottom_status_free_badge");
+
+    let badge_bounds = cx
+        .debug_bounds("bottom_status_bar_free_badge")
+        .expect("expected bottom status bar free badge bounds");
+    let badge_center = badge_bounds.center();
+
+    cx.simulate_mouse_move(badge_center, None, Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("See GitComet editions".into())
+    );
+
+    cx.simulate_click(badge_center, Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(cx.opened_url(), Some(crate::view::EDITIONS_URL.to_string()));
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected the free badge click to leave popovers closed"
+    );
+}
+
+#[gpui::test]
+fn bottom_status_bar_free_badge_scales_with_ui_zoom(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    open_repo_for_bottom_status_bar_test(cx, &view, RepoId(711), "bottom_status_free_badge_zoom");
+
+    let default_width = debug_width(cx, "bottom_status_bar_free_badge");
+
+    set_ui_scale_percent_for_test(cx, &view, 200);
+    draw_and_drain_test_window(cx);
+
+    // Unlike the title bar it used to live in, the bottom bar is uncached and
+    // sized from design pixels, so the badge tracks UI zoom with its neighbours.
+    let zoomed_width = debug_width(cx, "bottom_status_bar_free_badge");
+    assert!(
+        zoomed_width > default_width * 1.5,
+        "expected the FREE badge to grow with UI zoom (default={default_width}, zoomed={zoomed_width})"
+    );
+}
+
+#[gpui::test]
+fn bottom_status_bar_branding_opens_discord_and_release_notes(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    open_repo_for_bottom_status_bar_test(cx, &view, RepoId(712), "bottom_status_branding");
+
+    let discord_bounds = cx
+        .debug_bounds("bottom_status_bar_discord")
+        .expect("expected bottom status bar discord badge bounds");
+    cx.simulate_click(discord_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(cx.opened_url(), Some(crate::view::DISCORD_URL.to_string()));
+
+    let version_bounds = cx
+        .debug_bounds("bottom_status_bar_version")
+        .expect("expected bottom status bar version bounds");
+    cx.simulate_click(version_bounds.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert_eq!(cx.opened_url(), Some(crate::view::RELEASES_URL.to_string()));
+
+    let brand_bounds = cx
+        .debug_bounds("bottom_status_bar_brand")
+        .expect("expected the GitComet wordmark to be visible in the bottom bar");
+    assert!(
+        version_bounds.origin.x > brand_bounds.origin.x,
+        "expected the version number to sit at the bar's trailing end, right of the wordmark"
+    );
+}
+
 #[gpui::test]
 fn shared_context_menu_rows_fill_the_popover_width(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
