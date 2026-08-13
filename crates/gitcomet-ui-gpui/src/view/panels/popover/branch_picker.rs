@@ -16,6 +16,9 @@ pub(super) enum BranchPickerNavTarget {
     RemoteBranch { remote: String, branch: String },
     /// Create (and check out) a branch with this name.
     CreateBranch(String),
+    /// The nth entry of the row menu floating over the picker, which takes the
+    /// arrow keys while it is up.
+    RowAction(usize),
 }
 
 pub(super) struct BranchRows {
@@ -235,6 +238,164 @@ pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) ->
     }
 }
 
+/// Height the plain ref lists cap their rows at. Shared between the panels that
+/// render them and the keyboard navigation that scrolls them: the lists are
+/// windowed once they outgrow a couple of viewports, and are built for exactly
+/// this viewport.
+pub(super) const REF_PICKER_LIST_MAX_HEIGHT_PX: f32 = 240.0;
+
+/// Which refs a plain ref list offers. The two shapes are "pick a source ref"
+/// (HEAD, every branch, every tag) for the prompts that branch from one, and
+/// "pick a branch" for delete and rebase-onto, which cannot name the branch that
+/// is checked out and mark it instead.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(super) struct RefRowsSpec {
+    with_refs: bool,
+    hide_current_branch: bool,
+    mark_current_branch: bool,
+}
+
+impl RefRowsSpec {
+    /// HEAD, branches and tags, none of them marked.
+    pub(super) fn source_ref() -> Self {
+        Self {
+            with_refs: true,
+            hide_current_branch: false,
+            mark_current_branch: false,
+        }
+    }
+
+    /// Branches alone, the checked-out one marked — and hidden outright where it
+    /// is not a legal target.
+    pub(super) fn branches(hide_current_branch: bool) -> Self {
+        Self {
+            with_refs: false,
+            hide_current_branch,
+            mark_current_branch: true,
+        }
+    }
+
+    /// True for the lists that pick a ref to branch from, which also accept a
+    /// name that matched nothing so Enter can create it.
+    pub(super) fn offers_source_refs(self) -> bool {
+        self.with_refs
+    }
+}
+
+/// Everything the ref rows read.
+fn ref_rows_signature(repo: &RepoState, spec: RefRowsSpec) -> u64 {
+    use std::hash::Hash;
+
+    super::rows_cache::signature(|hasher| {
+        spec.hash(hasher);
+        repo.id.hash(hasher);
+        repo.head_branch_rev.hash(hasher);
+        repo.branches_rev.hash(hasher);
+        if spec.with_refs {
+            repo.tags_rev.hash(hasher);
+        }
+    })
+}
+
+/// The plain ref rows for `query` — one row per ref, name and icon, no detail
+/// line. Four surfaces share this: branch delete, rebase-onto, create-branch
+/// -from-ref and add-worktree.
+pub(super) fn ref_rows_cached(
+    this: &PopoverHost,
+    spec: RefRowsSpec,
+    query: &str,
+) -> Rc<super::rows_cache::CachedRows<String>> {
+    let Some(repo) = this.active_repo() else {
+        return super::rows_cache::CachedRows::empty();
+    };
+    let key = super::rows_cache::RowsCacheKey::new(
+        super::rows_cache::RowsCacheOwner::BranchRefs,
+        ref_rows_signature(repo, spec),
+        query,
+    );
+    super::rows_cache::get_or_build(&this.branch_ref_rows_cache, key, |_now| {
+        let head_branch = match &repo.head_branch {
+            Loadable::Ready(head) => Some(head.as_str()),
+            _ => None,
+        };
+        let mut items = Vec::new();
+        let mut names = Vec::new();
+        let mut push = |name: String, icon: &'static str| {
+            items.push(components::PickerPromptItem::plain(name.clone()).icon(icon));
+            names.push(name);
+        };
+
+        if spec.with_refs {
+            push("HEAD".to_string(), "icons/git_branch.svg");
+        }
+        if let Loadable::Ready(branches) = &repo.branches {
+            for branch in branches.iter() {
+                if spec.hide_current_branch && head_branch == Some(branch.name.as_str()) {
+                    continue;
+                }
+                push(branch.name.clone(), "icons/git_branch.svg");
+            }
+        }
+        if spec.with_refs
+            && let Loadable::Ready(tags) = &repo.tags
+        {
+            for tag in tags.iter() {
+                push(tag.name.clone(), "icons/tag.svg");
+            }
+        }
+
+        let marked_index = spec
+            .mark_current_branch
+            .then_some(head_branch)
+            .flatten()
+            .and_then(|head| names.iter().position(|name| name == head));
+        (items, names, marked_index)
+    })
+}
+
+pub(super) fn ref_nav_targets(this: &PopoverHost, spec: RefRowsSpec, query: &str) -> Vec<String> {
+    ref_rows_cached(this, spec, query).filtered_payloads()
+}
+
+/// The shared look of a plain ref list: a branch icon in the leading slot, the
+/// Enter hint, and the list attached to the search field above it.
+pub(super) fn ref_picker_prompt(
+    search: Entity<components::TextInput>,
+    scroll: gpui::ScrollHandle,
+    built: &super::rows_cache::CachedRows<String>,
+    cx: &mut gpui::Context<PopoverHost>,
+) -> components::PickerPrompt {
+    search.update(cx, |input, cx| {
+        input.set_chromeless(true, cx);
+        input.set_leading_icon(Some("icons/git_branch.svg"), cx);
+    });
+    components::PickerPrompt::new(search, scroll)
+        .prebuilt_items(Rc::clone(&built.items), Rc::clone(&built.layout))
+        .marked_index(built.marked_index)
+        .leading_icon("icons/git_branch.svg")
+        .selected_hint("Enter")
+        .accent_selection()
+        .attached_list_surface()
+}
+
+/// Everything [`rows`] reads, digested for the cache. Mirrors the
+/// `PopoverKind::BranchPicker` arm of [`super::fingerprint`], plus the clock:
+/// these rows carry relative dates ("3 mins ago") on their detail line, and a
+/// raw reading would make every frame a distinct key, so it is bucketed —
+/// the dates advance at most once a minute.
+pub(super) fn rows_signature(repo: &RepoState) -> u64 {
+    use std::hash::Hash;
+
+    super::rows_cache::signature(|hasher| {
+        repo.id.hash(hasher);
+        repo.head_branch_rev.hash(hasher);
+        repo.branches_rev.hash(hasher);
+        repo.remote_branches_rev.hash(hasher);
+        repo.ref_metadata_rev.hash(hasher);
+        super::rows_cache::date_bucket(std::time::SystemTime::now()).hash(hasher);
+    })
+}
+
 /// The cached view of the rows for `query`: the items, the filtered layout, and
 /// the payload of every row that survived the filter.
 ///
@@ -248,7 +409,11 @@ pub(super) fn cached(
     let Some(repo) = this.active_repo() else {
         return super::rows_cache::CachedRows::empty();
     };
-    let key = super::rows_cache::RowsCacheKey::for_branch_checkout(repo, query);
+    let key = super::rows_cache::RowsCacheKey::new(
+        super::rows_cache::RowsCacheOwner::BranchCheckout,
+        rows_signature(repo),
+        query,
+    );
     super::rows_cache::get_or_build(&this.branch_picker_rows_cache, key, |now| {
         let built = rows(repo, query, now);
         (built.items, built.rows, built.marked_index)
@@ -268,6 +433,8 @@ pub(super) fn activate(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match target {
+        // Menu entries never reach here: they run through the row menu itself.
+        BranchPickerNavTarget::RowAction(_) => {}
         BranchPickerNavTarget::Ref(name) => {
             this.handle_inline_branch_picker_select(name, repo_id, window, cx);
         }
@@ -354,6 +521,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         let query = search.read_with(cx, |input, _| input.text().trim().to_string());
         let built = cached(this, &query);
         let row_payloads = Rc::clone(&built.payloads);
+        let menu_payloads = Rc::clone(&built.payloads);
         let empty_text = match this.active_repo().map(|repo| &repo.branches) {
             Some(Loadable::Loading) | Some(Loadable::NotLoaded) => "Loading",
             Some(Loadable::Error(_)) => "Could not list branches",
@@ -367,13 +535,41 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .prebuilt_items(Rc::clone(&built.items), Rc::clone(&built.layout))
                 // Long ref lists render only what is on screen; keyboard
                 // navigation scrolls by the row geometry to match
-                // (`scroll_picker_prompt_to_row`).
-                .windowed_rows()
                 .tooltip_host(this.tooltip_host.clone())
                 .empty_text(empty_text)
                 .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
-                .selected_index(this.branch_picker_selected_index)
+                .selected_index(
+                    // While a row menu is open the arrow keys walk its entries,
+                    // so the list's highlight marks the invoking row instead.
+                    this.picker_row_menu
+                        .as_ref()
+                        .map(|menu| menu.display_index)
+                        .or(this.branch_picker_selected_index),
+                )
                 .marked_index(built.marked_index)
+                // Right-click offers the branch its sidebar row offers, floating
+                // over the picker rather than replacing it.
+                .on_context_menu(cx.listener(
+                    move |this, event: &components::PickerPromptContextMenuEvent, _window, cx| {
+                        let (Some(repo_id), Some(row)) = (
+                            this.active_repo().map(|repo| repo.id),
+                            menu_payloads.get(event.original_index).cloned(),
+                        ) else {
+                            return;
+                        };
+                        let target = picker_row_menu::PickerRowMenuTarget::Branch { repo_id, row };
+                        if !target.has_menu(this) {
+                            return;
+                        }
+                        picker_row_menu::open(
+                            this,
+                            target,
+                            event.display_index,
+                            event.position,
+                            cx,
+                        );
+                    },
+                ))
                 .render(
                     theme,
                     ui_scale_percent,
@@ -397,49 +593,32 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             Loadable::Ready(branches) => {
                 if let Some(search) = this.branch_picker_search_input.clone() {
                     let repo_id = repo.id;
-                    let head_branch = match &repo.head_branch {
-                        Loadable::Ready(head) => Some(head.as_str()),
-                        _ => None,
-                    };
-                    let branch_names = branches
-                        .iter()
-                        .filter_map(|b| {
-                            // The current branch cannot be rebased onto itself;
-                            // deleting it is impossible too.
-                            if (is_delete || is_rebase_onto) && head_branch == Some(b.name.as_str())
-                            {
-                                None
-                            } else {
-                                Some(b.name.clone())
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    let items = branch_names
-                        .iter()
-                        .cloned()
-                        .map(components::BranchRefPickerItem::branch)
-                        .collect::<Vec<_>>();
-                    let marked_name = head_branch.map(str::to_string);
+                    // The current branch cannot be rebased onto itself; deleting
+                    // it is impossible too.
+                    let spec = RefRowsSpec::branches(is_delete || is_rebase_onto);
+                    let query = search.read(cx).text().trim().to_string();
+                    let built = ref_rows_cached(this, spec, &query);
+                    let names = Rc::clone(&built.payloads);
 
                     menu = menu.child(
-                        components::BranchRefPicker::new(
-                            search,
-                            this.picker_prompt_scroll.clone(),
-                            items,
-                        )
-                        .tooltip_host(this.tooltip_host.clone())
-                        .empty_text("No branches")
-                        .max_height(scaled_px(240.0))
-                        .selected_index(this.branch_picker_selected_index)
-                        .marked_name(marked_name)
-                        .render(
-                            theme,
-                            ui_scale_percent,
-                            cx,
-                            move |this, name, _e, window, cx| {
-                                this.handle_inline_branch_picker_select(name, repo_id, window, cx);
-                            },
-                        ),
+                        ref_picker_prompt(search, this.picker_prompt_scroll.clone(), &built, cx)
+                            .tooltip_host(this.tooltip_host.clone())
+                            .empty_text("No branches")
+                            .max_height(scaled_px(REF_PICKER_LIST_MAX_HEIGHT_PX))
+                            .selected_index(this.branch_picker_selected_index)
+                            .render(
+                                theme,
+                                ui_scale_percent,
+                                cx,
+                                move |this, ix, _e, window, cx| {
+                                    let Some(name) = names.get(ix).cloned() else {
+                                        return;
+                                    };
+                                    this.handle_inline_branch_picker_select(
+                                        name, repo_id, window, cx,
+                                    );
+                                },
+                            ),
                     );
                 } else {
                     for (ix, branch) in branches.iter().enumerate() {
@@ -498,10 +677,13 @@ fn branch_picker_status_panel(
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
 
     if let Some(search) = this.branch_picker_search_input.clone() {
-        components::BranchRefPicker::new(search, this.picker_prompt_scroll.clone(), Vec::new())
+        // No rows at all — this panel exists to say why, in the picker's own
+        // shape so the search field above it keeps its chrome.
+        let empty = super::rows_cache::CachedRows::<String>::empty();
+        ref_picker_prompt(search, this.picker_prompt_scroll.clone(), &empty, cx)
             .tooltip_host(this.tooltip_host.clone())
             .empty_text(empty_text)
-            .max_height(scaled_px(240.0))
+            .max_height(scaled_px(REF_PICKER_LIST_MAX_HEIGHT_PX))
             .selected_index(this.branch_picker_selected_index)
             .render(theme, ui_scale_percent, cx, |_, _, _, _, _| {})
     } else {

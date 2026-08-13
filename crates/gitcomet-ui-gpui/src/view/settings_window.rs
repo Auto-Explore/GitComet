@@ -1130,6 +1130,7 @@ impl SettingsWindowView {
     fn preference_settings(&self) -> session::UiSettings {
         let mut settings = session::UiSettings {
             repo_picker_sort: None,
+            repo_picker_collapsed_sections: None,
             window_width: None,
             window_height: None,
             sidebar_width: None,

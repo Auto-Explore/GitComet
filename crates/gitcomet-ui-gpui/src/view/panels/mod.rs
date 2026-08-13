@@ -103,6 +103,21 @@ pub(in crate::view) enum ContextMenuAction {
         repo_ids: Vec<RepoId>,
         activate_after: Option<RepoId>,
     },
+    /// Keep a repository in the picker's Pinned section. Pins outlive both the
+    /// recents cap and the repository being closed, so this is what keeps one
+    /// reachable for good.
+    PinRepository {
+        path: std::path::PathBuf,
+    },
+    UnpinRepository {
+        path: std::path::PathBuf,
+    },
+    /// Drop a repository from the session's recent list. A pinned repository is
+    /// refused: the pin is what keeps a closed repository listed at all, so
+    /// forgetting one would strand it with nothing to bring it back.
+    ForgetRecentRepository {
+        path: std::path::PathBuf,
+    },
     OpenSubmoduleDiffInTab {
         path: std::path::PathBuf,
         target: DiffTarget,

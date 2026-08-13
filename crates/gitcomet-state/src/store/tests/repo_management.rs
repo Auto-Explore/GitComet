@@ -1217,6 +1217,104 @@ fn close_repo_removes_and_moves_active() {
     assert_eq!(state.active_repo, Some(RepoId(10)));
 }
 
+fn recent_repo_effect_workdirs(effects: &[Effect]) -> Vec<PathBuf> {
+    effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::PersistRecentRepo { workdir, .. } => Some(workdir.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Recording the close here rather than at the affordance that asked for it is
+/// what keeps the Recently Closed order the same whichever way a repository was
+/// closed — the repo tab's `x`, its menu, or the picker's row menu.
+#[test]
+fn close_repo_records_the_closed_repository_as_recent() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for name in ["repo1", "repo2"] {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/{name}"))),
+        );
+    }
+    let closed_workdir = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == RepoId(2))
+        .expect("repo 2 exists")
+        .spec
+        .workdir
+        .clone();
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id: RepoId(2) },
+    );
+
+    assert_eq!(recent_repo_effect_workdirs(&effects), vec![closed_workdir]);
+
+    // Closing something that is not open leaves the recents alone: there is no
+    // workdir to name, and re-running a close must not reorder the list.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id: RepoId(2) },
+    );
+    assert!(recent_repo_effect_workdirs(&effects).is_empty());
+}
+
+/// Bulk closes walk the tab strip left to right rather than the `HashSet` of
+/// ids, so the Recently Closed order they leave behind is the same on every run.
+#[test]
+fn close_repos_records_recents_in_tab_order() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    for ix in 1..=3 {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::OpenRepo(PathBuf::from(format!("/tmp/repo{ix}"))),
+        );
+    }
+    let workdir_of = |state: &AppState, repo_id: RepoId| {
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .expect("repo exists")
+            .spec
+            .workdir
+            .clone()
+    };
+    let first = workdir_of(&state, RepoId(1));
+    let third = workdir_of(&state, RepoId(3));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(3), RepoId(999), RepoId(1)],
+            activate_after: None,
+        },
+    );
+
+    assert_eq!(recent_repo_effect_workdirs(&effects), vec![first, third]);
+}
+
 #[test]
 fn close_repo_selects_right_neighbor_when_closing_first_active_tab() {
     let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();

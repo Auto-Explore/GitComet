@@ -520,4 +520,119 @@ mod badges {
         assert!(cx.debug_bounds("workspace_badge").is_none());
         assert!(cx.debug_bounds("branch_badge").is_none());
     }
+    /// Right-clicking a worktree row floats the very menu that worktree's sidebar
+    /// row opens — asserted against that model, so the two cannot drift apart.
+    #[gpui::test]
+    fn right_clicking_a_worktree_row_offers_the_sidebar_worktree_menu(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_workspace_picker(cx, repo_with_worktrees(repo_id), repo_id);
+
+        // Row 0 is the create row, which has no menu; the worktrees follow it.
+        let row = cx
+            .debug_bounds("picker_prompt_item_1")
+            .expect("expected a worktree row");
+        let at = row.center();
+        cx.simulate_mouse_move(at, None, gpui::Modifiers::default());
+        cx.simulate_event(gpui::MouseDownEvent {
+            position: at,
+            modifiers: gpui::Modifiers::default(),
+            button: MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            cx.debug_bounds("picker_row_menu").is_some(),
+            "right-clicking a worktree row should open its menu"
+        );
+        assert!(
+            cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()),
+            "the picker stays open underneath its row menu"
+        );
+
+        let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+        let (menu_labels, sidebar_labels, path) = cx.update(|_window, app| {
+            host.update(app, |host, cx| {
+                let entries = |model: ContextMenuModel| {
+                    model
+                        .items
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let menu = host
+                    .picker_row_menu
+                    .as_ref()
+                    .expect("a menu should be open")
+                    .clone();
+                let row = workspace_picker::cached(host, repo_id, "")
+                    .filtered_payloads()
+                    .into_iter()
+                    .find_map(|row| match row {
+                        workspace_picker::WorkspaceRow::Worktree(path) => Some(path),
+                        _ => None,
+                    })
+                    .expect("a worktree row");
+                let branch = match &host
+                    .state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .expect("the repo")
+                    .worktrees
+                {
+                    Loadable::Ready(worktrees) => worktrees
+                        .iter()
+                        .find(|worktree| worktree.path == row)
+                        .and_then(|worktree| worktree.branch.clone()),
+                    _ => None,
+                };
+                (
+                    entries(menu.model_for_test(host, cx)),
+                    entries(
+                        host.context_menu_model(
+                            &PopoverKind::worktree(
+                                repo_id,
+                                WorktreePopoverKind::Menu {
+                                    path: row.clone(),
+                                    branch,
+                                },
+                            ),
+                            cx,
+                        )
+                        .expect("the sidebar's worktree menu"),
+                    ),
+                    row,
+                )
+            })
+        });
+        assert!(
+            !menu_labels.is_empty(),
+            "the menu for {path:?} must have entries"
+        );
+        assert_eq!(
+            menu_labels, sidebar_labels,
+            "the row menu must offer exactly what the worktree's sidebar row offers"
+        );
+
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(cx.debug_bounds("picker_row_menu").is_none());
+        assert!(
+            cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()),
+            "the first Escape closes the menu, not the picker"
+        );
+    }
 }
