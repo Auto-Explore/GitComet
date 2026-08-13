@@ -68,6 +68,33 @@ impl PopoverHost {
             .set_offset(point(px(0.0), -offset));
     }
 
+    /// Scrolls the history author dropdown so displayed row `sel` is in view.
+    ///
+    /// Its list is windowed like the badge pickers', so the row may not have
+    /// been built; the geometry says where it would be.
+    pub(super) fn scroll_history_author_filter_to_row(
+        &mut self,
+        sel: usize,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(PopoverKind::HistoryAuthorFilter { repo_id }) = self.popover else {
+            return;
+        };
+        let query = self
+            .history_author_filter_search_input
+            .as_ref()
+            .map(|input| input.read(cx).text().trim().to_string())
+            .unwrap_or_default();
+        let (items, layout) = author_filter::rendered_rows(self, repo_id, &query);
+        self.scroll_picker_prompt_to_row(
+            &items,
+            &layout,
+            sel,
+            components::PICKER_LIST_MAX_HEIGHT_PX,
+            cx,
+        );
+    }
+
     /// Shared keyboard-navigation subscription for picker search inputs.
     ///
     /// `is_active` gates the subscription to the picker's popover kind.
@@ -674,6 +701,62 @@ impl PopoverHost {
                     this.close_popover(cx);
                 },
             ));
+        }
+        self.reset_picker_search_input(&input, window, cx);
+        input
+    }
+
+    pub(super) fn ensure_history_author_filter_search_input(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Entity<components::TextInput> {
+        let input = Self::ensure_search_input_entity(
+            &mut self.history_author_filter_search_input,
+            "Filter authors",
+            window,
+            cx,
+        );
+        if self
+            ._history_author_filter_search_input_subscription
+            .is_none()
+        {
+            self._history_author_filter_search_input_subscription =
+                Some(Self::picker_search_subscription(
+                    &input,
+                    window,
+                    cx,
+                    |this| matches!(this.popover, Some(PopoverKind::HistoryAuthorFilter { .. })),
+                    |this| &mut this.history_author_filter_selected_index,
+                    |this, query, _cx| {
+                        let Some(PopoverKind::HistoryAuthorFilter { repo_id }) = &this.popover
+                        else {
+                            return None;
+                        };
+                        let repo_id = *repo_id;
+                        Some(author_filter::nav_targets(this, repo_id, query))
+                    },
+                    |this, cx| this.close_popover(cx),
+                    Self::scroll_history_author_filter_to_row,
+                    |this, payload, query, _window, cx| {
+                        let Some(PopoverKind::HistoryAuthorFilter { repo_id }) = this.popover
+                        else {
+                            return;
+                        };
+                        // Suggestions only cover the authors of the commits
+                        // loaded so far, and the backend filter is a
+                        // case-insensitive substring match, so a name that is
+                        // not in the list is still worth applying as typed.
+                        let target = match payload {
+                            Some(target) => target,
+                            None if !query.is_empty() => {
+                                author_filter::AuthorTarget::Author(query.into())
+                            }
+                            None => return,
+                        };
+                        author_filter::apply(this, repo_id, target, cx);
+                    },
+                ));
         }
         self.reset_picker_search_input(&input, window, cx);
         input

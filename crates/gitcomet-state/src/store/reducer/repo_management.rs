@@ -130,6 +130,9 @@ fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
 
 fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     repo_state.loads_in_flight.clear();
+    // The cancelled walk's reply is dropped by the repo-load guard, so nothing
+    // downstream will ever clear the count it left on screen.
+    repo_state.set_log_scan_progress(None);
     if matches!(repo_state.open, Loadable::Loading) {
         repo_state.set_open(Loadable::NotLoaded);
     }
@@ -366,6 +369,11 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
     state.repos.push({
         let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
         repo_state.history_state.history_scope = history_mode;
+        repo_state.history_state.history_author_filter = session_preferences
+            .repo_history_author_filters
+            .get(&workdir_key)
+            .cloned()
+            .flatten();
         if let Some(enabled) = session_preferences
             .repo_fetch_prune_deleted_remote_tracking_branches
             .get(&workdir_key)
@@ -455,6 +463,11 @@ pub(super) fn restore_session(
         let mut repo_state = {
             let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
             repo_state.history_state.history_scope = history_mode;
+            repo_state.history_state.history_author_filter = session_preferences
+                .repo_history_author_filters
+                .get(&workdir_key)
+                .cloned()
+                .flatten();
             if let Some(enabled) = session_preferences
                 .repo_fetch_prune_deleted_remote_tracking_branches
                 .get(&workdir_key)

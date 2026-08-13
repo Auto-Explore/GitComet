@@ -1,6 +1,6 @@
 mod avatar;
 mod button;
-mod commit_sha_hover_menu;
+mod commit_link_menu;
 mod containers;
 mod context_menu;
 mod diff_stat;
@@ -24,7 +24,7 @@ pub use avatar::{
     initials_paint_origin_y,
 };
 pub use button::{Button, ButtonStyle};
-pub use commit_sha_hover_menu::{CommitShaHoverMenu, CommitShaLink};
+pub use commit_link_menu::{CommitLinkMenu, LinkTarget, MessageLink};
 pub use containers::{ScrollContainer, empty_state, empty_state_message, split_columns_header};
 #[cfg(test)]
 pub use containers::{panel, pill};
@@ -40,7 +40,6 @@ pub use modal::{modal_scrim, modal_surface, popover_surface};
 /// instead of only ever binding it through an inferred closure argument.
 #[allow(unused_imports)]
 pub use picker_prompt::PickerPromptHeader;
-#[cfg(any(test, feature = "benchmarks"))]
 pub use picker_prompt::picker_prompt_layout;
 pub use picker_prompt::{
     PICKER_LIST_MAX_HEIGHT_PX, PickerPrompt, PickerPromptContextMenuEvent, PickerPromptGeometry,

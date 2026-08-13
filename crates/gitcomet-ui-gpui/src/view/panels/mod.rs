@@ -77,6 +77,12 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    /// Scroll the history to a commit referenced from somewhere else and
+    /// show its details.
+    RevealHistoryCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,
@@ -213,6 +219,11 @@ pub(in crate::view) enum ContextMenuAction {
         path: std::path::PathBuf,
     },
     DiscardWorktreeChangesSelectionOrPath {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
+    AddToGitignoreSelectionOrPath {
         repo_id: RepoId,
         area: DiffArea,
         path: std::path::PathBuf,
@@ -544,6 +555,10 @@ pub(super) use bottom_status_bar::BottomStatusBarView;
 pub(super) use popover::PopoverHost;
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use popover::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
+/// Layout guards outside this module assert against the tab padding, so they
+/// follow the constant instead of hardcoding the current value.
+#[cfg(test)]
+pub(in crate::view) use repo_tabs_bar::REPO_TAB_SIDE_PADDING_PX;
 pub(super) use repo_tabs_bar::RepoTabsBarView;
 #[allow(unused_imports)]
 pub(in crate::view) use repo_tabs_bar::repo_tab_insert_before_for_drag_cursor;

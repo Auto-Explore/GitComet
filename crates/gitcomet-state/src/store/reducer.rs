@@ -95,6 +95,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RepoActivated { .. }
             | Msg::RepoExternallyChanged { .. }
             | Msg::SetHistoryScope { .. }
+            | Msg::SetHistoryAuthorFilter { .. }
             | Msg::LoadMoreHistory { .. }
             | Msg::SelectCommit { .. }
             | Msg::CompareCommitRange { .. }
@@ -121,6 +122,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::OpenFileAtCommitParent { .. }
             | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
+            | Msg::RevealCommit { .. }
             | Msg::ResetBrowseToLive { .. }
             | Msg::ViewerNavBack { .. }
             | Msg::ViewerNavForward { .. }
@@ -156,6 +158,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DiscardWorktreeChangesPath { .. }
             | Msg::DiscardWorktreeChangesPaths { .. }
             | Msg::SaveWorktreeFile { .. }
+            | Msg::AppendGitignorePatterns { .. }
             | Msg::Commit { .. }
             | Msg::CommitAmend { .. }
             | Msg::SafePushAfterCommit { .. }
@@ -522,6 +525,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         // persisted reword messages) on disk; continue it with the staged
         // auth like the cherry-pick commands above.
         RepoCommandKind::InteractiveRebase { .. } => Msg::RebaseContinue { repo_id },
+        // Writes `.gitignore` on the local filesystem, so it never fails for
+        // want of credentials — and this replay path exists only to re-run a
+        // command after an auth prompt. Retaining `patterns` would make a replay
+        // possible; there is just nothing here that an auth prompt could fix.
+        RepoCommandKind::AppendGitignorePatterns { .. } => return None,
         // Not replayable because command metadata does not retain original content.
         RepoCommandKind::SaveWorktreeFile { .. }
         | RepoCommandKind::StageHunk
@@ -751,6 +759,9 @@ fn is_view_navigation(msg: &Msg) -> bool {
             | Msg::ExitDiffEditMode { .. }
             | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
+            // A reveal moves the main view when its reference resolves, not
+            // when it is asked for.
+            | Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { .. })
             | Msg::ResetBrowseToLive { .. }
             | Msg::OpenInlineSubmoduleDiff { .. }
             | Msg::SelectInlineSubmoduleDiff { .. }
@@ -886,6 +897,9 @@ fn reduce_inner(
         }
         Msg::SetHistoryScope { repo_id, scope } => {
             external_and_history::set_history_scope(state, repo_id, scope)
+        }
+        Msg::SetHistoryAuthorFilter { repo_id, author } => {
+            external_and_history::set_history_author_filter(state, repo_id, author)
         }
         Msg::SetFetchPruneDeletedRemoteTrackingBranches { repo_id, enabled } => {
             repo_management::set_fetch_prune_deleted_remote_tracking_branches(
@@ -1051,6 +1065,10 @@ fn reduce_inner(
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
             effects::browse_repository_at_commit(state, repo_id, commit_id)
         }
+        Msg::RevealCommit { repo_id, reference } => {
+            effects::reveal_commit(state, repo_id, reference)
+        }
+        Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
             diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Back)
@@ -1373,6 +1391,10 @@ fn reduce_inner(
         } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::save_worktree_file(repo_id, path, contents, stage)
+        }
+        Msg::AppendGitignorePatterns { repo_id, patterns } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::append_gitignore_patterns(repo_id, patterns)
         }
         Msg::Commit {
             repo_id,
@@ -1838,10 +1860,17 @@ fn reduce_inner(
         }
         Msg::Internal(crate::msg::InternalMsg::LogLoaded {
             repo_id,
+            seq,
             scope,
             cursor,
             result,
-        }) => external_and_history::log_loaded(state, repo_id, scope, cursor, result),
+        }) => external_and_history::log_loaded(state, repo_id, seq, scope, cursor, result),
+        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+            repo_id,
+            seq,
+            commits,
+            scanned,
+        }) => external_and_history::log_chunk_loaded(state, repo_id, seq, commits, scanned),
         Msg::Internal(crate::msg::InternalMsg::TagsLoaded { repo_id, result }) => {
             effects::tags_loaded(state, repo_id, result)
         }
@@ -2010,6 +2039,11 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
+            repo_id,
+            reference,
+            result,
+        }) => effects::commit_reveal_resolved(state, repo_id, reference, result),
         Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
             repo_id,
             from,

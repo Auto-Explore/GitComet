@@ -35,6 +35,17 @@ impl CancellationToken {
     }
 }
 
+/// A partially built log page, reported while a walk is still running.
+///
+/// `commits` is the page so far — every chunk is a prefix of the next one and
+/// of the final page — and `scanned` counts the commits the walk has visited,
+/// matching or not, so a filter that is finding nothing still shows progress.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct LogChunk {
+    pub commits: Vec<crate::domain::Commit>,
+    pub scanned: u64,
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct CommandOutput {
     pub command: String,
@@ -314,6 +325,57 @@ pub trait GitRepository: Send + Sync {
         let page = self.log_history_mode_page(mode, limit, cursor)?;
         cancellation.check_cancelled()?;
         Ok(page)
+    }
+
+    /// Like [`Self::log_history_mode_page`], but restricted to commits whose
+    /// author matches `author` (case-insensitive substring match against the
+    /// author name shown in the UI), cancellable, and reporting the page as it
+    /// is built.
+    ///
+    /// An author filter has to walk history until it has found `limit` matching
+    /// commits, which for a rare author means walking all of it — over ten
+    /// seconds on a repository with a million commits. `on_chunk` lets the
+    /// caller show what has been found so far instead of nothing at all, and
+    /// `cancellation` lets a filter the user has moved on from be dropped
+    /// rather than waited out.
+    ///
+    /// Each chunk carries the whole page built up to that point, so chunks are
+    /// prefixes of each other and of the returned page, and applying one is
+    /// idempotent. The default implementation ignores the filter and reports
+    /// nothing; backends that support filtering override this method.
+    fn log_history_mode_page_streaming(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: &CancellationToken,
+        on_chunk: &mut dyn FnMut(LogChunk),
+    ) -> Result<LogPage> {
+        let _ = (author, on_chunk);
+        cancellation.check_cancelled()?;
+        let page = self.log_history_mode_page(mode, limit, cursor)?;
+        cancellation.check_cancelled()?;
+        Ok(page)
+    }
+
+    /// [`Self::log_history_mode_page_streaming`] for callers with nothing to
+    /// cancel and no use for the intermediate pages.
+    fn log_history_mode_page_filtered(
+        &self,
+        mode: HistoryMode,
+        author: Option<&str>,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+    ) -> Result<LogPage> {
+        self.log_history_mode_page_streaming(
+            mode,
+            author,
+            limit,
+            cursor,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
     }
 
     fn log_head_page(&self, limit: usize, cursor: Option<&LogCursor>) -> Result<LogPage>;

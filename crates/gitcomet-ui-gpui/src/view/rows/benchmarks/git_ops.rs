@@ -12,6 +12,14 @@ enum GitOpsScenario {
         total_commits: usize,
         requested_commits: usize,
     },
+    /// Author-filtered walk over a history where the wanted author is rare, so
+    /// the page can only be filled by walking (nearly) everything — the shape
+    /// that made filtering slow on a repository with a million commits.
+    LogWalkAuthorFilter {
+        total_commits: usize,
+        requested_commits: usize,
+        author: String,
+    },
     DiffCommit {
         target: DiffTarget,
         changed_files: usize,
@@ -157,6 +165,32 @@ impl GitOpsFixture {
 
     pub fn log_walk_10k_commits() -> Self {
         Self::log_walk(10_000, 10_000)
+    }
+
+    /// One author owns every `rare_every`-th commit, so filling `requested_commits`
+    /// forces the walk deep into the history.
+    pub fn log_walk_author_filter(
+        total_commits: usize,
+        requested_commits: usize,
+        rare_every: usize,
+    ) -> Self {
+        let total_commits = total_commits.max(1);
+        let rare_every = rare_every.max(2);
+        let repo_root = build_git_ops_log_repo_with_rare_author(total_commits, rare_every);
+        let backend = GixBackend;
+        let repo = backend
+            .open(repo_root.path())
+            .expect("open git_ops author-filter benchmark repo");
+
+        Self {
+            _repo_root: repo_root,
+            repo,
+            scenario: GitOpsScenario::LogWalkAuthorFilter {
+                total_commits,
+                requested_commits: requested_commits.max(1),
+                author: RARE_BENCH_AUTHOR.to_string(),
+            },
+        }
     }
 
     pub fn diff_rename_heavy(renamed_files: usize) -> Self {
@@ -344,6 +378,11 @@ impl GitOpsFixture {
                 GitOpsScenario::LogWalk {
                     total_commits,
                     requested_commits,
+                }
+                | GitOpsScenario::LogWalkAuthorFilter {
+                    total_commits,
+                    requested_commits,
+                    ..
                 },
                 GitOpsOutcome::LogWalk { commits_returned },
             ) => {
@@ -429,6 +468,32 @@ impl GitOpsFixture {
                     .repo
                     .log_head_page(*requested_commits, None)
                     .expect("git_ops log benchmark");
+                let commits_returned = page.commits.len();
+                (
+                    hash_log_page(&page),
+                    GitOpsOutcome::LogWalk { commits_returned },
+                )
+            }
+            GitOpsScenario::LogWalkAuthorFilter {
+                requested_commits,
+                author,
+                ..
+            } => {
+                // A fresh handle per run: the repository caches head pages by
+                // (mode, head, limit, cursor, author), so reusing one would
+                // measure a cache hit rather than the walk. Picking a new author
+                // in the app misses that cache the same way.
+                let repo = GixBackend
+                    .open(self._repo_root.path())
+                    .expect("open git_ops author-filter benchmark repo");
+                let page = repo
+                    .log_history_mode_page_filtered(
+                        gitcomet_core::domain::HistoryMode::FullReachable,
+                        Some(author.as_str()),
+                        *requested_commits,
+                        None,
+                    )
+                    .expect("git_ops author-filter benchmark");
                 let commits_returned = page.commits.len();
                 (
                     hash_log_page(&page),
@@ -611,19 +676,49 @@ pub(crate) fn build_git_ops_status_repo(tracked_files: usize, dirty_files: usize
     repo_root
 }
 
+/// Author of the sparse commits in [`build_git_ops_log_repo_with_rare_author`].
+const RARE_BENCH_AUTHOR: &str = "Rare Bench";
+const COMMON_BENCH_AUTHOR: &str = "Bench <bench@example.com>";
+
 fn build_git_ops_log_repo(total_commits: usize) -> TempDir {
+    build_git_ops_log_repo_with_authors(total_commits, |_| COMMON_BENCH_AUTHOR.to_string())
+}
+
+/// Like [`build_git_ops_log_repo`], but every `rare_every`-th commit is by a
+/// different author — so an author filter for that name has to walk deep into
+/// the history to fill a page.
+fn build_git_ops_log_repo_with_rare_author(total_commits: usize, rare_every: usize) -> TempDir {
+    build_git_ops_log_repo_with_authors(total_commits, |index| {
+        if index.is_multiple_of(rare_every) {
+            format!("{RARE_BENCH_AUTHOR} <rare@example.com>")
+        } else {
+            COMMON_BENCH_AUTHOR.to_string()
+        }
+    })
+}
+
+/// A linear history of `total_commits` commits, each touching the same file,
+/// with `author_at(index)` naming the author of commit `index` (1-based).
+fn build_git_ops_log_repo_with_authors(
+    total_commits: usize,
+    author_at: impl Fn(usize) -> String,
+) -> TempDir {
     let repo_root = tempfile::tempdir().expect("create git_ops log tempdir");
     let repo = repo_root.path();
     init_git_ops_repo(repo);
 
+    // Blob marks take 1..=total_commits, so commit marks start above them —
+    // a fixed offset would collide once the history outgrows it.
+    let commit_mark_base = total_commits;
     let mut import = String::with_capacity(total_commits.saturating_mul(192));
     for index in 1..=total_commits {
         let blob_mark = index;
-        let commit_mark = 100_000usize.saturating_add(index);
+        let commit_mark = commit_mark_base.saturating_add(index);
         let previous_commit_mark = commit_mark.saturating_sub(1);
         let payload = format!("seed-{index:05}");
         let message = format!("c{index:05}");
         let timestamp = 1_700_000_000usize.saturating_add(index);
+        let author = author_at(index);
 
         import.push_str("blob\n");
         import.push_str(&format!("mark :{blob_mark}\n"));
@@ -632,11 +727,9 @@ fn build_git_ops_log_repo(total_commits: usize) -> TempDir {
         import.push('\n');
         import.push_str("commit refs/heads/main\n");
         import.push_str(&format!("mark :{commit_mark}\n"));
+        import.push_str(&format!("author {author} {timestamp} +0000\n"));
         import.push_str(&format!(
-            "author Bench <bench@example.com> {timestamp} +0000\n"
-        ));
-        import.push_str(&format!(
-            "committer Bench <bench@example.com> {timestamp} +0000\n"
+            "committer {COMMON_BENCH_AUTHOR} {timestamp} +0000\n"
         ));
         import.push_str(&format!("data {}\n", message.len()));
         import.push_str(&message);

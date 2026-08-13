@@ -641,11 +641,6 @@ fn commit_id_matches_reference(commit_id: &CommitId, reference: &CommitId) -> bo
                 .is_some_and(|prefix| prefix.eq_ignore_ascii_case(reference)))
 }
 
-fn commit_id_reference_needs_resolution(reference: &CommitId) -> bool {
-    let reference = reference.as_ref();
-    (7..40).contains(&reference.len()) && reference.bytes().all(|byte| byte.is_ascii_hexdigit())
-}
-
 fn history_selected_list_index_cache_matches(
     cache: &HistorySelectedListIndexCache,
     repo_id: RepoId,
@@ -822,17 +817,25 @@ fn decide_pending_history_reveal(
         return decision;
     };
 
-    let reference_needs_resolution = commit_id_reference_needs_resolution(&pending.commit_id);
-    if !reference_needs_resolution
-        && !selected_commit
-            .is_some_and(|selected| commit_id_matches_reference(selected, &pending.commit_id))
+    // Selecting a target that is *not* loaded yet is `Msg::RevealCommit`'s job:
+    // it resolves the reference against the object database and shows the commit
+    // straight away, without this deciding anything about a row it cannot see.
+    //
+    // A full id already sitting in the loaded page is the exception. Selecting it
+    // needs no round-trip, and cannot flicker either: page reconciliation only
+    // clears a selection the page does not contain.
+    let Some(display_page) = display_page else {
+        return decision;
+    };
+    if selected_commit != Some(&pending.commit_id)
+        && display_page
+            .commits
+            .iter()
+            .any(|commit| commit.id == pending.commit_id)
     {
         decision.select_commit = Some(pending.commit_id.clone());
     }
 
-    let Some(display_page) = display_page else {
-        return decision;
-    };
     if !cache_request_matches {
         return decision;
     }
@@ -847,16 +850,8 @@ fn decide_pending_history_reveal(
         show_working_tree_summary_row,
     ) {
         HistoryCommitReferenceMatch::Unique { list_ix, commit_id } => {
-            if reference_needs_resolution {
-                match live_page_has_more {
-                    Some(false) => {}
-                    Some(true) => {
-                        decision.load_more = !log_loading_more;
-                        return decision;
-                    }
-                    None => return decision,
-                }
-            }
+            // The row carries the full id; an abbreviated reference upgrades to
+            // it here even if the resolve reply has not landed yet.
             if selected_commit != Some(&commit_id) {
                 decision.select_commit = Some(commit_id);
             }
@@ -955,6 +950,9 @@ impl HistoryView {
             repo.log_rev.hash(&mut hasher);
             repo.history_state.log_rev.hash(&mut hasher);
             repo.history_state.history_scope.hash(&mut hasher);
+            // A running walk reports progress without changing the log, and the
+            // header prints that count — so it has to repaint on its own.
+            repo.history_state.log_scan_progress.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
             repo.detached_head_commit.hash(&mut hasher);
             repo.branches_rev.hash(&mut hasher);
@@ -1696,6 +1694,10 @@ impl HistoryView {
 
         if decision.clear_pending {
             self.pending_history_reveal = None;
+            // The target no longer needs shielding from page reconciliation.
+            self.store.dispatch(Msg::FinishCommitReveal {
+                repo_id: pending.repo_id,
+            });
             cx.notify();
         }
     }
@@ -2859,7 +2861,9 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: None,
-                select_commit: Some(CommitId("c".into())),
+                // Selecting is `Msg::RevealCommit`'s job; a target that has not
+                // been paged in yet is nobody's cue to touch the selection.
+                select_commit: None,
                 scroll_to_list_ix: None,
                 load_more: true,
                 clear_pending: false,
@@ -2896,7 +2900,7 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: Some(LogScope::AllBranches),
-                select_commit: Some(CommitId("c".into())),
+                select_commit: None,
                 scroll_to_list_ix: None,
                 load_more: false,
                 clear_pending: false,
@@ -2933,7 +2937,7 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: None,
-                select_commit: Some(CommitId("c".into())),
+                select_commit: None,
                 scroll_to_list_ix: None,
                 load_more: false,
                 clear_pending: true,
@@ -3021,8 +3025,12 @@ mod tests {
         );
     }
 
+    /// An abbreviation used to force loading the *entire* history before it
+    /// could be trusted as unambiguous. `Msg::RevealCommit` settles ambiguity
+    /// against the object database instead, so a visible match is taken at once
+    /// even with pages left to load.
     #[test]
-    fn pending_history_reveal_abbreviated_commit_loads_more_before_selecting_visible_match() {
+    fn pending_history_reveal_abbreviated_commit_takes_a_visible_match_with_pages_left() {
         let full = "abcdef0123456789abcdef0123456789abcdef01";
         let other = "1234567890abcdef1234567890abcdef12345678";
         let commits = vec![
@@ -3055,10 +3063,10 @@ mod tests {
             decision,
             PendingHistoryRevealDecision {
                 set_scope: None,
-                select_commit: None,
-                scroll_to_list_ix: None,
-                load_more: true,
-                clear_pending: false,
+                select_commit: Some(CommitId(full.into())),
+                scroll_to_list_ix: Some(1),
+                load_more: false,
+                clear_pending: true,
             }
         );
     }

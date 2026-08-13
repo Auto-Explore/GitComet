@@ -31,6 +31,12 @@ pub enum Effect {
         updates: Vec<(PathBuf, HistoryMode)>,
         action: &'static str,
     },
+    PersistRepoHistoryAuthorFilter {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        author: Option<String>,
+        action: &'static str,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,
@@ -65,7 +71,12 @@ pub enum Effect {
     },
     LoadLog {
         repo_id: RepoId,
+        /// Identifies this walk, so its replies can be told from those of a
+        /// walk a newer request superseded. See [`crate::model::LogLoadSeq`].
+        seq: crate::model::LogLoadSeq,
         scope: LogScope,
+        /// Case-insensitive author filter, or `None` for all authors.
+        author: Option<String>,
         limit: usize,
         cursor: Option<LogCursor>,
     },
@@ -123,6 +134,12 @@ pub enum Effect {
     LoadCommitDetails {
         repo_id: RepoId,
         commit_id: CommitId,
+    },
+    /// Resolve a possibly abbreviated commit reference and load its details in
+    /// one call, so a reveal can show the commit before the log reaches it.
+    ResolveCommitForReveal {
+        repo_id: RepoId,
+        reference: CommitId,
     },
     LoadRangeFiles {
         repo_id: RepoId,
@@ -215,6 +232,10 @@ pub enum Effect {
         path: PathBuf,
         contents: String,
         stage: bool,
+    },
+    AppendGitignorePatterns {
+        repo_id: RepoId,
+        patterns: Vec<String>,
     },
 
     CheckoutBranch {

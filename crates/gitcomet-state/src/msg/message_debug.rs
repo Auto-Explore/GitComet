@@ -92,15 +92,29 @@ impl std::fmt::Debug for InternalMsg {
                 .finish(),
             InternalMsg::LogLoaded {
                 repo_id,
+                seq,
                 scope,
                 cursor,
                 result,
             } => f
                 .debug_struct("LogLoaded")
                 .field("repo_id", repo_id)
+                .field("seq", seq)
                 .field("scope", scope)
                 .field("cursor", cursor)
                 .field("result", result)
+                .finish(),
+            InternalMsg::LogChunkLoaded {
+                repo_id,
+                seq,
+                commits,
+                scanned,
+            } => f
+                .debug_struct("LogChunkLoaded")
+                .field("repo_id", repo_id)
+                .field("seq", seq)
+                .field("commits", &commits.len())
+                .field("scanned", scanned)
                 .finish(),
             InternalMsg::TagsLoaded { repo_id, result } => f
                 .debug_struct("TagsLoaded")
@@ -262,6 +276,16 @@ impl std::fmt::Debug for InternalMsg {
                 .debug_struct("CommitDetailsLoaded")
                 .field("repo_id", repo_id)
                 .field("commit_id", commit_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::CommitRevealResolved {
+                repo_id,
+                reference,
+                result,
+            } => f
+                .debug_struct("CommitRevealResolved")
+                .field("repo_id", repo_id)
+                .field("reference", reference)
                 .field("result", result)
                 .finish(),
             InternalMsg::RangeFilesLoaded {

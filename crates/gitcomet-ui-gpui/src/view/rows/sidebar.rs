@@ -2511,6 +2511,19 @@ mod tests {
         CommitId(id.into())
     }
 
+    /// The sequence number of the log walk the store has in flight, if any. A
+    /// `LogLoaded` answering by hand has to carry it, or the reducer takes the
+    /// reply for a superseded walk's and drops it.
+    fn active_log_seq(store: &AppStore, repo_id: RepoId) -> gitcomet_state::model::LogLoadSeq {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| repo.loads_in_flight.active_log_seq())
+            .unwrap_or_default()
+    }
+
     fn commit(id: &str) -> Commit {
         Commit {
             id: commit_id(id),
@@ -3599,6 +3612,7 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
+            seq: active_log_seq(&store_for_assert, repo_id),
             scope: initial_scope,
             cursor: None,
             result: Ok(LogPage {
@@ -3705,6 +3719,7 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
+            seq: active_log_seq(&store_for_assert, repo_id),
             scope: initial_scope,
             cursor: None,
             result: Ok(LogPage {
@@ -3823,6 +3838,7 @@ mod tests {
         }));
         store_for_assert.dispatch(Msg::Internal(InternalMsg::LogLoaded {
             repo_id,
+            seq: active_log_seq(&store_for_assert, repo_id),
             scope: initial_scope,
             cursor: None,
             result: Ok(LogPage {

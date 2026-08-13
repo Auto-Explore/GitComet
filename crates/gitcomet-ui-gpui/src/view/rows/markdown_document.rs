@@ -28,6 +28,8 @@ use crate::view::markdown_preview::{
     TOO_MANY_ROWS_TO_RENDER_MESSAGE, markdown_document_blocks,
 };
 use crate::view::perf::{self, ViewPerfRenderLane};
+use std::cell::Cell;
+use std::rc::Rc;
 
 /// Everything the flowing renderer needs that is not in the document.
 pub(in crate::view) struct MarkdownDocumentContext {
@@ -374,20 +376,35 @@ fn render_inline_image(
     let (Some(view), Some(url)) = (context.view.clone(), inline.link_url.clone()) else {
         return image.into_any_element();
     };
-    image
-        .id(("markdown_preview_inline_image_link", inline.source_byte))
-        .cursor(gpui::CursorStyle::PointingHand)
-        .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
-            // The row underneath would otherwise also treat this as a click on
-            // its text and arm a drag-selection behind the menu.
-            cx.stop_propagation();
-            let url = url.clone();
-            let position = event.position;
-            view.update(cx, |this, cx| {
-                this.open_markdown_preview_link_menu(url, position, window, cx);
-                cx.notify();
-            });
+    // The menu hangs off the picture's box, which only paint knows. Prepaint of
+    // this frame runs before it can dispatch a click, so the handler always
+    // reads a box from the frame it fired on.
+    let painted_bounds = Rc::new(Cell::new(None));
+    let record_bounds = Rc::clone(&painted_bounds);
+    div()
+        // The wrapper stands where the picture stood, so it keeps the picture's
+        // sizing in the line it sits on.
+        .flex_none()
+        .on_children_prepainted(move |children_bounds, _window, _cx| {
+            record_bounds.set(children_bounds.first().copied());
         })
+        .child(
+            image
+                .id(("markdown_preview_inline_image_link", inline.source_byte))
+                .cursor(gpui::CursorStyle::PointingHand)
+                .on_mouse_down(gpui::MouseButton::Left, move |event, window, cx| {
+                    // The row underneath would otherwise also treat this as a
+                    // click on its text and arm a drag-selection behind the menu.
+                    cx.stop_propagation();
+                    let url = url.clone();
+                    let bounds = painted_bounds.get();
+                    let position = event.position;
+                    view.update(cx, |this, cx| {
+                        this.open_markdown_preview_link_menu(url, bounds, position, window, cx);
+                        cx.notify();
+                    });
+                }),
+        )
         .into_any_element()
 }
 

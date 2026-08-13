@@ -384,10 +384,12 @@ pub(in crate::view) use self::markdown_document::{
     MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls, MarkdownDocumentContext,
     render_markdown_document,
 };
-pub(in crate::view) use self::markdown_flow_text::markdown_flow_row_offset;
 #[cfg(test)]
 pub(in crate::view) use self::markdown_flow_text::{
     clear_markdown_selection_paint_log_for_tests, markdown_selection_paint_log_for_tests,
+};
+pub(in crate::view) use self::markdown_flow_text::{
+    markdown_flow_painted_offset, markdown_flow_row_offset,
 };
 pub(in crate::view) use self::sidebar::active_workspace_paths_by_branch;
 pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;

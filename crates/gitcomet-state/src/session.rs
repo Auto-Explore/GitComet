@@ -214,6 +214,7 @@ struct UiSessionFile {
     external_code_editor: Option<ExternalCodeEditorSettingFile>,
     repo_history_modes: Option<BTreeMap<String, HistoryModeSetting>>,
     repo_history_scopes: Option<BTreeMap<String, HistoryScopeSetting>>,
+    repo_history_author_filters: Option<BTreeMap<String, Option<String>>>,
     repo_fetch_prune_deleted_remote_tracking_branches: Option<BTreeMap<String, bool>>,
     survey_prompt: Option<SurveyPromptSession>,
 }
@@ -343,6 +344,7 @@ pub(crate) struct RepoSessionPreferences {
     pub(crate) default_history_mode: Option<HistoryMode>,
     pub(crate) repo_history_modes: BTreeMap<String, HistoryMode>,
     pub(crate) repo_history_scopes: BTreeMap<String, LogScope>,
+    pub(crate) repo_history_author_filters: BTreeMap<String, Option<String>>,
     pub(crate) repo_fetch_prune_deleted_remote_tracking_branches: BTreeMap<String, bool>,
 }
 
@@ -374,6 +376,7 @@ pub(crate) fn load_repo_session_preferences_from_path(
             .into_iter()
             .map(|(k, v)| (k, v.into()))
             .collect(),
+        repo_history_author_filters: file.repo_history_author_filters.unwrap_or_default(),
         repo_fetch_prune_deleted_remote_tracking_branches: file
             .repo_fetch_prune_deleted_remote_tracking_branches
             .unwrap_or_default(),
@@ -1106,6 +1109,33 @@ pub fn persist_repo_history_scope_to_path(
             .get_or_insert_with(BTreeMap::new)
             .insert(workdir_key, scope);
 
+        persist_to_path(session_file_path, &file)
+    })
+}
+
+/// Persists the history author filter for `workdir`. `None` clears the stored
+/// filter; a `Some(Some(_))` stores the active author.
+pub fn persist_repo_history_author_filter_to_path(
+    workdir: &Path,
+    author: Option<&str>,
+    session_file_path: &Path,
+) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        let stored = file
+            .repo_history_author_filters
+            .get_or_insert_with(BTreeMap::new);
+        let workdir_key = path_storage_key(workdir);
+        let existing = stored.get(&workdir_key).cloned().flatten();
+        if existing == author.map(ToOwned::to_owned) {
+            return Ok(());
+        }
+        if let Some(author) = author {
+            stored.insert(workdir_key, Some(author.to_owned()));
+        } else {
+            stored.remove(&workdir_key);
+        }
+        file.version = CURRENT_SESSION_FILE_VERSION;
         persist_to_path(session_file_path, &file)
     })
 }

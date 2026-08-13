@@ -662,6 +662,7 @@ tree-sitter-sequel	0.3.11	MIT
 tree-sitter-swift	0.7.3	MIT
 tree-sitter-toml-ng	0.7.0	MIT
 tree-sitter-typescript	0.23.2	MIT
+tree-sitter-vue	0.1.0	MIT
 tree-sitter-xml	0.7.0	MIT
 tree-sitter-yaml	0.7.2	MIT
 tree-sitter-zig	1.1.2	MIT

@@ -2305,11 +2305,18 @@ fn closing_active_repo_refreshes_open_neighbor_with_cancelled_loads() {
                 .loads_in_flight
                 .request(RepoLoadsInFlight::STAGED_STATUS)
         );
-        assert!(repo1_state.loads_in_flight.request_log(
-            repo1_state.history_state.history_scope,
-            50,
-            None,
-        ));
+        let log_request = crate::model::PendingLogLoad {
+            scope: repo1_state.history_state.history_scope,
+            author: None,
+            limit: 50,
+            cursor: None,
+        };
+        assert!(
+            repo1_state
+                .loads_in_flight
+                .request_log(log_request)
+                .is_some()
+        );
     }
 
     let repo2 = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
@@ -3213,9 +3220,9 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
     assert_eq!(state.active_repo, Some(repo1));
 
     let has_status = has_status_refresh_effects(&effects, repo1);
-    let has_log = effects.iter().any(|e| {
-        matches!(e, Effect::LoadLog { repo_id, scope: _, limit: _, cursor: _ } if *repo_id == repo1)
-    });
+    let has_log = effects
+        .iter()
+        .any(|e| matches!(e, Effect::LoadLog { repo_id, .. } if *repo_id == repo1));
     let has_selected_diff_reload = effects.iter().any(|e| {
         matches!(
             e,

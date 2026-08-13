@@ -917,18 +917,22 @@ impl MainPaneView {
         absolute.parent().map(ToOwned::to_owned)
     }
 
-    /// Web link under `position` in a rendered markdown preview row.
+    /// Web link under `position` in a rendered markdown preview row, and where
+    /// it sits in that row.
     ///
     /// Preview rows paint link *text*, not the destination, so the URL comes
     /// from the inline span the click landed in. Offsets from the hitbox are
     /// relative to the slice a row painted, which is the whole row only while
-    /// word wrap is off.
-    pub(in crate::view) fn markdown_preview_link_at(
+    /// word wrap is off — and the range comes back in that same space, so it
+    /// can be turned back into a box on screen. A link that began on an earlier
+    /// visual line is clamped to the start of this one, which is where it does
+    /// begin as far as this row is concerned.
+    pub(in crate::view) fn markdown_preview_link_span_at(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
         position: Point<Pixels>,
-    ) -> Option<SharedString> {
+    ) -> Option<(SharedString, Range<usize>)> {
         if !self.is_markdown_preview_active() {
             return None;
         }
@@ -940,7 +944,12 @@ impl MainPaneView {
         row.inline_spans
             .iter()
             .find(|span| span.byte_range.contains(&offset))
-            .and_then(|span| span.link_url.clone())
+            .and_then(|span| {
+                let url = span.link_url.clone()?;
+                let start = span.byte_range.start.saturating_sub(slice_start);
+                let end = span.byte_range.end.saturating_sub(slice_start);
+                Some((url, start..end))
+            })
     }
 
     /// The wrap plan `list` renders with, once it is confirmed to describe the

@@ -467,12 +467,15 @@ pub(super) fn schedule_load_upstream_divergence(
     );
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn schedule_load_log(
     executor: &TaskExecutor,
     repos: &RepoMap,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
+    seq: crate::model::LogLoadSeq,
     scope: LogScope,
+    author: Option<String>,
     limit: usize,
     cursor: Option<LogCursor>,
     cancellation: CancellationToken,
@@ -487,12 +490,36 @@ pub(super) fn schedule_load_log(
         move |repo, msg_tx| {
             let result = {
                 let cursor_ref = cursor.as_ref();
-                repo.log_history_mode_page_cancellable(scope, limit, cursor_ref, &cancellation)
+                // Report the page as it fills in. Finding one page of a rare
+                // author means walking the whole history — over ten seconds on
+                // a repository with a million commits — and the user should not
+                // be looking at the previous filter's rows for all of it.
+                let chunk_tx = msg_tx.clone();
+                let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
+                    send_or_log(
+                        &chunk_tx,
+                        Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
+                            repo_id,
+                            seq,
+                            commits: chunk.commits,
+                            scanned: chunk.scanned,
+                        }),
+                    );
+                };
+                repo.log_history_mode_page_streaming(
+                    scope,
+                    author.as_deref(),
+                    limit,
+                    cursor_ref,
+                    &cancellation,
+                    &mut on_chunk,
+                )
             };
             send_or_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
+                    seq,
                     scope,
                     cursor,
                     result,
@@ -504,6 +531,7 @@ pub(super) fn schedule_load_log(
                 &msg_tx,
                 Msg::Internal(crate::msg::InternalMsg::LogLoaded {
                     repo_id,
+                    seq,
                     scope,
                     cursor: cursor_on_missing,
                     result: Err(missing_repo_error(repo_id)),
@@ -1141,6 +1169,30 @@ pub(super) fn schedule_load_commit_details(
                 repo_id,
                 commit_id: commit_id.clone(),
                 result: repo.commit_details(&commit_id),
+            }),
+        );
+    });
+}
+
+/// Resolve a possibly abbreviated reference and load its details in one call.
+///
+/// `commit_details` runs the reference through `rev-parse`, so this answers
+/// "does it exist, and is it unambiguous?" as a side effect of the load the
+/// details pane needs anyway.
+pub(super) fn schedule_resolve_commit_for_reveal(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    reference: gitcomet_core::domain::CommitId,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
+                repo_id,
+                reference: reference.clone(),
+                result: repo.commit_details(&reference),
             }),
         );
     });
