@@ -19,3 +19,8 @@ criterion
 .codex
 .worktrees/
 .reasonix/
+
+# `cargo test --manifest-path vendor/tree-sitter-vue/Cargo.toml` (the standalone
+# check for the vendored grammar's own bindings) writes a lockfile there. The
+# workspace lock is what governs the real build.
+vendor/*/Cargo.lock
