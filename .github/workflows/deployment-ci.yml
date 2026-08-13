@@ -120,7 +120,7 @@ jobs:
           grep -Fq 'dbus-launch --sh-syntax' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'gnome-keyring-daemon --start --components=secrets' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'libsecret-1-0' .github/workflows/deploy-microsoft-store.yml
-          grep -Fq 'microsoft/microsoft-store-apppublisher@v1.3' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'microsoft/microsoft-store-apppublisher@v1.4' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'gh release view' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission update' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission updateMetadata' .github/workflows/deploy-microsoft-store.yml
