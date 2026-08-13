@@ -901,6 +901,11 @@ pub struct DiffState {
     /// only for a `WorkingTree` target — editing is always of the file on disk.
     /// Set by `OpenFileEditor`, cleared by `ExitDiffEditMode`.
     pub edit_mode: bool,
+    /// The view that opened the editor. Editing always retargets the working
+    /// tree, so both the original target and whether it was a diff or a
+    /// full-content preview have to be retained explicitly for Save/Discard to
+    /// return to the right place.
+    pub edit_return_view: Option<FileEditReturnView>,
     pub diff_target_rev: u64,
     pub diff_state_rev: u64,
     /// A reload of the *same* target is in flight and the content still on
@@ -931,6 +936,7 @@ impl Default for DiffState {
             diff_target: None,
             content_preview: false,
             edit_mode: false,
+            edit_return_view: None,
             diff_target_rev: 0,
             diff_state_rev: 0,
             diff_reload_in_flight: false,
@@ -947,6 +953,13 @@ impl Default for DiffState {
             diff_file_image: Loadable::NotLoaded,
         }
     }
+}
+
+/// Main-pane destination restored when an editable working-tree buffer closes.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FileEditReturnView {
+    pub target: DiffTarget,
+    pub content_preview: bool,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

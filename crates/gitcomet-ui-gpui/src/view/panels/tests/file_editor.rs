@@ -321,7 +321,7 @@ fn provider_binding_key_changes_only_when_something_changed() {
 }
 
 #[gpui::test]
-async fn alt_e_toggles_the_editor_and_ctrl_s_saves_while_it_has_focus(
+async fn alt_e_toggles_the_editor_and_ctrl_s_saves_and_exits_while_it_has_focus(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = lock_visual_test();
@@ -390,6 +390,16 @@ async fn alt_e_toggles_the_editor_and_ctrl_s_saves_while_it_has_focus(
     assert!(
         cx.update(|_window, app| !main_pane.read(app).file_editor_is_dirty()),
         "the buffer settles once saved"
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx)
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_window, app| !main_pane.read(app).is_file_editor_active()),
+        "saving from the editor returns to the view that opened it"
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
@@ -780,6 +790,50 @@ async fn word_wrap_reaches_the_buffer(cx: &mut gpui::TestAppContext) {
                 .file_editor_input
                 .read(app)
                 .soft_wrap()
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn file_editor_mounts_a_vertical_scrollbar(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(975);
+    let workdir = unique_workdir("file_editor_scrollbar");
+    let file_rel = std::path::PathBuf::from("long.rs");
+    let contents = (0..400)
+        .map(|line| format!("fn line_{line}() {{}}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    std::fs::write(workdir.join(&file_rel), contents).expect("write fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
+            this.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("file_editor_scrollbar").is_some(),
+        "edit mode should mount its vertical scrollbar beside the scroll surface"
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.file_editor_scroll.max_offset().y > px(0.0),
+            "the long editor fixture should expose a vertical scroll range"
         );
     });
 
@@ -1726,6 +1780,63 @@ async fn discarding_from_the_toolbar_returns_to_the_read_only_view(cx: &mut gpui
             std::fs::read_to_string(workdir.join(&file_rel)).expect("file still on disk"),
             "fn main() {}\n",
             "and the file on disk was never written"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn saving_from_the_toolbar_exits_the_editor(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(976);
+    let workdir = unique_workdir("file_editor_save_exits");
+    let file_rel = std::path::PathBuf::from("main.rs");
+    std::fs::write(workdir.join(&file_rel), "fn main() {}\n").expect("write fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
+            this.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        });
+    });
+    cx.run_until_parked();
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.replace_utf8_range(0..0, "// saved\n", cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        main_pane.update(app, |pane, cx| {
+            pane.save_file_editor_buffer_and_exit(window, cx);
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx)
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = main_pane.read(app);
+        assert!(!pane.file_editor_is_dirty());
+        assert!(
+            !pane.is_file_editor_active(),
+            "the toolbar Save action should close edit mode after dispatching the write"
         );
     });
 

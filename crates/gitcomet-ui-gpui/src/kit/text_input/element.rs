@@ -793,7 +793,7 @@ impl Element for TextElement {
             window.on_mouse_event(move |event: &MouseMoveEvent, _phase, _window, cx| {
                 input.update(cx, |input, cx| {
                     if input.interaction.is_selecting {
-                        input.select_to(input.index_for_mouse_position(event.position), cx);
+                        input.update_mouse_selection(event.position, cx);
                     }
                 });
             });
@@ -805,6 +805,8 @@ impl Element for TextElement {
                 }
                 input.update(cx, |input, _cx| {
                     input.interaction.is_selecting = false;
+                    input.interaction.mouse_selection_anchor = None;
+                    input.interaction.pending_mouse_selection_anchor = None;
                 });
             });
         }

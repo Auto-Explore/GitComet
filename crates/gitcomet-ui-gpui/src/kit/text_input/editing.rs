@@ -435,6 +435,9 @@ impl TextInput {
         self.selection.reversed = false;
         self.selection.undo_stack.clear();
         self.selection.redo_stack.clear();
+        self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
         self.interaction.cursor_blink_visible = true;
         self.layout.scroll_x = px(0.0);
         self.invalidate_layout_caches();
@@ -2336,6 +2339,8 @@ impl TextInput {
         self.interaction.vertical_motion_x = None;
         self.interaction.cursor_blink_visible = true;
         self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
         self.invalidate_layout_caches();
         if self.multiline && self.soft_wrap {
             self.request_wrap_recompute();
@@ -2627,17 +2632,28 @@ impl TextInput {
         cx.stop_propagation();
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
-        let index = self.index_for_mouse_position(event.position);
+        let index = self.try_index_for_mouse_position(event.position);
         self.interaction.vertical_motion_x = None;
 
         if event.modifiers.shift {
             self.interaction.is_selecting = true;
-            self.select_to(index, cx);
+            self.interaction.mouse_selection_anchor = Some(if self.selection.reversed {
+                self.selection.range.end
+            } else {
+                self.selection.range.start
+            });
+            self.interaction.pending_mouse_selection_anchor = None;
+            if let Some(index) = index {
+                self.select_mouse_to_index(index, cx);
+            }
             return;
         }
 
         if event.click_count >= 2 {
             self.interaction.is_selecting = false;
+            self.interaction.mouse_selection_anchor = None;
+            self.interaction.pending_mouse_selection_anchor = None;
+            let index = index.unwrap_or_else(|| self.cursor_offset());
             let range = self.token_range_for_offset(index);
             if range.is_empty() {
                 self.move_to(index, cx);
@@ -2648,7 +2664,16 @@ impl TextInput {
             }
         } else {
             self.interaction.is_selecting = true;
-            self.move_to(index, cx)
+            self.interaction.mouse_selection_anchor = index;
+            self.interaction.pending_mouse_selection_anchor =
+                index.is_none().then_some(event.position);
+            match index {
+                Some(index) => self.move_to(index, cx),
+                // Clear any old highlight without inventing byte zero as the
+                // new anchor. The initiating pointer position is resolved by
+                // the first move after the next layout has painted.
+                None => self.move_to(self.cursor_offset(), cx),
+            }
         }
     }
 
@@ -2659,6 +2684,8 @@ impl TextInput {
         _cx: &mut Context<Self>,
     ) {
         self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
     }
 
     pub(super) fn on_mouse_move(
@@ -2668,8 +2695,7 @@ impl TextInput {
         cx: &mut Context<Self>,
     ) {
         if self.interaction.is_selecting {
-            let index = self.index_for_mouse_position(event.position);
-            self.select_to(index, cx);
+            self.update_mouse_selection(event.position, cx);
         }
     }
 
@@ -2734,6 +2760,8 @@ impl TextInput {
         window.focus(&self.focus_handle, cx);
         self.interaction.cursor_blink_visible = true;
         self.interaction.is_selecting = false;
+        self.interaction.mouse_selection_anchor = None;
+        self.interaction.pending_mouse_selection_anchor = None;
         self.interaction.vertical_motion_x = None;
 
         let index = self.index_for_mouse_position(event.position);
@@ -2966,9 +2994,9 @@ impl TextInput {
             .child(select_all_row)
     }
 
-    pub(super) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+    fn try_index_for_mouse_position(&self, position: Point<Pixels>) -> Option<usize> {
         if self.content.is_empty() {
-            return 0;
+            return Some(0);
         }
 
         let (Some(bounds), Some(layout), Some(starts)) = (
@@ -2976,14 +3004,14 @@ impl TextInput {
             self.layout.last.as_ref(),
             self.layout.line_starts.as_ref(),
         ) else {
-            return 0;
+            return None;
         };
 
         if position.y < bounds.top() {
-            return 0;
+            return Some(0);
         }
         if position.y > bounds.bottom() {
-            return self.content.len();
+            return Some(self.content.len());
         }
 
         let line_height = if self.layout.line_height.is_zero() {
@@ -2992,7 +3020,7 @@ impl TextInput {
             self.layout.line_height
         };
 
-        match layout {
+        Some(match layout {
             TextInputLayout::Plain(lines) => {
                 let ratio = f32::from(position.y - bounds.top()) / f32::from(line_height);
                 let mut line_ix = ratio.floor() as isize;
@@ -3030,7 +3058,54 @@ impl TextInput {
                 let doc_ix = starts.get(line_ix).copied().unwrap_or(0) + local;
                 doc_ix.min(self.content.len())
             }
+        })
+    }
+
+    pub(super) fn index_for_mouse_position(&self, position: Point<Pixels>) -> usize {
+        // Public hit-test callers need a total answer. Mouse drag initiation
+        // uses the optional form above so a briefly invalid layout never turns
+        // into a bogus byte-zero anchor.
+        self.try_index_for_mouse_position(position)
+            .unwrap_or_else(|| self.cursor_offset())
+    }
+
+    pub(super) fn update_mouse_selection(
+        &mut self,
+        position: Point<Pixels>,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(index) = self.try_index_for_mouse_position(position) else {
+            return;
+        };
+        if self.interaction.mouse_selection_anchor.is_none() {
+            let Some(anchor_position) = self.interaction.pending_mouse_selection_anchor else {
+                return;
+            };
+            let Some(anchor) = self.try_index_for_mouse_position(anchor_position) else {
+                return;
+            };
+            self.interaction.mouse_selection_anchor = Some(anchor);
+            self.interaction.pending_mouse_selection_anchor = None;
         }
+        self.select_mouse_to_index(index, cx);
+    }
+
+    fn select_mouse_to_index(&mut self, index: usize, cx: &mut Context<Self>) {
+        let Some(anchor) = self.interaction.mouse_selection_anchor else {
+            return;
+        };
+        let anchor = self.clamp_to_char_boundary(anchor);
+        let index = self.clamp_to_char_boundary(index);
+        let next = anchor.min(index)..anchor.max(index);
+        let reversed = index < anchor;
+        if self.selection.range == next && self.selection.reversed == reversed {
+            return;
+        }
+        self.selection.range = next;
+        self.selection.reversed = reversed;
+        self.interaction.vertical_motion_x = None;
+        self.interaction.cursor_blink_visible = true;
+        cx.notify();
     }
 
     pub(super) fn index_for_position(&self, position: Point<Pixels>) -> usize {
