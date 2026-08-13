@@ -59,6 +59,7 @@ pub struct UiSession {
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_relative_dates: Option<bool>,
+    pub history_highlight_commit_chain: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -197,6 +198,7 @@ struct UiSessionFile {
     terminal_action_bar_target: Option<String>,
     history_show_tags: Option<bool>,
     history_relative_dates: Option<bool>,
+    history_highlight_commit_chain: Option<bool>,
     history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     default_history_mode: Option<HistoryModeSetting>,
     commit_push_after_enabled: Option<bool>,
@@ -315,6 +317,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
         terminal_action_bar_target: file.terminal_action_bar_target,
         history_show_tags: file.history_show_tags,
         history_relative_dates: file.history_relative_dates,
+        history_highlight_commit_chain: file.history_highlight_commit_chain,
         history_tag_fetch_mode: file.history_tag_fetch_mode,
         default_history_mode: file.default_history_mode.map(Into::into),
         commit_push_after_enabled: file.commit_push_after_enabled,
@@ -665,6 +668,7 @@ pub struct UiSettings {
     pub terminal_action_bar_target: Option<String>,
     pub history_show_tags: Option<bool>,
     pub history_relative_dates: Option<bool>,
+    pub history_highlight_commit_chain: Option<bool>,
     pub history_tag_fetch_mode: Option<GitLogTagFetchMode>,
     pub default_history_mode: Option<HistoryMode>,
     pub commit_push_after_enabled: Option<bool>,
@@ -814,6 +818,9 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.history_show_tags {
             file.history_show_tags = Some(value);
+        }
+        if let Some(value) = settings.history_highlight_commit_chain {
+            file.history_highlight_commit_chain = Some(value);
         }
         if let Some(value) = settings.history_relative_dates {
             file.history_relative_dates = Some(value);
@@ -2820,6 +2827,53 @@ mod tests {
         assert_eq!(
             loaded.recent_repos,
             vec![canonical(&repo_a), canonical(&repo_b)]
+        );
+    }
+
+    #[test]
+    fn history_highlight_commit_chain_round_trips_and_defaults_to_unset() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-highlight-chain-setting-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let session_file = dir.join("session.json");
+
+        // Absent from the file, so the UI applies its own default rather than
+        // the setting silently reading as "off".
+        assert_eq!(
+            load_from_path(&session_file).history_highlight_commit_chain,
+            None
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_highlight_commit_chain: Some(false),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("persist highlight setting");
+        assert_eq!(
+            load_from_path(&session_file).history_highlight_commit_chain,
+            Some(false)
+        );
+
+        persist_ui_settings_to_path(
+            UiSettings {
+                history_highlight_commit_chain: Some(true),
+                ..UiSettings::default()
+            },
+            &session_file,
+        )
+        .expect("re-enable highlight setting");
+        assert_eq!(
+            load_from_path(&session_file).history_highlight_commit_chain,
+            Some(true)
         );
     }
 

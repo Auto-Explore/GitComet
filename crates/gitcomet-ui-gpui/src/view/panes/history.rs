@@ -1,10 +1,11 @@
 use super::super::*;
 use crate::view::caches::{
-    HistoryBranchChainCache, HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm,
-    analyze_history_stashes, build_history_branch_chain_bits,
+    HistoryRelatedCommitsCache, HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm,
+    analyze_history_stashes, build_history_branch_containment_bits,
     build_history_branch_ref_items_by_target, build_history_branch_text_by_target,
-    build_history_tag_names_by_target, build_history_visible_indices,
-    history_ref_items_from_displayed_refs, next_history_stash_tip_for_commit_ix,
+    build_history_related_commit_bits, build_history_tag_names_by_target,
+    build_history_visible_indices, history_ref_items_from_displayed_refs,
+    next_history_stash_tip_for_commit_ix, related_commit_contains,
 };
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
@@ -792,43 +793,6 @@ fn resolve_history_selected_list_index(
 }
 
 #[allow(clippy::too_many_arguments)]
-/// Tip of the branch that is *active* in the sidebar, or `None` when none is.
-///
-/// "Active" means the same thing the sidebar's own row highlight means
-/// (`branch_row_is_selected`): the branch is picked **and** its tip is still the
-/// selected commit. Clicking any other commit ends it, so the sidebar highlight
-/// and the history's branch emphasis switch off together rather than the history
-/// keeping a stale branch lit.
-fn active_branch_tip(repo: &RepoState, selected: Option<&SelectedBranch>) -> Option<CommitId> {
-    let selected = selected.filter(|selected| selected.repo_id == repo.id)?;
-    let tip = selected_branch_tip(repo, selected.section, &selected.name)?;
-    (repo.history_state.selected_commit.as_ref() == Some(&tip)).then_some(tip)
-}
-
-/// Commit a sidebar-selected branch points at, which is where the highlighted
-/// first-parent chain starts.
-fn selected_branch_tip(repo: &RepoState, section: BranchSection, name: &str) -> Option<CommitId> {
-    match section {
-        BranchSection::Local => match &repo.branches {
-            Loadable::Ready(branches) => branches
-                .iter()
-                .find(|branch| branch.name == name)
-                .map(|branch| branch.target.clone()),
-            _ => None,
-        },
-        BranchSection::Remote => {
-            let (remote, branch_name) = name.split_once('/')?;
-            match &repo.remote_branches {
-                Loadable::Ready(branches) => branches
-                    .iter()
-                    .find(|branch| branch.remote == remote && branch.name == branch_name)
-                    .map(|branch| branch.target.clone()),
-                _ => None,
-            }
-        }
-    }
-}
-
 fn decide_pending_history_reveal(
     pending: &PendingHistoryReveal,
     active_repo_id: Option<RepoId>,
@@ -935,6 +899,7 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) timezone: Timezone,
     pub(in super::super) show_timezone: bool,
     pub(in super::super) history_relative_dates: bool,
+    pub(in super::super) history_highlight_commit_chain: bool,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
@@ -971,7 +936,7 @@ pub(in super::super) struct HistoryView {
     last_browse_commit: Option<CommitId>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
-    pub(in super::super) history_branch_chain_cache: Option<HistoryBranchChainCache>,
+    pub(in super::super) history_related_commits_cache: Option<HistoryRelatedCommitsCache>,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
     /// Minute tick that re-renders the table while the relative date format is
@@ -1020,6 +985,7 @@ impl HistoryView {
         timezone: Timezone,
         show_timezone: bool,
         history_relative_dates: bool,
+        history_highlight_commit_chain: bool,
         history_show_graph: bool,
         history_show_author: bool,
         history_show_date: bool,
@@ -1072,6 +1038,7 @@ impl HistoryView {
             timezone,
             show_timezone,
             history_relative_dates,
+            history_highlight_commit_chain,
             _ui_model_subscription: subscription,
             root_view,
             notify_fingerprint: initial_fingerprint,
@@ -1105,7 +1072,7 @@ impl HistoryView {
             last_browse_commit: None,
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
-            history_branch_chain_cache: None,
+            history_related_commits_cache: None,
             history_scroll: UniformListScrollHandle::default(),
             history_panel_focus_handle,
             relative_time_tick: None,
@@ -1465,6 +1432,22 @@ impl HistoryView {
         cx.notify();
     }
 
+    pub(in super::super) fn set_history_highlight_commit_chain(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.history_highlight_commit_chain == enabled {
+            return;
+        }
+        self.history_highlight_commit_chain = enabled;
+        // The relation cache is only consulted while the setting is on, but
+        // dropping it keeps a stale bitset from being reused if it goes back on
+        // after the log has moved.
+        self.history_related_commits_cache = None;
+        cx.notify();
+    }
+
     pub(in super::super) fn set_history_relative_dates(
         &mut self,
         enabled: bool,
@@ -1762,88 +1745,105 @@ impl HistoryView {
 use gitcomet_core::domain::{LogPage, LogScope, RemoteBranch, StashEntry};
 
 impl HistoryView {
-    /// Rows on the first-parent chain of the branch picked in the sidebar.
+    /// Rows related to the commit selected in the history: the commit itself,
+    /// everything it descends from, and its direct children.
     ///
-    /// Rebuilt only when the branch tip or the log changes, so clicking around
-    /// the history does no work at all and picking a branch costs one walk down
-    /// its first-parent chain.
-    pub(in super::super) fn ensure_history_branch_chain_cache(
+    /// Rebuilt only when the selection or the log changes. Selecting a branch in
+    /// the sidebar goes through here too, because that selects the branch's tip
+    /// commit -- so picking a branch lights its history without a second
+    /// mechanism.
+    pub(in super::super) fn ensure_history_related_commits_cache(
         &mut self,
-    ) -> Option<&HistoryBranchChainCache> {
+        show_worktree_summary_row: bool,
+    ) -> Option<&HistoryRelatedCommitsCache> {
         enum Action {
             Clear,
             CacheOk,
             Rebuild {
                 repo_id: RepoId,
                 log_fingerprint: u64,
-                tip: Option<CommitId>,
-                on_chain: Arc<[u64]>,
+                anchor: Option<CommitId>,
+                related: Arc<[u64]>,
             },
         }
 
         let action = (|| {
+            if !self.history_highlight_commit_chain {
+                return Action::Clear;
+            }
             let Some(repo) = self.active_repo() else {
                 return Action::Clear;
             };
-            let selected = self
-                .selected_branch
-                .as_ref()
-                .filter(|selected| selected.repo_id == repo.id);
-            let tip = active_branch_tip(repo, selected);
-            let log_fingerprint = Self::display_log_page_for_repo(repo)
+            // A multi-selection has no single commit to relate to, so the whole
+            // list stays at full strength rather than picking one arbitrarily.
+            let anchor = if repo.history_state.multi_selection.is_multi() {
+                None
+            } else {
+                repo.history_state.selected_commit.clone().or_else(|| {
+                    // No selected commit *is* the uncommitted-changes row being
+                    // selected. Those changes sit on HEAD, so selecting that row
+                    // lights HEAD's chain -- the branch the changes will land on
+                    // -- rather than leaving the whole list unhighlighted.
+                    show_worktree_summary_row
+                        .then(|| repo.head_commit_id())
+                        .flatten()
+                })
+            };
+            let page = Self::display_log_page_for_repo(repo);
+            let log_fingerprint = page
                 .as_deref()
                 .map_or(0, |page| Self::log_fingerprint(&page.commits));
 
-            if let Some(cache) = &self.history_branch_chain_cache
+            if let Some(cache) = &self.history_related_commits_cache
                 && cache.repo_id == repo.id
                 && cache.log_fingerprint == log_fingerprint
-                && cache.tip == tip
+                && cache.anchor == anchor
             {
                 return Action::CacheOk;
             }
 
-            let Some(tip) = tip else {
+            let Some(anchor) = anchor else {
                 return Action::Rebuild {
                     repo_id: repo.id,
                     log_fingerprint,
-                    tip: None,
-                    on_chain: Arc::from(Vec::new()),
+                    anchor: None,
+                    related: Arc::from(Vec::new()),
                 };
             };
-            let on_chain = Self::display_log_page_for_repo(repo)
+            let related = page
                 .as_deref()
-                .map(|page| build_history_branch_chain_bits(&page.commits, &tip))
+                .map(|page| build_history_related_commit_bits(&page.commits, &anchor))
                 .unwrap_or_else(|| Arc::from(Vec::new()));
 
             Action::Rebuild {
                 repo_id: repo.id,
                 log_fingerprint,
-                tip: Some(tip),
-                on_chain,
+                anchor: Some(anchor),
+                related,
             }
         })();
 
         match action {
             Action::Clear => {
-                self.history_branch_chain_cache = None;
+                self.history_related_commits_cache = None;
             }
             Action::CacheOk => {}
             Action::Rebuild {
                 repo_id,
                 log_fingerprint,
-                tip,
-                on_chain,
+                anchor,
+                related,
             } => {
-                self.history_branch_chain_cache = Some(HistoryBranchChainCache {
+                self.history_related_commits_cache = Some(HistoryRelatedCommitsCache {
                     repo_id,
                     log_fingerprint,
-                    tip,
-                    on_chain,
+                    anchor,
+                    related,
                 });
             }
         }
 
-        self.history_branch_chain_cache
+        self.history_related_commits_cache
             .as_ref()
             .filter(|cache| !cache.is_empty())
     }
@@ -2388,6 +2388,20 @@ fn build_history_decoration_cache(
     // row is what breaks ties where several branches contain the same commit.
     let mut lane_branch_by_col: SmallVec<[Option<(u16, usize)>; 8]> = SmallVec::new();
 
+    // Integration branches present in this repo, each with the set of commits it
+    // contains. A commit that is *in* `dev` is dev's, however the graph happens
+    // to draw the lane it sits on -- carrying names down lanes alone gets this
+    // wrong the moment a feature branch diverges, because the shared history
+    // below the fork keeps whichever lane won the node.
+    let integration_containment: Vec<(String, Arc<[u64]>)> =
+        integration_branch_tips(branches, remote_branches)
+            .into_iter()
+            .map(|(name, tip)| {
+                let bits = build_history_branch_containment_bits(&page.commits, &tip);
+                (name, bits)
+            })
+            .collect();
+
     for (visible_ix, (commit_ix, base_row)) in base
         .visible_indices
         .iter()
@@ -2441,11 +2455,18 @@ fn build_history_decoration_cache(
             }
         }
 
-        // A branch ref on this row beats anything inherited: the row *is* that
-        // branch's head.
-        if let Some(name) =
+        // Containment in an integration branch outranks everything: the commit
+        // genuinely belongs to that branch, whatever lane it is drawn on.
+        let contained_in = integration_containment
+            .iter()
+            .find(|(_, bits)| related_commit_contains(bits, commit_ix))
+            .map(|(name, _)| name.clone());
+
+        // Otherwise a branch ref on this row beats anything inherited: the row
+        // *is* that branch's head.
+        if let Some(name) = contained_in.or_else(|| {
             history_row_attribution_branch(&ref_items, &tracked_local_branches).map(str::to_owned)
-        {
+        }) {
             let next_ix = u16::try_from(branch_names.len()).unwrap_or(u16::MAX);
             let ix = *branch_name_ix.entry(name.clone()).or_insert_with(|| {
                 branch_names.push(SharedString::from(name));
@@ -2501,6 +2522,32 @@ fn history_ref_branch_name(item: &HistoryRefListItem) -> Option<&str> {
         HistoryRefListItemKind::RemoteBranch { name } => Some(name.as_str()),
         HistoryRefListItemKind::Tag { .. } | HistoryRefListItemKind::DetachedHead => None,
     }
+}
+
+/// Integration branches present in the repo, highest priority first, as
+/// `(display name, tip)`. A local branch is preferred over the remote of the
+/// same name so the label matches what the ref column shows.
+fn integration_branch_tips(
+    branches: &[Branch],
+    remote_branches: &[RemoteBranch],
+) -> Vec<(String, CommitId)> {
+    let mut found: Vec<(String, CommitId)> = Vec::new();
+    for wanted in INTEGRATION_BRANCH_NAMES {
+        if let Some(branch) = branches.iter().find(|branch| branch.name == wanted) {
+            found.push((branch.name.clone(), branch.target.clone()));
+            continue;
+        }
+        if let Some(remote) = remote_branches
+            .iter()
+            .find(|remote| remote.name == wanted && remote.remote == "origin")
+        {
+            found.push((
+                format!("{}/{}", remote.remote, remote.name),
+                remote.target.clone(),
+            ));
+        }
+    }
+    found
 }
 
 /// Branch names that conventionally carry shared history. A commit sitting on
@@ -2849,6 +2896,58 @@ mod tests {
             history_row_attribution_branch(&ref_items, &HashSet::default()),
             Some("origin/dev")
         );
+    }
+
+    #[test]
+    fn dev_keeps_its_commits_however_the_feature_lane_is_drawn() {
+        // The reported case: `feature` has diverged and its tip sits above dev's
+        // in the log, so the lane that reaches the fork first is the feature's.
+        // Containment has to win regardless -- every commit below the fork is
+        // still in `dev`.
+        let labels = lane_branch_labels(
+            vec![
+                commit("f2", &["f1"], "feature work"),
+                commit("f1", &["base"], "feature start"),
+                commit("d2", &["d1"], "dev work"),
+                commit("d1", &["base"], "dev start"),
+                commit("base", &["root"], "shared base"),
+                commit("root", &[], "root"),
+            ],
+            &[branch("feature", "f2"), branch("dev", "d2")],
+            &[],
+            Some("feature"),
+        );
+
+        assert_eq!(labels[0].as_deref(), Some("feature"), "feature-only commit");
+        assert_eq!(labels[1].as_deref(), Some("feature"), "feature-only commit");
+        assert_eq!(labels[2].as_deref(), Some("dev"));
+        assert_eq!(labels[3].as_deref(), Some("dev"));
+        assert_eq!(labels[4].as_deref(), Some("dev"), "the fork point is dev's");
+        assert_eq!(labels[5].as_deref(), Some("dev"), "and so is the root");
+    }
+
+    #[test]
+    fn dev_wins_even_when_its_tip_is_the_lower_row() {
+        // The mirror ordering, which the previous "nearest branch head above"
+        // rule got backwards.
+        let labels = lane_branch_labels(
+            vec![
+                commit("d2", &["d1"], "dev work"),
+                commit("d1", &["base"], "dev start"),
+                commit("f2", &["f1"], "feature work"),
+                commit("f1", &["base"], "feature start"),
+                commit("base", &["root"], "shared base"),
+                commit("root", &[], "root"),
+            ],
+            &[branch("feature", "f2"), branch("dev", "d2")],
+            &[],
+            Some("feature"),
+        );
+
+        assert_eq!(labels[2].as_deref(), Some("feature"));
+        assert_eq!(labels[3].as_deref(), Some("feature"));
+        assert_eq!(labels[4].as_deref(), Some("dev"), "the fork point is dev's");
+        assert_eq!(labels[5].as_deref(), Some("dev"));
     }
 
     #[test]

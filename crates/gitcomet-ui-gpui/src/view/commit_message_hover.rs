@@ -27,6 +27,9 @@ const COMMIT_MESSAGE_HOVER_POINTER_INSET_PX: f32 = 16.0;
 /// Cap on the message actually shaped. A pathological commit body would
 /// otherwise shape tens of thousands of glyphs on a hover.
 const COMMIT_MESSAGE_HOVER_MAX_CHARS: usize = 4_000;
+/// Footer type size. A step under the card's `text_xs` body, so attribution
+/// reads as secondary to the message it describes.
+const COMMIT_MESSAGE_HOVER_FOOTER_FONT_PX: f32 = 10.5;
 
 #[derive(Clone, Debug)]
 pub(in crate::view) struct CommitMessageHoverState {
@@ -35,6 +38,11 @@ pub(in crate::view) struct CommitMessageHoverState {
     /// Subject line, known from the log page without any git read, so the card
     /// can open immediately and fill its body in when the message arrives.
     pub(in crate::view) summary: SharedString,
+    /// Author and date, shown in the card's footer. The date column can be
+    /// hidden, and the author column narrow, so this is often the only place
+    /// they are legible.
+    pub(in crate::view) author: SharedString,
+    pub(in crate::view) when: SharedString,
     pub(in crate::view) source_bounds: Bounds<Pixels>,
     pub(in crate::view) source_pointer_x: Pixels,
 }
@@ -347,6 +355,37 @@ impl Render for CommitMessageHoverHost {
             ui_scale.px(8.0),
         );
 
+        let mut footer = div()
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .pt_1()
+            .text_color(theme.colors.text_muted);
+        if !state.author.is_empty() {
+            footer = footer
+                .child(components::author_avatar(
+                    theme,
+                    ui_scale,
+                    state.author.as_ref(),
+                ))
+                .child(
+                    div()
+                        .min_w(px(0.0))
+                        .line_clamp(1)
+                        .child(state.author.clone()),
+                );
+        }
+        if !state.when.is_empty() {
+            footer = footer.child(
+                div()
+                    .flex_none()
+                    .ml_auto()
+                    .whitespace_nowrap()
+                    .child(state.when.clone()),
+            );
+        }
+        let has_footer = !state.author.is_empty() || !state.when.is_empty();
+
         gpui::anchored()
             .position(layout.anchor)
             .anchor(layout.anchor_corner)
@@ -356,6 +395,8 @@ impl Render for CommitMessageHoverHost {
                     .w(layout.panel_w)
                     .max_h(layout.max_panel_h)
                     .overflow_hidden()
+                    .flex()
+                    .flex_col()
                     .px_2()
                     .py_1p5()
                     .bg(theme.colors.tooltip_bg)
@@ -368,7 +409,20 @@ impl Render for CommitMessageHoverHost {
                     .child(
                         gpui::StyledText::new(message)
                             .with_default_highlights(&window.text_style(), highlights),
-                    ),
+                    )
+                    .when(has_footer, |card| {
+                        card.child(
+                            // Separated and a size down, so it reads as
+                            // attribution rather than part of the message.
+                            div()
+                                .mt_1()
+                                .pt_1()
+                                .border_t_1()
+                                .border_color(theme.colors.border)
+                                .text_size(ui_scale.px(COMMIT_MESSAGE_HOVER_FOOTER_FONT_PX))
+                                .child(footer),
+                        )
+                    }),
             )
             .into_any_element()
     }
@@ -383,6 +437,8 @@ mod tests {
             repo_id: RepoId(1),
             commit_id: CommitId("abc".into()),
             summary: summary.to_string().into(),
+            author: "Ada Lovelace".into(),
+            when: "2 days ago".into(),
             source_bounds: Bounds::new(point(px(0.0), px(100.0)), size(px(400.0), px(28.0))),
             source_pointer_x: px(120.0),
         }

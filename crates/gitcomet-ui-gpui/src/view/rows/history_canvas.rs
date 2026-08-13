@@ -193,46 +193,73 @@ fn history_row_is_selected_branch_tip(
         .any(|item| history_ref_is_selected_branch(&item.kind, selected_branch))
 }
 
-/// How far an off-branch summary is pushed toward muted text while a branch is
-/// active in the sidebar. All the way: against pure white/black on the active
-/// branch, anything short of this left the two too close to separate at a
-/// glance.
-const OFF_BRANCH_SUMMARY_MIX: f32 = 1.0;
+/// How far an unrelated summary is pushed toward muted text while a commit is
+/// selected. All the way: against pure white/black on the related rows, anything
+/// short of this left the two too close to separate at a glance.
+const UNRELATED_SUMMARY_MIX: f32 = 1.0;
 
-/// How far an off-branch row's lane colour is pushed toward muted, so the
-/// message border and the graph-column fade recede with the text instead of
-/// staying fully saturated on rows the active branch does not contain.
-const OFF_BRANCH_LANE_COLOR_MIX: f32 = 0.75;
+/// How far an unrelated row's lane colour is pushed toward muted, so the message
+/// border and the graph-column fade recede with the text instead of staying
+/// fully saturated on rows that have nothing to do with the selection.
+const UNRELATED_LANE_COLOR_MIX: f32 = 0.75;
 
-/// The commit summary carries the sidebar's branch selection.
+/// The commit summary carries the history's own selection.
 ///
-/// `on_branch_chain` is `None` when no branch is active, and only then does the
-/// row render as ordinary body text. While a branch *is* active the column
-/// splits in two: rows on its first-parent chain go to full contrast (pure white
-/// on a dark theme, pure black on a light one) and every other row drops to
-/// muted, so the branch reads as a continuous run down the list.
+/// `related_to_selection` is `None` when no single commit is selected, and only
+/// then does the row render as ordinary body text. While a commit *is* selected
+/// the column splits in two: the commit, everything it descends from and its
+/// direct children go to full contrast (pure white on a dark theme, pure black
+/// on a light one), and everything else drops to muted -- so the selected
+/// commit's line of history reads as a continuous run.
 ///
-/// A row background tint was tried first and was far too intrusive -- picking a
-/// long-lived branch washes most of the list, and it fought with the table's own
-/// shading for selection, HEAD and hover. Moving only the message text leaves all
-/// of that legible underneath.
+/// A row background tint was tried first and was far too intrusive: it washed
+/// most of the list and fought with the table's own shading for selection, HEAD
+/// and hover. Moving only the message text leaves all of that legible underneath.
 ///
-/// The revealed tip keeps `emphasis_text` when no chain is active at all, so it
-/// still reads while the chain cache has not caught up.
+/// The revealed branch tip keeps `emphasis_text` when nothing is selected, so it
+/// still reads while the relation cache has not caught up.
 fn history_summary_color(
     theme: AppTheme,
     is_selected_branch_tip: bool,
-    on_branch_chain: Option<bool>,
+    related_to_selection: Option<bool>,
 ) -> gpui::Rgba {
-    match on_branch_chain {
+    match related_to_selection {
         Some(true) => full_contrast_text(theme),
         Some(false) => crate::theme::mix_colors(
             theme.colors.text,
             theme.colors.text_muted,
-            OFF_BRANCH_SUMMARY_MIX,
+            UNRELATED_SUMMARY_MIX,
         ),
         None if is_selected_branch_tip => selected_branch_label_color(theme),
         None => theme.colors.text,
+    }
+}
+
+/// Summary colour for a row, given only its relation to the selection. The
+/// working-tree summary row has no refs, so it needs the relation rule without
+/// the branch-tip case.
+pub(super) fn selection_related_summary_color(
+    theme: AppTheme,
+    related_to_selection: Option<bool>,
+) -> gpui::Rgba {
+    history_summary_color(theme, false, related_to_selection)
+}
+
+/// Lane colour muted to match an unrelated row, shared with the working-tree
+/// summary row so its connector recedes with the history it joins.
+pub(super) fn selection_related_lane_color(
+    theme: AppTheme,
+    lane_color: gpui::Rgba,
+    related_to_selection: Option<bool>,
+) -> gpui::Rgba {
+    if related_to_selection == Some(false) {
+        crate::theme::mix_colors(
+            lane_color,
+            theme.colors.text_muted,
+            UNRELATED_LANE_COLOR_MIX,
+        )
+    } else {
+        lane_color
     }
 }
 
@@ -331,7 +358,7 @@ pub(super) fn history_commit_row_canvas(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
-    on_branch_chain: Option<bool>,
+    related_to_selection: Option<bool>,
     lane_branch_name: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
@@ -462,19 +489,14 @@ pub(super) fn history_commit_row_canvas(
                 size((summary_right - x).max(px(0.0)), bounds.size.height),
             );
 
-            let lane_color = history_graph::lane_color(theme, graph_row.node_color_ix);
-            // While a branch is active, rows it does not contain mute their lane
-            // colour too: a full-strength border and fade on a dimmed row read
-            // as louder than the branch they are supposed to sit behind.
-            let node_color = if on_branch_chain == Some(false) {
-                crate::theme::mix_colors(
-                    lane_color,
-                    theme.colors.text_muted,
-                    OFF_BRANCH_LANE_COLOR_MIX,
-                )
-            } else {
-                lane_color
-            };
+            // Rows unrelated to the selection mute their lane colour too: a
+            // full-strength border and fade on a dimmed row read as louder than
+            // the history they are supposed to sit behind.
+            let node_color = selection_related_lane_color(
+                theme,
+                history_graph::lane_color(theme, graph_row.node_color_ix),
+                related_to_selection,
+            );
 
             // A lane-coloured wash across the right of the graph column, fading
             // into the border on the message cell so a commit's dot and its
@@ -810,7 +832,7 @@ pub(super) fn history_commit_row_canvas(
                     summary.shared(),
                     summary.text_hash(),
                     summary_text_bounds.size.width.max(px(0.0)),
-                    history_summary_color(theme, is_selected_branch_tip, on_branch_chain),
+                    history_summary_color(theme, is_selected_branch_tip, related_to_selection),
                     None,
                 );
                 window.with_content_mask(
@@ -1003,6 +1025,8 @@ pub(super) fn history_commit_row_canvas(
                 let view = view.clone();
                 let commit_id = commit_id.clone();
                 let summary = summary.shared().clone();
+                let hover_author = author.shared().clone();
+                let hover_when = when.shared().clone();
                 let hitbox = hitbox.clone();
                 move |event: &gpui::MouseMoveEvent, phase, window, cx| {
                     if phase != DispatchPhase::Bubble {
@@ -1021,6 +1045,8 @@ pub(super) fn history_commit_row_canvas(
                         repo_id,
                         commit_id: commit_id.clone(),
                         summary: summary.clone(),
+                        author: hover_author.clone(),
+                        when: hover_when.clone(),
                         source_bounds: summary_bounds,
                         source_pointer_x: event.position.x,
                     };
@@ -1294,7 +1320,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_branch_chain_summaries_go_to_full_contrast() {
+    fn commits_related_to_the_selection_go_to_full_contrast() {
         let dark = AppTheme::gitcomet_dark();
         let on_chain = history_summary_color(dark, false, Some(true));
         assert_eq!((on_chain.r, on_chain.g, on_chain.b), (1.0, 1.0, 1.0));
@@ -1307,19 +1333,19 @@ mod tests {
             let on_chain = history_summary_color(theme, false, Some(true));
             // Has to actually move off body text, or the cue says nothing.
             assert_ne!(on_chain, theme.colors.text);
-            // The chain covers the tip too, so it wins over the tip styling.
+            // The relation covers the tip too, so it wins over tip styling.
             assert_eq!(history_summary_color(theme, true, Some(true)), on_chain);
         }
     }
 
     #[test]
-    fn rows_off_the_active_branch_recede_behind_it() {
+    fn rows_unrelated_to_the_selection_recede_behind_it() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             let off = history_summary_color(theme, false, Some(false));
             let on = history_summary_color(theme, false, Some(true));
 
             // Pushed all the way to muted, and clearly apart from both the
-            // active branch's full contrast and ordinary body text.
+            // related rows' full contrast and ordinary body text.
             assert_eq!(off, theme.colors.text_muted);
             assert_ne!(off, theme.colors.text);
             assert_ne!(off, on);
@@ -1327,7 +1353,37 @@ mod tests {
     }
 
     #[test]
-    fn summaries_are_plain_body_text_while_no_branch_is_active() {
+    fn the_uncommitted_changes_row_follows_the_history_it_connects_to() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let lane = history_graph::lane_color(theme, 0);
+
+            // Nothing selected: the connector keeps its lane colour and the
+            // label its body text, exactly as before the feature existed.
+            assert_eq!(selection_related_lane_color(theme, lane, None), lane);
+            assert_eq!(
+                selection_related_summary_color(theme, None),
+                theme.colors.text
+            );
+
+            // On the selected chain: full contrast, matching the commit rows.
+            assert_eq!(selection_related_lane_color(theme, lane, Some(true)), lane);
+            assert_eq!(
+                selection_related_summary_color(theme, Some(true)),
+                full_contrast_text(theme)
+            );
+
+            // Off it: both recede, so the lane does not break at the top of a
+            // dimmed run.
+            assert_ne!(selection_related_lane_color(theme, lane, Some(false)), lane);
+            assert_eq!(
+                selection_related_summary_color(theme, Some(false)),
+                theme.colors.text_muted
+            );
+        }
+    }
+
+    #[test]
+    fn summaries_are_plain_body_text_while_nothing_is_selected() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             assert_eq!(history_summary_color(theme, false, None), theme.colors.text);
         }

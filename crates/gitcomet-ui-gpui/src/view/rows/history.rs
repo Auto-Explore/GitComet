@@ -3,7 +3,7 @@ use super::diff_text::*;
 use super::history_canvas;
 use super::*;
 
-use crate::view::caches::branch_chain_contains;
+use crate::view::caches::related_commit_contains;
 use crate::view::markdown_preview::{
     MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineImage, MarkdownInlineStyle,
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
@@ -2724,9 +2724,9 @@ impl HistoryView {
         let stash_ids = this.ensure_history_stash_ids_cache();
         // Cloned out of `this` so the row loop below can borrow it immutably
         // alongside the repo snapshot; it is an `Arc` bitset, so this is cheap.
-        let branch_chain = this
-            .ensure_history_branch_chain_cache()
-            .map(|cache| cache.on_chain.clone());
+        let related_commits = this
+            .ensure_history_related_commits_cache(show_working_tree_summary_row)
+            .map(|cache| cache.related.clone());
 
         let Some(repo) = this.active_repo() else {
             return Vec::new();
@@ -2759,6 +2759,20 @@ impl HistoryView {
             .filter_map(|list_ix| {
                 if show_working_tree_summary_row && list_ix == 0 {
                     let selected = repo.history_state.selected_commit.is_none();
+                    // Uncommitted changes sit on top of the first commit and the
+                    // row draws a connector down to it, so it follows that
+                    // commit's state -- otherwise the lane visibly breaks at the
+                    // top of a highlighted chain.
+                    let related_to_selection = related_commits.as_ref().map(|bits| {
+                        // Selected: this row *is* the anchor, so it is related
+                        // whatever sits below it.
+                        selected
+                            || cache
+                                .and_then(|cache| cache.base.visible_indices.first())
+                                .is_some_and(|first_commit_ix| {
+                                    related_commit_contains(bits, first_commit_ix)
+                                })
+                    });
                     return Some(working_tree_summary_history_row(
                         theme,
                         ui_scale,
@@ -2772,6 +2786,7 @@ impl HistoryView {
                         show_date,
                         show_sha,
                         worktree_node_color,
+                        related_to_selection,
                         repo.id,
                         selected,
                         worktree_counts,
@@ -2802,11 +2817,11 @@ impl HistoryView {
                     || stash_ids
                         .as_ref()
                         .is_some_and(|ids| ids.contains(&commit.id));
-                // `None` when no branch is picked: every row then renders at full
-                // strength rather than every row being dimmed.
-                let on_branch_chain = branch_chain
+                // `None` when nothing is selected: every row then renders at
+                // full strength rather than every row being dimmed.
+                let related_to_selection = related_commits
                     .as_ref()
-                    .map(|bits| branch_chain_contains(bits, commit_ix));
+                    .map(|bits| related_commit_contains(bits, commit_ix));
                 let when = base_row_vm.when.resolve(display_key);
                 let short_sha = base_row_vm.short_sha.resolve();
 
@@ -2837,7 +2852,7 @@ impl HistoryView {
                     Arc::clone(&decoration_row_vm.tag_names),
                     Arc::clone(&decoration_row_vm.ref_items),
                     selected_branch,
-                    on_branch_chain,
+                    related_to_selection,
                     lane_branch_name,
                     base_row_vm.author.clone(),
                     base_row_vm.summary.clone(),
@@ -2904,9 +2919,9 @@ fn history_table_row(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
-    // `Some(true)` when a branch is picked in the sidebar and this row sits on
-    // its first-parent chain; `None` when no branch is picked.
-    on_branch_chain: Option<bool>,
+    // `Some(true)` when a commit is selected and this row is related to it;
+    // `None` when nothing is selected.
+    related_to_selection: Option<bool>,
     // Branch this commit belongs to, shown as a faded badge while the row is
     // hovered. Inherited down the lane, so unlabelled commits have one too.
     lane_branch_name: Option<SharedString>,
@@ -2946,7 +2961,7 @@ fn history_table_row(
         tag_names,
         ref_items,
         selected_branch,
-        on_branch_chain,
+        related_to_selection,
         lane_branch_name,
         author,
         summary,
@@ -3040,6 +3055,9 @@ fn working_tree_summary_history_row(
     show_date: bool,
     show_sha: bool,
     node_color: gpui::Rgba,
+    // `Some(false)` when a commit is selected and the history below this row is
+    // not part of its chain; `None` when nothing is selected.
+    related_to_selection: Option<bool>,
     repo_id: RepoId,
     selected: bool,
     counts: (usize, usize, usize),
@@ -3047,6 +3065,11 @@ fn working_tree_summary_history_row(
 ) -> AnyElement {
     let scaled_px = |value| ui_scale.px(value);
     let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
+    // Same treatment the commit rows get, so the connector and its label recede
+    // or light up together with the history it joins.
+    let node_color =
+        history_canvas::selection_related_lane_color(theme, node_color, related_to_selection);
+    let label_color = history_canvas::selection_related_summary_color(theme, related_to_selection);
     let icon_count = |icon_path: &'static str, color: gpui::Rgba, count: usize| {
         div()
             .flex()
@@ -3173,6 +3196,7 @@ fn working_tree_summary_history_row(
                     .flex_1()
                     .min_w(px(0.0))
                     .text_sm()
+                    .text_color(label_color)
                     .line_clamp(1)
                     .whitespace_nowrap()
                     .child("Uncommitted changes"),

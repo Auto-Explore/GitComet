@@ -1389,6 +1389,8 @@ impl GitCometView {
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
         let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
+        let history_highlight_commit_chain =
+            ui_session.history_highlight_commit_chain.unwrap_or(true);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
@@ -1523,6 +1525,7 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 history_relative_dates,
+                history_highlight_commit_chain,
                 diff_scroll_sync,
                 diff_content_mode,
                 diff_whitespace_mode,
@@ -2466,6 +2469,17 @@ impl GitCometView {
         self.main_pane
             .update(cx, |pane, cx| pane.reset_history_column_widths(cx));
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_history_highlight_commit_chain(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_highlight_commit_chain(enabled, cx);
+        });
+        cx.notify();
     }
 
     pub(in crate::view) fn set_history_relative_dates(
