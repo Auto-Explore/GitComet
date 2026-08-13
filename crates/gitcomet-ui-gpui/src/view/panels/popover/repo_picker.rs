@@ -2,6 +2,14 @@ use super::super::super::path_display;
 use super::*;
 use std::collections::BTreeSet;
 
+/// Height this picker caps its row list at. Taller than the badge pickers'
+/// [`components::PICKER_LIST_MAX_HEIGHT_PX`] because three sections share the
+/// list. Shared between the panel that renders the list and the keyboard
+/// navigation that scrolls it: the windowed list builds its rows for exactly
+/// this viewport, so a navigation that assumed another one would scroll to the
+/// wrong place.
+pub(super) const REPO_PICKER_LIST_MAX_HEIGHT_PX: f32 = 360.0;
+
 pub(super) const PINNED_SECTION: &str = "Pinned";
 pub(super) const OPEN_SECTION: &str = "Open Repositories";
 pub(super) const RECENTLY_CLOSED_SECTION: &str = "Recently Closed";
@@ -42,7 +50,7 @@ impl RepoPickerEntry {
 /// Row order inside each picker section. Recency means last activated for open
 /// repositories and session MRU position for closed ones — the two sections are
 /// ordered independently, so the sections themselves never interleave.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(super) enum RepoPickerSort {
     #[default]
     Newest,
@@ -388,30 +396,70 @@ mod tests {
     }
 }
 
+/// Digest of everything [`entries`] reads, for the rows cache to key on.
+///
+/// Held as a hash rather than by value because these are lists: pins are
+/// uncapped, so a key that owned them would clone every path on every render —
+/// more than the rebuild it is there to avoid. Miss an input here and the picker
+/// shows a stale list with nothing to say so, the trap
+/// [`super::rows_cache`] and [`super::fingerprint`] both carry.
+fn rows_signature(this: &PopoverHost) -> u64 {
+    use std::hash::Hash;
+
+    super::rows_cache::signature(|hasher| {
+        this.repo_picker_sort.hash(hasher);
+        this.cached_pinned_repos.hash(hasher);
+        this.cached_recent_repos.hash(hasher);
+        // Marks the row for the repository that is active.
+        this.state.active_repo.hash(hasher);
+        this.state.repos.len().hash(hasher);
+        for repo in &this.state.repos {
+            repo.id.hash(hasher);
+            repo.spec.workdir.hash(hasher);
+            // The open section ranks by last activation, so a bump reorders it.
+            repo.last_active_at.hash(hasher);
+        }
+    })
+}
+
+/// The picker's rows, built once per change to the data behind them.
+///
+/// `PopoverHost` is an uncached overlay view — a hover moving between rows
+/// re-renders the whole popover — and every caller here goes through the cache,
+/// so those frames reuse the rows instead of rebuilding a `PickerPromptItem`
+/// and two lowercased sort keys per repository.
+pub(super) fn cached(
+    this: &PopoverHost,
+    query: &str,
+) -> std::rc::Rc<super::rows_cache::CachedRows<RepoPickerEntry>> {
+    let key = super::rows_cache::RowsCacheKey::new(
+        super::rows_cache::RowsCacheOwner::RepoPicker,
+        rows_signature(this),
+        query,
+    )
+    // Must match what `panel` renders with, or Enter activates a different row
+    // than the highlighted one.
+    .with_collapsed(&collapsed_sections(this, query));
+    super::rows_cache::get_or_build(&this.repo_picker_rows_cache, key, |_now| {
+        let entries = entries(this);
+        let marked_index = this.state.active_repo.and_then(|active| {
+            entries
+                .iter()
+                .position(|(entry, _)| *entry == RepoPickerEntry::Open(active))
+        });
+        let (payloads, items) = entries.into_iter().unzip();
+        (items, payloads, marked_index)
+    })
+}
+
 /// The picker rows in display order for the current query, paired with the
 /// scroll-child index each row occupies (section headers take child slots too).
 pub(super) fn filtered_layout(
     this: &PopoverHost,
     query: &str,
 ) -> (Vec<RepoPickerEntry>, components::PickerPromptLayout) {
-    let entries = entries(this);
-    let items = entries
-        .iter()
-        .map(|(_, item)| item.clone())
-        .collect::<Vec<_>>();
-    // Must match what `panel` hands the picker, or Enter activates a different
-    // row than the highlighted one.
-    let layout = components::picker_prompt_layout_with_collapsed(
-        &items,
-        query,
-        &collapsed_sections(this, query),
-    );
-    let ordered = layout
-        .item_indices
-        .iter()
-        .filter_map(|&ix| entries.get(ix).map(|(entry, _)| entry.clone()))
-        .collect();
-    (ordered, layout)
+    let rows = cached(this, query);
+    (rows.filtered_payloads(), (*rows.layout).clone())
 }
 
 /// What the arrow keys walk in the picker: repository rows normally, sort
@@ -443,8 +491,8 @@ pub(super) fn nav_targets(this: &PopoverHost, query: &str) -> Vec<RepoPickerNavT
             .collect();
     }
 
-    filtered_layout(this, query)
-        .0
+    cached(this, query)
+        .filtered_payloads()
         .into_iter()
         .map(RepoPickerNavTarget::Entry)
         .collect()
@@ -595,7 +643,9 @@ pub(super) fn activate(
 }
 
 /// Drops a recently-closed entry from the session's recent list. Open and pinned
-/// repositories have no `x`, so anything else is a no-op.
+/// repositories have no `x` and no menu entry for this, and the guards below
+/// keep it that way: a pin is what keeps a closed repository listed at all, so
+/// forgetting one would drop it out of the picker with nothing to bring it back.
 pub(super) fn forget(
     this: &mut PopoverHost,
     entry: &RepoPickerEntry,
@@ -604,6 +654,9 @@ pub(super) fn forget(
     let RepoPickerEntry::Closed(path) = entry else {
         return;
     };
+    if this.cached_pinned_repos.iter().any(|pin| pin == path) {
+        return;
+    }
     let _ = session::remove_recent_repo(path);
     this.cached_recent_repos.retain(|recent| recent != path);
     // The rows below the removed one shift up, so a stale selection would
@@ -620,6 +673,10 @@ pub(super) struct RepoPickerRowMenu {
     /// Display index of the row the menu belongs to, so it stays highlighted
     /// while the menu floats somewhere else on screen.
     pub(super) display_index: usize,
+    /// Filter text the menu was opened over. The rows are re-filtered as that
+    /// text changes, which moves the row `display_index` names, so the menu is
+    /// dismissed rather than left pointing somewhere else.
+    query: String,
 }
 
 /// What a repository row's context menu can do. Pin state and open state decide
@@ -745,6 +802,15 @@ pub(super) fn row_menu_items(
     items
 }
 
+/// The filter text the picker is showing right now. Empty before the search
+/// input exists, which is also how `panel` renders in that window.
+fn current_query(this: &PopoverHost, cx: &gpui::App) -> String {
+    this.repo_picker_search_input
+        .as_ref()
+        .map(|input| input.read(cx).text().trim().to_string())
+        .unwrap_or_default()
+}
+
 pub(super) fn open_row_menu(
     this: &mut PopoverHost,
     entry: RepoPickerEntry,
@@ -756,6 +822,7 @@ pub(super) fn open_row_menu(
         entry,
         position,
         display_index,
+        query: current_query(this, cx),
     });
     // The selection index now addresses the menu's own actions, so it restarts
     // from nothing; the invoking row keeps its highlight through
@@ -765,16 +832,43 @@ pub(super) fn open_row_menu(
     cx.notify();
 }
 
-/// Dismisses the row menu without running anything — Escape, or a press outside
-/// it. The selection lands back on the row the menu belonged to, so arrowing on
-/// carries from there rather than restarting at the top of the list.
+/// Dismisses the row menu without running anything — Escape, a press outside
+/// it, or an edit to the filter. The selection lands back on the row the menu
+/// belonged to, so arrowing on carries from there rather than restarting at the
+/// top of the list.
 pub(super) fn close_row_menu(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>) {
-    let display_index = this
-        .repo_picker_row_menu
-        .take()
-        .map(|menu| menu.display_index);
-    this.repo_picker_selected_index = display_index;
+    let Some(menu) = this.repo_picker_row_menu.take() else {
+        // No menu was open, so there is no selection of its to restore: leave
+        // whatever the arrow keys were on alone.
+        return;
+    };
+    // The rows can have been re-filtered, re-sorted or closed out from under the
+    // menu while it floated over them, so look the invoking row up again rather
+    // than trusting the index it had when the menu opened. Gone means gone: a
+    // kept index would highlight a different repository.
+    let query = current_query(this, cx);
+    this.repo_picker_selected_index = filtered_layout(this, &query)
+        .0
+        .iter()
+        .position(|entry| *entry == menu.entry);
     cx.notify();
+}
+
+/// Dismisses the row menu when the filter text has moved out from under it.
+/// Called on every input notification, so it has to compare rather than close
+/// unconditionally — the arrow keys reach the picker through the same input.
+pub(super) fn close_row_menu_on_query_change(
+    this: &mut PopoverHost,
+    query: &str,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    if this
+        .repo_picker_row_menu
+        .as_ref()
+        .is_some_and(|menu| menu.query != query)
+    {
+        close_row_menu(this, cx);
+    }
 }
 
 /// Closes the row menu on the way into one of its actions. Unlike a dismissal
@@ -799,16 +893,38 @@ pub(super) fn activate_row_action(
     let workdir = entry.workdir(this);
     close_row_menu_for_action(this, cx);
 
-    // Actions that leave the picker for somewhere else run through the shared
-    // context-menu executor, which already handles the toasts, the editor
-    // launch and closing the popover behind itself.
-    let delegate = |this: &mut PopoverHost, action, window: &mut Window, cx: &mut _| {
-        this.context_menu_activate_action(action, window, cx);
+    // Activating and forgetting name the row by its entry. Everything else names
+    // it by path, and an open row loses its path the moment the repository
+    // leaves the store — a concurrent close from a repo tab, say. The menu is
+    // already down by the time we get here, so bailing quietly would land the
+    // click as nothing at all: say so instead.
+    let workdir = match action {
+        RepoPickerRowAction::Activate | RepoPickerRowAction::Open => {
+            activate(this, entry, cx);
+            return;
+        }
+        RepoPickerRowAction::ForgetRecent => {
+            forget(this, &entry, cx);
+            return;
+        }
+        _ => match workdir {
+            Some(workdir) => workdir,
+            None => {
+                // A toast rather than an error banner: nothing failed, the row
+                // just went stale, and the banner belongs to whichever
+                // repository is active now — not to this one.
+                this.push_toast(
+                    components::ToastKind::Warning,
+                    "That repository is no longer open.".to_owned(),
+                    cx,
+                );
+                return;
+            }
+        },
     };
 
     match action {
         RepoPickerRowAction::Pin => {
-            let Some(workdir) = workdir else { return };
             let _ = session::persist_pinned_repo(&workdir);
             if !this.cached_pinned_repos.contains(&workdir) {
                 this.cached_pinned_repos.push(workdir);
@@ -816,71 +932,72 @@ pub(super) fn activate_row_action(
             cx.notify();
         }
         RepoPickerRowAction::Unpin => {
-            let Some(workdir) = workdir else { return };
             let _ = session::remove_pinned_repo(&workdir);
             this.cached_pinned_repos.retain(|pin| pin != &workdir);
             cx.notify();
         }
-        RepoPickerRowAction::Activate | RepoPickerRowAction::Open => activate(this, entry, cx),
-        RepoPickerRowAction::RevealLocation => {
-            let Some(path) = workdir else { return };
-            delegate(
-                this,
-                ContextMenuAction::OpenRepositoryLocation { path },
-                window,
-                cx,
-            );
-        }
-        RepoPickerRowAction::OpenInCodeEditor => {
-            let Some(path) = workdir else { return };
-            delegate(
-                this,
-                ContextMenuAction::OpenInCodeEditor {
-                    repo_id: None,
-                    path,
-                },
-                window,
-                cx,
-            );
-        }
-        RepoPickerRowAction::CopyPath => {
-            let Some(workdir) = workdir else { return };
-            delegate(
-                this,
-                ContextMenuAction::CopyText {
-                    text: workdir.display().to_string(),
-                },
-                window,
-                cx,
-            );
-        }
+        // Actions that leave the picker for somewhere else run through the
+        // shared context-menu executor, which already handles the toasts, the
+        // editor launch and closing the popover behind itself.
+        RepoPickerRowAction::RevealLocation => this.context_menu_activate_action(
+            ContextMenuAction::OpenRepositoryLocation { path: workdir },
+            window,
+            cx,
+        ),
+        RepoPickerRowAction::OpenInCodeEditor => this.context_menu_activate_action(
+            ContextMenuAction::OpenInCodeEditor {
+                repo_id: None,
+                path: workdir,
+            },
+            window,
+            cx,
+        ),
+        RepoPickerRowAction::CopyPath => this.context_menu_activate_action(
+            ContextMenuAction::CopyText {
+                text: workdir.display().to_string(),
+            },
+            window,
+            cx,
+        ),
         RepoPickerRowAction::Close => {
             let RepoPickerEntry::Open(repo_id) = entry else {
                 return;
             };
             // Closing keeps the picker up so several repositories can go in a
-            // row. Only opening a repository records it as recent, so closing
-            // one has to do it here — and `cached_recent_repos` is an open-time
-            // snapshot, so the same move is made against the session file and
-            // the cache. Skipping either leaves the Recently Closed list the
-            // user is looking at disagreeing with the one they get next time.
-            if let Some(workdir) = workdir {
-                let _ = session::persist_recent_repo(&workdir);
-                this.cached_recent_repos.retain(|recent| recent != &workdir);
-                this.cached_recent_repos.insert(0, workdir);
-            }
-            this.repo_picker_selected_index = None;
+            // row, so the list underneath has to show the row reach Recently
+            // Closed right away. The session file is written by the reducer's
+            // own close effect; this only holds the open-time snapshot the
+            // picker renders from in step with it, cap included.
+            session::promote_recent_repo(&mut this.cached_recent_repos, &workdir);
             this.store.dispatch(Msg::CloseRepo { repo_id });
             cx.notify();
         }
-        RepoPickerRowAction::ForgetRecent => forget(this, &entry, cx),
+        // Taken care of above, before the path lookup that the rest need.
+        RepoPickerRowAction::Activate
+        | RepoPickerRowAction::Open
+        | RepoPickerRowAction::ForgetRecent => {}
     }
+}
+
+/// Hands the tooltip host a pointer position it would otherwise never see. Both
+/// halves of the row-menu layer `occlude()`, which stops the root view's own
+/// mouse-move listener from firing over them.
+fn track_pointer_for_tooltips(
+    this: &mut PopoverHost,
+    e: &MouseMoveEvent,
+    _window: &mut Window,
+    cx: &mut gpui::Context<PopoverHost>,
+) {
+    let _ = this
+        .tooltip_host
+        .update(cx, |host, cx| host.on_mouse_moved(e.position, cx));
 }
 
 /// The floating row menu, drawn by [`PopoverHost::render`] above the picker.
 /// Returns `None` unless a row menu is open.
 pub(super) fn row_menu_layer(
     this: &PopoverHost,
+    window: &Window,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> Option<gpui::AnyElement> {
     let menu = this.repo_picker_row_menu.clone()?;
@@ -940,6 +1057,29 @@ pub(super) fn row_menu_layer(
         close_row_menu(this, cx);
     });
 
+    // The menu anchors at the pointer and gpui flips it above that point when it
+    // will not fit below, so the room it really has is the taller of the two
+    // sides. Capping to that and scrolling inside is what keeps the destructive
+    // entries at the bottom reachable in a short window or at a large UI scale —
+    // the treatment `popover_view` gives every other context menu.
+    let margin_y = super::popover_scaled_px_from_percent(16.0, ui_scale_percent);
+    let window_h = window.window_bounds().get_bounds().size.height;
+    let max_menu_h = ((window_h - menu.position.y) - margin_y)
+        .max(menu.position.y - margin_y)
+        .max(super::popover_scaled_px_from_percent(
+            96.0,
+            ui_scale_percent,
+        ));
+    let list = crate::view::restrict_scroll_to_vertical_axis(
+        div()
+            .id("repo_picker_row_menu_scroll")
+            .debug_selector(|| "repo_picker_row_menu_scroll".to_string())
+            .min_h(gpui::px(0.0))
+            .max_h(max_menu_h)
+            .overflow_y_scroll(),
+    )
+    .child(list);
+
     Some(
         div()
             .absolute()
@@ -958,6 +1098,12 @@ pub(super) fn row_menu_layer(
                     .size_full()
                     .bg(gpui::rgba(0x00000000))
                     .occlude()
+                    // Both this and the menu below occlude, which silences the
+                    // root view's mouse tracking, so both have to feed the
+                    // tooltip host themselves — otherwise a truncated-text
+                    // tooltip from the picker underneath stays painted wherever
+                    // the pointer was when the menu opened.
+                    .on_mouse_move(cx.listener(track_pointer_for_tooltips))
                     .on_any_mouse_down(dismiss_menu),
             )
             .child(
@@ -971,15 +1117,7 @@ pub(super) fn row_menu_layer(
                         .debug_selector(|| "repo_picker_row_menu".to_string())
                         .occlude()
                         .on_any_mouse_down(|_e, _w, cx| cx.stop_propagation())
-                        // `occlude` silences the root view's mouse tracking, so
-                        // feed the tooltip host from in here or a truncated-text
-                        // tooltip from the picker underneath stays anchored
-                        // where the pointer last was outside the menu.
-                        .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _window, cx| {
-                            let _ = this
-                                .tooltip_host
-                                .update(cx, |host, cx| host.on_mouse_moved(e.position, cx));
-                        }))
+                        .on_mouse_move(cx.listener(track_pointer_for_tooltips))
                         .child(components::context_menu(theme, list)),
                 ),
             )
@@ -993,7 +1131,6 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
     let ui_scale_percent = ui_scale.percent();
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
     let width = super::PICKER_WIDTH;
-    let entries = entries(this);
 
     if let Some(search) = this.repo_picker_search_input.clone() {
         // Match the Create Branch search field: a chromeless input, here with a
@@ -1003,33 +1140,31 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
             input.set_leading_icon(Some("icons/zoom.svg"), cx);
         });
 
-        let items = entries
-            .iter()
-            .map(|(_, item)| item.clone())
-            .collect::<Vec<_>>();
-        let active_index = this.state.active_repo.and_then(|active| {
-            entries
-                .iter()
-                .position(|(entry, _)| matches!(entry, RepoPickerEntry::Open(id) if *id == active))
-        });
+        let query = search.read(cx).text().trim().to_string();
+        let built = cached(this, &query);
         // One list behind all three row callbacks: each closure lives as long as
         // the elements it is attached to, so cloning the vector per callback
         // would hold three copies of every path for the frame.
-        let row_entries: std::rc::Rc<[RepoPickerEntry]> = entries
-            .iter()
-            .map(|(entry, _)| entry.clone())
-            .collect::<Vec<_>>()
-            .into();
-        let select_entries = std::rc::Rc::clone(&row_entries);
-        let remove_entries = std::rc::Rc::clone(&row_entries);
+        let row_entries = std::rc::Rc::clone(&built.payloads);
+        let select_entries = std::rc::Rc::clone(&built.payloads);
+        let remove_entries = std::rc::Rc::clone(&built.payloads);
 
-        let query = search.read(cx).text().trim().to_string();
         let row_menu = this.repo_picker_row_menu.as_ref();
         let mut prompt = components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-            .items(items)
+            // Prebuilt items and layout: the cache already filtered, sorted and
+            // folded them, so `render` must not repeat that work. The collapsed
+            // sections are baked into that layout rather than handed to the
+            // picker separately.
+            .prebuilt_items(
+                std::rc::Rc::clone(&built.items),
+                std::rc::Rc::clone(&built.layout),
+            )
+            // A long pin list renders only what is on screen; keyboard
+            // navigation scrolls by the row geometry to match
+            // (`scroll_picker_prompt_to_row`), which has to be told the same
             .tooltip_host(this.tooltip_host.clone())
             .empty_text("No repositories")
-            .max_height(scaled_px(360.0))
+            .max_height(scaled_px(REPO_PICKER_LIST_MAX_HEIGHT_PX))
             // While a row menu is open the arrow keys walk its actions, so the
             // list's highlight marks the invoking row instead — without the
             // Enter hint, which now belongs to the menu.
@@ -1038,11 +1173,10 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                     .map(|menu| menu.display_index)
                     .or(this.repo_picker_selected_index),
             )
-            .marked_index(active_index)
+            .marked_index(built.marked_index)
             .accent_selection()
             .padded_query_row()
             .remove_tooltip("Remove from recently closed")
-            .collapsed_sections(collapsed_sections(this, &query))
             .on_context_menu(cx.listener(
                 move |this, event: &components::PickerPromptContextMenuEvent, _window, cx| {
                     let Some(entry) = row_entries.get(event.original_index).cloned() else {
@@ -1091,6 +1225,9 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         // stretch under fit-content parents.
         .w(width.preferred_px(ui_scale))
     } else {
+        // No search input yet, so no cache key to build one against: this is the
+        // plain menu the picker falls back to, and it is not windowed.
+        let entries = entries(this);
         let mut menu = div()
             .flex()
             .flex_col()

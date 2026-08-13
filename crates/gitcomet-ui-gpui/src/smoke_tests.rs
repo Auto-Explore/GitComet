@@ -12,7 +12,7 @@ use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
 use gpui::{
     ClipboardItem, Decorations, KeyBinding, Modifiers, MouseButton, MouseDownEvent, MouseUpEvent,
-    Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Tiling, div, px,
+    Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, Tiling, div, px,
 };
 use std::fs;
 use std::path::Path;
@@ -3175,14 +3175,20 @@ impl gpui::Render for PickerPromptScrollbarTestView {
         _window: &mut gpui::Window,
         cx: &mut gpui::Context<Self>,
     ) -> impl IntoElement {
-        let items = (0..50)
-            .map(|ix| SharedString::from(format!("Commit {ix:02}  Synthetic history entry")))
-            .collect::<Vec<_>>();
+        let items: std::rc::Rc<[components::PickerPromptItem]> = (0..50)
+            .map(|ix| {
+                components::PickerPromptItem::plain(format!(
+                    "Commit {ix:02}  Synthetic history entry"
+                ))
+            })
+            .collect::<Vec<_>>()
+            .into();
+        let layout = std::rc::Rc::new(components::picker_prompt_layout(&items, ""));
 
         div().size_full().bg(self.theme.colors.window_bg).child(
             div().w(px(360.0)).child(
                 components::PickerPrompt::new(self.input.clone(), self.scroll_handle.clone())
-                    .items(items)
+                    .prebuilt_items(items, layout)
                     .max_height(px(120.0))
                     .render(
                         self.theme,

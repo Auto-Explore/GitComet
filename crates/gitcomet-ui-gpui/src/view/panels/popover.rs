@@ -38,17 +38,15 @@ mod stash_picker_prompt;
 mod stash_prompt;
 mod submodule_add_prompt;
 mod submodule_change_pointer_prompt;
-mod submodule_open_picker;
+mod submodule_picker;
 mod submodule_remove_confirm;
-mod submodule_remove_picker;
 mod submodule_trust_confirm;
 mod terminal_shutdown_confirm;
 mod unsaved_file_edits_confirm;
 mod workspace_picker;
 mod worktree_add_prompt;
-mod worktree_open_picker;
+mod worktree_picker;
 mod worktree_remove_confirm;
-mod worktree_remove_picker;
 
 #[derive(Clone, Debug)]
 enum PopoverAnchor {
@@ -216,11 +214,18 @@ pub(in super::super) struct PopoverHost {
     pending_worktree_add_prefill: Option<(String, String)>,
     submodule_picker_selected_index: Option<usize>,
     file_history_selected_index: Option<usize>,
-    /// Row models for the two badge pickers, rebuilt only when the repository
-    /// data behind them changes rather than on every frame. See
-    /// [`rows_cache`] — a hover moving between rows re-renders this whole view.
+    /// Row models for the pickers that build one row per repository, ref or
+    /// worktree, rebuilt only when the data behind them changes rather than on
+    /// every frame. See [`rows_cache`] — a hover moving between rows re-renders
+    /// this whole view.
     branch_picker_rows_cache: rows_cache::RowsCache<branch_picker::BranchPickerNavTarget>,
     workspace_picker_rows_cache: rows_cache::RowsCache<workspace_picker::WorkspaceRow>,
+    repo_picker_rows_cache: rows_cache::RowsCache<repo_picker::RepoPickerEntry>,
+    stash_picker_rows_cache: rows_cache::RowsCache<stash_picker_prompt::StashRow>,
+    file_history_rows_cache: rows_cache::RowsCache<CommitId>,
+    submodule_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
+    worktree_picker_rows_cache: rows_cache::RowsCache<std::path::PathBuf>,
+    branch_ref_rows_cache: rows_cache::RowsCache<String>,
 
     repo_picker_search_input: Option<Entity<components::TextInput>>,
     branch_picker_search_input: Option<Entity<components::TextInput>>,
@@ -1585,6 +1590,12 @@ impl PopoverHost {
             file_history_selected_index: None,
             branch_picker_rows_cache: rows_cache::RowsCache::default(),
             workspace_picker_rows_cache: rows_cache::RowsCache::default(),
+            repo_picker_rows_cache: rows_cache::RowsCache::default(),
+            stash_picker_rows_cache: rows_cache::RowsCache::default(),
+            file_history_rows_cache: rows_cache::RowsCache::default(),
+            submodule_picker_rows_cache: rows_cache::RowsCache::default(),
+            worktree_picker_rows_cache: rows_cache::RowsCache::default(),
+            branch_ref_rows_cache: rows_cache::RowsCache::default(),
             repo_picker_search_input: None,
             branch_picker_search_input: None,
             remote_picker_search_input: None,
@@ -2194,34 +2205,6 @@ impl PopoverHost {
                     ..
                 })
         )
-    }
-
-    fn active_branch_ref_picker_items(
-        &self,
-        include_head: bool,
-        include_tags: bool,
-    ) -> Vec<components::BranchRefPickerItem> {
-        let Some(repo) = self.active_repo() else {
-            return Vec::new();
-        };
-        let mut items = Vec::new();
-        if include_head {
-            items.push(components::BranchRefPickerItem::head());
-        }
-        if let Loadable::Ready(branches) = &repo.branches {
-            items.extend(
-                branches
-                    .iter()
-                    .map(|branch| components::BranchRefPickerItem::branch(branch.name.clone())),
-            );
-        }
-        if include_tags && let Loadable::Ready(tags) = &repo.tags {
-            items.extend(
-                tags.iter()
-                    .map(|tag| components::BranchRefPickerItem::tag(tag.name.clone())),
-            );
-        }
-        items
     }
 
     fn handle_inline_branch_picker_escape(&mut self, cx: &mut gpui::Context<Self>) {
@@ -2897,6 +2880,12 @@ impl PopoverHost {
         // keeps the memory from outliving the picker that needed it.
         self.branch_picker_rows_cache.clear();
         self.workspace_picker_rows_cache.clear();
+        self.repo_picker_rows_cache.clear();
+        self.stash_picker_rows_cache.clear();
+        self.file_history_rows_cache.clear();
+        self.submodule_picker_rows_cache.clear();
+        self.worktree_picker_rows_cache.clear();
+        self.branch_ref_rows_cache.clear();
         if is_context_menu {
             self.popover = Some(kind);
             self.context_menu_selected_ix = self
@@ -3618,7 +3607,7 @@ impl Render for PopoverHost {
         // Painted after the popover, so it hit-tests above the picker it floats
         // over and its own scrim intercepts the click that would otherwise
         // reach `popover_scrim` and close the whole picker.
-        if let Some(row_menu) = repo_picker::row_menu_layer(self, cx) {
+        if let Some(row_menu) = repo_picker::row_menu_layer(self, window, cx) {
             layer = layer.child(row_menu);
         }
         layer.into_any_element()
@@ -3747,10 +3736,10 @@ impl PopoverHost {
                         worktree_add_prompt::panel(self, repo_id, window, cx)
                     }
                     WorktreePopoverKind::OpenPicker => {
-                        worktree_open_picker::panel(self, repo_id, cx)
+                        worktree_picker::panel(self, repo_id, false, cx)
                     }
                     WorktreePopoverKind::RemovePicker => {
-                        worktree_remove_picker::panel(self, repo_id, cx)
+                        worktree_picker::panel(self, repo_id, true, cx)
                     }
                     WorktreePopoverKind::BadgePicker => workspace_picker::panel(self, repo_id, cx),
                     WorktreePopoverKind::RemoveConfirm { path, branch } => {
@@ -3776,10 +3765,10 @@ impl PopoverHost {
                         submodule_trust_confirm::panel(self, repo_id, cx)
                     }
                     SubmodulePopoverKind::OpenPicker => {
-                        submodule_open_picker::panel(self, repo_id, cx)
+                        submodule_picker::panel(self, repo_id, false, cx)
                     }
                     SubmodulePopoverKind::RemovePicker => {
-                        submodule_remove_picker::panel(self, repo_id, cx)
+                        submodule_picker::panel(self, repo_id, true, cx)
                     }
                     SubmodulePopoverKind::RemoveConfirm { path } => {
                         submodule_remove_confirm::panel(self, repo_id, path, cx)

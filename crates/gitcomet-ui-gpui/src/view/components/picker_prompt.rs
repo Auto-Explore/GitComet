@@ -28,7 +28,6 @@ pub struct PickerPrompt {
     /// Opt-in, because a picker whose rows can be left unbuilt must scroll its
     /// keyboard selection into view through [`PickerPromptGeometry`] rather than
     /// through `ScrollHandle::scroll_to_item`, which needs the row to exist.
-    windowed: bool,
     empty_text: SharedString,
     max_height: gpui::Pixels,
     tooltip_host: Option<WeakEntity<TooltipHost>>,
@@ -43,7 +42,6 @@ pub struct PickerPrompt {
     query_row_trailing: Option<gpui::AnyElement>,
     list_override: Option<gpui::AnyElement>,
     remove_tooltip: Option<SharedString>,
-    collapsed_sections: BTreeSet<SharedString>,
     on_toggle_section: Option<Rc<OnToggleSectionFn>>,
     on_context_menu: Option<Rc<OnContextMenuFn>>,
 }
@@ -166,6 +164,11 @@ pub struct PickerPromptLayout {
 /// Resolve the display layout the same way [`PickerPrompt::render`] does, so
 /// keyboard navigation over a filtered list stays in lockstep with the rows the
 /// user sees.
+///
+/// Every caller in the app itself folds sections (even to an empty set) and goes
+/// through [`picker_prompt_layout_with_collapsed`]; this shorthand is what the
+/// tests and benchmarks resolve a layout with.
+#[cfg(any(test, feature = "benchmarks"))]
 pub fn picker_prompt_layout(items: &[PickerPromptItem], query: &str) -> PickerPromptLayout {
     picker_prompt_layout_with_collapsed(items, query, &BTreeSet::new())
 }
@@ -480,7 +483,6 @@ impl PickerPrompt {
             scroll_handle,
             items: Rc::from(Vec::new()),
             layout: None,
-            windowed: false,
             empty_text: "No matches".into(),
             max_height: px(360.0),
             tooltip_host: None,
@@ -495,30 +497,9 @@ impl PickerPrompt {
             query_row_trailing: None,
             list_override: None,
             remove_tooltip: None,
-            collapsed_sections: BTreeSet::new(),
             on_toggle_section: None,
             on_context_menu: None,
         }
-    }
-
-    pub fn items<I, T>(mut self, items: I) -> Self
-    where
-        I: IntoIterator<Item = T>,
-        T: Into<PickerPromptItem>,
-    {
-        self.items = items.into_iter().map(Into::into).collect::<Vec<_>>().into();
-        self
-    }
-
-    /// Renders only the rows the viewport can show, standing spacers in for the
-    /// rest, once the list grows past a couple of viewports.
-    ///
-    /// The picker's keyboard navigation must scroll by [`PickerPromptGeometry`]
-    /// when this is on: a row outside the window has no element for
-    /// `ScrollHandle::scroll_to_item` to find, so it would refuse to scroll to it.
-    pub fn windowed_rows(mut self) -> Self {
-        self.windowed = true;
-        self
     }
 
     /// Items and the layout already resolved for them, shared rather than
@@ -617,15 +598,6 @@ impl PickerPrompt {
         self
     }
 
-    /// Sections whose rows are folded away. Only consulted when this picker
-    /// resolves its own layout; a caller passing [`Self::prebuilt_items`] must
-    /// have built that layout with `picker_prompt_layout_with_collapsed` and the
-    /// same set.
-    pub fn collapsed_sections(mut self, sections: BTreeSet<SharedString>) -> Self {
-        self.collapsed_sections = sections;
-        self
-    }
-
     /// Makes section headers interactive: a disclosure chevron plus a click that
     /// hands back the section's label. Pass a `cx.listener(...)`.
     pub fn on_toggle_section(
@@ -681,6 +653,9 @@ impl PickerPrompt {
         let scaled_px = |value| ui_scale.px(value);
 
         // Reuse the caller's layout when it supplied one; otherwise filter here.
+        // A picker that folds sections away resolves its own layout with
+        // `picker_prompt_layout_with_collapsed` and passes it through
+        // [`Self::prebuilt_items`] — nothing is folded on this path.
         let layout = match self.layout.clone() {
             Some(layout) => layout,
             None => {
@@ -690,7 +665,7 @@ impl PickerPrompt {
                 Rc::new(picker_prompt_layout_with_collapsed(
                     &self.items,
                     &query,
-                    &self.collapsed_sections,
+                    &BTreeSet::new(),
                 ))
             }
         };
@@ -780,12 +755,12 @@ impl PickerPrompt {
             // and below it become two spacers of exactly their height, so the
             // scrollbar and the scroll offset behave as if all of them were
             // there.
-            let window = if self.windowed {
-                let geometry = PickerPromptGeometry::new(&self.items, &layout, ui_scale);
-                geometry.window(-scroll_handle.offset().y, self.max_height)
-            } else {
-                PickerPromptWindow::everything(row_count)
-            };
+            // Only what the viewport can show, once the list is long enough
+            // to be worth it — `PickerPromptGeometry::window` hands back every
+            // row for a short one, so a small picker keeps exactly the geometry
+            // it had before any of this existed.
+            let geometry = PickerPromptGeometry::new(&self.items, &layout, ui_scale);
+            let window = geometry.window(-scroll_handle.offset().y, self.max_height);
             if window.space_before > px(0.0) {
                 list = list.child(div().flex_shrink_0().w_full().h(window.space_before));
             }

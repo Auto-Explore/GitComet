@@ -549,6 +549,23 @@ pub fn persist_repos_snapshot_to_path(
     })
 }
 
+/// Moves `value` to the front of an MRU list, dropping any earlier copy of it
+/// and holding the list to [`MAX_RECENT_REPOS`]. The cap lives here alone so
+/// the session file and the in-memory caches the UI shows can never disagree
+/// about how long the list is.
+fn promote_within_recents_cap<T: PartialEq>(list: &mut Vec<T>, value: T) {
+    list.retain(|existing| existing != &value);
+    list.insert(0, value);
+    list.truncate(MAX_RECENT_REPOS);
+}
+
+/// [`promote_within_recents_cap`] for a caller holding its own copy of what
+/// [`UiSession::recent_repos`] last returned: applies one recents bump to that
+/// copy so it still matches the file after [`persist_recent_repo`] writes it.
+pub fn promote_recent_repo(recents: &mut Vec<PathBuf>, workdir: &Path) {
+    promote_within_recents_cap(recents, workdir.to_path_buf());
+}
+
 pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
     let Some(path) = default_session_file_path() else {
         return Ok(());
@@ -563,12 +580,19 @@ pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> 
 
         let workdir_key = path_storage_key(workdir);
         let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
-        recent_repos.retain(|path| path.trim() != workdir_key);
-        recent_repos.retain(|path| !path.trim().is_empty());
-        recent_repos.insert(0, workdir_key);
-        if recent_repos.len() > MAX_RECENT_REPOS {
-            recent_repos.truncate(MAX_RECENT_REPOS);
-        }
+        // Blanks go, and a key a hand-edited file padded is normalized in place
+        // so the promotion below still recognizes it as the same repository.
+        recent_repos.retain_mut(|path| {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            if trimmed.len() != path.len() {
+                *path = trimmed.to_owned();
+            }
+            true
+        });
+        promote_within_recents_cap(recent_repos, workdir_key);
 
         persist_to_path(session_file_path, &file)
     })
@@ -2896,6 +2920,103 @@ mod tests {
 
         remove_pinned_repo_to_path(&repo_b, &path).expect("unpin second repo");
         assert_eq!(load_from_path(&path).pinned_repos, vec![repo_a]);
+    }
+
+    /// A UI holding its own copy of the recents has to be able to apply a bump
+    /// without re-reading the file, and the copy has to still match the file
+    /// afterwards — including at the cap, where the file drops its tail.
+    #[test]
+    fn promote_recent_repo_matches_the_file_at_the_cap() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-promote-recent-cap-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        // One more repository than the list can hold, so the cap is in play.
+        let repos: Vec<PathBuf> = (0..=MAX_RECENT_REPOS)
+            .map(|ix| dir.join(format!("repo-{ix}")))
+            .collect();
+        for repo in &repos {
+            persist_recent_repo_to_path(repo, &path).expect("record repo as recent");
+        }
+
+        let mut cached = load_from_path(&path).recent_repos;
+        assert_eq!(cached.len(), MAX_RECENT_REPOS);
+
+        // The one the cap pushed off comes back to the front, on both sides.
+        let evicted = repos[0].clone();
+        assert!(!cached.contains(&evicted));
+        promote_recent_repo(&mut cached, &evicted);
+        persist_recent_repo_to_path(&evicted, &path).expect("re-record the evicted repo");
+
+        assert_eq!(
+            cached.len(),
+            MAX_RECENT_REPOS,
+            "the in-memory list has to honour the same cap the file does"
+        );
+        assert_eq!(
+            cached,
+            load_from_path(&path).recent_repos,
+            "a promoted cache must match what the next load returns"
+        );
+
+        // Re-promoting something already listed moves it without growing the list.
+        let already_listed = cached[3].clone();
+        promote_recent_repo(&mut cached, &already_listed);
+        assert_eq!(cached.len(), MAX_RECENT_REPOS);
+        assert_eq!(cached.first(), Some(&already_listed));
+        assert_eq!(
+            cached
+                .iter()
+                .filter(|path| **path == already_listed)
+                .count(),
+            1
+        );
+    }
+
+    /// The stored keys are written trimmed, but a hand-edited file can pad them.
+    /// A padded copy is still the same repository, so it must not survive the
+    /// promotion as a second entry.
+    #[test]
+    fn persist_recent_repo_collapses_a_padded_duplicate() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-recent-padded-dupe-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+        let repo = dir.join("repo-padded");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                recent_repos: Some(vec![
+                    format!("  {}  ", path_storage_key(&repo)),
+                    "   ".to_owned(),
+                ]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_recent_repo_to_path(&repo, &path).expect("record repo as recent");
+
+        assert_eq!(
+            load_from_path(&path).recent_repos,
+            vec![repo],
+            "the padded entry and the blank should both be gone"
+        );
     }
 
     #[test]

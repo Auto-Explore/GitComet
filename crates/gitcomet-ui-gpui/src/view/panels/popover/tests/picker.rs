@@ -861,6 +861,676 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
     );
 }
 
+/// Typing re-filters the rows the menu is floating over, so the row its stored
+/// index highlights is no longer the row it was opened on — and it would go on
+/// owning the arrow keys over a list that had moved underneath it. Any edit to
+/// the filter therefore dismisses it, and the selection follows the row itself
+/// rather than the index it used to sit at.
+#[gpui::test]
+fn repo_picker_row_menu_closes_when_the_filter_changes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-menu-filter");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    // Two closed rows below the open one, so the filter has something to drop.
+    let kept = std::path::PathBuf::from("/tmp/zebra-repo");
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, _cx| {
+            host.cached_recent_repos =
+                vec![std::path::PathBuf::from("/tmp/aardvark-repo"), kept.clone()];
+        });
+    });
+
+    let entry = repo_picker::RepoPickerEntry::Closed(kept.clone());
+    let display_index = cx.update(|_window, app| {
+        repo_picker::filtered_layout(popover_host.read(app), "")
+            .0
+            .iter()
+            .position(|candidate| *candidate == entry)
+            .expect("the seeded recent should have a row")
+    });
+
+    cx.update(|window, app| {
+        popover_host.update(app, |host, cx| {
+            repo_picker::open_row_menu(
+                host,
+                entry.clone(),
+                display_index,
+                gpui::point(gpui::px(140.0), gpui::px(120.0)),
+                cx,
+            );
+            let _ = window;
+        });
+    });
+
+    // An arrow key reaches the picker through the same input the filter uses, so
+    // the menu has to survive one: it is the query changing that dismisses it,
+    // not any notification at all.
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    assert!(
+        cx.update(|_window, app| popover_host.read(app).repo_picker_row_menu.is_some()),
+        "arrowing inside the menu must not dismiss it"
+    );
+
+    cx.simulate_keystrokes("z e b");
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let host = popover_host.read(app);
+        assert!(
+            host.repo_picker_row_menu.is_none(),
+            "editing the filter should dismiss the row menu"
+        );
+        let filtered = repo_picker::filtered_layout(host, "zeb").0;
+        assert_eq!(
+            host.repo_picker_selected_index,
+            filtered.iter().position(|candidate| *candidate == entry),
+            "the selection should follow the row the menu belonged to into the filtered list"
+        );
+    });
+}
+
+/// The rows can move while the menu floats over them — a background close, or
+/// another surface closing a repository. Escape therefore has to look its row up
+/// again instead of restoring the index it stored when the menu opened.
+#[gpui::test]
+fn repo_picker_row_menu_escape_reanchors_to_its_row(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-menu-reanchor");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    let dropped = std::path::PathBuf::from("/tmp/dropped-repo");
+    let last = std::path::PathBuf::from("/tmp/last-repo");
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, _cx| {
+            host.cached_recent_repos = vec![dropped.clone(), last.clone()];
+        });
+    });
+
+    let entry = repo_picker::RepoPickerEntry::Closed(last.clone());
+    let stale_index = cx.update(|_window, app| {
+        repo_picker::filtered_layout(popover_host.read(app), "")
+            .0
+            .iter()
+            .position(|candidate| *candidate == entry)
+            .expect("the seeded recent should have a row")
+    });
+
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            repo_picker::open_row_menu(
+                host,
+                entry.clone(),
+                stale_index,
+                gpui::point(gpui::px(140.0), gpui::px(120.0)),
+                cx,
+            );
+            // A row above the menu's own disappears, so its index now names a
+            // different repository than the one the menu was opened on.
+            host.cached_recent_repos = vec![last.clone()];
+            repo_picker::dismiss(host, cx);
+
+            let moved_to = repo_picker::filtered_layout(host, "")
+                .0
+                .iter()
+                .position(|candidate| *candidate == entry);
+            assert_ne!(moved_to, Some(stale_index), "the row should have moved up");
+            assert_eq!(
+                host.repo_picker_selected_index, moved_to,
+                "Escape should land on the row the menu belonged to, wherever it is now"
+            );
+
+            // And when the row is gone altogether there is nothing to restore.
+            repo_picker::open_row_menu(
+                host,
+                entry.clone(),
+                0,
+                gpui::point(gpui::px(140.0), gpui::px(120.0)),
+                cx,
+            );
+            host.cached_recent_repos = Vec::new();
+            repo_picker::dismiss(host, cx);
+            assert_eq!(host.repo_picker_selected_index, None);
+        });
+    });
+}
+
+/// A pin is what keeps a closed repository listed at all, so forgetting one
+/// would drop it out of the picker with nothing left to bring it back. The menu
+/// offers no such entry — and `forget` refuses it in its own right, so a future
+/// caller cannot reintroduce the hole.
+#[gpui::test]
+fn repo_picker_forget_refuses_a_pinned_repository(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-forget-pinned");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    let pinned = std::path::PathBuf::from("/tmp/pinned-and-closed");
+    let entry = repo_picker::RepoPickerEntry::Closed(pinned.clone());
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            host.cached_pinned_repos = vec![pinned.clone()];
+            host.cached_recent_repos = vec![pinned.clone()];
+
+            assert!(
+                !repo_picker::row_menu_items(host, &entry)
+                    .into_iter()
+                    .any(|item| matches!(
+                        item,
+                        repo_picker::RepoPickerRowMenuItem::Entry {
+                            action: repo_picker::RepoPickerRowAction::ForgetRecent,
+                            ..
+                        }
+                    )),
+                "a pinned row must not offer the forget action"
+            );
+
+            repo_picker::forget(host, &entry, cx);
+            assert_eq!(
+                host.cached_recent_repos,
+                vec![pinned.clone()],
+                "forgetting a pinned repository must be a no-op"
+            );
+        });
+    });
+}
+
+/// Closing from the row menu keeps the picker up, so the list underneath has to
+/// show the row reach Recently Closed straight away. The session file is the
+/// reducer's job; this only keeps the picker's own snapshot in step with it.
+#[gpui::test]
+fn repo_picker_close_row_action_promotes_the_recents_cache(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, workdir) = create_tracking_store("repo-picker-close-row");
+    let workdir = gitcomet_core::path_utils::canonicalize_or_original(workdir);
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    let older = std::path::PathBuf::from("/tmp/older-repo");
+    let entry = repo_picker::RepoPickerEntry::Open(gitcomet_state::model::RepoId(1));
+    cx.update(|window, app| {
+        popover_host.update(app, |host, cx| {
+            // The repository is already on the list from when it was opened, so
+            // closing it has to move that entry rather than add a second one.
+            host.cached_recent_repos = vec![older.clone(), workdir.clone()];
+            repo_picker::open_row_menu(
+                host,
+                entry.clone(),
+                0,
+                gpui::point(gpui::px(140.0), gpui::px(120.0)),
+                cx,
+            );
+            repo_picker::activate_row_action(
+                host,
+                repo_picker::RepoPickerRowAction::Close,
+                window,
+                cx,
+            );
+
+            assert_eq!(
+                host.cached_recent_repos,
+                vec![workdir.clone(), older.clone()],
+                "the closed repository should lead the list, exactly once"
+            );
+            assert!(host.repo_picker_row_menu.is_none());
+            assert_eq!(host.repo_picker_selected_index, None);
+            assert!(
+                host.is_open(),
+                "closing keeps the picker up for the next one"
+            );
+        });
+    });
+}
+
+/// The row a menu was opened on can leave the store while the menu is up — a
+/// concurrent close from a repo tab, say. The menu is already down by the time
+/// the action runs, so a quiet bail would land the click as nothing at all.
+#[gpui::test]
+fn repo_picker_row_action_says_so_when_the_repository_is_gone(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-row-gone");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    // Stands in for a repository that left the store while its menu was up — a
+    // concurrent close from a repo tab — taking the workdir every path-shaped
+    // action needs with it.
+    let entry = repo_picker::RepoPickerEntry::Open(gitcomet_state::model::RepoId(999));
+
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            assert!(
+                host.workdir_for_repo(gitcomet_state::model::RepoId(999))
+                    .is_none()
+            );
+            repo_picker::open_row_menu(
+                host,
+                entry.clone(),
+                0,
+                gpui::point(gpui::px(140.0), gpui::px(120.0)),
+                cx,
+            );
+        });
+    });
+
+    cx.update(|window, app| {
+        popover_host.update(app, |host, cx| {
+            repo_picker::activate_row_action(
+                host,
+                repo_picker::RepoPickerRowAction::Pin,
+                window,
+                cx,
+            );
+            assert!(
+                host.cached_pinned_repos.is_empty(),
+                "there is no path to pin, so nothing should have been pinned"
+            );
+        });
+    });
+    cx.run_until_parked();
+
+    let toasts = cx.update(|_window, app| {
+        view.read(app)
+            .toast_host
+            .read(app)
+            .toasts_for_tests(app)
+            .into_iter()
+            .map(|(_, message)| message)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        toasts,
+        vec!["That repository is no longer open.".to_string()],
+        "the click has to land as something the user can see"
+    );
+}
+
+/// The row menu is its own floating layer, so it gets none of the max-height
+/// treatment `popover_view` gives the context menus that go through it. Without
+/// a cap of its own it runs off a short window, taking the destructive entries
+/// at the bottom with it and leaving no way to scroll to them.
+#[gpui::test]
+fn repo_picker_row_menu_stays_inside_a_short_window(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-menu-height");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    // Short enough that the menu does not fit on either side of its anchor.
+    cx.simulate_resize(gpui::size(gpui::px(720.0), gpui::px(150.0)));
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    let window_h = cx.update(|window, _app| window.window_bounds().get_bounds().size.height);
+
+    let entry = repo_picker::RepoPickerEntry::Open(gitcomet_state::model::RepoId(1));
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            repo_picker::open_row_menu(
+                host,
+                entry,
+                0,
+                gpui::point(gpui::px(200.0), window_h / 2.0),
+                cx,
+            );
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert!(
+        cx.debug_bounds("repo_picker_row_menu_scroll").is_some(),
+        "the menu needs a scroll container to reach what the cap cuts off"
+    );
+    let menu = cx
+        .debug_bounds("repo_picker_row_menu")
+        .expect("the row menu should be on screen");
+    assert!(
+        menu.bottom() <= window_h,
+        "the menu should be capped to the window, got {menu:?} in a window {window_h:?} tall"
+    );
+    assert!(
+        menu.size.height > gpui::px(0.0),
+        "the cap must not collapse the menu"
+    );
+}
+
+/// Both halves of the row-menu layer occlude, which silences the root view's
+/// mouse tracking. The scrim covers the whole window, so without its own
+/// forwarding a truncated-path tooltip from the picker underneath stays painted
+/// wherever the pointer was when the menu opened.
+#[gpui::test]
+fn repo_picker_row_menu_scrim_feeds_the_tooltip_host(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-menu-tooltip");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let tooltip_host = cx.update(|_window, app| view.read(app).tooltip_host_for_test());
+
+    let row = cx
+        .debug_bounds("picker_prompt_item_0")
+        .expect("expected a repository row");
+    let row_center = row.center();
+    cx.simulate_mouse_move(row_center, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    let entry = repo_picker::RepoPickerEntry::Open(gitcomet_state::model::RepoId(1));
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            repo_picker::open_row_menu(host, entry, 0, row_center, cx);
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    // Over the scrim, clear of the menu itself.
+    let menu = cx
+        .debug_bounds("repo_picker_row_menu")
+        .expect("the row menu should be on screen");
+    let over_scrim = gpui::point(
+        menu.origin.x - gpui::px(40.0),
+        menu.origin.y - gpui::px(40.0),
+    );
+    cx.simulate_mouse_move(over_scrim, None, gpui::Modifiers::default());
+    cx.run_until_parked();
+
+    assert_eq!(
+        cx.update(|_window, app| tooltip_host.read(app).anchor_for_test()),
+        over_scrim,
+        "the scrim has to hand the tooltip host the positions it swallows"
+    );
+}
+
+/// Pins are uncapped, so this list is the one that can grow without bound. Past
+/// a couple of viewports it renders only what is on screen — otherwise every
+/// frame, including the ones a hover between rows causes, builds an element per
+/// repository.
+#[gpui::test]
+fn a_long_repo_list_renders_only_the_rows_in_view(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-windowed");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            host.cached_pinned_repos = (0..200)
+                .map(|ix| std::path::PathBuf::from(format!("/tmp/pinned-{ix:03}")))
+                .collect();
+            cx.notify();
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let matched = cx.update(|_window, app| {
+        repo_picker::cached(popover_host.read(app), "")
+            .layout
+            .item_indices
+            .len()
+    });
+    assert!(matched > 200, "expected a long list, matched {matched}");
+
+    assert!(
+        cx.debug_bounds("picker_prompt_item_0").is_some(),
+        "the first row is in view"
+    );
+    assert!(
+        cx.debug_bounds("picker_prompt_item_150").is_none(),
+        "a row 150 places down must not be built until it is scrolled to"
+    );
+}
+
+/// The windowed list stands spacers in for the rows it does not render, sized
+/// from the geometry alone — and this list has section headers in among those
+/// rows. If the arithmetic drifted from what rows really paint at, scrolling
+/// would drift with it.
+#[gpui::test]
+fn repo_row_geometry_matches_the_height_rows_paint_at(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-geometry");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+
+    // Two pinned rows above the open one, so a section boundary falls between
+    // the rows this compares.
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            host.cached_pinned_repos = vec![
+                std::path::PathBuf::from("/tmp/pinned-one"),
+                std::path::PathBuf::from("/tmp/pinned-two"),
+            ];
+            cx.notify();
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    let geometry = cx.update(|_window, app| {
+        let rows = repo_picker::cached(popover_host.read(app), "");
+        components::PickerPromptGeometry::new(&rows.items, &rows.layout, 100u32)
+    });
+
+    let first = cx
+        .debug_bounds("picker_prompt_item_0")
+        .expect("expected the first row to render");
+    let second = cx
+        .debug_bounds("picker_prompt_item_1")
+        .expect("expected the second row to render");
+    let third = cx
+        .debug_bounds("picker_prompt_item_2")
+        .expect("expected the row below the section boundary to render");
+
+    assert_eq!(
+        first.size.height,
+        geometry.row_height(0),
+        "a painted row must be exactly as tall as the geometry says"
+    );
+    assert_eq!(
+        second.origin.y - first.origin.y,
+        geometry.row_top(1) - geometry.row_top(0),
+        "the stride between rows must match the geometry"
+    );
+    assert_eq!(
+        third.origin.y - second.origin.y,
+        geometry.row_top(2) - geometry.row_top(1),
+        "and the stride across a section header must include the header"
+    );
+}
+
+/// Arrowing up from nothing selects the *last* row, which in a long list is far
+/// outside the window. Scrolling to it has to go through the row geometry: the
+/// window has not built an element for it, so there is nothing for
+/// `ScrollHandle::scroll_to_item` to find and scroll to.
+#[gpui::test]
+fn arrowing_to_the_last_row_scrolls_it_into_a_windowed_repo_list(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-window-nav");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            host.cached_pinned_repos = (0..200)
+                .map(|ix| std::path::PathBuf::from(format!("/tmp/pinned-{ix:03}")))
+                .collect();
+            cx.notify();
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    // 200 pins plus the one open repository, so the last row is 200 —
+    // `debug_bounds` takes a `&'static str`, so it is named by literal.
+    const LAST_ROW: &str = "picker_prompt_item_200";
+    let last = cx.update(|_window, app| {
+        repo_picker::cached(popover_host.read(app), "")
+            .layout
+            .item_indices
+            .len()
+            - 1
+    });
+    assert_eq!(last, 200, "the seeded list should end at row 200");
+    assert!(
+        cx.debug_bounds(LAST_ROW).is_none(),
+        "the row this arrows to must start outside the window"
+    );
+
+    cx.simulate_keystrokes("up");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    assert_eq!(
+        cx.update(|_window, app| popover_host.read(app).repo_picker_selected_index),
+        Some(last),
+        "arrowing up from nothing selects the last row"
+    );
+    assert!(
+        cx.debug_bounds(LAST_ROW).is_some(),
+        "the selected row has to be scrolled into the window, not left unbuilt"
+    );
+}
+
+/// A named change to one of the inputs the picker's rows are built from, and the
+/// label the assertion reports it under.
+type RowsInputBump = (
+    &'static str,
+    fn(&mut PopoverHost, &mut gpui::Context<PopoverHost>),
+);
+
+/// `PopoverHost` is an uncached overlay view, so a hover moving between rows
+/// re-renders the whole picker. The rows only change when the data behind them
+/// does, so those frames have to reuse them.
+#[gpui::test]
+fn repo_picker_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-rows-cache");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            host.cached_pinned_repos = vec![std::path::PathBuf::from("/tmp/pinned-one")];
+            host.cached_recent_repos = vec![std::path::PathBuf::from("/tmp/closed-one")];
+            cx.notify();
+        });
+    });
+
+    let rows = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| repo_picker::cached(popover_host.read(app), ""))
+    };
+
+    let first = rows(cx);
+    assert!(
+        std::rc::Rc::ptr_eq(&first, &rows(cx)),
+        "an unchanged picker must hand back the very same rows"
+    );
+
+    // Every input the rows are built from has to be in the key. A missing one
+    // shows a stale list with nothing on screen to say it is stale, so each is
+    // bumped in turn and has to force a rebuild.
+    let bumps: [RowsInputBump; 6] = [
+        ("sort", |host, cx| {
+            repo_picker::apply_sort(host, repo_picker::RepoPickerSort::Oldest, cx);
+        }),
+        ("a pin", |host, _cx| {
+            host.cached_pinned_repos
+                .push(std::path::PathBuf::from("/tmp/pinned-two"));
+        }),
+        ("a recent", |host, _cx| {
+            host.cached_recent_repos
+                .push(std::path::PathBuf::from("/tmp/closed-two"));
+        }),
+        ("a collapsed section", |host, cx| {
+            repo_picker::toggle_section(host, &"Open Repositories".into(), cx);
+        }),
+        ("the active repository", |host, _cx| {
+            let mut state = (*host.state).clone();
+            state.active_repo = None;
+            host.state = std::sync::Arc::new(state);
+        }),
+        ("a repository's last activation", |host, _cx| {
+            let mut state = (*host.state).clone();
+            for repo in &mut state.repos {
+                repo.last_active_at = Some(std::time::SystemTime::UNIX_EPOCH);
+            }
+            host.state = std::sync::Arc::new(state);
+        }),
+    ];
+
+    let mut previous = rows(cx);
+    for (label, bump) in bumps {
+        cx.update(|_window, app| {
+            popover_host.update(app, bump);
+        });
+        let rebuilt = rows(cx);
+        assert!(
+            !std::rc::Rc::ptr_eq(&previous, &rebuilt),
+            "changing {label} must rebuild the rows"
+        );
+        previous = rebuilt;
+    }
+
+    // The query is part of the key too, and it arrives separately from the host.
+    let filtered = cx.update(|_window, app| repo_picker::cached(popover_host.read(app), "pinned"));
+    assert!(
+        !std::rc::Rc::ptr_eq(&previous, &filtered),
+        "a different query must rebuild the rows"
+    );
+}
+
 fn open_repo_picker(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
     cx.update(|window, app| {
         let _ = window.draw(app);

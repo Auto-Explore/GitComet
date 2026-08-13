@@ -162,6 +162,24 @@ pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
     }
 }
 
+/// Everything [`rows`] reads, digested for the cache. Mirrors the
+/// `RepoPopoverKind::Worktree` arm of [`super::fingerprint`], which tracks HEAD
+/// as well because the create row names the ref it would branch from. No
+/// relative dates on these rows, so the clock stays out of it: they say what is
+/// checked out and where, not when.
+pub(super) fn rows_signature(repo: &RepoState) -> u64 {
+    use std::hash::Hash;
+
+    super::rows_cache::signature(|hasher| {
+        repo.id.hash(hasher);
+        repo.head_branch_rev.hash(hasher);
+        repo.worktrees_rev.hash(hasher);
+        super::rows_cache::loadable_kind(&repo.open).hash(hasher);
+        // The picker marks the row whose path is the active workdir.
+        repo.spec.workdir.hash(hasher);
+    })
+}
+
 /// The cached rows for `query`: the items, the filtered layout, and the payload
 /// behind each row. Every caller goes through this, so a frame that only
 /// repaints reuses the rows instead of rebuilding them.
@@ -173,7 +191,11 @@ pub(super) fn cached(
     let Some(repo) = this.state.repos.iter().find(|r| r.id == repo_id) else {
         return super::rows_cache::CachedRows::empty();
     };
-    let key = super::rows_cache::RowsCacheKey::for_workspace(repo, query);
+    let key = super::rows_cache::RowsCacheKey::new(
+        super::rows_cache::RowsCacheOwner::Workspace,
+        rows_signature(repo),
+        query,
+    );
     super::rows_cache::get_or_build(&this.workspace_picker_rows_cache, key, |_now| {
         let built = rows(repo, query);
         (built.items, built.rows, built.marked_index)
@@ -268,8 +290,6 @@ pub(super) fn panel(
             .prebuilt_items(Rc::clone(&built.items), Rc::clone(&built.layout))
             // Long ref lists render only what is on screen; keyboard
             // navigation scrolls by the row geometry to match
-            // (`scroll_picker_prompt_to_row`).
-            .windowed_rows()
             .tooltip_host(this.tooltip_host.clone())
             // Only reachable when the repo is gone: the create row always
             // matches, so a present repo never yields an empty list.

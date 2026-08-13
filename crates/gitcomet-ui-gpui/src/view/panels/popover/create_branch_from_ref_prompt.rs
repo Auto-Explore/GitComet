@@ -79,7 +79,13 @@ pub(super) fn panel(
         });
 
         if is_focused {
-            let refs = this.active_branch_ref_picker_items(true, true);
+            let query = search.read(cx).text().trim().to_string();
+            let built = branch_picker::ref_rows_cached(
+                this,
+                branch_picker::RefRowsSpec::source_ref(),
+                &query,
+            );
+            let names = std::rc::Rc::clone(&built.payloads);
 
             div()
                 .flex()
@@ -94,21 +100,25 @@ pub(super) fn panel(
                 )
                 .child(
                     div().px_2().pb_1().w_full().min_w(px(0.0)).child(
-                        components::BranchRefPicker::new(
+                        branch_picker::ref_picker_prompt(
                             search,
                             this.picker_prompt_scroll.clone(),
-                            refs,
+                            &built,
+                            cx,
                         )
                         .tooltip_host(this.tooltip_host.clone())
                         .empty_text("No matches")
-                        .max_height(scaled_px(240.0))
+                        .max_height(scaled_px(branch_picker::REF_PICKER_LIST_MAX_HEIGHT_PX))
                         .selected_index(this.branch_picker_selected_index)
                         .select_on_mouse_down()
                         .render(
                             theme,
                             ui_scale_percent,
                             cx,
-                            move |this, name, _e, window, cx| {
+                            move |this, ix, _e, window, cx| {
+                                let Some(name) = names.get(ix).cloned() else {
+                                    return;
+                                };
                                 let repo_id = this.active_repo_id().unwrap_or(RepoId(0));
                                 this.handle_inline_branch_picker_select(name, repo_id, window, cx);
                             },
