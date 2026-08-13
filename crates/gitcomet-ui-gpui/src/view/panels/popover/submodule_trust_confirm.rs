@@ -71,7 +71,7 @@ pub(super) fn panel(
                 .pt_1()
                 .max_w(scaled_px(460.0))
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Git blocks local file transport for submodules by default. Trusting these sources will allow GitComet to enable file transport only for this repo/source pair."),
         )
         .section(
@@ -82,7 +82,7 @@ pub(super) fn panel(
                     .no_hover_border()
                     .end_slot(svg_icon(
                         "icons/open_external.svg",
-                        theme.colors.accent,
+                        theme.colors.accent.foreground,
                         px(14.0),
                     ))
                     .on_click(theme, cx, |_this, _e, _window, cx| {
@@ -102,7 +102,7 @@ pub(super) fn panel(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(format!("Submodule: {}", source.submodule_path.display())),
                 )
                 .child(
@@ -115,7 +115,7 @@ pub(super) fn panel(
                     div()
                         .text_xs()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(format!(
                             "Local path: {}",
                             source.local_source_path.display()
@@ -137,7 +137,7 @@ pub(super) fn panel(
                         div()
                             .text_xs()
                             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(format!("Branch: {branch}")),
                     )
                 })
@@ -146,7 +146,7 @@ pub(super) fn panel(
                         div()
                             .text_xs()
                             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(format!("Logical name: {name}")),
                     )
                 })
@@ -154,7 +154,7 @@ pub(super) fn panel(
                     details.child(
                         div()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child("Force: enabled"),
                     )
                 }),
@@ -242,7 +242,7 @@ fn checking_panel(theme: AppTheme, cx: &mut gpui::Context<PopoverHost>) -> gpui:
         .flex_col()
         .min_w(scaled_px(460.0))
         .child(popover_title("Checking submodule trust…"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()
@@ -252,13 +252,13 @@ fn checking_panel(theme: AppTheme, cx: &mut gpui::Context<PopoverHost>) -> gpui:
                 .gap_2()
                 .child(crate::view::icons::svg_spinner(
                     "submodule_trust_checking_spinner",
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     scaled_px(16.0),
                 ))
                 .child(
                     div()
                         .text_sm()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("Checking local submodule sources…"),
                 ),
         )

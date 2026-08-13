@@ -120,24 +120,24 @@ pub(super) fn panel(
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child("Mainline parent"),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child("Choose the parent Git should treat as the merge's mainline."),
             )
             .children(mainline_choices.into_iter().map(|choice| {
                 let number = choice.number;
                 let is_selected = selected_mainline == Some(number);
                 let outlined_border = crate::theme::with_alpha(
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     if theme.is_dark { 0.38 } else { 0.28 },
                 );
                 let hover_overlay = crate::theme::with_alpha(
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     if theme.is_dark { 0.07 } else { 0.05 },
                 );
                 let top_line = div()
@@ -167,16 +167,16 @@ pub(super) fn panel(
                     .px_2()
                     .py_1()
                     .rounded_md()
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .border_1()
                     .border_color(if is_selected {
-                        theme.colors.accent
+                        theme.colors.accent.foreground
                     } else {
                         outlined_border
                     })
                     .when(is_selected, |row| {
                         row.bg(crate::theme::with_alpha(
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             if theme.is_dark { 0.12 } else { 0.08 },
                         ))
                     })

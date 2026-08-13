@@ -662,8 +662,8 @@ fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
 
 fn settings_row_separator_color(theme: AppTheme) -> gpui::Rgba {
     mix_color(
-        theme.colors.window_bg,
-        theme.colors.border_variant,
+        theme.colors.surface.canvas,
+        theme.colors.stroke.subtle,
         if theme.is_dark { 0.14 } else { 0.10 },
     )
 }
@@ -671,20 +671,24 @@ fn settings_row_separator_color(theme: AppTheme) -> gpui::Rgba {
 fn settings_dropdown_background(theme: AppTheme) -> gpui::Rgba {
     if theme.is_dark {
         mix_color(
-            theme.colors.surface_bg_elevated,
-            theme.colors.window_bg,
+            theme.colors.surface.raised,
+            theme.colors.surface.canvas,
             0.58,
         )
     } else {
-        mix_color(theme.colors.surface_bg_elevated, theme.colors.border, 0.55)
+        mix_color(
+            theme.colors.surface.raised,
+            theme.colors.stroke.default,
+            0.55,
+        )
     }
 }
 
 fn settings_dropdown_border_color(theme: AppTheme) -> gpui::Rgba {
     if theme.is_dark {
-        with_alpha(theme.colors.border, 0.98)
+        with_alpha(theme.colors.stroke.default, 0.98)
     } else {
-        theme.colors.border
+        theme.colors.stroke.default
     }
 }
 
@@ -1997,11 +2001,14 @@ impl SettingsWindowView {
         let id: SharedString = id.into();
         let debug_id = id.clone();
         let text_color = if selected {
-            theme.colors.text
+            theme.colors.foreground.primary
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
-        let selected_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 });
+        let selected_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.16 } else { 0.10 },
+        );
         let hover_bg = theme.hover_overlay();
         let active_bg = theme.active_overlay();
 
@@ -2046,7 +2053,11 @@ impl SettingsWindowView {
                     .items_center()
                     .justify_center()
                     .when(selected, |d| {
-                        d.child(svg_icon("icons/check.svg", theme.colors.accent, px(12.0)))
+                        d.child(svg_icon(
+                            "icons/check.svg",
+                            theme.colors.accent.foreground,
+                            px(12.0),
+                        ))
                     }),
             )
             .child(
@@ -2067,7 +2078,7 @@ impl SettingsWindowView {
                         this.child(
                             div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .overflow_hidden()
@@ -2103,11 +2114,14 @@ impl SettingsWindowView {
         let id: SharedString = id.into();
         let debug_id = id.clone();
         let text_color = if selected {
-            theme.colors.text
+            theme.colors.foreground.primary
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
-        let selected_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 });
+        let selected_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.16 } else { 0.10 },
+        );
         let hover_bg = theme.hover_overlay();
         let active_bg = theme.active_overlay();
 
@@ -2149,7 +2163,11 @@ impl SettingsWindowView {
                     .items_center()
                     .justify_center()
                     .when(selected, |d| {
-                        d.child(svg_icon("icons/check.svg", theme.colors.accent, px(12.0)))
+                        d.child(svg_icon(
+                            "icons/check.svg",
+                            theme.colors.accent.foreground,
+                            px(12.0),
+                        ))
                     }),
             )
             .child(
@@ -2173,7 +2191,7 @@ impl SettingsWindowView {
                             .flex_1()
                             .min_w(px(0.0))
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -2191,7 +2209,7 @@ impl SettingsWindowView {
             .px_2()
             .py_1()
             .text_sm()
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(message)
             .into_any_element()
     }
@@ -2289,8 +2307,8 @@ impl SettingsWindowView {
             .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
-            .hover(move |s| s.bg(theme.colors.hover))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
             .child(
                 div()
                     .debug_selector(move || label_debug_id.clone())
@@ -2315,7 +2333,7 @@ impl SettingsWindowView {
                     .justify_end()
                     .gap_2()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .overflow_hidden()
                     .child(
                         div()
@@ -2331,7 +2349,7 @@ impl SettingsWindowView {
                         } else {
                             "icons/arrow_right.svg"
                         },
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))),
             )
@@ -2361,8 +2379,8 @@ impl SettingsWindowView {
             .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
-            .hover(move |s| s.bg(theme.colors.hover))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
             .child(
                 div()
                     .debug_selector(move || label_debug_id.clone())
@@ -2394,10 +2412,12 @@ impl SettingsWindowView {
                             .flex()
                             .items_center()
                             .p(px(2.0))
-                            .when(enabled, |track| track.justify_end().bg(theme.colors.accent))
+                            .when(enabled, |track| {
+                                track.justify_end().bg(theme.colors.accent.foreground)
+                            })
                             .when(!enabled, |track| {
                                 track.justify_start().bg(with_alpha(
-                                    theme.colors.text_muted,
+                                    theme.colors.foreground.secondary,
                                     if theme.is_dark { 0.35 } else { 0.30 },
                                 ))
                             })
@@ -2461,7 +2481,7 @@ impl SettingsWindowView {
                             .min_w(px(0.0))
                             .text_sm()
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -2494,8 +2514,8 @@ impl SettingsWindowView {
             .border_b_1()
             .border_color(settings_row_separator_color(theme))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.colors.hover))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
             .child(
                 div()
                     .debug_selector(move || label_debug_id.clone())
@@ -2512,11 +2532,11 @@ impl SettingsWindowView {
                     .items_start()
                     .gap_2()
                     .text_sm()
-                    .text_color(theme.colors.accent)
+                    .text_color(theme.colors.accent.foreground)
                     .child(div().flex_1().min_w(px(0.0)).child(value))
                     .child(div().flex_shrink_0().child(svg_icon(
                         "icons/open_external.svg",
-                        theme.colors.accent,
+                        theme.colors.accent.foreground,
                         px(13.0),
                     ))),
             )
@@ -2531,22 +2551,22 @@ impl SettingsWindowView {
         ) = match self.runtime_info.git.compatibility {
             GitCompatibility::Supported => (
                 "icons/check.svg",
-                theme.colors.success,
+                theme.colors.status.success.foreground,
                 format!("Git >= {min_git_version}").into(),
             ),
             GitCompatibility::TooOld => (
                 "icons/warning.svg",
-                theme.colors.warning,
+                theme.colors.status.warning.foreground,
                 format!("Git < {min_git_version}").into(),
             ),
             GitCompatibility::Unknown => (
                 "icons/warning.svg",
-                theme.colors.warning,
+                theme.colors.status.warning.foreground,
                 "Git version unknown".into(),
             ),
             GitCompatibility::Unavailable => (
                 "icons/warning.svg",
-                theme.colors.danger,
+                theme.colors.status.danger.foreground,
                 "Unavailable".into(),
             ),
         };
@@ -2592,7 +2612,7 @@ impl SettingsWindowView {
                             .min_w(px(0.0))
                             .text_sm()
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -2671,7 +2691,7 @@ impl SettingsWindowView {
             .flex()
             .items_center()
             .rounded(px(theme.radii.row))
-            .hover(move |s| s.bg(theme.colors.hover))
+            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
             .child(
                 div()
                     .flex()
@@ -2691,7 +2711,7 @@ impl SettingsWindowView {
                             .w(px(90.0))
                             .text_xs()
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .whitespace_nowrap()
                             .child(row.version),
                     )
@@ -2701,7 +2721,7 @@ impl SettingsWindowView {
                             .min_w(px(0.0))
                             .text_xs()
                             .font_family(UI_MONOSPACE_FONT_FAMILY)
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .whitespace_nowrap()
                             .overflow_hidden()
@@ -3043,7 +3063,7 @@ impl SettingsWindowView {
                     .pb_2()
                     .text_lg()
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .child(title),
             )
     }
@@ -3063,7 +3083,7 @@ impl SettingsWindowView {
             .pb_2()
             .text_sm()
             .font_weight(FontWeight::BOLD)
-            .text_color(theme.colors.text)
+            .text_color(theme.colors.foreground.primary)
             .child(title)
     }
 
@@ -3075,9 +3095,9 @@ impl SettingsWindowView {
         cx: &mut gpui::Context<Self>,
     ) -> Stateful<gpui::Div> {
         let icon_color = if selected {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         div()
             .id(category.nav_id())
@@ -3091,8 +3111,12 @@ impl SettingsWindowView {
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
             .overflow_hidden()
-            .when(selected, |d| d.bg(theme.colors.active))
-            .when(!selected, |d| d.hover(move |s| s.bg(theme.colors.hover)))
+            .when(selected, |d| {
+                d.bg(theme.colors.interaction.pressed_background)
+            })
+            .when(!selected, |d| {
+                d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            })
             .child(
                 div()
                     .flex_shrink_0()
@@ -3104,7 +3128,7 @@ impl SettingsWindowView {
                     .min_w(px(0.0))
                     .text_sm()
                     .when(selected, |d| d.font_weight(FontWeight::MEDIUM))
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .line_clamp(1)
                     .whitespace_nowrap()
                     .overflow_hidden()
@@ -3150,7 +3174,7 @@ impl SettingsWindowView {
                     .px_2()
                     .py_1()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child("No matching settings"),
             );
         }
@@ -3166,7 +3190,7 @@ impl SettingsWindowView {
             .flex_col()
             .gap_2()
             .p_2()
-            .bg(theme.colors.sidebar_bg)
+            .bg(theme.colors.surface.chrome)
             .child(
                 div()
                     .id("settings_window_nav_search")
@@ -3206,16 +3230,16 @@ impl Render for SettingsWindowView {
         let is_macos = cfg!(target_os = "macos");
         let header_bg = if window.is_window_active() {
             with_alpha(
-                theme.colors.surface_bg,
+                theme.colors.surface.panel,
                 if theme.is_dark { 0.98 } else { 0.94 },
             )
         } else {
-            theme.colors.surface_bg
+            theme.colors.surface.panel
         };
         let header_border = if window.is_window_active() {
-            theme.colors.border
+            theme.colors.stroke.default
         } else {
-            with_alpha(theme.colors.border, 0.7)
+            with_alpha(theme.colors.stroke.default, 0.7)
         };
 
         let drag_region = div()
@@ -3290,8 +3314,8 @@ impl Render for SettingsWindowView {
             self.ui_scale_percent,
             "settings_window_min_btn",
             "icons/generic_minimize.svg",
-            theme.colors.text_muted,
-            theme.colors.text,
+            theme.colors.foreground.secondary,
+            theme.colors.foreground.primary,
         )
         .id("settings_window_min")
         .debug_selector(|| "settings_window_min".to_string())
@@ -3310,8 +3334,8 @@ impl Render for SettingsWindowView {
             self.ui_scale_percent,
             "settings_window_max_btn",
             max_icon,
-            theme.colors.text_muted,
-            theme.colors.text,
+            theme.colors.foreground.secondary,
+            theme.colors.foreground.primary,
         )
         .id("settings_window_max")
         .debug_selector(|| "settings_window_max".to_string())
@@ -3326,8 +3350,8 @@ impl Render for SettingsWindowView {
             self.ui_scale_percent,
             "settings_window_close_btn",
             "icons/generic_close.svg",
-            theme.colors.text_muted,
-            theme.colors.danger,
+            theme.colors.foreground.secondary,
+            theme.colors.status.danger.foreground,
         )
         .id("settings_window_close_btn")
         .debug_selector(|| "settings_window_close".to_string())
@@ -3793,7 +3817,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pb_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Shortcut: Ctrl/Cmd +, -, and 0."),
                             ),
                         );
@@ -3833,7 +3857,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pb_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(self.font_options_hint(self.ui_font_family.as_str())),
                             )
                             .child(self.dropdown_list_container(
@@ -3882,7 +3906,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pb_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         self.font_options_hint(self.editor_font_family.as_str()),
                                     ),
@@ -3980,7 +4004,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pt_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Custom editor executable"),
                             )
                             .child(
@@ -4005,7 +4029,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pt_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Arguments"),
                             )
                             .child(
@@ -4110,7 +4134,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pb_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "System default is best effort. Use a custom launcher for predictable cross-platform behavior.",
                                     ),
@@ -4168,7 +4192,7 @@ impl Render for SettingsWindowView {
                                         .px_2()
                                         .pt_1()
                                         .text_xs()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child("Program"),
                                 )
                                 .child(
@@ -4205,7 +4229,7 @@ impl Render for SettingsWindowView {
                                         .px_2()
                                         .pt_1()
                                         .text_xs()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child("Arguments"),
                                 )
                                 .child(
@@ -4221,7 +4245,7 @@ impl Render for SettingsWindowView {
                                         .px_2()
                                         .pb_1()
                                         .text_xs()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child("One argument per line. Use {cwd} and {repo_name} placeholders."),
                                 )
                                 .child(
@@ -4273,7 +4297,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pb_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "Choose what the action bar terminal button opens. Global shortcuts for each can be configured separately.",
                                     ),
@@ -4330,9 +4354,9 @@ impl Render for SettingsWindowView {
                                 .pt_1()
                                 .text_xs()
                                 .text_color(if status.is_error {
-                                    theme.colors.danger
+                                    theme.colors.status.danger.foreground
                                 } else {
-                                    theme.colors.success
+                                    theme.colors.status.success.foreground
                                 })
                                 .child(status.text),
                         );
@@ -4560,7 +4584,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pb_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "Applies when opening repositories that do not already have a saved history mode.",
                                     ),
@@ -4657,7 +4681,7 @@ impl Render for SettingsWindowView {
                                     .px_2()
                                     .pb_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Columns may auto-hide in narrow windows."),
                             )
                             .child(
@@ -4808,7 +4832,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .pb_1()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(git_executable_scope_note()),
                         )
                         .child(system_git_row)
@@ -4870,7 +4894,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .pt_1()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("Custom Git executable"),
                         )
                         .child(
@@ -4896,7 +4920,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .pb_1()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(
                                     "Press Enter after editing the path to apply it immediately.",
                                 ),
@@ -4913,7 +4937,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .pb_1()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(detail),
                         );
                     }
@@ -5041,7 +5065,7 @@ impl Render for SettingsWindowView {
                         .h_full()
                         .min_w(px(0.0))
                         .min_h(px(0.0))
-                        .bg(theme.colors.window_bg)
+                        .bg(theme.colors.surface.canvas)
                         .child(
                             div()
                                 .w_full()
@@ -5102,10 +5126,10 @@ impl Render for SettingsWindowView {
                                 .py_1()
                                 .rounded(px(theme.radii.row))
                                 .cursor(CursorStyle::PointingHand)
-                                .hover(move |s| s.bg(theme.colors.hover))
-                                .active(move |s| s.bg(theme.colors.active))
+                                .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+                                .active(move |s| s.bg(theme.colors.interaction.pressed_background))
                                 .text_sm()
-                                .text_color(theme.colors.accent)
+                                .text_color(theme.colors.accent.foreground)
                                 .child("< Settings")
                                 .on_click(cx.listener(|this, _e: &ClickEvent, _window, cx| {
                                     this.show_root(cx);
@@ -5114,7 +5138,7 @@ impl Render for SettingsWindowView {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("/"),
                         )
                         .child(
@@ -5129,7 +5153,7 @@ impl Render for SettingsWindowView {
                             .px_2()
                             .py_1()
                             .text_sm()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child("No dependency licenses found.")
                             .into_any_element()
                     } else {
@@ -5195,7 +5219,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .pb_1()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(format!("{} third-party crates listed", rows.len())),
                         )
                         .child(
@@ -5207,7 +5231,7 @@ impl Render for SettingsWindowView {
                                 .px_2()
                                 .py_1()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .flex()
                                 .items_center()
                                 .gap_2()
@@ -5239,7 +5263,7 @@ impl Render for SettingsWindowView {
             .size_full()
             .flex()
             .flex_col()
-            .bg(theme.colors.window_bg)
+            .bg(theme.colors.surface.canvas)
             .when_some(frame_rounding, |d, rounding| {
                 d.when(rounding.bottom_left, |d| d.rounded_bl(rounding.radius))
                     .when(rounding.bottom_right, |d| d.rounded_br(rounding.radius))
@@ -5252,7 +5276,7 @@ impl Render for SettingsWindowView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text);
+            .text_color(theme.colors.foreground.primary);
 
         let body = if show_custom_window_chrome {
             body.child(header).child(content)
@@ -5263,7 +5287,7 @@ impl Render for SettingsWindowView {
         let mut root = div()
             .size_full()
             .cursor(cursor)
-            .text_color(theme.colors.text)
+            .text_color(theme.colors.foreground.primary)
             .relative()
             // Any click anywhere hides visible tooltips.
             .capture_any_mouse_down(cx.listener(|_this, _e: &MouseDownEvent, _window, cx| {
@@ -5727,15 +5751,14 @@ mod tests {
 
         let dark = AppTheme::gitcomet_dark();
         assert!(
-            brightness(settings_dropdown_background(dark))
-                < brightness(dark.colors.surface_bg_elevated),
+            brightness(settings_dropdown_background(dark)) < brightness(dark.colors.surface.raised),
             "dark dropdown surface should be darker than the card surface"
         );
 
         let light = AppTheme::gitcomet_light();
         assert!(
             brightness(settings_dropdown_background(light))
-                < brightness(light.colors.surface_bg_elevated),
+                < brightness(light.colors.surface.raised),
             "light dropdown surface should still read darker than the card surface"
         );
     }

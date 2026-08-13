@@ -97,11 +97,11 @@ impl Render for TooltipBubbleView {
             div()
                 .px_2()
                 .py_1()
-                .bg(self.theme.colors.tooltip_bg)
+                .bg(self.theme.colors.tooltip.background)
                 .rounded(px(self.theme.radii.row))
                 .shadow(crate::theme::shadow_popover(self.theme))
                 .text_xs()
-                .text_color(self.theme.colors.tooltip_text)
+                .text_color(self.theme.colors.tooltip.foreground)
                 .child(self.text.clone()),
         )
     }

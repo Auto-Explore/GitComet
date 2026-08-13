@@ -11,7 +11,7 @@ pub fn author_color(theme: AppTheme, name: &str) -> Rgba {
     let mut hasher = rustc_hash::FxHasher::default();
     name.hash(&mut hasher);
     let hue = (hasher.finish() % 360) as f32 / 360.0;
-    let light = if theme.is_dark { 0.62 } else { 0.45 };
+    let light = if theme.is_dark { 0.62 } else { 0.34 };
     gpui::hsla(hue, 0.60, light, 1.0).into()
 }
 

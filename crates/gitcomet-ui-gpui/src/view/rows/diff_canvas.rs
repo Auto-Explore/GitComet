@@ -329,7 +329,7 @@ fn paint_blame_annotation(
     );
     window.paint_layer(layout.message, |window| {
         let message_color = if hovered == Some(AnnotArea::Message) {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
             text_color
         };
@@ -350,7 +350,7 @@ fn paint_blame_annotation(
                     point(layout.message.left(), underline_y),
                     size(layout.message.size.width, px(1.0)),
                 ),
-                theme.colors.accent,
+                theme.colors.accent.foreground,
             ));
         }
     });
@@ -360,7 +360,7 @@ fn paint_blame_annotation(
     // revision (the committed state before the local change).
     if prior_enabled {
         let icon_color = if hovered == Some(AnnotArea::PriorIcon) {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
             crate::theme::with_alpha(text_color, 0.6)
         };
@@ -379,13 +379,13 @@ fn paint_blame_annotation(
         // the "view file at this commit" icon, which would be a no-op here.
         paint_blame_dot(
             layout.browse_icon,
-            crate::theme::with_alpha(theme.colors.accent, 0.7),
+            crate::theme::with_alpha(theme.colors.accent.foreground, 0.7),
             ui_scale_percent,
             window,
         );
     } else if browse_enabled {
         let icon_color = if hovered == Some(AnnotArea::BrowseIcon) {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
             crate::theme::with_alpha(text_color, 0.6)
         };
@@ -518,8 +518,8 @@ impl StageGutterSpec {
 
     fn color(self, theme: AppTheme) -> gpui::Rgba {
         match self.area {
-            DiffArea::Unstaged => theme.colors.diff_add_text,
-            DiffArea::Staged => theme.colors.diff_remove_text,
+            DiffArea::Unstaged => theme.colors.diff.added.foreground,
+            DiffArea::Staged => theme.colors.diff.removed.foreground,
         }
     }
 
@@ -861,7 +861,7 @@ fn render_blame_column(
         blame,
         &layout,
         y,
-        theme.colors.text_muted,
+        theme.colors.foreground.secondary,
         theme,
         metrics,
         when_metrics,
@@ -1166,7 +1166,7 @@ fn patch_split_row_canvas_revision_key(
 }
 
 fn semantic_diff_row_bg(theme: AppTheme, bg: gpui::Rgba) -> Option<gpui::Rgba> {
-    (bg != theme.colors.window_bg).then_some(bg)
+    (bg != theme.colors.surface.canvas).then_some(bg)
 }
 
 fn focused_row_outline_color(theme: AppTheme, bg: gpui::Rgba) -> gpui::Rgba {
@@ -2054,7 +2054,7 @@ pub(super) fn inline_diff_line_row_canvas(
                 prepaint.bounds,
                 prepaint.annot_w,
                 bg,
-                theme.colors.surface_bg,
+                theme.colors.surface.panel,
             );
 
             if let Some(blame) = &blame {
@@ -2327,13 +2327,13 @@ pub(super) fn split_diff_line_row_canvas(
                     window,
                     prepaint.bounds,
                     prepaint.annot_w,
-                    theme.colors.surface_bg,
+                    theme.colors.surface.panel,
                 );
             }
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.left_col), left_bg));
             window.paint_quad(fill(
                 row_bg_fill_bounds(prepaint.sep_bounds),
-                theme.colors.border,
+                theme.colors.stroke.default,
             ));
             window.paint_quad(fill(row_bg_fill_bounds(prepaint.right_col), right_bg));
 
@@ -2605,7 +2605,7 @@ pub(super) fn patch_split_column_row_canvas(
                 prepaint.bounds,
                 prepaint.annot_w,
                 bg,
-                theme.colors.surface_bg,
+                theme.colors.surface.panel,
             );
 
             if let Some(blame) = &blame {
@@ -2755,8 +2755,8 @@ pub(in crate::view) fn blame_gutter_row_canvas(
 
             // The whole canvas *is* the annotation column, so it takes the
             // sidebar colour the diff and preview rows give theirs — not the
-            // editor's own `window_bg`, which left the strip with no edge at all.
-            window.paint_quad(fill(bounds, theme.colors.surface_bg));
+            // editor canvas, which left the strip with no edge at all.
+            window.paint_quad(fill(bounds, theme.colors.surface.panel));
 
             if let Some(blame) = &blame {
                 let when_metrics = line_metrics_annot_when(window);
@@ -2859,8 +2859,8 @@ pub(super) fn worktree_preview_row_canvas(
                 window,
                 bounds,
                 prepaint.annot_w,
-                theme.colors.window_bg,
-                theme.colors.surface_bg,
+                theme.colors.surface.canvas,
+                theme.colors.surface.panel,
             );
             if let Some(color) = bar_color
                 && prepaint.bar_w > px(0.0)
@@ -2900,7 +2900,7 @@ pub(super) fn worktree_preview_row_canvas(
                 prepaint.inner.left() + gutter_cell_total_width(prepaint.pad, ui_scale_percent)
                     - prepaint.pad,
                 y,
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 line_metrics,
                 window,
                 cx,
@@ -2921,7 +2921,7 @@ pub(super) fn worktree_preview_row_canvas(
                     offset_map.as_ref(),
                     reveal_whitespace_chars,
                     y,
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     line_metrics,
                     ui_scale_percent,
                     true,

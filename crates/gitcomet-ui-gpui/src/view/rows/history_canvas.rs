@@ -124,17 +124,17 @@ struct HistoryChipVisual {
 fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryChipVisual {
     match kind {
         HistoryChipStyleKind::Tag => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent, 0.35),
-            bg: with_alpha(theme.colors.accent, 0.12),
-            text: theme.colors.accent,
+            border: with_alpha(theme.colors.accent.foreground, 0.35),
+            bg: with_alpha(theme.colors.accent.foreground, 0.12),
+            text: theme.colors.accent.foreground,
         },
         // The HEAD chip carries no selection state: a ring around a pill that is
         // already a solid accent fill reads as a rendering artifact, not as a
         // selection. Selecting the checked-out branch is left unmarked here.
         HistoryChipStyleKind::Head => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent, 0.90),
-            bg: with_alpha(theme.colors.accent, 0.90),
-            text: theme.colors.accent_text,
+            border: with_alpha(theme.colors.accent.foreground, 0.90),
+            bg: with_alpha(theme.colors.accent.foreground, 0.90),
+            text: theme.colors.accent.on_solid,
         },
         // The branch picked in the sidebar is tinted rather than merely
         // re-bordered: on a busy ref column a border alone reads as noise, and
@@ -142,14 +142,14 @@ fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryCh
         // is the tip of. It stays short of the solid HEAD fill so the two
         // remain distinguishable on the same row.
         HistoryChipStyleKind::Branch { selected: true } => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent, 0.85),
-            bg: with_alpha(theme.colors.accent, 0.22),
+            border: with_alpha(theme.colors.accent.foreground, 0.85),
+            bg: with_alpha(theme.colors.accent.foreground, 0.22),
             text: selected_branch_label_color(theme),
         },
         HistoryChipStyleKind::Branch { selected: false } => HistoryChipVisual {
-            border: with_alpha(theme.colors.border, 0.90),
-            bg: theme.colors.surface_bg_elevated,
-            text: theme.colors.text_muted,
+            border: with_alpha(theme.colors.stroke.default, 0.90),
+            bg: theme.colors.surface.raised,
+            text: theme.colors.foreground.secondary,
         },
     }
 }
@@ -201,7 +201,7 @@ fn history_summary_color(theme: AppTheme, is_selected_branch_tip: bool) -> gpui:
     if is_selected_branch_tip {
         selected_branch_label_color(theme)
     } else {
-        theme.colors.text
+        theme.colors.foreground.primary
     }
 }
 
@@ -315,7 +315,7 @@ pub(super) fn history_commit_row_canvas(
                 return;
             };
             if hitbox.is_hovered(window) {
-                window.paint_quad(fill(bounds, theme.colors.hover));
+                window.paint_quad(fill(bounds, theme.colors.interaction.hover_background));
             }
             // Purple highlight on the commit currently being browsed historically.
             if view
@@ -484,7 +484,7 @@ pub(super) fn history_commit_row_canvas(
                                 &probe,
                                 fx_hash_str(probe.as_ref()),
                                 branch_content_bounds.size.width,
-                                theme.colors.text_muted,
+                                theme.colors.foreground.secondary,
                                 None,
                             );
                             shaped.width + chip_pad_x * 2.0 + chip_gap
@@ -620,7 +620,7 @@ pub(super) fn history_commit_row_canvas(
                                 &label,
                                 fx_hash_str(label.as_ref()),
                                 (branch_content_bounds.right() - x - chip_pad_x * 2.0).max(px(0.0)),
-                                theme.colors.text_muted,
+                                theme.colors.foreground.secondary,
                                 None,
                             );
                             let chip_bounds = Bounds::new(
@@ -651,7 +651,7 @@ pub(super) fn history_commit_row_canvas(
                 .lanes_now
                 .get(usize::from(graph_row.node_col))
                 .map(|lane| history_graph::lane_color(theme, lane.color_ix))
-                .unwrap_or(theme.colors.text_muted);
+                .unwrap_or(theme.colors.foreground.secondary);
 
             let mut summary_text_left = summary_bounds.left() + cell_pad_x;
             if show_graph_color_marker {
@@ -781,7 +781,7 @@ pub(super) fn history_commit_row_canvas(
                     author.shared(),
                     author.text_hash(),
                     author_text_bounds.size.width.max(px(0.0)),
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     None,
                 );
                 window.with_content_mask(
@@ -816,7 +816,7 @@ pub(super) fn history_commit_row_canvas(
                     when.shared(),
                     when.text_hash(),
                     date_text_bounds.size.width.max(px(0.0)),
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     Some(UI_MONOSPACE_FONT_FAMILY),
                 );
                 let origin_x =
@@ -853,7 +853,7 @@ pub(super) fn history_commit_row_canvas(
                     short_sha.shared(),
                     short_sha.text_hash(),
                     sha_text_bounds.size.width.max(px(0.0)),
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     Some(UI_MONOSPACE_FONT_FAMILY),
                 );
                 let origin_x = (sha_text_bounds.right() - shaped.width).max(sha_text_bounds.left());
@@ -1145,7 +1145,7 @@ mod tests {
             // way the tip must move away from body text, not sit between it and
             // the muted text used for de-emphasized columns.
             assert_eq!(
-                tip, theme.colors.emphasis_text,
+                tip, theme.colors.foreground.emphasis,
                 "the tip summary should use the theme's emphasis color"
             );
         }

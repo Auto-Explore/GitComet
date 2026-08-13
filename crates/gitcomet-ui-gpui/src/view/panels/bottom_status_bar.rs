@@ -27,8 +27,8 @@ fn status_bar_chip(
         .items_center()
         .justify_center()
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.text_color(theme.colors.accent))
-        .active(move |s| s.text_color(theme.colors.accent))
+        .hover(move |s| s.text_color(theme.colors.accent.foreground))
+        .active(move |s| s.text_color(theme.colors.accent.foreground))
 }
 
 pub(in super::super) struct BottomStatusBarView {
@@ -98,8 +98,10 @@ impl Render for BottomStatusBarView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == zoom_picker_invoker.as_ref());
-        let zoom_button_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+        let zoom_button_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.26 } else { 0.20 },
+        );
         let zoom_label = if ui_scale_percent == crate::ui_scale::DEFAULT_UI_SCALE_PERCENT {
             String::new()
         } else {
@@ -107,9 +109,9 @@ impl Render for BottomStatusBarView {
         };
 
         let zoom_icon_color = if zoom_picker_active {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         let zoom_button = components::Button::new("bottom_status_bar_zoom", zoom_label)
             .start_slot(
@@ -154,7 +156,7 @@ impl Render for BottomStatusBarView {
                 } else {
                     "icons/arrow_left.svg"
                 },
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 scaled_px(12.0),
             ))
             .style(components::ButtonStyle::Transparent)
@@ -179,7 +181,7 @@ impl Render for BottomStatusBarView {
                 } else {
                     "icons/arrow_right.svg"
                 },
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 scaled_px(12.0),
             ))
             .style(components::ButtonStyle::Transparent)
@@ -206,9 +208,9 @@ impl Render for BottomStatusBarView {
                     .w(scaled_px(12.0))
                     .h(scaled_px(12.0))
                     .flex_shrink_0()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .group_hover("bottom_status_bar_discord", move |s| {
-                        s.text_color(theme.colors.accent)
+                        s.text_color(theme.colors.accent.foreground)
                     }),
             )
             .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
@@ -222,7 +224,7 @@ impl Render for BottomStatusBarView {
             .line_height(scaled_px(12.0))
             .font_weight(FontWeight::NORMAL)
             .text_color(with_alpha(
-                theme.colors.text,
+                theme.colors.foreground.primary,
                 if theme.is_dark { 0.72 } else { 0.62 },
             ))
             .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
@@ -248,12 +250,12 @@ impl Render for BottomStatusBarView {
             .items_center()
             .gap(scaled_px(4.0))
             .cursor(CursorStyle::PointingHand)
-            .text_color(theme.colors.text_muted)
-            .hover(move |s| s.text_color(theme.colors.accent))
-            .active(move |s| s.text_color(theme.colors.accent))
+            .text_color(theme.colors.foreground.secondary)
+            .hover(move |s| s.text_color(theme.colors.accent.foreground))
+            .active(move |s| s.text_color(theme.colors.accent.foreground))
             .child(svg_icon(
                 "icons/gitcomet_mark.svg",
-                theme.colors.accent,
+                theme.colors.accent.foreground,
                 scaled_px(13.0),
             ))
             .child(
@@ -278,9 +280,9 @@ impl Render for BottomStatusBarView {
             .cursor(CursorStyle::PointingHand)
             .text_size(scaled_px(11.0))
             .line_height(scaled_px(12.0))
-            .text_color(theme.colors.text_muted)
-            .hover(move |s| s.text_color(theme.colors.accent))
-            .active(move |s| s.text_color(theme.colors.accent))
+            .text_color(theme.colors.foreground.secondary)
+            .hover(move |s| s.text_color(theme.colors.accent.foreground))
+            .active(move |s| s.text_color(theme.colors.accent.foreground))
             .on_click(cx.listener(|_this, _e: &ClickEvent, _window, cx| {
                 cx.stop_propagation();
                 cx.open_url(RELEASES_URL);
@@ -297,7 +299,7 @@ impl Render for BottomStatusBarView {
             .items_center()
             .justify_between()
             .px_2()
-            .bg(theme.colors.sidebar_bg)
+            .bg(theme.colors.surface.chrome)
             .when_some(
                 crate::view::chrome::client_frame_corner_rounding(theme, window),
                 |d, rounding| {

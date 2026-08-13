@@ -35,16 +35,16 @@ pub(super) fn panel(
             .flex_col()
             .w(scaled_px(420.0))
             .child(popover_title("Squash commits"))
-            .child(div().border_t_1().border_color(theme.colors.border))
+            .child(div().border_t_1().border_color(theme.colors.stroke.default))
             .child(
                 div()
                     .px_2()
                     .py_1()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child("The selected commits are no longer squashable."),
             )
-            .child(div().border_t_1().border_color(theme.colors.border))
+            .child(div().border_t_1().border_color(theme.colors.stroke.default))
             .child(
                 div()
                     .px_2()
@@ -87,13 +87,13 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(420.0))
         .child(popover_title(format!("Squash {count} commits")))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()
                 .py_1()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(summary),
         )
         .child(
@@ -107,7 +107,7 @@ pub(super) fn panel(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("Commit message"),
                 )
                 .child(
@@ -128,7 +128,7 @@ pub(super) fn panel(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("Description"),
                 )
                 .child(
@@ -147,11 +147,11 @@ pub(super) fn panel(
                     .px_2()
                     .pb_1()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(hint),
             )
         })
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

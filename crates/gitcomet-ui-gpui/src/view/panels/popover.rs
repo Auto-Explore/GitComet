@@ -424,8 +424,8 @@ pub(in super::super) fn focusable_toggle_row<V: 'static>(
         .hover(move |s| s.bg(hover_bg))
         .active(move |s| s.bg(active_bg))
         .focus(move |s| {
-            s.bg(theme.colors.focus_ring_bg)
-                .border_color(theme.colors.focus_ring)
+            s.bg(theme.colors.interaction.focus_background)
+                .border_color(theme.colors.interaction.focus_ring)
         })
         .on_mouse_down(
             MouseButton::Left,
@@ -537,7 +537,7 @@ pub(super) fn hotkey_hint(
         .debug_selector(move || debug_selector.to_string())
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .child(label.into())
 }
 
@@ -576,7 +576,7 @@ pub(super) fn dialog_cancel_button(
 }
 
 pub(super) fn dialog_divider(theme: AppTheme) -> gpui::Div {
-    div().border_t_1().border_color(theme.colors.border)
+    div().border_t_1().border_color(theme.colors.stroke.default)
 }
 
 /// Shared scaffolding for confirm-style dialogs: title, divider, body
@@ -605,7 +605,7 @@ impl ConfirmDialog {
                 .px_2()
                 .py_1()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(text.into())
                 .into_any_element(),
         );
@@ -619,7 +619,7 @@ impl ConfirmDialog {
                 .px_2()
                 .pb_1()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(text.into())
                 .into_any_element(),
         );
@@ -636,7 +636,7 @@ impl ConfirmDialog {
                 .child(
                     div()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(text.into()),
                 )
                 .into_any_element(),
@@ -652,7 +652,7 @@ impl ConfirmDialog {
                 .pb_1()
                 .text_xs()
                 .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(text.into())
                 .into_any_element(),
         );
@@ -714,7 +714,7 @@ pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
         .px_2()
         .py_1()
         .text_xs()
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .child(label)
 }
 
@@ -4302,7 +4302,7 @@ impl PopoverHost {
                             .font_weight(FontWeight::BOLD)
                             .child("Reword commit message"),
                     )
-                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(div().border_t_1().border_color(theme.colors.stroke.default))
                     .child(
                         div()
                             .px_2()
@@ -4314,7 +4314,7 @@ impl PopoverHost {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Commit message"),
                             )
                             .child(self.rebase_reword_input.clone()),
@@ -4330,7 +4330,7 @@ impl PopoverHost {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Description"),
                             )
                             .child(
@@ -4349,12 +4349,12 @@ impl PopoverHost {
                             .px_2()
                             .pb_1()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(
                                 "Clear the message and save to keep the original commit message.",
                             ),
                     )
-                    .child(div().border_t_1().border_color(theme.colors.border))
+                    .child(div().border_t_1().border_color(theme.colors.stroke.default))
                     .child(
                         div()
                             .px_2()
@@ -4390,7 +4390,7 @@ impl PopoverHost {
         };
 
         let is_right = matches!(anchor_corner, Anchor::TopRight | Anchor::BottomRight);
-        let popover_border_color = theme.colors.border;
+        let popover_border_color = theme.colors.stroke.default;
         let gap_y = if is_app_menu {
             crate::view::chrome::title_bar_height(ui_scale_percent)
         } else if anchor_is_bounds {

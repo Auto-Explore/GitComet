@@ -126,7 +126,7 @@ pub(super) fn paint_history_graph(
         .lanes_now
         .get(usize::from(row.node_col))
         .map(|l| history_graph::lane_color(theme, l.color_ix))
-        .unwrap_or(theme.colors.text_muted);
+        .unwrap_or(theme.colors.foreground.secondary);
 
     // Within one paint layer gpui draws all quads before any path, so the
     // node (a quad) would sit under the lane lines no matter the call
@@ -145,7 +145,7 @@ pub(super) fn paint_history_graph(
             paint_stash_node(
                 bounds.left() + node_x,
                 y_center,
-                theme.colors.window_bg,
+                theme.colors.surface.canvas,
                 node_color,
                 window,
             );

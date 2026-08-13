@@ -2154,8 +2154,8 @@ impl PatchDiffSearchQueryUpdateFixture {
                     .unwrap_or(&[]);
                 let language = self.language_for_src_ix.get(src_ix).copied().flatten();
                 let word_color = match line.kind {
-                    DiffLineKind::Add => Some(self.theme.colors.success),
-                    DiffLineKind::Remove => Some(self.theme.colors.danger),
+                    DiffLineKind::Add => Some(self.theme.colors.status.success.foreground),
+                    DiffLineKind::Remove => Some(self.theme.colors.status.danger.foreground),
                     _ => None,
                 };
 

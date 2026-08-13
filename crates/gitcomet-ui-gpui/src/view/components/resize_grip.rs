@@ -16,18 +16,21 @@ const GRIP_LEN_PX: f32 = 44.0;
 /// Thickness of the tinted middle segment across the divider.
 const GRIP_THICKNESS_PX: f32 = 4.0;
 
-/// Hovered grip tint: a text-alpha overlay rather than `colors.hover`, which is
-/// a surface-level tint that all but disappears on the elevated chrome band the
-/// dividers sit on. Alphas are in scrollbar-thumb territory so a 4px pill still
-/// reads against both `window_bg` and `sidebar_bg`.
+/// Hovered grip tint: a text-alpha overlay because a surface-level hover tint
+/// all but disappears on the elevated chrome band the dividers sit on. Alphas
+/// are in scrollbar-thumb territory so a 4px pill still reads against both the
+/// canvas and surrounding chrome.
 fn hover_tint(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(theme.colors.text, if theme.is_dark { 0.34 } else { 0.30 })
+    with_alpha(
+        theme.colors.foreground.primary,
+        if theme.is_dark { 0.34 } else { 0.30 },
+    )
 }
 
 /// Dragged grip tint: the accent color, so an in-flight resize is unmistakable
 /// and clearly distinct from mere hover.
 fn drag_tint(theme: AppTheme) -> gpui::Rgba {
-    theme.colors.accent
+    theme.colors.accent.foreground
 }
 
 /// Hover/drag visual for a resize divider: the whole strip stays interactive

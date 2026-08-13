@@ -687,9 +687,9 @@ impl PickerPrompt {
             .when(attached_list_surface, |surface| {
                 surface
                     .border_1()
-                    .border_color(theme.colors.border_variant)
+                    .border_color(theme.colors.stroke.subtle)
                     .rounded(px(theme.radii.control))
-                    .bg(theme.colors.surface_bg_elevated)
+                    .bg(theme.colors.surface.raised)
                     .overflow_hidden()
             })
             .child(
@@ -714,9 +714,9 @@ impl PickerPrompt {
                     }),
             )
             .child(div().h(px(1.0)).w_full().bg(if attached_list_surface {
-                theme.colors.border
+                theme.colors.stroke.default
             } else {
-                theme.colors.border_variant
+                theme.colors.stroke.subtle
             }));
 
         if let Some(list_override) = self.list_override {
@@ -746,7 +746,7 @@ impl PickerPrompt {
                     .px(scaled_px(ROW_PAD_X_PX))
                     .text_sm()
                     .line_height(scaled_px(18.0))
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(self.empty_text),
             );
         } else {
@@ -835,9 +835,9 @@ impl PickerPrompt {
                             crate::view::icons::svg_icon(
                                 icon,
                                 if is_marked {
-                                    theme.colors.accent
+                                    theme.colors.accent.foreground
                                 } else {
-                                    theme.colors.text_muted
+                                    theme.colors.foreground.secondary
                                 },
                                 scaled_px(14.0),
                             )
@@ -872,7 +872,7 @@ impl PickerPrompt {
                                 })
                                 .child(crate::view::icons::svg_icon(
                                     "icons/check.svg",
-                                    theme.colors.accent,
+                                    theme.colors.accent.foreground,
                                     scaled_px(12.0),
                                 )),
                         )
@@ -890,14 +890,14 @@ impl PickerPrompt {
                                     .justify_center()
                                     .rounded(scaled_px(4.0))
                                     .bg(with_alpha(
-                                        theme.colors.text,
+                                        theme.colors.foreground.primary,
                                         if theme.is_dark { 0.06 } else { 0.035 },
                                     ))
                                     .font_family(
                                         crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
                                     )
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(hint),
                             )
                         })
@@ -962,7 +962,7 @@ impl PickerPrompt {
                                 .w(scaled_px(3.0))
                                 .rounded_tr(px(theme.radii.row))
                                 .rounded_br(px(theme.radii.row))
-                                .bg(theme.colors.accent),
+                                .bg(theme.colors.accent.foreground),
                         )
                     });
                 }
@@ -1382,7 +1382,7 @@ fn section_header_row(
         .gap(scaled_px(4.0))
         .px(scaled_px(ROW_PAD_X_PX))
         .text_xs()
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .whitespace_nowrap()
         .overflow_hidden();
 
@@ -1402,7 +1402,7 @@ fn section_header_row(
                     } else {
                         "icons/chevron_down.svg"
                     },
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     scaled_px(10.0),
                 )),
         );
@@ -1411,7 +1411,7 @@ fn section_header_row(
     if collapsed && header.hidden_count > 0 {
         label_row = label_row.child(
             div()
-                .text_color(with_alpha(theme.colors.text_muted, 0.7))
+                .text_color(with_alpha(theme.colors.foreground.secondary, 0.7))
                 .child(SharedString::from(header.hidden_count.to_string())),
         );
     }
@@ -1423,7 +1423,7 @@ fn section_header_row(
             header
                 .mt(scaled_px(4.0))
                 .border_t_1()
-                .border_color(theme.colors.border_variant)
+                .border_color(theme.colors.stroke.subtle)
         })
         .pt(scaled_px(6.0))
         .pb(scaled_px(4.0));
@@ -1466,8 +1466,8 @@ fn picker_item_label<V: 'static>(
         LineRole {
             text_id: "picker_prompt_label_part_text",
             parts: item.parts(),
-            base_color: theme.colors.text,
-            dim_color: theme.colors.text_muted,
+            base_color: theme.colors.foreground.primary,
+            dim_color: theme.colors.foreground.secondary,
             text_size: gpui::rems(0.875),
             weight: FontWeight::NORMAL,
         },
@@ -1485,10 +1485,10 @@ fn picker_item_label<V: 'static>(
         LineRole {
             text_id: "picker_prompt_secondary_part_text",
             parts: item.secondary(),
-            base_color: theme.colors.text_muted,
+            base_color: theme.colors.foreground.secondary,
             // Half-strength muted, the weight Zed gives the dots between a row's
             // detail fields.
-            dim_color: with_alpha(theme.colors.text_muted, 0.5),
+            dim_color: with_alpha(theme.colors.foreground.secondary, 0.5),
             text_size: gpui::rems(0.75),
             weight: FontWeight::NORMAL,
         },
@@ -1532,7 +1532,7 @@ fn picker_item_line<V: 'static>(
     cx: &gpui::Context<V>,
 ) -> Div {
     let match_highlight = HighlightStyle {
-        color: Some(theme.colors.accent.into()),
+        color: Some(theme.colors.accent.foreground.into()),
         font_weight: Some(FontWeight::BOLD),
         ..HighlightStyle::default()
     };
@@ -1626,19 +1626,19 @@ fn remove_row_button<V: 'static>(
         })
         .hover(move |s| {
             s.bg(with_alpha(
-                theme.colors.danger,
+                theme.colors.status.danger.foreground,
                 super::REMOVE_BUTTON_HOVER_ALPHA,
             ))
         })
         .active(move |s| {
             s.bg(with_alpha(
-                theme.colors.danger,
+                theme.colors.status.danger.foreground,
                 super::REMOVE_BUTTON_PRESSED_ALPHA,
             ))
         })
         .child(crate::view::icons::svg_icon(
             super::REMOVE_BUTTON_ICON,
-            theme.colors.danger,
+            theme.colors.status.danger.foreground,
             scaled_px(super::REMOVE_BUTTON_ICON_SIZE_PX),
         ))
         .on_mouse_move(cx.listener(move |_this, event: &MouseMoveEvent, _w, cx| {

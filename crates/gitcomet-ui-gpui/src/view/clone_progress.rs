@@ -4,7 +4,10 @@ use gitcomet_state::model::{CloneOpState, CloneOpStatus, CloneProgressStage};
 use std::path::Path;
 
 pub(crate) fn clone_progress_loading_color(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(theme.colors.text, if theme.is_dark { 0.42 } else { 0.34 })
+    with_alpha(
+        theme.colors.foreground.primary,
+        if theme.is_dark { 0.42 } else { 0.34 },
+    )
 }
 
 pub(crate) fn clone_progress_title(op: &CloneOpState) -> &'static str {
@@ -26,14 +29,16 @@ pub(crate) fn clone_progress_phase_label(op: &CloneOpState) -> &'static str {
 
 pub(crate) fn clone_progress_color(theme: AppTheme, op: &CloneOpState) -> gpui::Rgba {
     match op.status {
-        CloneOpStatus::Cancelling => {
-            with_alpha(theme.colors.text, if theme.is_dark { 0.60 } else { 0.48 })
-        }
+        CloneOpStatus::Cancelling => with_alpha(
+            theme.colors.foreground.primary,
+            if theme.is_dark { 0.60 } else { 0.48 },
+        ),
         _ => match op.progress.stage {
             CloneProgressStage::Loading => clone_progress_loading_color(theme),
-            CloneProgressStage::RemoteObjects => {
-                with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 })
-            }
+            CloneProgressStage::RemoteObjects => with_alpha(
+                theme.colors.foreground.primary,
+                if theme.is_dark { 0.78 } else { 0.62 },
+            ),
         },
     }
 }
@@ -41,26 +46,34 @@ pub(crate) fn clone_progress_color(theme: AppTheme, op: &CloneOpState) -> gpui::
 pub(crate) fn clone_progress_bar_fill_color(theme: AppTheme, op: &CloneOpState) -> gpui::Rgba {
     match op.status {
         CloneOpStatus::Cancelling => with_alpha(
-            theme.colors.warning,
+            theme.colors.status.warning.foreground,
             if theme.is_dark { 0.92 } else { 0.84 },
         ),
         _ => match op.progress.stage {
-            CloneProgressStage::Loading => {
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.82 } else { 0.74 })
-            }
-            CloneProgressStage::RemoteObjects => {
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.94 } else { 0.86 })
-            }
+            CloneProgressStage::Loading => with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.82 } else { 0.74 },
+            ),
+            CloneProgressStage::RemoteObjects => with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.94 } else { 0.86 },
+            ),
         },
     }
 }
 
 pub(crate) fn clone_progress_bar_track_color(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(theme.colors.border, if theme.is_dark { 0.40 } else { 0.22 })
+    with_alpha(
+        theme.colors.stroke.default,
+        if theme.is_dark { 0.40 } else { 0.22 },
+    )
 }
 
 pub(crate) fn clone_progress_bar_border_color(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(theme.colors.border, if theme.is_dark { 0.72 } else { 0.42 })
+    with_alpha(
+        theme.colors.stroke.default,
+        if theme.is_dark { 0.72 } else { 0.42 },
+    )
 }
 
 pub(crate) fn clone_progress_fill_ratio(percent: u8) -> f32 {
@@ -149,39 +162,39 @@ mod tests {
 
         assert_eq!(
             clone_progress_color(theme, &loading),
-            with_alpha(theme.colors.text, 0.34)
+            with_alpha(theme.colors.foreground.primary, 0.34)
         );
         assert_eq!(
             clone_progress_color(theme, &remote),
-            with_alpha(theme.colors.text, 0.62)
+            with_alpha(theme.colors.foreground.primary, 0.62)
         );
         assert_eq!(
             clone_progress_color(theme, &cancelling),
-            with_alpha(theme.colors.text, 0.48)
+            with_alpha(theme.colors.foreground.primary, 0.48)
         );
         assert_eq!(
             clone_progress_loading_color(theme),
-            with_alpha(theme.colors.text, 0.34)
+            with_alpha(theme.colors.foreground.primary, 0.34)
         );
         assert_eq!(
             clone_progress_bar_fill_color(theme, &loading),
-            with_alpha(theme.colors.accent, 0.74)
+            with_alpha(theme.colors.accent.foreground, 0.74)
         );
         assert_eq!(
             clone_progress_bar_fill_color(theme, &remote),
-            with_alpha(theme.colors.accent, 0.86)
+            with_alpha(theme.colors.accent.foreground, 0.86)
         );
         assert_eq!(
             clone_progress_bar_fill_color(theme, &cancelling),
-            with_alpha(theme.colors.warning, 0.84)
+            with_alpha(theme.colors.status.warning.foreground, 0.84)
         );
         assert_eq!(
             clone_progress_bar_track_color(theme),
-            with_alpha(theme.colors.border, 0.22)
+            with_alpha(theme.colors.stroke.default, 0.22)
         );
         assert_eq!(
             clone_progress_bar_border_color(theme),
-            with_alpha(theme.colors.border, 0.42)
+            with_alpha(theme.colors.stroke.default, 0.42)
         );
     }
 
@@ -198,39 +211,39 @@ mod tests {
 
         assert_eq!(
             clone_progress_color(theme, &loading),
-            with_alpha(theme.colors.text, 0.42)
+            with_alpha(theme.colors.foreground.primary, 0.42)
         );
         assert_eq!(
             clone_progress_color(theme, &remote),
-            with_alpha(theme.colors.text, 0.78)
+            with_alpha(theme.colors.foreground.primary, 0.78)
         );
         assert_eq!(
             clone_progress_color(theme, &cancelling),
-            with_alpha(theme.colors.text, 0.60)
+            with_alpha(theme.colors.foreground.primary, 0.60)
         );
         assert_eq!(
             clone_progress_loading_color(theme),
-            with_alpha(theme.colors.text, 0.42)
+            with_alpha(theme.colors.foreground.primary, 0.42)
         );
         assert_eq!(
             clone_progress_bar_fill_color(theme, &loading),
-            with_alpha(theme.colors.accent, 0.82)
+            with_alpha(theme.colors.accent.foreground, 0.82)
         );
         assert_eq!(
             clone_progress_bar_fill_color(theme, &remote),
-            with_alpha(theme.colors.accent, 0.94)
+            with_alpha(theme.colors.accent.foreground, 0.94)
         );
         assert_eq!(
             clone_progress_bar_fill_color(theme, &cancelling),
-            with_alpha(theme.colors.warning, 0.92)
+            with_alpha(theme.colors.status.warning.foreground, 0.92)
         );
         assert_eq!(
             clone_progress_bar_track_color(theme),
-            with_alpha(theme.colors.border, 0.40)
+            with_alpha(theme.colors.stroke.default, 0.40)
         );
         assert_eq!(
             clone_progress_bar_border_color(theme),
-            with_alpha(theme.colors.border, 0.72)
+            with_alpha(theme.colors.stroke.default, 0.72)
         );
     }
 

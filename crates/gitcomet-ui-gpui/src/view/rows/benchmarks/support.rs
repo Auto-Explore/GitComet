@@ -1272,15 +1272,15 @@ pub(crate) fn build_text_input_streamed_highlights(
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
     let theme = AppTheme::gitcomet_dark();
     let style_primary = gpui::HighlightStyle {
-        color: Some(theme.colors.accent.into()),
+        color: Some(theme.colors.accent.foreground.into()),
         ..gpui::HighlightStyle::default()
     };
     let style_secondary = gpui::HighlightStyle {
-        color: Some(theme.colors.warning.into()),
+        color: Some(theme.colors.status.warning.foreground.into()),
         ..gpui::HighlightStyle::default()
     };
     let style_overlay = gpui::HighlightStyle {
-        color: Some(theme.colors.success.into()),
+        color: Some(theme.colors.status.success.foreground.into()),
         ..gpui::HighlightStyle::default()
     };
 

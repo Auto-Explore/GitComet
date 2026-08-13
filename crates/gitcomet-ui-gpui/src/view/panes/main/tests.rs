@@ -2427,7 +2427,7 @@ fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
     assert_eq!(placeholder_highlights[0].0, placeholder_range);
     assert_eq!(
         placeholder_highlights[0].1.color,
-        Some(theme.colors.danger.into())
+        Some(theme.colors.status.danger.foreground.into())
     );
     assert_eq!(
         placeholder_highlights[0].1.background_color, None,
@@ -2466,7 +2466,10 @@ fn resolved_output_without_a_language_still_marks_unresolved_rows() {
 
     assert_eq!(highlights.len(), 1);
     assert_eq!(highlights[0].0, placeholder_range);
-    assert_eq!(highlights[0].1.color, Some(theme.colors.danger.into()));
+    assert_eq!(
+        highlights[0].1.color,
+        Some(theme.colors.status.danger.foreground.into())
+    );
 }
 
 /// The point of the wash: with several conflicts open, only the one being
@@ -2509,7 +2512,7 @@ fn the_active_conflicts_row_is_washed_yellow_and_the_others_are_not() {
     );
     assert_eq!(
         style_for(&second_range).color,
-        Some(theme.colors.danger.into()),
+        Some(theme.colors.status.danger.foreground.into()),
         "the wash marks the selection; the row is still an unresolved one"
     );
 }

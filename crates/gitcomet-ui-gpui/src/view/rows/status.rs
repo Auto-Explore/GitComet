@@ -463,29 +463,33 @@ fn status_row(
     let (icon, color) = if is_submodule {
         let color = match submodule_status {
             Some(SubmoduleStatus::NotInitialized) => with_alpha(
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 if theme.is_dark { 0.78 } else { 0.92 },
             ),
-            Some(SubmoduleStatus::HeadMismatch) => theme.colors.warning,
+            Some(SubmoduleStatus::HeadMismatch) => theme.colors.status.warning.foreground,
             Some(SubmoduleStatus::MergeConflict | SubmoduleStatus::MissingMapping) => {
-                theme.colors.danger
+                theme.colors.status.danger.foreground
             }
             Some(SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_)) | None => {
-                theme.colors.accent
+                theme.colors.accent.foreground
             }
         };
         ("icons/box.svg", color)
     } else {
         match entry.kind {
             FileStatusKind::Untracked => match area {
-                DiffArea::Unstaged => ("icons/plus.svg", theme.colors.success),
-                DiffArea::Staged => ("icons/question.svg", theme.colors.warning),
+                DiffArea::Unstaged => ("icons/plus.svg", theme.colors.status.success.foreground),
+                DiffArea::Staged => ("icons/question.svg", theme.colors.status.warning.foreground),
             },
-            FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
-            FileStatusKind::Added => ("icons/plus.svg", theme.colors.success),
-            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
-            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
-            FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
+            FileStatusKind::Modified => {
+                ("icons/pencil.svg", theme.colors.status.warning.foreground)
+            }
+            FileStatusKind::Added => ("icons/plus.svg", theme.colors.status.success.foreground),
+            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.status.danger.foreground),
+            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent.foreground),
+            FileStatusKind::Conflicted => {
+                ("icons/warning.svg", theme.colors.status.danger.foreground)
+            }
         }
     };
 
@@ -601,16 +605,20 @@ fn status_row(
         .w_full()
         .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
-        .when(selected, |s| s.bg(theme.colors.hover))
-        .when(context_menu_active, |s| s.bg(theme.colors.active))
+        .when(selected, |s| {
+            s.bg(theme.colors.interaction.hover_background)
+        })
+        .when(context_menu_active, |s| {
+            s.bg(theme.colors.interaction.pressed_background)
+        })
         .hover(move |s| {
             if context_menu_active {
-                s.bg(theme.colors.active)
+                s.bg(theme.colors.interaction.pressed_background)
             } else {
-                s.bg(theme.colors.hover)
+                s.bg(theme.colors.interaction.hover_background)
             }
         })
-        .active(move |s| s.bg(theme.colors.active))
+        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
         .on_mouse_down(
             MouseButton::Right,
             cx.listener(move |this, e: &MouseDownEvent, window, cx| {

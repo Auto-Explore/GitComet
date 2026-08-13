@@ -39,7 +39,7 @@ impl HistoryView {
         let count = commits_count + usize::from(show_working_tree_summary_row);
         let scan_progress = repo.and_then(|r| r.history_state.log_scan_progress);
 
-        let bg = theme.colors.window_bg;
+        let bg = theme.colors.surface.canvas;
 
         let body: AnyElement = if count == 0 {
             match repo.map(|r| &r.log) {
@@ -157,7 +157,7 @@ impl HistoryView {
                     .w_full()
                     .bg(bg)
                     .border_b_1()
-                    .border_color(theme.colors.border_variant)
+                    .border_color(theme.colors.stroke.subtle)
                     .child(
                         div()
                             .pr(scrollbar_gutter)
@@ -176,9 +176,9 @@ impl HistoryView {
                         .py(ui_scale::design_px_from_percent(2.0, self.ui_scale_percent))
                         .bg(bg)
                         .border_b_1()
-                        .border_color(theme.colors.border_variant)
+                        .border_color(theme.colors.stroke.subtle)
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .debug_selector(|| "history_scan_progress".to_string())
@@ -323,7 +323,10 @@ impl HistoryView {
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let scaled_px = |value| ui_scale::design_px_from_percent(value, self.ui_scale_percent);
-        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let icon_muted = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.72 } else { 0.82 },
+        );
         let (show_graph, show_author, show_date, show_sha) = self.history_visible_columns();
         let col_author = self.history_col_author;
         let col_date = self.history_col_date;
@@ -400,7 +403,7 @@ impl HistoryView {
                     id,
                     components::ResizeGripAxis::Vertical,
                     dragging,
-                    Some(theme.colors.border_variant),
+                    Some(theme.colors.stroke.subtle),
                 ))
                 .on_drag(handle, |_handle, _offset, _window, cx| {
                     cx.new(|_cx| HistoryColResizeDragGhost)
@@ -488,7 +491,7 @@ impl HistoryView {
             .px_2()
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(
                 div()
                     .w(self.history_col_branch)
@@ -515,15 +518,22 @@ impl HistoryView {
                                     .h(scaled_px(18.0))
                                     .line_height(scaled_px(18.0))
                                     .rounded(px(theme.radii.row))
-                                    .when(scope_active, |d| d.bg(theme.colors.active))
+                                    .when(scope_active, |d| {
+                                        d.bg(theme.colors.interaction.pressed_background)
+                                    })
                                     .hover(move |s| {
                                         if scope_active {
-                                            s.bg(theme.colors.active)
+                                            s.bg(theme.colors.interaction.pressed_background)
                                         } else {
-                                            s.bg(with_alpha(theme.colors.hover, 0.55))
+                                            s.bg(with_alpha(
+                                                theme.colors.interaction.hover_background,
+                                                0.55,
+                                            ))
                                         }
                                     })
-                                    .active(move |s| s.bg(theme.colors.active))
+                                    .active(move |s| {
+                                        s.bg(theme.colors.interaction.pressed_background)
+                                    })
                                     .cursor(CursorStyle::PointingHand)
                                     .child(
                                         div()
@@ -637,15 +647,22 @@ impl HistoryView {
                                         .h(scaled_px(18.0))
                                         .line_height(scaled_px(18.0))
                                         .rounded(px(theme.radii.row))
-                                        .when(author_active, |d| d.bg(theme.colors.active))
+                                        .when(author_active, |d| {
+                                            d.bg(theme.colors.interaction.pressed_background)
+                                        })
                                         .hover(move |s| {
                                             if author_active {
-                                                s.bg(theme.colors.active)
+                                                s.bg(theme.colors.interaction.pressed_background)
                                             } else {
-                                                s.bg(with_alpha(theme.colors.hover, 0.55))
+                                                s.bg(with_alpha(
+                                                    theme.colors.interaction.hover_background,
+                                                    0.55,
+                                                ))
                                             }
                                         })
-                                        .active(move |s| s.bg(theme.colors.active))
+                                        .active(move |s| {
+                                            s.bg(theme.colors.interaction.pressed_background)
+                                        })
                                         .cursor(CursorStyle::PointingHand)
                                         .child(
                                             div()
@@ -653,10 +670,10 @@ impl HistoryView {
                                                 .line_clamp(1)
                                                 .whitespace_nowrap()
                                                 .when(author_filter_active, |d| {
-                                                    d.text_color(theme.colors.accent)
+                                                    d.text_color(theme.colors.accent.foreground)
                                                 })
                                                 .when(!author_filter_active, |d| {
-                                                    d.text_color(theme.colors.text_muted)
+                                                    d.text_color(theme.colors.foreground.secondary)
                                                 })
                                                 .child(author_label.clone()),
                                         )

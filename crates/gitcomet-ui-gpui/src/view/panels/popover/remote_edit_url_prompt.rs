@@ -20,13 +20,13 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(640.0))
         .child(popover_title(format!("Edit remote URL ({kind_label})")))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()
                 .py_1()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(format!("Remote: {name}")),
         )
         .child(
@@ -37,7 +37,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.remote_url_edit_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

@@ -980,13 +980,15 @@ fn markdown_preview_row_element(
         content_shell = match row.kind {
             MarkdownPreviewRowKind::Heading { level: 1 | 2 } => {
                 content_shell.border_b_1().border_color(with_alpha(
-                    theme.colors.border,
+                    theme.colors.stroke.default,
                     if theme.is_dark { 0.85 } else { 0.92 },
                 ))
             }
             MarkdownPreviewRowKind::CodeLine { is_first, is_last } => {
-                let code_border =
-                    with_alpha(theme.colors.border, if theme.is_dark { 0.90 } else { 0.80 });
+                let code_border = with_alpha(
+                    theme.colors.stroke.default,
+                    if theme.is_dark { 0.90 } else { 0.80 },
+                );
                 let mut shell = content_shell
                     .px(markdown_preview_scaled_px(
                         MARKDOWN_PREVIEW_SHELL_PAD_X_PX,
@@ -1007,12 +1009,12 @@ fn markdown_preview_row_element(
             MarkdownPreviewRowKind::TableRow { is_header } => {
                 let bg = if is_header {
                     with_alpha(
-                        theme.colors.surface_bg_elevated,
+                        theme.colors.surface.raised,
                         if theme.is_dark { 0.64 } else { 0.86 },
                     )
                 } else {
                     with_alpha(
-                        theme.colors.surface_bg_elevated,
+                        theme.colors.surface.raised,
                         if theme.is_dark { 0.42 } else { 0.72 },
                     )
                 };
@@ -1024,7 +1026,7 @@ fn markdown_preview_row_element(
                     .bg(bg)
                     .border_b_1()
                     .border_color(with_alpha(
-                        theme.colors.border,
+                        theme.colors.stroke.default,
                         if theme.is_dark { 0.88 } else { 0.86 },
                     ))
             }
@@ -1034,7 +1036,7 @@ fn markdown_preview_row_element(
                     ui_scale_percent,
                 ))
                 .bg(with_alpha(
-                    theme.colors.warning,
+                    theme.colors.status.warning.foreground,
                     if theme.is_dark { 0.12 } else { 0.08 },
                 )),
             _ => unreachable!(),
@@ -1131,7 +1133,7 @@ fn markdown_preview_row_element(
                 .flex()
                 .items_center()
                 .child(div().w_full().h(px(1.0)).bg(with_alpha(
-                    theme.colors.border,
+                    theme.colors.stroke.default,
                     if theme.is_dark { 0.92 } else { 0.88 },
                 ))),
             _ if marker.is_none() && alert_title.is_none() && inline_images.is_empty() => {
@@ -1186,7 +1188,7 @@ fn markdown_preview_row_element(
                                 ui_scale_percent,
                             ))
                             .line_height(px(typography.line_height))
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(marker),
                     );
                 }
@@ -1781,7 +1783,7 @@ pub(in crate::view) fn markdown_preview_flow_image(
     image_base_dir: Option<&std::path::Path>,
     picture_sizes: &MarkdownPreviewPictureSizes,
 ) -> AnyElement {
-    let label_color = theme.colors.text_muted;
+    let label_color = theme.colors.foreground.secondary;
     let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
 
     let picture = row.image.as_ref().and_then(|image| {
@@ -1927,7 +1929,7 @@ pub(in crate::view) fn markdown_preview_inline_image(
     picture_sizes: &MarkdownPreviewPictureSizes,
 ) -> AnyElement {
     let source_byte = inline.source_byte;
-    let label_color = theme.colors.text_muted;
+    let label_color = theme.colors.foreground.secondary;
     let font_size = markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
     let described = if inline.alt.is_empty() {
         inline.image.source.clone()
@@ -2107,7 +2109,7 @@ fn markdown_preview_image_placeholder(
     markdown_preview_image_placeholder_element(
         markdown_preview_image_label(row, reason),
         markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, context.ui_scale_percent),
-        context.theme.colors.text_muted,
+        context.theme.colors.foreground.secondary,
     )
 }
 
@@ -2158,7 +2160,7 @@ fn markdown_preview_image_row(
     let failed_label = markdown_preview_image_label(row, "Failed to load");
     let failed_font_size =
         markdown_preview_scaled_px(MARKDOWN_PREVIEW_BASE_FONT_PX, ui_scale_percent);
-    let failed_color = context.theme.colors.text_muted;
+    let failed_color = context.theme.colors.foreground.secondary;
     // `Contain` keeps the aspect ratio inside whichever box the document asked
     // for, so a declared width never stretches the picture across the row.
     let image = match declared_width {
@@ -2272,9 +2274,9 @@ fn worktree_preview_bar_color(this: &MainPaneView, theme: AppTheme) -> Option<gp
         || this.added_file_preview_abs_path().is_some()
         || this.diff_preview_is_new_file;
     if highlight_deleted_file {
-        Some(theme.colors.danger)
+        Some(theme.colors.status.danger.foreground)
     } else if highlight_new_file {
-        Some(theme.colors.success)
+        Some(theme.colors.status.success.foreground)
     } else {
         None
     }
@@ -2339,11 +2341,11 @@ fn markdown_preview_alert_title_label(row: &MarkdownPreviewRow) -> Option<&'stat
 
 fn markdown_preview_alert_color(theme: AppTheme, kind: MarkdownAlertKind) -> gpui::Rgba {
     match kind {
-        MarkdownAlertKind::Note => theme.colors.accent,
-        MarkdownAlertKind::Tip => theme.colors.success,
-        MarkdownAlertKind::Important => with_alpha(theme.colors.accent, 0.85),
-        MarkdownAlertKind::Warning => theme.colors.warning,
-        MarkdownAlertKind::Caution => theme.colors.danger,
+        MarkdownAlertKind::Note => theme.colors.accent.foreground,
+        MarkdownAlertKind::Tip => theme.colors.status.success.foreground,
+        MarkdownAlertKind::Important => with_alpha(theme.colors.accent.foreground, 0.85),
+        MarkdownAlertKind::Warning => theme.colors.status.warning.foreground,
+        MarkdownAlertKind::Caution => theme.colors.status.danger.foreground,
     }
 }
 
@@ -2357,7 +2359,10 @@ fn markdown_preview_blockquote_gutter(
         return None;
     }
 
-    let quote_bar_color = with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.86 });
+    let quote_bar_color = with_alpha(
+        theme.colors.stroke.default,
+        if theme.is_dark { 0.96 } else { 0.86 },
+    );
     let alert_bar_color = alert_kind.map(|kind| markdown_preview_alert_color(theme, kind));
     let bars = (0..blockquote_level)
         .map(|ix| {
@@ -2418,7 +2423,7 @@ fn markdown_preview_inline_highlight(
         MarkdownInlineStyle::Code => gpui::HighlightStyle {
             background_color: Some(
                 with_alpha(
-                    theme.colors.active_section,
+                    theme.colors.interaction.selected_background,
                     if theme.is_dark { 0.75 } else { 0.55 },
                 )
                 .into(),
@@ -2426,18 +2431,18 @@ fn markdown_preview_inline_highlight(
             ..gpui::HighlightStyle::default()
         },
         MarkdownInlineStyle::Strikethrough => gpui::HighlightStyle {
-            color: Some(theme.colors.text_muted.into()),
+            color: Some(theme.colors.foreground.secondary.into()),
             strikethrough: Some(gpui::StrikethroughStyle {
                 thickness: px(1.0),
-                color: Some(theme.colors.text_muted.into()),
+                color: Some(theme.colors.foreground.secondary.into()),
             }),
             ..gpui::HighlightStyle::default()
         },
         MarkdownInlineStyle::Link => gpui::HighlightStyle {
-            color: Some(theme.colors.accent.into()),
+            color: Some(theme.colors.accent.foreground.into()),
             underline: Some(gpui::UnderlineStyle {
                 thickness: px(1.0),
-                color: Some(theme.colors.accent.into()),
+                color: Some(theme.colors.accent.foreground.into()),
                 wavy: false,
             }),
             ..gpui::HighlightStyle::default()
@@ -2445,7 +2450,7 @@ fn markdown_preview_inline_highlight(
         MarkdownInlineStyle::Underline => gpui::HighlightStyle {
             underline: Some(gpui::UnderlineStyle {
                 thickness: px(1.0),
-                color: Some(theme.colors.text.into()),
+                color: Some(theme.colors.foreground.primary.into()),
                 wavy: false,
             }),
             ..gpui::HighlightStyle::default()
@@ -2455,17 +2460,17 @@ fn markdown_preview_inline_highlight(
 
 fn markdown_preview_row_text_color(theme: AppTheme, row: &MarkdownPreviewRow) -> gpui::Rgba {
     if row.alert_kind.is_some() {
-        return theme.colors.text;
+        return theme.colors.foreground.primary;
     }
 
     match row.kind {
         MarkdownPreviewRowKind::Heading { level: 6 } | MarkdownPreviewRowKind::BlockquoteLine => {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         }
-        MarkdownPreviewRowKind::Heading { .. } => theme.colors.text,
-        MarkdownPreviewRowKind::ThematicBreak => theme.colors.text_muted,
-        MarkdownPreviewRowKind::PlainFallback => theme.colors.warning,
-        _ => theme.colors.text,
+        MarkdownPreviewRowKind::Heading { .. } => theme.colors.foreground.primary,
+        MarkdownPreviewRowKind::ThematicBreak => theme.colors.foreground.secondary,
+        MarkdownPreviewRowKind::PlainFallback => theme.colors.status.warning.foreground,
+        _ => theme.colors.foreground.primary,
     }
 }
 
@@ -2631,9 +2636,9 @@ fn markdown_preview_row_typography(
 
 fn markdown_preview_code_background(theme: AppTheme) -> gpui::Rgba {
     if theme.is_dark {
-        with_alpha(theme.colors.surface_bg_elevated, 0.88)
+        with_alpha(theme.colors.surface.raised, 0.88)
     } else {
-        with_alpha(theme.colors.surface_bg, 0.86)
+        with_alpha(theme.colors.surface.panel, 0.86)
     }
 }
 
@@ -2681,15 +2686,15 @@ pub(in crate::view) fn markdown_preview_row_background(
 
     match row.change_hint {
         Hint::Added => Some(with_alpha(
-            theme.colors.success,
+            theme.colors.status.success.foreground,
             if theme.is_dark { 0.18 } else { 0.12 },
         )),
         Hint::Removed => Some(with_alpha(
-            theme.colors.danger,
+            theme.colors.status.danger.foreground,
             if theme.is_dark { 0.16 } else { 0.10 },
         )),
         Hint::Modified => Some(with_alpha(
-            theme.colors.accent,
+            theme.colors.accent.foreground,
             if theme.is_dark { 0.18 } else { 0.10 },
         )),
         Hint::None => {
@@ -2702,7 +2707,7 @@ pub(in crate::view) fn markdown_preview_row_background(
 
             match row.kind {
                 Kind::PlainFallback => Some(with_alpha(
-                    theme.colors.warning,
+                    theme.colors.status.warning.foreground,
                     if theme.is_dark { 0.08 } else { 0.06 },
                 )),
                 _ => None,
@@ -2936,12 +2941,12 @@ fn history_table_row(
         .cursor(CursorStyle::PointingHand)
         .hover(move |s| {
             if context_menu_active {
-                s.bg(theme.colors.active)
+                s.bg(theme.colors.interaction.pressed_background)
             } else {
-                s.bg(theme.colors.hover)
+                s.bg(theme.colors.interaction.hover_background)
             }
         })
-        .active(move |s| s.bg(theme.colors.active))
+        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
         .child(commit_row)
         // Selecting on press, like the sidebar rows: the row the gesture
         // *starts* on owns it, so a release that merely drifted here — the end
@@ -2973,13 +2978,13 @@ fn history_table_row(
 
     if is_head && !selected && !context_menu_active {
         // A quiet tint keeps HEAD findable without competing with selection.
-        row = row.bg(with_alpha(theme.colors.accent, 0.06));
+        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.06));
     }
     if selected {
-        row = row.bg(with_alpha(theme.colors.accent, 0.15));
+        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.15));
     }
     if context_menu_active {
-        row = row.bg(theme.colors.active);
+        row = row.bg(theme.colors.interaction.pressed_background);
     }
 
     if is_head {
@@ -2990,7 +2995,7 @@ fn history_table_row(
                 .bottom_0()
                 .left_0()
                 .w(ui_scale.px(3.0))
-                .bg(with_alpha(theme.colors.accent, 0.90)),
+                .bg(with_alpha(theme.colors.accent.foreground, 0.90)),
         );
     }
 
@@ -3027,7 +3032,7 @@ fn working_tree_summary_history_row(
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(count.to_string()),
             )
             .into_any_element()
@@ -3038,20 +3043,28 @@ fn working_tree_summary_history_row(
     if modified > 0 {
         parts.push(icon_count(
             "icons/pencil.svg",
-            theme.colors.warning,
+            theme.colors.status.warning.foreground,
             modified,
         ));
     }
     if added > 0 {
-        parts.push(icon_count("icons/plus.svg", theme.colors.success, added));
+        parts.push(icon_count(
+            "icons/plus.svg",
+            theme.colors.status.success.foreground,
+            added,
+        ));
     }
     if deleted > 0 {
-        parts.push(icon_count("icons/minus.svg", theme.colors.danger, deleted));
+        parts.push(icon_count(
+            "icons/minus.svg",
+            theme.colors.status.danger.foreground,
+            deleted,
+        ));
     }
 
     // History rows render on the content card, so the hollow node core
     // matches the card surface rather than the window canvas.
-    let node_fill = theme.colors.window_bg;
+    let node_fill = theme.colors.surface.canvas;
     let circle = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, _cx| {
@@ -3109,13 +3122,13 @@ fn working_tree_summary_history_row(
         .items_center()
         .px_2()
         .cursor(CursorStyle::PointingHand)
-        .hover(move |s| s.bg(theme.colors.hover))
-        .active(move |s| s.bg(theme.colors.active))
+        .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
         .child(
             div()
                 .w(col_branch)
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .line_clamp(1)
                 .whitespace_nowrap()
                 .child(div()),
@@ -3163,7 +3176,7 @@ fn working_tree_summary_history_row(
                     .px(cell_pad_x)
                     .text_xs()
                     .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .whitespace_nowrap()
                     .child("Click to review"),
             )
@@ -3176,7 +3189,7 @@ fn working_tree_summary_history_row(
         }));
 
     if selected {
-        row = row.bg(with_alpha(theme.colors.accent, 0.15));
+        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.15));
     }
 
     row.into_any_element()

@@ -24,11 +24,17 @@ struct CloneProgressSyncAction {
 }
 
 fn clone_progress_shell_border_color(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(theme.colors.accent, if theme.is_dark { 0.36 } else { 0.28 })
+    with_alpha(
+        theme.colors.accent.foreground,
+        if theme.is_dark { 0.36 } else { 0.28 },
+    )
 }
 
 fn clone_progress_shell_accent_color(theme: AppTheme) -> gpui::Rgba {
-    with_alpha(theme.colors.accent, if theme.is_dark { 0.20 } else { 0.14 })
+    with_alpha(
+        theme.colors.accent.foreground,
+        if theme.is_dark { 0.20 } else { 0.14 },
+    )
 }
 
 fn toast_viewport_corner() -> ToastViewportCorner {
@@ -502,7 +508,7 @@ impl ToastHost {
     fn render_progress_shell(&self, content: impl IntoElement) -> AnyElement {
         let theme = self.theme;
         let shell_bg = with_alpha(
-            theme.colors.surface_bg_elevated,
+            theme.colors.surface.raised,
             if theme.is_dark { 0.96 } else { 0.98 },
         );
         let shell_border = clone_progress_shell_border_color(theme);
@@ -520,7 +526,7 @@ impl ToastHost {
             .overflow_hidden()
             .shadow(crate::theme::shadow_popover(theme))
             .text_lg()
-            .text_color(theme.colors.text)
+            .text_color(theme.colors.foreground.primary)
             .child(div().w(px(5.0)).bg(shell_accent).flex_shrink_0())
             .child(
                 div()
@@ -613,11 +619,14 @@ impl ToastHost {
                                     .font_weight(FontWeight::BOLD)
                                     .child(crate::view::clone_progress::clone_progress_title(&op)),
                             )
-                            .child(div().text_sm().text_color(theme.colors.text_muted).child(
-                                crate::view::clone_progress::clone_progress_dest_label(
-                                    op.dest.as_ref(),
-                                ),
-                            )),
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(theme.colors.foreground.secondary)
+                                    .child(crate::view::clone_progress::clone_progress_dest_label(
+                                        op.dest.as_ref(),
+                                    )),
+                            ),
                     ),
             )
             .child(
@@ -694,7 +703,7 @@ impl ToastHost {
                         .child(
                             div()
                                 .text_sm()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(progress.url.clone()),
                         ),
                 ),
@@ -755,7 +764,7 @@ impl Render for ToastHost {
                 let close = components::Button::new(format!("toast_close_{}", t.id), "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -776,7 +785,7 @@ impl Render for ToastHost {
                                     crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
                                 )
                                 .bg(with_alpha(
-                                    theme.colors.window_bg,
+                                    theme.colors.surface.canvas,
                                     if theme.is_dark { 0.28 } else { 0.75 },
                                 ))
                                 .rounded(px(theme.radii.row))
@@ -1237,7 +1246,10 @@ mod tests {
             let host = host.read(app);
             assert_eq!(host.toasts.len(), 1);
             let input = host.toasts[0].input.clone();
-            assert_eq!(input.read(app).debug_text_color(), light.colors.text.into());
+            assert_eq!(
+                input.read(app).debug_text_color(),
+                light.colors.foreground.primary.into()
+            );
             input
         });
 
@@ -1248,7 +1260,7 @@ mod tests {
         cx.update(|app| {
             assert_eq!(
                 toast_input.read(app).debug_text_color(),
-                dark.colors.text.into()
+                dark.colors.foreground.primary.into()
             );
         });
     }
@@ -1260,19 +1272,19 @@ mod tests {
 
         assert_eq!(
             clone_progress_shell_border_color(dark),
-            with_alpha(dark.colors.accent, 0.36)
+            with_alpha(dark.colors.accent.foreground, 0.36)
         );
         assert_eq!(
             clone_progress_shell_accent_color(dark),
-            with_alpha(dark.colors.accent, 0.20)
+            with_alpha(dark.colors.accent.foreground, 0.20)
         );
         assert_eq!(
             clone_progress_shell_border_color(light),
-            with_alpha(light.colors.accent, 0.28)
+            with_alpha(light.colors.accent.foreground, 0.28)
         );
         assert_eq!(
             clone_progress_shell_accent_color(light),
-            with_alpha(light.colors.accent, 0.14)
+            with_alpha(light.colors.accent.foreground, 0.14)
         );
     }
 

@@ -1269,7 +1269,10 @@ impl MainPaneView {
             }
         };
         let selected_bg = if errored {
-            with_alpha(theme.colors.danger, if theme.is_dark { 0.30 } else { 0.20 })
+            with_alpha(
+                theme.colors.status.danger.foreground,
+                if theme.is_dark { 0.30 } else { 0.20 },
+            )
         } else {
             selected_bg
         };
@@ -1535,12 +1538,14 @@ impl MainPaneView {
             format!("{}/{}", ix + 1, self.diff_search_matches.len()).into()
         };
         let match_label_color = if regex_invalid && !query.is_empty() {
-            theme.colors.danger
+            theme.colors.status.danger.foreground
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
-        let option_selected_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
+        let option_selected_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.34 } else { 0.24 },
+        );
         let options = self.diff_search_options;
         let compact_control_height = px(26.0);
         let compact_icon_button_width = px(22.0);
@@ -1555,8 +1560,8 @@ impl MainPaneView {
             .py(px(2.0))
             .rounded(px(theme.radii.control))
             .border_1()
-            .border_color(theme.colors.border)
-            .bg(theme.colors.surface_bg_elevated)
+            .border_color(theme.colors.stroke.default)
+            .bg(theme.colors.surface.raised)
             .shadow(crate::theme::shadow_surface(theme))
             .child(
                 div()
@@ -1591,7 +1596,7 @@ impl MainPaneView {
                 components::Button::new("diff_search_newline", "")
                     .start_slot(svg_icon(
                         "icons/line_break.svg",
-                        theme.colors.text,
+                        theme.colors.foreground.primary,
                         px(14.0),
                     ))
                     .borderless()
@@ -1672,7 +1677,7 @@ impl MainPaneView {
                 components::Button::new("diff_search_close", "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -1809,18 +1814,28 @@ impl MainPaneView {
 
                 let status_badge = |status: SubmoduleStatus| {
                     let (label, color) = match status {
-                        SubmoduleStatus::UpToDate => ("Loaded", theme.colors.success),
+                        SubmoduleStatus::UpToDate => {
+                            ("Loaded", theme.colors.status.success.foreground)
+                        }
                         SubmoduleStatus::NotInitialized => (
                             "Not loaded",
                             with_alpha(
-                                theme.colors.text_muted,
+                                theme.colors.foreground.secondary,
                                 if theme.is_dark { 0.86 } else { 0.94 },
                             ),
                         ),
-                        SubmoduleStatus::HeadMismatch => ("Head mismatch", theme.colors.warning),
-                        SubmoduleStatus::MergeConflict => ("Conflict", theme.colors.danger),
-                        SubmoduleStatus::MissingMapping => ("Missing mapping", theme.colors.danger),
-                        SubmoduleStatus::Unknown(_) => ("Unknown", theme.colors.text_muted),
+                        SubmoduleStatus::HeadMismatch => {
+                            ("Head mismatch", theme.colors.status.warning.foreground)
+                        }
+                        SubmoduleStatus::MergeConflict => {
+                            ("Conflict", theme.colors.status.danger.foreground)
+                        }
+                        SubmoduleStatus::MissingMapping => {
+                            ("Missing mapping", theme.colors.status.danger.foreground)
+                        }
+                        SubmoduleStatus::Unknown(_) => {
+                            ("Unknown", theme.colors.foreground.secondary)
+                        }
                     };
 
                     div()
@@ -1837,12 +1852,18 @@ impl MainPaneView {
 
                 let change_row_icon = |kind: FileStatusKind| match kind {
                     FileStatusKind::Untracked | FileStatusKind::Added => {
-                        ("icons/plus.svg", theme.colors.success)
+                        ("icons/plus.svg", theme.colors.status.success.foreground)
                     }
-                    FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
-                    FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
-                    FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
-                    FileStatusKind::Conflicted => ("icons/warning.svg", theme.colors.danger),
+                    FileStatusKind::Modified => {
+                        ("icons/pencil.svg", theme.colors.status.warning.foreground)
+                    }
+                    FileStatusKind::Deleted => {
+                        ("icons/minus.svg", theme.colors.status.danger.foreground)
+                    }
+                    FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent.foreground),
+                    FileStatusKind::Conflicted => {
+                        ("icons/warning.svg", theme.colors.status.danger.foreground)
+                    }
                 };
 
                 let render_change_rows =
@@ -1858,7 +1879,7 @@ impl MainPaneView {
                                     .px_2()
                                     .py_1()
                                     .text_sm()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("No inner changes.")
                                     .into_any_element(),
                             ];
@@ -1930,7 +1951,7 @@ impl MainPaneView {
                                         .font_family(
                                             crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
                                         )
-                                        .text_color(theme.colors.success)
+                                        .text_color(theme.colors.status.success.foreground)
                                         .child(additions),
                                 )
                                 .child(
@@ -1939,14 +1960,16 @@ impl MainPaneView {
                                         .font_family(
                                             crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
                                         )
-                                        .text_color(theme.colors.danger)
+                                        .text_color(theme.colors.status.danger.foreground)
                                         .child(deletions),
                                 );
 
                                 if let Some(target) = target {
                                     row = row
                                         .cursor(CursorStyle::PointingHand)
-                                        .hover(move |row| row.bg(theme.colors.hover))
+                                        .hover(move |row| {
+                                            row.bg(theme.colors.interaction.hover_background)
+                                        })
                                         .on_click(cx.listener(
                                             move |this, _e: &ClickEvent, _window, cx| {
                                                 let selected_ix = inline_selected_ix.unwrap_or(0);
@@ -2014,7 +2037,7 @@ impl MainPaneView {
                                     .px_2()
                                     .pt_1()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(title),
                             )
                             .children(render_change_rows(
@@ -2062,12 +2085,15 @@ impl MainPaneView {
                         .rounded(px(theme.radii.row))
                         .border_1()
                         .border_color(if emphasized {
-                            theme.colors.active
+                            theme.colors.interaction.pressed_background
                         } else {
-                            theme.colors.border
+                            theme.colors.stroke.default
                         })
                         .bg(if emphasized {
-                            with_alpha(theme.colors.hover, if theme.is_dark { 0.28 } else { 0.48 })
+                            with_alpha(
+                                theme.colors.interaction.hover_background,
+                                if theme.is_dark { 0.28 } else { 0.48 },
+                            )
                         } else {
                             gpui::rgba(0x00000000)
                         })
@@ -2083,7 +2109,7 @@ impl MainPaneView {
                                 .child(
                                     div()
                                         .text_sm()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child(submodule_range_label(range.kind)),
                                 )
                                 .child(
@@ -2093,9 +2119,9 @@ impl MainPaneView {
                                             crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY,
                                         )
                                         .text_color(if changed {
-                                            theme.colors.text
+                                            theme.colors.foreground.primary
                                         } else {
-                                            theme.colors.text_muted
+                                            theme.colors.foreground.secondary
                                         })
                                         .child(format!(
                                             "{} -> {}",
@@ -2112,7 +2138,7 @@ impl MainPaneView {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child("Hashes"),
                                 )
                                 .child(
@@ -2130,7 +2156,7 @@ impl MainPaneView {
                             div()
                                 .px_2()
                                 .text_sm()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(reason.clone()),
                         );
                     }
@@ -2154,7 +2180,7 @@ impl MainPaneView {
                     .min_h(px(0.0))
                     .overflow_y_scroll()
                     .gap_2()
-                    .bg(theme.colors.window_bg)
+                    .bg(theme.colors.surface.canvas)
                     .child(
                         div()
                             .px_2()
@@ -2172,16 +2198,20 @@ impl MainPaneView {
                                         "icons/box.svg",
                                         match summary_status.unwrap_or(SubmoduleStatus::UpToDate) {
                                             SubmoduleStatus::NotInitialized => with_alpha(
-                                                theme.colors.text_muted,
+                                                theme.colors.foreground.secondary,
                                                 if theme.is_dark { 0.82 } else { 0.94 },
                                             ),
-                                            SubmoduleStatus::HeadMismatch => theme.colors.warning,
+                                            SubmoduleStatus::HeadMismatch => {
+                                                theme.colors.status.warning.foreground
+                                            }
                                             SubmoduleStatus::MergeConflict
                                             | SubmoduleStatus::MissingMapping => {
-                                                theme.colors.danger
+                                                theme.colors.status.danger.foreground
                                             }
                                             SubmoduleStatus::UpToDate
-                                            | SubmoduleStatus::Unknown(_) => theme.colors.accent,
+                                            | SubmoduleStatus::Unknown(_) => {
+                                                theme.colors.accent.foreground
+                                            }
                                         },
                                         px(14.0),
                                     ))
@@ -2344,9 +2374,9 @@ impl MainPaneView {
         // the browsed commit's.
         let historical_browse = is_file_preview && self.historical_browse_content_active();
         let content_bg = if historical_browse {
-            crate::theme::historical_surface_bg(theme, theme.colors.window_bg)
+            crate::theme::historical_surface_bg(theme, theme.colors.surface.canvas)
         } else {
-            theme.colors.window_bg
+            theme.colors.surface.canvas
         };
 
         // Deliberately not gated on `is_file_preview`: that predicate also asks
@@ -2490,10 +2520,12 @@ impl MainPaneView {
                 cx,
             );
         } else if !is_file_preview && !is_file_editor {
-            let view_toggle_selected_bg =
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+            let view_toggle_selected_bg = with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.26 } else { 0.20 },
+            );
             let view_toggle_border = with_alpha(
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 if theme.is_dark { 0.38 } else { 0.28 },
             );
             let view_toggle_divider = with_alpha(view_toggle_border, 0.90);
@@ -2515,15 +2547,17 @@ impl MainPaneView {
                         .px_1()
                         .h(components::control_height(ui_scale_percent))
                         .rounded(px(theme.radii.row))
-                        .when(diff_mode_active, |d| d.bg(theme.colors.active))
+                        .when(diff_mode_active, |d| {
+                            d.bg(theme.colors.interaction.pressed_background)
+                        })
                         .hover(move |s| {
                             if diff_mode_active {
-                                s.bg(theme.colors.active)
+                                s.bg(theme.colors.interaction.pressed_background)
                             } else {
-                                s.bg(with_alpha(theme.colors.hover, 0.55))
+                                s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
                             }
                         })
-                        .active(move |s| s.bg(theme.colors.active))
+                        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
                         .cursor(CursorStyle::PointingHand)
                         .child(
                             div()
@@ -2535,7 +2569,7 @@ impl MainPaneView {
                         )
                         .child(svg_icon(
                             "icons/chevron_down.svg",
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             px(12.0),
                         ))
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -2566,7 +2600,11 @@ impl MainPaneView {
                 .is_some();
 
                 let prev_hunk_btn = components::Button::new("diff_prev_hunk", "")
-                    .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
+                    .start_slot(svg_icon(
+                        "icons/arrow_up.svg",
+                        theme.colors.foreground.primary,
+                        px(14.0),
+                    ))
                     .style(components::ButtonStyle::Outlined)
                     .disabled(!can_nav_prev)
                     .on_click(theme, cx, |this, _e, _w, cx| {
@@ -2585,7 +2623,7 @@ impl MainPaneView {
                 let next_hunk_btn = components::Button::new("diff_next_hunk", "")
                     .start_slot(svg_icon(
                         "icons/arrow_down.svg",
-                        theme.colors.text,
+                        theme.colors.foreground.primary,
                         px(14.0),
                     ))
                     .style(components::ButtonStyle::Outlined)
@@ -2705,8 +2743,10 @@ impl MainPaneView {
         } else {
             // File content view (e.g. a file shown at a commit): expose the
             // Blame toggle here too so annotations can be walked through history.
-            let annotate_selected_bg =
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+            let annotate_selected_bg = with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.26 } else { 0.20 },
+            );
             // Reached by the file-content view *and* by the editor, including
             // for a file the preview declines: an editable buffer must never sit
             // under Inline/Split and hunk arrows that navigate a diff which is
@@ -2809,10 +2849,14 @@ impl MainPaneView {
                 .is_some_and(|id| id == &diff_action_invoker);
             controls = controls.child(
                 components::Button::new(cog_id, "")
-                    .start_slot(svg_icon("icons/cog.svg", theme.colors.text_muted, px(14.0)))
+                    .start_slot(svg_icon(
+                        "icons/cog.svg",
+                        theme.colors.foreground.secondary,
+                        px(14.0),
+                    ))
                     .style(components::ButtonStyle::Transparent)
                     .selected(diff_action_active)
-                    .selected_bg(theme.colors.active)
+                    .selected_bg(theme.colors.interaction.pressed_background)
                     .on_click(theme, cx, move |this, e, window, cx| {
                         this.activate_context_menu_invoker(diff_action_invoker.clone(), cx);
                         this.open_popover_at(cog_kind.clone(), e.position(), window, cx);
@@ -2824,7 +2868,7 @@ impl MainPaneView {
                 components::Button::new("diff_close", "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -3169,7 +3213,7 @@ impl MainPaneView {
                                     .flex_col()
                                     .h_full()
                                     .min_h(px(0.0))
-                                    .bg(theme.colors.window_bg)
+                                    .bg(theme.colors.surface.canvas)
                                     .font_family(editor_font_family.clone())
                                     .child(columns_header)
                                     .child(
@@ -3290,7 +3334,7 @@ impl MainPaneView {
                                                 .relative()
                                                 .h_full()
                                                 .min_h(px(0.0))
-                                                .bg(theme.colors.window_bg)
+                                                .bg(theme.colors.surface.canvas)
                                                 .font_family(editor_font_family.clone())
                                                 .child(
                                                     div()
@@ -3398,13 +3442,13 @@ impl MainPaneView {
                                                 left_label,
                                                 collapsed_file_stat.map(|(_, removed)| removed),
                                                 '-',
-                                                theme.colors.diff_remove_text,
+                                                theme.colors.diff.removed.foreground,
                                             );
                                             let right_header = Self::split_column_header_label(
                                                 right_label,
                                                 collapsed_file_stat.map(|(added, _)| added),
                                                 '+',
-                                                theme.colors.diff_add_text,
+                                                theme.colors.diff.added.foreground,
                                             );
 
                                             let split_dragging = self.diff_split_resize.is_some();
@@ -3421,7 +3465,7 @@ impl MainPaneView {
                                                         id,
                                                         components::ResizeGripAxis::Vertical,
                                                         split_dragging,
-                                                        Some(theme.colors.border),
+                                                        Some(theme.colors.stroke.default),
                                                     ))
                                                     .on_drag(
                                                         DiffSplitResizeHandle::Divider,
@@ -3535,10 +3579,10 @@ impl MainPaneView {
                                                 .flex()
                                                 .items_center()
                                                 .text_xs()
-                                                .text_color(theme.colors.text_muted)
+                                                .text_color(theme.colors.foreground.secondary)
                                                 .bg(crate::theme::content_header_bg(theme))
                                                 .border_b_1()
-                                                .border_color(theme.colors.border)
+                                                .border_color(theme.colors.stroke.default)
                                                 .child(
                                                     div()
                                                         .w(left_w)
@@ -3568,7 +3612,7 @@ impl MainPaneView {
                                                 .min_h(px(0.0))
                                                 .flex()
                                                 .flex_col()
-                                                .bg(theme.colors.window_bg)
+                                                .bg(theme.colors.surface.canvas)
                                                 .font_family(editor_font_family.clone())
                                                 .child(columns_header)
                                                 .child(
@@ -3745,7 +3789,9 @@ impl MainPaneView {
             .h_full()
             .min_h(px(0.0))
             .bg(crate::theme::content_header_bg(theme))
-            .when(diff_editor_menu_active, |d| d.bg(theme.colors.active))
+            .when(diff_editor_menu_active, |d| {
+                d.bg(theme.colors.interaction.pressed_background)
+            })
             .track_focus(&self.diff_panel_focus_handle)
             .on_action(
                 cx.listener(|this, _: &crate::view::TextInputDiffPrevFile, window, cx| {
@@ -3826,7 +3872,7 @@ impl MainPaneView {
                         crate::theme::content_header_bg(theme)
                     })
                     .border_b_1()
-                    .border_color(theme.colors.border),
+                    .border_color(theme.colors.stroke.default),
             )
             .child(
                 div()

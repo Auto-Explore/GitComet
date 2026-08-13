@@ -246,10 +246,10 @@ impl CommitFileKindTone {
     #[inline]
     pub(in crate::view) fn color(self, theme: &AppTheme) -> gpui::Rgba {
         match self {
-            Self::Success => theme.colors.success,
-            Self::Warning => theme.colors.warning,
-            Self::Danger => theme.colors.danger,
-            Self::Accent => theme.colors.accent,
+            Self::Success => theme.colors.status.success.foreground,
+            Self::Warning => theme.colors.status.warning.foreground,
+            Self::Danger => theme.colors.status.danger.foreground,
+            Self::Accent => theme.colors.accent.foreground,
         }
     }
 }

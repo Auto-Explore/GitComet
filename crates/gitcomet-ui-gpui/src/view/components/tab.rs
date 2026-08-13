@@ -170,8 +170,8 @@ impl Tab {
     /// contrast in the correct direction for both dark and light themes.
     pub fn outline_color(theme: AppTheme) -> gpui::Rgba {
         let amount = if theme.is_dark { 0.18 } else { 0.14 };
-        let border = theme.colors.border;
-        let text = theme.colors.text;
+        let border = theme.colors.stroke.default;
+        let text = theme.colors.foreground.primary;
         gpui::Rgba {
             r: border.r + (text.r - border.r) * amount,
             g: border.g + (text.g - border.g) * amount,
@@ -243,14 +243,14 @@ impl Tab {
             .horizontal_padding
             .unwrap_or_else(|| scaled_px(Self::TAB_HORIZONTAL_PADDING_PX));
         let text_color = if self.selected {
-            theme.colors.text
+            theme.colors.foreground.primary
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         let natural_width = self.natural_width;
         let selected_shape = self.selected.then(|| {
             selected_tab_shape(
-                theme.colors.sidebar_bg,
+                theme.colors.surface.chrome,
                 Self::outline_color(theme),
                 px(theme.radii.control),
                 scaled_px(Self::TAB_BOTTOM_CURVE_RADIUS_PX),
@@ -313,7 +313,7 @@ impl Tab {
         }
 
         if !self.selected {
-            let hover_text = theme.colors.text;
+            let hover_text = theme.colors.foreground.primary;
             base = base.hover(move |s| s.text_color(hover_text));
         }
 

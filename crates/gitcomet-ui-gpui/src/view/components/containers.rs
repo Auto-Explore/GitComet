@@ -25,15 +25,15 @@ pub fn panel(
         .h(px(CONTROL_HEIGHT_MD_PX))
         .px_2()
         .border_b_1()
-        .border_color(theme.colors.border)
-        .bg(theme.colors.surface_bg_elevated)
+        .border_color(theme.colors.stroke.default)
+        .bg(theme.colors.surface.raised)
         .child(div().text_sm().font_weight(FontWeight::BOLD).child(title));
 
     if let Some(subtitle) = subtitle {
         header = header.child(
             div()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(subtitle),
         );
     }
@@ -41,9 +41,9 @@ pub fn panel(
     div()
         .flex()
         .flex_col()
-        .bg(theme.colors.surface_bg)
+        .bg(theme.colors.surface.panel)
         .border_1()
-        .border_color(theme.colors.border)
+        .border_color(theme.colors.stroke.default)
         .rounded(px(theme.radii.panel))
         .overflow_hidden()
         .when(show_header, |this| this.child(header))
@@ -67,7 +67,7 @@ pub fn pill(theme: AppTheme, label: impl Into<SharedString>, bg: gpui::Rgba) -> 
         .rounded(px(theme.radii.pill))
         .bg(bg)
         .text_xs()
-        .text_color(theme.colors.text)
+        .text_color(theme.colors.foreground.primary)
         .child(label.into())
 }
 
@@ -84,7 +84,7 @@ pub fn empty_state_message(theme: AppTheme, message: impl Into<SharedString>) ->
         .child(
             div()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(message.into()),
         )
 }
@@ -106,13 +106,13 @@ pub fn empty_state(
             div()
                 .text_lg()
                 .font_weight(FontWeight::BOLD)
-                .text_color(theme.colors.text)
+                .text_color(theme.colors.foreground.primary)
                 .child(title.into()),
         )
         .child(
             div()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(message.into()),
         )
 }
@@ -201,7 +201,7 @@ pub fn split_columns_header(
         .flex()
         .items_center()
         .text_xs()
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .child(div().flex_1().min_w(px(0.0)).px_2().child(left.into()))
         .child(div().flex_1().min_w(px(0.0)).px_2().child(right.into()))
 }

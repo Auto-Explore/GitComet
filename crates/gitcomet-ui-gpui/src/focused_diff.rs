@@ -342,8 +342,8 @@ impl Render for FocusedDiffView {
                 this.set_ui_scale_percent(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT, window, cx);
             }))
             .size_full()
-            .bg(theme.colors.window_bg)
-            .text_color(theme.colors.text)
+            .bg(theme.colors.surface.canvas)
+            .text_color(theme.colors.foreground.primary)
             .font(gpui::Font {
                 family: self.ui_font_family.clone().into(),
                 features: crate::font_preferences::applied_font_features(self.use_font_ligatures),
@@ -360,9 +360,9 @@ impl Render for FocusedDiffView {
                     .w_full()
                     .px(scaled_px(12.0))
                     .py(scaled_px(8.0))
-                    .bg(theme.colors.surface_bg)
+                    .bg(theme.colors.surface.panel)
                     .border_b_1()
-                    .border_color(theme.colors.border)
+                    .border_color(theme.colors.stroke.default)
                     .flex()
                     .flex_row()
                     .items_center()
@@ -376,7 +376,7 @@ impl Render for FocusedDiffView {
                     .child(div().flex_grow())
                     .child(
                         div()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .text_size(scaled_px(12.0))
                             .child(SharedString::from(format!("{line_count} lines"))),
                     )
@@ -427,14 +427,17 @@ fn render_diff_line(
     window: &Window,
 ) -> impl IntoElement {
     let (text_color, bg) = match line.visual_kind {
-        DiffLineKind::Header => (theme.colors.text_muted, None),
-        DiffLineKind::HunkHeader => (theme.colors.accent, None),
-        DiffLineKind::Add => (theme.colors.diff_add_text, Some(theme.colors.diff_add_bg)),
-        DiffLineKind::Remove => (
-            theme.colors.diff_remove_text,
-            Some(theme.colors.diff_remove_bg),
+        DiffLineKind::Header => (theme.colors.foreground.secondary, None),
+        DiffLineKind::HunkHeader => (theme.colors.accent.foreground, None),
+        DiffLineKind::Add => (
+            theme.colors.diff.added.foreground,
+            Some(theme.colors.diff.added.background),
         ),
-        DiffLineKind::Context => (theme.colors.text, None),
+        DiffLineKind::Remove => (
+            theme.colors.diff.removed.foreground,
+            Some(theme.colors.diff.removed.background),
+        ),
+        DiffLineKind::Context => (theme.colors.foreground.primary, None),
     };
 
     let line_num = format!("{:>4} ", index + 1);
@@ -446,7 +449,7 @@ fn render_diff_line(
         .flex_row()
         .child(
             div()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .text_size(scaled_px(11.0))
                 .min_w(scaled_px(40.0))
                 .child(SharedString::from(line_num)),

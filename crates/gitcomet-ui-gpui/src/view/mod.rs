@@ -2841,7 +2841,7 @@ impl GitCometView {
                 id,
                 components::ResizeGripAxis::Vertical,
                 dragging,
-                idle_line.then_some(theme.colors.border_variant),
+                idle_line.then_some(theme.colors.stroke.subtle),
             ))
             .on_drag(handle, |_handle, _offset, _window, cx| {
                 cx.new(|_cx| PaneResizeDragGhost)
@@ -3120,8 +3120,8 @@ impl GitCometView {
 
     fn auth_prompt_banner_colors(theme: AppTheme) -> (gpui::Rgba, gpui::Rgba) {
         (
-            with_alpha(theme.colors.accent, 0.15),
-            with_alpha(theme.colors.accent, 0.3),
+            with_alpha(theme.colors.accent.foreground, 0.15),
+            with_alpha(theme.colors.accent.foreground, 0.3),
         )
     }
 
@@ -3562,7 +3562,7 @@ impl Render for GitCometView {
                 weight: gpui::FontWeight::default(),
                 style: gpui::FontStyle::default(),
             })
-            .text_color(theme.colors.text)
+            .text_color(theme.colors.foreground.primary)
             // Any click anywhere hides visible tooltips (both gpui-managed
             // bubbles and the canvas-driven TooltipHost overlay).
             .capture_any_mouse_down(cx.listener(|this, _e: &MouseDownEvent, _window, cx| {
@@ -3628,9 +3628,17 @@ impl Render for GitCometView {
                     .relative()
                     .px_2()
                     .py_1()
-                    .bg(with_alpha(theme.colors.warning, 0.13))
+                    .bg(if theme.is_dark {
+                        with_alpha(theme.colors.status.warning.foreground, 0.13)
+                    } else {
+                        theme.colors.status.warning.background
+                    })
                     .border_1()
-                    .border_color(with_alpha(theme.colors.warning, 0.30))
+                    .border_color(if theme.is_dark {
+                        with_alpha(theme.colors.status.warning.foreground, 0.30)
+                    } else {
+                        theme.colors.status.warning.border
+                    })
                     .rounded(px(theme.radii.panel))
                     .child(
                         div()
@@ -3646,7 +3654,7 @@ impl Render for GitCometView {
                             .child(
                                 div()
                                     .text_sm()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(
                                         "Would you like to contribute by reporting issue to GitComet GitHub repository?",
                                     ),
@@ -3654,7 +3662,7 @@ impl Render for GitCometView {
                             .child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(format!("Summary: {summary}")),
                             )
                             .child(
@@ -3725,7 +3733,7 @@ impl Render for GitCometView {
                 .child(
                     div()
                         .text_sm()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(subtitle),
                 )
                 .when(requires_username, |this| {
@@ -3736,7 +3744,7 @@ impl Render for GitCometView {
                     this.child(
                         div()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child("Use Cancel if you do not trust this host."),
                     )
                 })
@@ -3751,7 +3759,7 @@ impl Render for GitCometView {
                         .child(
                             div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(prompt.reason.clone()),
                         ),
                     )
@@ -3805,7 +3813,7 @@ impl Render for GitCometView {
             let dismiss = components::Button::new("repo_error_banner_close", "")
                 .start_slot(svg_icon(
                     "icons/generic_close.svg",
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     px(12.0),
                 ))
                 .style(components::ButtonStyle::Transparent)
@@ -3818,7 +3826,7 @@ impl Render for GitCometView {
                     .id("repo_error_banner_command")
                     .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                     .bg(with_alpha(
-                        theme.colors.window_bg,
+                        theme.colors.surface.canvas,
                         if theme.is_dark { 0.28 } else { 0.75 },
                     ))
                     .rounded(px(theme.radii.row))
@@ -3833,9 +3841,17 @@ impl Render for GitCometView {
                     .px_2()
                     .py_1()
                     .pr(px(40.0))
-                    .bg(with_alpha(theme.colors.danger, 0.15))
+                    .bg(if theme.is_dark {
+                        with_alpha(theme.colors.status.danger.foreground, 0.15)
+                    } else {
+                        theme.colors.status.danger.background
+                    })
                     .border_1()
-                    .border_color(with_alpha(theme.colors.danger, 0.3))
+                    .border_color(if theme.is_dark {
+                        with_alpha(theme.colors.status.danger.foreground, 0.3)
+                    } else {
+                        theme.colors.status.danger.border
+                    })
                     .rounded(px(theme.radii.panel))
                     .child(
                         restrict_scroll_to_vertical_axis(
@@ -3860,7 +3876,7 @@ impl Render for GitCometView {
                             div()
                                 .mt_1()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("Scroll for full output"),
                         )
                     })
@@ -3871,7 +3887,7 @@ impl Render for GitCometView {
         let mut root = div()
             .size_full()
             .cursor(cursor)
-            .text_color(theme.colors.text);
+            .text_color(theme.colors.foreground.primary);
         root = root.relative();
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root

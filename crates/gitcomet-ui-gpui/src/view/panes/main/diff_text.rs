@@ -65,10 +65,7 @@ impl MainPaneView {
     }
 
     pub(in super::super::super) fn diff_text_selection_color(&self) -> gpui::Rgba {
-        with_alpha(
-            self.theme.colors.accent,
-            if self.theme.is_dark { 0.28 } else { 0.18 },
-        )
+        self.theme.colors.editor.selection_background
     }
 
     pub(in super::super::super) fn set_diff_text_hitbox(

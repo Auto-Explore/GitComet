@@ -10,40 +10,20 @@ pub enum ToastKind {
 }
 
 pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div {
-    let (accent, bg, border) = match kind {
-        ToastKind::Success => (
-            theme.colors.success,
-            with_alpha(
-                theme.colors.surface_bg_elevated,
-                if theme.is_dark { 0.96 } else { 0.98 },
-            ),
-            with_alpha(
-                theme.colors.success,
-                if theme.is_dark { 0.55 } else { 0.45 },
-            ),
-        ),
-        ToastKind::Warning => (
-            theme.colors.warning,
-            with_alpha(
-                theme.colors.surface_bg_elevated,
-                if theme.is_dark { 0.96 } else { 0.98 },
-            ),
-            with_alpha(
-                theme.colors.warning,
-                if theme.is_dark { 0.55 } else { 0.45 },
-            ),
-        ),
-        ToastKind::Error => (
-            theme.colors.danger,
-            with_alpha(
-                theme.colors.surface_bg_elevated,
-                if theme.is_dark { 0.96 } else { 0.98 },
-            ),
-            with_alpha(theme.colors.danger, if theme.is_dark { 0.55 } else { 0.45 }),
-        ),
+    let status = match kind {
+        ToastKind::Success => theme.colors.status.success,
+        ToastKind::Warning => theme.colors.status.warning,
+        ToastKind::Error => theme.colors.status.danger,
     };
-
-    let accent = with_alpha(accent, if theme.is_dark { 0.85 } else { 0.75 });
+    let (accent, bg, border) = if theme.is_dark {
+        (
+            with_alpha(status.foreground, 0.85),
+            with_alpha(theme.colors.surface.raised, 0.96),
+            with_alpha(status.foreground, 0.55),
+        )
+    } else {
+        (status.foreground, status.background, status.border)
+    };
 
     div()
         .min_w(px(360.0))
@@ -57,7 +37,7 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
         .overflow_hidden()
         .shadow(crate::theme::shadow_popover(theme))
         .text_lg()
-        .text_color(theme.colors.text)
+        .text_color(theme.colors.foreground.primary)
         .child(div().w(px(5.0)).bg(accent).flex_shrink_0())
         .child(
             div()

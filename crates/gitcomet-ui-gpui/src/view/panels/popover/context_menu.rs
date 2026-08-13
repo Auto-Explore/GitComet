@@ -1805,7 +1805,7 @@ impl PopoverHost {
             .flex()
             .flex_col()
             .items_stretch()
-            .text_color(theme.colors.text)
+            .text_color(theme.colors.foreground.primary)
             .min_w(width.min_px(ui_scale))
             .max_w(width.max_px(ui_scale))
             .track_focus(&focus)
@@ -1929,13 +1929,14 @@ impl PopoverHost {
                             .h(components::control_height(ui_scale))
                             .rounded(px(theme.radii.row))
                             .border_1()
-                            .border_color(theme.colors.border)
+                            .border_color(theme.colors.stroke.default)
                             .overflow_hidden()
                             .p(px(1.0));
                         for (seg_ix, segment) in segments.into_iter().enumerate() {
                             if seg_ix > 0 {
-                                control = control
-                                    .child(div().h_full().w(px(1.0)).bg(theme.colors.border));
+                                control = control.child(
+                                    div().h_full().w(px(1.0)).bg(theme.colors.stroke.default),
+                                );
                             }
                             let ContextMenuSegment {
                                 id,
@@ -1949,7 +1950,7 @@ impl PopoverHost {
                                 .borderless()
                                 .style(components::ButtonStyle::Subtle)
                                 .selected(selected)
-                                .selected_bg(theme.colors.active)
+                                .selected_bg(theme.colors.interaction.pressed_background)
                                 .on_click(theme, cx, move |this, _e, window, cx| {
                                     this.context_menu_activate_action(action.clone(), window, cx);
                                 })

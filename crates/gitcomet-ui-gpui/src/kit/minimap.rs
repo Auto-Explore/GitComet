@@ -117,7 +117,7 @@ impl MinimapColumn {
                     |_window, _cx| MinimapInteractionState::default(),
                 );
 
-                window.paint_quad(fill(bounds, theme.colors.surface_bg));
+                window.paint_quad(fill(bounds, theme.colors.surface.panel));
                 // kdiff3 rules each column off with a line; keep the width at
                 // exactly 20px by painting the edge instead of using a border.
                 window.paint_quad(fill(
@@ -125,7 +125,7 @@ impl MinimapColumn {
                         point(bounds.right() - px(1.0), bounds.top()),
                         size(px(1.0), bounds.size.height),
                     ),
-                    theme.colors.border,
+                    theme.colors.stroke.default,
                 ));
 
                 paint_bands(
@@ -220,10 +220,10 @@ fn band_color(theme: AppTheme, kind: MinimapRowKind) -> Option<gpui::Rgba> {
     let resolved_alpha = if theme.is_dark { 0.45 } else { 0.35 };
     let (mut color, alpha) = match kind {
         MinimapRowKind::Unchanged => return None,
-        MinimapRowKind::LocalChanged => (theme.colors.diff_add_text, changed_alpha),
-        MinimapRowKind::RemoteChanged => (theme.colors.accent, changed_alpha),
-        MinimapRowKind::ResolvedConflict => (theme.colors.text_muted, resolved_alpha),
-        MinimapRowKind::Conflict => (theme.colors.danger, changed_alpha),
+        MinimapRowKind::LocalChanged => (theme.colors.diff.added.foreground, changed_alpha),
+        MinimapRowKind::RemoteChanged => (theme.colors.accent.foreground, changed_alpha),
+        MinimapRowKind::ResolvedConflict => (theme.colors.foreground.secondary, resolved_alpha),
+        MinimapRowKind::Conflict => (theme.colors.status.danger.foreground, changed_alpha),
     };
     color.a = alpha;
     Some(color)
@@ -279,13 +279,13 @@ fn paint_viewport_frame(
     let frame_h = (height * viewport.extent).max(px(2.0));
     let y1 = (y0 + frame_h).min(bounds.bottom());
     let width = bounds.size.width;
-    let mut edge = theme.colors.text;
+    let mut edge = theme.colors.foreground.primary;
     edge.a = if theme.is_dark { 0.95 } else { 0.70 };
     let thickness = px(1.0);
 
     // A 1px rectangle around the page, as kdiff3's `drawRect` does, plus a
     // faint wash so a page that is only a few pixels tall still reads.
-    let mut shade = theme.colors.text;
+    let mut shade = theme.colors.foreground.primary;
     shade.a = if theme.is_dark { 0.14 } else { 0.09 };
     window.paint_quad(fill(
         Bounds::new(point(bounds.left(), y0), size(width, y1 - y0)),

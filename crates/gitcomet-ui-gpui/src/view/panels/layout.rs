@@ -63,7 +63,7 @@ fn commit_details_author_row(
                         column.child(
                             div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .child(details.author_email.clone()),
@@ -75,7 +75,7 @@ fn commit_details_author_row(
                     div()
                         .flex_none()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(relative),
                 )
             }),
@@ -106,7 +106,7 @@ fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyE
         .child(
             div()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(key),
         )
         .child(div().w_full().min_w(px(0.0)).text_sm().child(value))
@@ -136,7 +136,7 @@ fn commit_message_summary_highlights(
         return Vec::new();
     }
     let style = gpui::HighlightStyle {
-        color: Some(theme.colors.emphasis_text.into()),
+        color: Some(theme.colors.foreground.emphasis.into()),
         font_weight: Some(FontWeight::SEMIBOLD),
         ..gpui::HighlightStyle::default()
     };
@@ -160,10 +160,10 @@ fn commit_message_summary_highlights(
 
 fn commit_link_style(theme: AppTheme) -> gpui::HighlightStyle {
     gpui::HighlightStyle {
-        color: Some(theme.colors.accent.into()),
+        color: Some(theme.colors.accent.foreground.into()),
         underline: Some(gpui::UnderlineStyle {
             thickness: px(1.0),
-            color: Some(theme.colors.accent.into()),
+            color: Some(theme.colors.accent.foreground.into()),
             wavy: false,
         }),
         ..gpui::HighlightStyle::default()
@@ -1006,7 +1006,7 @@ impl DetailsPaneView {
             // The last card sits directly above the files section's own top
             // separator, so it omits its bottom border to avoid a double line.
             .when(show_border, |row| {
-                row.border_b_1().border_color(theme.colors.border)
+                row.border_b_1().border_color(theme.colors.stroke.default)
             })
             .child(components::author_avatar(theme, ui_scale, &author))
             .child(
@@ -1020,7 +1020,7 @@ impl DetailsPaneView {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(when),
                     ),
@@ -1030,7 +1030,7 @@ impl DetailsPaneView {
                     .flex_none()
                     .text_xs()
                     .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(short_sha),
             )
             .into_any_element()
@@ -1136,9 +1136,9 @@ impl DetailsPaneView {
             .justify_between()
             .h(components::control_height_md(ui_scale))
             .px_2()
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface.raised)
             .border_b_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
@@ -1152,7 +1152,7 @@ impl DetailsPaneView {
                 components::Button::new("commit_details_close", "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -1248,9 +1248,9 @@ impl DetailsPaneView {
             .justify_between()
             .h(components::control_height_md(ui_scale))
             .px_2()
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface.raised)
             .border_b_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
@@ -1264,7 +1264,7 @@ impl DetailsPaneView {
                 components::Button::new("range_comparison_close", "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -1317,7 +1317,7 @@ impl DetailsPaneView {
             RangeFilesState::Loading => div()
                 .debug_selector(|| "range_files_loading".to_string())
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Loading")
                 .into_any_element(),
             // An error must not render as "No files." — that is exactly what a
@@ -1326,13 +1326,13 @@ impl DetailsPaneView {
             RangeFilesState::Failed(message) => div()
                 .debug_selector(|| "range_files_error".to_string())
                 .text_sm()
-                .text_color(theme.colors.danger)
+                .text_color(theme.colors.status.danger.foreground)
                 .child(SharedString::from(message.clone()))
                 .into_any_element(),
             RangeFilesState::Loaded(0) => div()
                 .debug_selector(|| "range_files_empty".to_string())
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element(),
             RangeFilesState::Loaded(count) => Self::vertical_scroll_frame(
@@ -1373,7 +1373,7 @@ impl DetailsPaneView {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(subheader),
                     )
@@ -1392,13 +1392,13 @@ impl DetailsPaneView {
                             // pane and collapsing the list to nothing.
                             .min_h(ui_scale.px(RANGE_FILES_SECTION_MIN_HEIGHT_PX))
                             .border_t_1()
-                            .border_color(theme.colors.border_variant)
+                            .border_color(theme.colors.stroke.subtle)
                             .pt_2()
                             .child(
                                 div()
                                     .debug_selector(move || files_label_selector.to_string())
                                     .text_sm()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(files_label),
                             )
                             .child(files_body),
@@ -1479,7 +1479,7 @@ impl DetailsPaneView {
                     components::Button::new("commit_details_close", "")
                         .start_slot(svg_icon(
                             "icons/generic_close.svg",
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             px(12.0),
                         ))
                         .style(components::ButtonStyle::Transparent)
@@ -1536,7 +1536,7 @@ impl DetailsPaneView {
                             let files = if details.files.is_empty() {
                                 div()
                                     .text_sm()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("No files.")
                                     .into_any_element()
                             } else {
@@ -1628,12 +1628,12 @@ impl DetailsPaneView {
                                         .h_full()
                                         .min_h(commit_files_section_min_height)
                                         .border_t_1()
-                                        .border_color(theme.colors.border_variant)
+                                        .border_color(theme.colors.stroke.subtle)
                                         .pt_2()
                                         .child(
                                             div()
                                                 .text_sm()
-                                                .text_color(theme.colors.text_muted)
+                                                .text_color(theme.colors.foreground.secondary)
                                                 .child(format!(
                                                     "Committed files ({})",
                                                     details.files.len()
@@ -1653,7 +1653,7 @@ impl DetailsPaneView {
                         let files = if details.files.is_empty() {
                             div()
                                 .text_sm()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("No files.")
                                 .into_any_element()
                         } else {
@@ -1756,12 +1756,16 @@ impl DetailsPaneView {
                                     .h_full()
                                     .min_h(commit_files_section_min_height)
                                     .border_t_1()
-                                    .border_color(theme.colors.border_variant)
+                                    .border_color(theme.colors.stroke.subtle)
                                     .pt_2()
                                     .child(
-                                        div().text_sm().text_color(theme.colors.text_muted).child(
-                                            format!("Committed files ({})", details.files.len()),
-                                        ),
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.colors.foreground.secondary)
+                                            .child(format!(
+                                                "Committed files ({})",
+                                                details.files.len()
+                                            )),
                                     )
                                     .child(files),
                             )
@@ -1865,7 +1869,10 @@ impl DetailsPaneView {
         let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
         let split_change_tracking = self.change_tracking_view == ChangeTrackingView::SplitUntracked;
-        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let icon_muted = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.72 } else { 0.82 },
+        );
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
         // Measured last frame by the probe on the sections container below; the
@@ -2357,7 +2364,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("unstaged_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2374,7 +2384,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("untracked_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2393,7 +2406,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("split_unstaged_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2412,7 +2428,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("staged_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2469,15 +2488,17 @@ impl DetailsPaneView {
                     .px_1()
                     .h(px(18.0))
                     .rounded(px(theme.radii.row))
-                    .when(change_tracking_active, |d| d.bg(theme.colors.active))
+                    .when(change_tracking_active, |d| {
+                        d.bg(theme.colors.interaction.pressed_background)
+                    })
                     .hover(move |s| {
                         if change_tracking_active {
-                            s.bg(theme.colors.active)
+                            s.bg(theme.colors.interaction.pressed_background)
                         } else {
-                            s.bg(with_alpha(theme.colors.hover, 0.55))
+                            s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
                         }
                     })
-                    .active(move |s| s.bg(theme.colors.active))
+                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
                     .cursor(CursorStyle::PointingHand)
                     .child(
                         div()
@@ -2534,7 +2555,7 @@ impl DetailsPaneView {
                     id,
                     components::ResizeGripAxis::Horizontal,
                     dragging,
-                    Some(theme.colors.border),
+                    Some(theme.colors.stroke.default),
                 ))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -3005,7 +3026,7 @@ impl DetailsPaneView {
             self.commit_amend_enabled,
         );
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
-        let icon_color = theme.colors.accent;
+        let icon_color = theme.colors.accent.foreground;
         let icon = |path: &'static str| svg_icon(path, icon_color, px(14.0));
         let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, px(14.0));
         let commit_label = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
@@ -3032,17 +3053,19 @@ impl DetailsPaneView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == previous_messages_invoker.as_ref());
-        let menu_selected_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+        let menu_selected_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.26 } else { 0.20 },
+        );
         let menu_icon_color = if commit_options_active {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         let previous_messages_icon_color = if previous_messages_active {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         let commit_message = components::ScrollContainer::vertical(
             ("commit_message_scroll_surface", repo_key),

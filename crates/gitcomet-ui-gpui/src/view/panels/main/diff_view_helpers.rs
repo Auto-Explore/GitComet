@@ -19,13 +19,19 @@ impl MainPaneView {
 
                         let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
                             FileStatusKind::Untracked | FileStatusKind::Added => {
-                                ("icons/plus.svg", theme.colors.success)
+                                ("icons/plus.svg", theme.colors.status.success.foreground)
                             }
-                            FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
-                            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
-                            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
+                            FileStatusKind::Modified => {
+                                ("icons/pencil.svg", theme.colors.status.warning.foreground)
+                            }
+                            FileStatusKind::Deleted => {
+                                ("icons/minus.svg", theme.colors.status.danger.foreground)
+                            }
+                            FileStatusKind::Renamed => {
+                                ("icons/swap.svg", theme.colors.accent.foreground)
+                            }
                             FileStatusKind::Conflicted => {
-                                ("icons/warning.svg", theme.colors.danger)
+                                ("icons/warning.svg", theme.colors.status.danger.foreground)
                             }
                         };
                         (Some(icon), color, self.cached_path_display(path))
@@ -33,12 +39,12 @@ impl MainPaneView {
                     DiffTarget::Commit { commit_id: _, path } => match path {
                         Some(path) => (
                             Some("icons/pencil.svg"),
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             self.cached_path_display(path),
                         ),
                         None => (
                             Some("icons/pencil.svg"),
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             "Full diff".into(),
                         ),
                     },
@@ -49,12 +55,12 @@ impl MainPaneView {
                     } => match path {
                         Some(path) => (
                             Some("icons/swap.svg"),
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             self.cached_path_display(path),
                         ),
                         None => (
                             Some("icons/swap.svg"),
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             "Commit range".into(),
                         ),
                     },
@@ -147,13 +153,13 @@ impl MainPaneView {
             .h(components::control_height(ui_scale_percent))
             .rounded(px(theme.radii.row))
             .border_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
+            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
             .child(svg_icon(
                 "icons/history.svg",
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 px(12.0),
             ))
             .child(
@@ -179,7 +185,7 @@ impl MainPaneView {
         let back_btn = components::Button::new("viewer_nav_back", "")
             .start_slot(svg_icon(
                 "icons/arrow_left.svg",
-                theme.colors.text,
+                theme.colors.foreground.primary,
                 px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
@@ -193,7 +199,7 @@ impl MainPaneView {
         let forward_btn = components::Button::new("viewer_nav_forward", "")
             .start_slot(svg_icon(
                 "icons/arrow_right.svg",
-                theme.colors.text,
+                theme.colors.foreground.primary,
                 px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
@@ -222,7 +228,7 @@ impl MainPaneView {
         div()
             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
             .text_xs()
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(label)
     }
 
@@ -332,7 +338,7 @@ impl MainPaneView {
                       delta: i8,
                       cx: &mut gpui::Context<Self>| {
             let btn = components::Button::new(id, "")
-                .start_slot(svg_icon(icon, theme.colors.text, px(14.0)))
+                .start_slot(svg_icon(icon, theme.colors.foreground.primary, px(14.0)))
                 .style(components::ButtonStyle::Outlined);
             let btn = if borderless { btn.borderless() } else { btn };
             btn.on_click(theme, cx, move |this, _e, window, cx| {

@@ -110,7 +110,7 @@ pub(super) fn split_conflict_row_canvas(
                     point(divider_x, prepaint.handle_bounds.top()),
                     size(px(1.0), prepaint.handle_bounds.size.height),
                 ),
-                theme.colors.border,
+                theme.colors.stroke.default,
             ));
 
             if show_line_numbers {
@@ -123,7 +123,7 @@ pub(super) fn split_conflict_row_canvas(
                             &left_line_no,
                             left_gutter.left() + pad,
                             y,
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             line_metrics,
                             window,
                             cx,
@@ -139,15 +139,15 @@ pub(super) fn split_conflict_row_canvas(
                             &right_line_no,
                             right_gutter.left() + pad,
                             y,
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             line_metrics,
                             window,
                             cx,
                         );
                     },
                 );
-                paint_gutter_divider(left_gutter, pad, theme.colors.border, window);
-                paint_gutter_divider(right_gutter, pad, theme.colors.border, window);
+                paint_gutter_divider(left_gutter, pad, theme.colors.stroke.default, window);
+                paint_gutter_divider(right_gutter, pad, theme.colors.stroke.default, window);
             }
 
             let left_text_bounds =
@@ -326,7 +326,10 @@ pub(super) fn single_column_conflict_canvas(
             if row_selected {
                 window.paint_quad(fill(
                     bounds,
-                    with_alpha(theme.colors.accent, if theme.is_dark { 0.20 } else { 0.14 }),
+                    with_alpha(
+                        theme.colors.accent.foreground,
+                        if theme.is_dark { 0.20 } else { 0.14 },
+                    ),
                 ));
             }
 
@@ -337,7 +340,7 @@ pub(super) fn single_column_conflict_canvas(
                 window.paint_quad(fill(
                     bounds,
                     with_alpha(
-                        theme.colors.warning,
+                        theme.colors.status.warning.foreground,
                         if theme.is_dark { 0.22 } else { 0.16 },
                     ),
                 ));
@@ -357,7 +360,7 @@ pub(super) fn single_column_conflict_canvas(
                     ),
                     gpui::size(px(3.0), bounds.size.height),
                 );
-                window.paint_quad(fill(bar, theme.colors.accent));
+                window.paint_quad(fill(bar, theme.colors.accent.foreground));
             }
 
             if show_line_numbers {
@@ -370,14 +373,14 @@ pub(super) fn single_column_conflict_canvas(
                             &line_no,
                             gutter_bounds.left() + pad,
                             y,
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             line_metrics,
                             window,
                             cx,
                         );
                     },
                 );
-                paint_gutter_divider(gutter_bounds, pad, theme.colors.border, window);
+                paint_gutter_divider(gutter_bounds, pad, theme.colors.stroke.default, window);
             }
 
             let text_bounds = split_column_text_bounds(bounds, pad, gap, show_line_numbers);

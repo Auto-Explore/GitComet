@@ -423,6 +423,37 @@ pub(super) fn segments_to_cached_styled_text(
     styled_text_to_cached(expanded_text, highlights)
 }
 
+fn word_highlight_colors(
+    theme: AppTheme,
+    foreground: gpui::Rgba,
+) -> (gpui::Rgba, Option<gpui::Rgba>) {
+    if theme.is_dark {
+        return (with_alpha(foreground, 0.22), None);
+    }
+
+    for set in [
+        theme.colors.diff.added,
+        theme.colors.diff.removed,
+        theme.colors.diff.modified,
+    ] {
+        if foreground == set.foreground {
+            return (set.word_background, Some(set.foreground));
+        }
+    }
+    (with_alpha(foreground, 0.16), Some(foreground))
+}
+
+fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
+    if theme.is_dark {
+        (with_alpha(theme.colors.accent.foreground, 0.22), None)
+    } else {
+        (
+            theme.colors.editor.search_match_background,
+            Some(theme.colors.editor.search_match_foreground),
+        )
+    }
+}
+
 /// Fused version of `build_diff_text_segments` + `segments_to_cached_styled_text`.
 ///
 /// Builds the combined styled text and highlights in a single pass over the
@@ -555,20 +586,31 @@ pub(super) fn build_styled_text_fused(
 
             let mut style = gpui::HighlightStyle::default();
 
-            if in_word && let Some(mut c) = word_color {
-                c.a = if theme.is_dark { 0.22 } else { 0.16 };
-                style.background_color = Some(c.into());
+            let mut semantic_word_foreground = None;
+            if in_word && let Some(c) = word_color {
+                let (background, foreground) = word_highlight_colors(theme, c);
+                style.background_color = Some(background.into());
+                semantic_word_foreground = foreground;
             }
 
+            let mut semantic_query_foreground = None;
             if in_query {
-                style.background_color = Some(
-                    with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into(),
-                );
+                let (background, foreground) = query_highlight_colors(theme);
+                style.background_color = Some(background.into());
+                semantic_query_foreground = foreground;
             }
 
             let syntax_fg = syntax_highlight_color(theme, syntax);
             if let Some(fg) = syntax_fg {
                 style.color = Some(fg.into());
+            }
+            if syntax_fg.is_none()
+                && let Some(foreground) = semantic_word_foreground
+            {
+                style.color = Some(foreground.into());
+            }
+            if let Some(foreground) = semantic_query_foreground {
+                style.color = Some(foreground.into());
             }
 
             if style != gpui::HighlightStyle::default() && offset < next_offset {
@@ -821,8 +863,9 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
         }
 
         let base_highlights = base.highlights.as_ref();
-        let query_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into();
+        let (query_bg, query_fg) = query_highlight_colors(theme);
+        let query_bg: gpui::Hsla = query_bg.into();
+        let query_fg: Option<gpui::Hsla> = query_fg.map(Into::into);
         if base_highlights.is_empty() {
             let mut merged = Vec::with_capacity(query_ranges.len());
             for range in query_ranges.iter().cloned() {
@@ -830,6 +873,7 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
                     &mut merged,
                     range,
                     gpui::HighlightStyle {
+                        color: query_fg,
                         background_color: Some(query_bg),
                         ..gpui::HighlightStyle::default()
                     },
@@ -887,6 +931,9 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
             let mut style = active_base.map(|(_, style)| *style).unwrap_or_default();
             if active_query.is_some() {
                 style.background_color = Some(query_bg);
+                if let Some(query_fg) = query_fg {
+                    style.color = Some(query_fg);
+                }
             }
 
             if style != default_style {
@@ -1324,22 +1371,33 @@ pub(super) fn styled_text_for_diff_segments(
 
         let mut style = gpui::HighlightStyle::default();
 
+        let mut semantic_word_foreground = None;
         if seg.in_word
-            && let Some(mut c) = word_color
+            && let Some(c) = word_color
         {
-            c.a = if theme.is_dark { 0.22 } else { 0.16 };
-            style.background_color = Some(c.into());
+            let (background, foreground) = word_highlight_colors(theme, c);
+            style.background_color = Some(background.into());
+            semantic_word_foreground = foreground;
         }
 
+        let mut semantic_query_foreground = None;
         if seg.in_query {
-            style.background_color = Some(
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 }).into(),
-            );
+            let (background, foreground) = query_highlight_colors(theme);
+            style.background_color = Some(background.into());
+            semantic_query_foreground = foreground;
         }
 
         let syntax_fg = syntax_highlight_color(theme, seg.syntax);
         if let Some(fg) = syntax_fg {
             style.color = Some(fg.into());
+        }
+        if syntax_fg.is_none()
+            && let Some(foreground) = semantic_word_foreground
+        {
+            style.color = Some(foreground.into());
+        }
+        if let Some(foreground) = semantic_query_foreground {
+            style.color = Some(foreground.into());
         }
 
         if style != gpui::HighlightStyle::default() && offset < next_offset {
@@ -1420,29 +1478,29 @@ pub(in super::super) fn diff_line_colors(
 
     match (theme.is_dark, kind) {
         (_, Header) => (
-            theme.colors.window_bg,
-            theme.colors.text_muted,
-            theme.colors.text_muted,
+            theme.colors.editor.background,
+            theme.colors.editor.line_number,
+            theme.colors.editor.line_number,
         ),
         (_, Hunk) => (
-            theme.colors.window_bg,
-            theme.colors.accent,
-            theme.colors.text_muted,
+            theme.colors.editor.background,
+            theme.colors.accent.foreground,
+            theme.colors.editor.line_number,
         ),
         (_, Add) => (
-            theme.colors.diff_add_bg,
-            theme.colors.diff_add_text,
-            theme.colors.diff_add_text,
+            theme.colors.diff.added.background,
+            theme.colors.diff.added.foreground,
+            theme.colors.diff.added.foreground,
         ),
         (_, Remove) => (
-            theme.colors.diff_remove_bg,
-            theme.colors.diff_remove_text,
-            theme.colors.diff_remove_text,
+            theme.colors.diff.removed.background,
+            theme.colors.diff.removed.foreground,
+            theme.colors.diff.removed.foreground,
         ),
         (_, Context) => (
-            theme.colors.window_bg,
-            theme.colors.text,
-            theme.colors.text_muted,
+            theme.colors.editor.background,
+            theme.colors.editor.foreground,
+            theme.colors.editor.line_number,
         ),
     }
 }

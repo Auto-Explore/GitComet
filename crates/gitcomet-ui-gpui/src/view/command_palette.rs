@@ -817,7 +817,7 @@ impl CommandPaletteView {
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         let highlight = gpui::HighlightStyle {
-            color: Some(self.theme.colors.accent.into()),
+            color: Some(self.theme.colors.accent.foreground.into()),
             font_weight: Some(FontWeight::BOLD),
             ..gpui::HighlightStyle::default()
         };
@@ -831,7 +831,7 @@ impl CommandPaletteView {
         let focus_range = ranges.first().map(|(range, _)| range.clone());
         let mut text = components::TruncatedText::new(label.to_owned())
             .profile(components::TextTruncationProfile::End)
-            .text_color(self.theme.colors.text)
+            .text_color(self.theme.colors.foreground.primary)
             .text_sm();
         if let Some(focus_range) = focus_range {
             text = text.focus_range(Some(focus_range));
@@ -868,7 +868,7 @@ impl CommandPaletteView {
                             .px(scaled_px(14.0))
                             .text_xs()
                             .font_weight(FontWeight::MEDIUM)
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(title)
                             .into_any_element(),
                         false,
@@ -945,7 +945,7 @@ impl CommandPaletteView {
                                         .w(scaled_px(3.0))
                                         .rounded_tr(px(theme.radii.row))
                                         .rounded_br(px(theme.radii.row))
-                                        .bg(theme.colors.accent),
+                                        .bg(theme.colors.accent.foreground),
                                 )
                         })
                         .px(scaled_px(6.0))
@@ -985,7 +985,7 @@ impl Render for CommandPaletteView {
                 .justify_center()
                 .px(scaled_px(12.0))
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("No matching commands")
                 .into_any_element()
         } else {
@@ -1022,7 +1022,7 @@ impl Render for CommandPaletteView {
                     .items_center()
                     .px(scaled_px(14.0))
                     .border_b_1()
-                    .border_color(theme.colors.border_variant)
+                    .border_color(theme.colors.stroke.subtle)
                     .child(self.query_input.clone()),
             )
             .child(list_body);

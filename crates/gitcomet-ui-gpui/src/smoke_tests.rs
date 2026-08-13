@@ -73,7 +73,7 @@ fn simulate_key_press(cx: &mut gpui::VisualTestContext, key: &str) {
 fn builds_pure_components_without_panics() {
     for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
         assert_no_panic("components::pill", || {
-            let _ = components::pill(theme, "Label", theme.colors.accent);
+            let _ = components::pill(theme, "Label", theme.colors.accent.foreground);
         });
 
         assert_no_panic("components::empty_state", || {
@@ -3081,7 +3081,7 @@ impl gpui::Render for PanelLayoutTestView {
                     .child(scrollbar.render(theme))
             });
 
-        div().size_full().bg(theme.colors.window_bg).child(
+        div().size_full().bg(theme.colors.surface.canvas).child(
             components::panel(theme, "Panel", None, body)
                 .flex_1()
                 .h_full(),
@@ -3185,19 +3185,22 @@ impl gpui::Render for PickerPromptScrollbarTestView {
             .into();
         let layout = std::rc::Rc::new(components::picker_prompt_layout(&items, ""));
 
-        div().size_full().bg(self.theme.colors.window_bg).child(
-            div().w(px(360.0)).child(
-                components::PickerPrompt::new(self.input.clone(), self.scroll_handle.clone())
-                    .prebuilt_items(items, layout)
-                    .max_height(px(120.0))
-                    .render(
-                        self.theme,
-                        ui_scale::DEFAULT_UI_SCALE_PERCENT,
-                        cx,
-                        |_this, _ix, _event, _window, _cx| {},
-                    ),
-            ),
-        )
+        div()
+            .size_full()
+            .bg(self.theme.colors.surface.canvas)
+            .child(
+                div().w(px(360.0)).child(
+                    components::PickerPrompt::new(self.input.clone(), self.scroll_handle.clone())
+                        .prebuilt_items(items, layout)
+                        .max_height(px(120.0))
+                        .render(
+                            self.theme,
+                            ui_scale::DEFAULT_UI_SCALE_PERCENT,
+                            cx,
+                            |_this, _ix, _event, _window, _cx| {},
+                        ),
+                ),
+            )
     }
 }
 
@@ -3635,7 +3638,7 @@ impl gpui::Render for ScrollbarTestView {
             })
             .collect::<Vec<_>>();
 
-        div().size_full().bg(theme.colors.window_bg).child(
+        div().size_full().bg(theme.colors.surface.canvas).child(
             div()
                 .id("scroll_container")
                 .relative()
@@ -3837,7 +3840,7 @@ impl gpui::Render for ScrollbarMismatchedBoundsView {
 
         // Render the scrollbar in a *larger* container than the scroll surface to ensure the
         // scrollbar uses its own bounds (not the scroll handle's bounds) for hit-testing/metrics.
-        div().size_full().bg(theme.colors.window_bg).child(
+        div().size_full().bg(theme.colors.surface.canvas).child(
             div()
                 .id("outer_scrollbar_container")
                 .relative()

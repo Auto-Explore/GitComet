@@ -10,7 +10,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .flex_col()
         .w(scaled_px(420.0))
         .child(popover_title("Create stash"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

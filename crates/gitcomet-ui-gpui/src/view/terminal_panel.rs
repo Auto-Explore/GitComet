@@ -2749,9 +2749,9 @@ impl GitCometView {
             // transparent when unfocused) so toggling focus never shifts layout.
             .border_t_2()
             .border_color(if terminal_focused {
-                theme.colors.focus_ring
+                theme.colors.interaction.focus_ring
             } else {
-                with_alpha(theme.colors.focus_ring, 0.0)
+                with_alpha(theme.colors.interaction.focus_ring, 0.0)
             })
             .child(header)
             .child(viewport_element)
@@ -2766,7 +2766,7 @@ impl GitCometView {
                         div()
                             .px(px(8.0))
                             .py(px(4.0))
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(format!("Terminal — {status}")),
                     )
                     .child(panel)
@@ -2799,8 +2799,8 @@ impl GitCometView {
                 .size(px(22.0))
                 .rounded(px(theme.radii.row))
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(theme.colors.hover))
-                .child(svg_icon(icon, theme.colors.text, px(14.0)))
+                .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+                .child(svg_icon(icon, theme.colors.foreground.primary, px(14.0)))
                 .gitcomet_tooltip(theme, tip.into())
         };
 
@@ -2818,14 +2818,14 @@ impl GitCometView {
         for (i, title) in tabs.iter().enumerate() {
             let is_active = i == active_index;
             let tab_bg = if is_active {
-                theme.colors.active_section
+                theme.colors.interaction.selected_background
             } else {
-                theme.colors.surface_bg
+                theme.colors.surface.panel
             };
             let text_color = if is_active {
-                theme.colors.text
+                theme.colors.foreground.primary
             } else {
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             };
 
             let close = div()
@@ -2836,7 +2836,7 @@ impl GitCometView {
                 .size(px(14.0))
                 .rounded(px(theme.radii.row))
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
+                .hover(move |s| s.bg(with_alpha(theme.colors.status.danger.foreground, 0.18)))
                 .child(svg_icon("icons/generic_close.svg", text_color, px(10.0)))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -2860,7 +2860,9 @@ impl GitCometView {
                 .text_size(px(12.0))
                 .flex_none()
                 .cursor(CursorStyle::PointingHand)
-                .when(!is_active, |d| d.hover(move |s| s.bg(theme.colors.hover)))
+                .when(!is_active, |d| {
+                    d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
+                })
                 .child(svg_icon("icons/terminal.svg", text_color, px(12.0)))
                 .child(title.clone())
                 .child(close)
@@ -2884,8 +2886,12 @@ impl GitCometView {
             .size(px(20.0))
             .rounded(px(theme.radii.row))
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(theme.colors.hover))
-            .child(svg_icon("icons/plus.svg", theme.colors.text, px(12.0)))
+            .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+            .child(svg_icon(
+                "icons/plus.svg",
+                theme.colors.foreground.primary,
+                px(12.0),
+            ))
             .gitcomet_tooltip(theme, "New terminal".into())
             .on_mouse_down(
                 MouseButton::Left,
@@ -2903,9 +2909,9 @@ impl GitCometView {
             .gap(px(2.0))
             .px(px(4.0))
             .py(px(4.0))
-            .bg(theme.colors.surface_bg)
+            .bg(theme.colors.surface.panel)
             .border_b_1()
-            .border_color(theme.colors.border_variant)
+            .border_color(theme.colors.stroke.subtle)
             .child(tabs_row)
             .when(focused, |row| {
                 // Badge that explains why the usual app shortcuts (Ctrl+P, etc.)
@@ -2921,12 +2927,17 @@ impl GitCometView {
                         .px(px(6.0))
                         .py(px(2.0))
                         .rounded(px(theme.radii.row))
-                        .bg(with_alpha(theme.colors.accent, 0.15))
-                        .child(div().size(px(6.0)).rounded(px(3.0)).bg(theme.colors.accent))
+                        .bg(with_alpha(theme.colors.accent.foreground, 0.15))
+                        .child(
+                            div()
+                                .size(px(6.0))
+                                .rounded(px(3.0))
+                                .bg(theme.colors.accent.foreground),
+                        )
                         .child(
                             div()
                                 .text_size(px(11.0))
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child("Keyboard captured"),
                         )
                         .gitcomet_tooltip(
@@ -3044,7 +3055,7 @@ impl GitCometView {
                 "terminal_panel_resize",
                 components::ResizeGripAxis::Horizontal,
                 self.terminal_panel_resize.is_some(),
-                Some(theme.colors.border_variant),
+                Some(theme.colors.stroke.subtle),
             ))
             .on_drag(TerminalPanelResizeDrag, |_payload, _offset, _window, cx| {
                 cx.new(|_cx| super::mod_helpers::ResizeDragGhost)
@@ -3326,7 +3337,7 @@ fn paint_terminal_canvas_state(
     for rect in paint_state.selection_rects {
         window.paint_quad(fill(
             rect,
-            with_alpha(theme.colors.accent, TERMINAL_SELECTION_ALPHA),
+            with_alpha(theme.colors.accent.foreground, TERMINAL_SELECTION_ALPHA),
         ));
     }
     for (line, origin, line_height) in paint_state.lines {

@@ -380,7 +380,7 @@ impl MainPaneView {
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let show_ws = this.reveal_whitespace_chars;
-        let word_hl_color = Some(theme.colors.warning);
+        let word_hl_color = Some(theme.colors.status.warning.foreground);
         let syntax_lang = this.conflict_row_syntax_language();
         let prepared_docs = &this.conflict_three_way_prepared_syntax_documents;
 
@@ -473,7 +473,10 @@ impl MainPaneView {
             this.ensure_prepared_syntax_chunk_poll(cx);
         }
 
-        let chosen_bg = with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.12 });
+        let chosen_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.16 } else { 0.12 },
+        );
         let conflict_choices = this.conflict_resolver.conflict_choices.as_slice();
         // section 30 R11 (kdiff3 change colours): with a real base alignment, the
         // side columns tint only rows whose own line differs from base; the
@@ -554,7 +557,7 @@ impl MainPaneView {
                         .flex()
                         .items_center()
                         .bg(with_alpha(
-                            theme.colors.success,
+                            theme.colors.status.success.foreground,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
                         .when(
@@ -567,13 +570,13 @@ impl MainPaneView {
                                         .top_0()
                                         .bottom_0()
                                         .w(px(3.0))
-                                        .bg(theme.colors.accent),
+                                        .bg(theme.colors.accent.foreground),
                                 )
                             },
                         )
                         .px_2()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(label)
                         .cursor(CursorStyle::PointingHand)
                         .on_mouse_down(
@@ -665,39 +668,39 @@ impl MainPaneView {
                         {
                             match column {
                                 ThreeWayColumn::Ours => with_alpha(
-                                    theme.colors.success,
+                                    theme.colors.status.success.foreground,
                                     if theme.is_dark { 0.10 } else { 0.08 },
                                 ),
                                 _ => with_alpha(
-                                    theme.colors.accent,
+                                    theme.colors.accent.foreground,
                                     if theme.is_dark { 0.14 } else { 0.10 },
                                 ),
                             }
                         } else {
-                            with_alpha(theme.colors.surface_bg_elevated, 0.0)
+                            with_alpha(theme.colors.surface.raised, 0.0)
                         }
                     } else if is_in_conflict {
                         match column {
                             ThreeWayColumn::Base => with_alpha(
-                                theme.colors.warning,
+                                theme.colors.status.warning.foreground,
                                 if theme.is_dark { 0.10 } else { 0.08 },
                             ),
                             ThreeWayColumn::Ours => with_alpha(
-                                theme.colors.success,
+                                theme.colors.status.success.foreground,
                                 if theme.is_dark { 0.10 } else { 0.08 },
                             ),
                             ThreeWayColumn::Theirs => with_alpha(
-                                theme.colors.accent,
+                                theme.colors.accent.foreground,
                                 if theme.is_dark { 0.14 } else { 0.10 },
                             ),
                         }
                     } else {
-                        with_alpha(theme.colors.surface_bg_elevated, 0.0)
+                        with_alpha(theme.colors.surface.raised, 0.0)
                     };
                     let fg = if line_text.is_some() {
-                        theme.colors.text
+                        theme.colors.foreground.primary
                     } else {
-                        theme.colors.text_muted
+                        theme.colors.foreground.secondary
                     };
                     // kdiff3 behavior: per-column line numbers from the
                     // side's own file; padding rows have none.
@@ -800,12 +803,12 @@ impl MainPaneView {
                                     .top_0()
                                     .bottom_0()
                                     .w(px(3.0))
-                                    .bg(theme.colors.accent),
+                                    .bg(theme.colors.accent.foreground),
                             )
                         })
                         .when(row_selected, |d| {
                             d.child(div().absolute().inset_0().bg(with_alpha(
-                                theme.colors.accent,
+                                theme.colors.accent.foreground,
                                 if theme.is_dark { 0.20 } else { 0.14 },
                             )))
                         })
@@ -991,7 +994,7 @@ impl MainPaneView {
                         .id((div_id_prefix, visible_row_ix))
                         .h(px(20.0))
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("")
                         .into_any_element();
                 };
@@ -1067,9 +1070,9 @@ impl MainPaneView {
 
                 let bg = split_cell_bg(theme, visual_kind, side);
                 let fg = if text_opt.is_some() {
-                    theme.colors.text
+                    theme.colors.foreground.primary
                 } else {
-                    theme.colors.text_muted
+                    theme.colors.foreground.secondary
                 };
                 let display_text = conflict_display_text(&text, styled, show_ws);
                 let show_line_numbers = this.mergetool_show_line_numbers;
@@ -1142,7 +1145,7 @@ impl MainPaneView {
                                 .top_0()
                                 .bottom_0()
                                 .w(px(3.0))
-                                .bg(theme.colors.accent),
+                                .bg(theme.colors.accent.foreground),
                         )
                     })
                     .when(show_line_numbers, |d| {
@@ -1317,7 +1320,7 @@ impl MainPaneView {
                         .flex()
                         .items_center()
                         .bg(with_alpha(
-                            theme.colors.success,
+                            theme.colors.status.success.foreground,
                             if theme.is_dark { 0.08 } else { 0.06 },
                         ))
                         .when(
@@ -1330,13 +1333,13 @@ impl MainPaneView {
                                         .top_0()
                                         .bottom_0()
                                         .w(px(3.0))
-                                        .bg(theme.colors.accent),
+                                        .bg(theme.colors.accent.foreground),
                                 )
                             },
                         )
                         .px_2()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(label)
                         .cursor(CursorStyle::PointingHand)
                         .on_mouse_down(
@@ -1479,9 +1482,9 @@ impl MainPaneView {
                     let text = SharedString::new(side_text.unwrap_or_default());
                     let bg = split_cell_bg(theme, visual_kind, side);
                     let fg = if has_text {
-                        theme.colors.text
+                        theme.colors.foreground.primary
                     } else {
-                        theme.colors.text_muted
+                        theme.colors.foreground.secondary
                     };
                     let display_text = conflict_display_text(&text, styled, show_ws);
                     let show_line_numbers = this.mergetool_show_line_numbers;
@@ -1566,12 +1569,12 @@ impl MainPaneView {
                                     .top_0()
                                     .bottom_0()
                                     .w(px(3.0))
-                                    .bg(theme.colors.accent),
+                                    .bg(theme.colors.accent.foreground),
                             )
                         })
                         .when(row_selected, |d| {
                             d.child(div().absolute().inset_0().bg(with_alpha(
-                                theme.colors.accent,
+                                theme.colors.accent.foreground,
                                 if theme.is_dark { 0.20 } else { 0.14 },
                             )))
                         })
@@ -1709,7 +1712,7 @@ impl MainPaneView {
         let label: SharedString =
             format!("⋯ {len} unchanged lines ({first_line}–{last_line})").into();
         let fold_bg = with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.14 } else { 0.10 },
         );
         let reveal_btn = |id_suffix: &'static str,
@@ -1726,7 +1729,9 @@ impl MainPaneView {
                 .justify_center()
                 .rounded(px(theme.radii.row))
                 .cursor(CursorStyle::PointingHand)
-                .hover(move |style| style.bg(with_alpha(theme.colors.hover, 0.55)))
+                .hover(move |style| {
+                    style.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
+                })
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
@@ -1740,7 +1745,7 @@ impl MainPaneView {
                         }
                     }),
                 )
-                .child(svg_icon(icon, theme.colors.text_muted, px(10.0)))
+                .child(svg_icon(icon, theme.colors.foreground.secondary, px(10.0)))
                 .gitcomet_tooltip(theme, tooltip.into())
         };
         div()
@@ -1753,7 +1758,7 @@ impl MainPaneView {
             .gap_2()
             .bg(fold_bg)
             .text_xs()
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(
                 div()
                     .flex_shrink_0()
@@ -1847,7 +1852,7 @@ impl MainPaneView {
         }
 
         let fold_bg = with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.14 } else { 0.10 },
         );
         // Line-number cell sized to this file's digit count so short numbers sit
@@ -1873,7 +1878,7 @@ impl MainPaneView {
                             .h(px(20.0))
                             .px_2()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child("")
                             .into_any_element();
                     }
@@ -1892,7 +1897,7 @@ impl MainPaneView {
                 // resolver pick — mute it so only real picks read as
                 // decisions.
                 let badge_fg = if gutter_row.has_marker() && gutter_row.unresolved() {
-                    theme.colors.danger
+                    theme.colors.status.danger.foreground
                 } else if gutter_row.has_marker() {
                     badge_fg
                 } else {
@@ -1902,12 +1907,18 @@ impl MainPaneView {
                 let conflict_active = this.conflict_resolver.conflict_is_active(conflict_ix);
                 let conflict_unresolved = gutter_row.unresolved();
                 let marker_color = if conflict_unresolved {
-                    with_alpha(theme.colors.danger, if theme.is_dark { 0.96 } else { 0.90 })
+                    with_alpha(
+                        theme.colors.status.danger.foreground,
+                        if theme.is_dark { 0.96 } else { 0.90 },
+                    )
                 } else if conflict_active {
-                    with_alpha(theme.colors.accent, if theme.is_dark { 0.92 } else { 0.84 })
+                    with_alpha(
+                        theme.colors.accent.foreground,
+                        if theme.is_dark { 0.92 } else { 0.84 },
+                    )
                 } else {
                     with_alpha(
-                        theme.colors.success,
+                        theme.colors.status.success.foreground,
                         if theme.is_dark { 0.82 } else { 0.72 },
                     )
                 };
@@ -1959,7 +1970,7 @@ impl MainPaneView {
                     .items_center()
                     .text_xs()
                     .font_family(editor_font_family.clone())
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     // The active conflict's open row wears the same yellow wash
                     // the editor paints behind its `<Merge Conflict>` text, so
                     // the gutter and the code read as one highlighted row.
@@ -1972,7 +1983,7 @@ impl MainPaneView {
                     })
                     .when(gutter_row.manual_without_marker(), |d| {
                         d.bg(with_alpha(
-                            theme.colors.surface_bg_elevated,
+                            theme.colors.surface.raised,
                             if theme.is_dark { 0.18 } else { 0.12 },
                         ))
                     })
@@ -1987,7 +1998,7 @@ impl MainPaneView {
                                 .mr_1()
                                 .flex()
                                 .justify_end()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(line_number_string(u32::try_from(ix + 1).ok())),
                         )
                     })
@@ -2019,9 +2030,13 @@ impl MainPaneView {
                             .when_some(confidence, |d, confidence| {
                                 use gitcomet_core::conflict_session::AutosolveConfidence;
                                 let dot_color = match confidence {
-                                    AutosolveConfidence::High => theme.colors.accent,
-                                    AutosolveConfidence::Medium => theme.colors.warning,
-                                    AutosolveConfidence::Low => theme.colors.danger,
+                                    AutosolveConfidence::High => theme.colors.accent.foreground,
+                                    AutosolveConfidence::Medium => {
+                                        theme.colors.status.warning.foreground
+                                    }
+                                    AutosolveConfidence::Low => {
+                                        theme.colors.status.danger.foreground
+                                    }
                                 };
                                 d.child(
                                     div()
@@ -2089,12 +2104,14 @@ impl MainPaneView {
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let show_ws = this.reveal_whitespace_chars;
         if let Some(projection) = this.conflict_resolved_output_projection.as_ref() {
-            let unresolved_row_bg =
-                with_alpha(theme.colors.danger, if theme.is_dark { 0.18 } else { 0.10 });
+            let unresolved_row_bg = with_alpha(
+                theme.colors.status.danger.foreground,
+                if theme.is_dark { 0.18 } else { 0.10 },
+            );
             let active_unresolved_row_bg =
                 crate::view::panes::main::resolved_output_active_conflict_background(theme);
             let resolved_row_bg = with_alpha(
-                theme.colors.success,
+                theme.colors.status.success.foreground,
                 if theme.is_dark { 0.12 } else { 0.08 },
             );
             let line_count = this.conflict_resolved_preview_line_count;
@@ -2134,9 +2151,9 @@ impl MainPaneView {
                     }
                 });
                 let text_color = if conflict_marker.is_some_and(|marker| marker.unresolved) {
-                    theme.colors.danger
+                    theme.colors.status.danger.foreground
                 } else {
-                    theme.colors.text
+                    theme.colors.foreground.primary
                 };
 
                 elements.push(
@@ -2189,7 +2206,7 @@ impl MainPaneView {
                         .h(px(20.0))
                         .px_2()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("")
                         .into_any_element(),
                 );
@@ -2237,7 +2254,7 @@ impl MainPaneView {
                         .h(px(20.0))
                         .px_2()
                         .text_xs()
-                        .text_color(this.theme.colors.text_muted)
+                        .text_color(this.theme.colors.foreground.secondary)
                         .child("")
                         .into_any_element();
                 };
@@ -2458,14 +2475,14 @@ impl MainPaneView {
 
         let [left_col_w, right_col_w] = self.conflict_diff_split_col_widths;
         let left_fg = if row.old.is_some() {
-            theme.colors.text
+            theme.colors.foreground.primary
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         let right_fg = if row.new.is_some() {
-            theme.colors.text
+            theme.colors.foreground.primary
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
 
         if self.conflict_canvas_rows_enabled {
@@ -2560,7 +2577,7 @@ impl MainPaneView {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border)),
+                    .child(div().w(px(1.0)).h_full().bg(theme.colors.stroke.default)),
             )
             .child(right)
             .into_any_element()
@@ -2577,8 +2594,8 @@ fn conflict_diff_line_number_cell(theme: AppTheme, line_no: SharedString) -> gpu
         .flex()
         .items_center()
         .border_r_1()
-        .border_color(theme.colors.border)
-        .text_color(theme.colors.text_muted)
+        .border_color(theme.colors.stroke.default)
+        .text_color(theme.colors.foreground.secondary)
         .child(line_no)
 }
 
@@ -2697,29 +2714,32 @@ fn resolved_output_source_badge_colors(
 ) -> (gpui::Rgba, gpui::Rgba) {
     match source {
         conflict_resolver::ResolvedLineSource::A => (
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.68 } else { 0.56 }),
-            theme.colors.accent,
+            with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.68 } else { 0.56 },
+            ),
+            theme.colors.accent.foreground,
         ),
         conflict_resolver::ResolvedLineSource::B => (
             with_alpha(
-                theme.colors.success,
+                theme.colors.status.success.foreground,
                 if theme.is_dark { 0.68 } else { 0.56 },
             ),
-            theme.colors.success,
+            theme.colors.status.success.foreground,
         ),
         conflict_resolver::ResolvedLineSource::C => (
             with_alpha(
-                theme.colors.warning,
+                theme.colors.status.warning.foreground,
                 if theme.is_dark { 0.68 } else { 0.56 },
             ),
-            theme.colors.warning,
+            theme.colors.status.warning.foreground,
         ),
         conflict_resolver::ResolvedLineSource::Manual => (
             with_alpha(
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 if theme.is_dark { 0.48 } else { 0.42 },
             ),
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
         ),
     }
 }
@@ -2846,16 +2866,19 @@ fn split_cell_bg(
     match (kind, side) {
         (gitcomet_core::file_diff::FileDiffRowKind::Add, ConflictPickSide::Theirs)
         | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Theirs) => {
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.14 } else { 0.10 })
+            with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.14 } else { 0.10 },
+            )
         }
         (gitcomet_core::file_diff::FileDiffRowKind::Remove, ConflictPickSide::Ours)
         | (gitcomet_core::file_diff::FileDiffRowKind::Modify, ConflictPickSide::Ours) => {
             with_alpha(
-                theme.colors.success,
+                theme.colors.status.success.foreground,
                 if theme.is_dark { 0.10 } else { 0.08 },
             )
         }
-        _ => with_alpha(theme.colors.surface_bg_elevated, 0.0),
+        _ => with_alpha(theme.colors.surface.raised, 0.0),
     }
 }
 

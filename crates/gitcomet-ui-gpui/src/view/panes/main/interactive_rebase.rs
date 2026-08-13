@@ -373,7 +373,7 @@ impl Render for IRebaseDragPreview {
             InteractiveRebaseAction::Squash | InteractiveRebaseAction::Fixup
         );
         let outlined_border = with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.38 } else { 0.28 },
         );
         div()
@@ -385,20 +385,20 @@ impl Render for IRebaseDragPreview {
             .px_2()
             .py_0p5()
             .rounded(px(theme.radii.row))
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface.raised)
             .border_1()
-            .border_color(with_alpha(theme.colors.accent, 0.6))
+            .border_color(with_alpha(theme.colors.accent.foreground, 0.6))
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child("⠿"),
             )
             .when(is_squash_like, |d| {
                 d.child(div().flex_shrink_0().flex().items_center().child(
                     crate::view::icons::svg_icon(
                         "icons/squash_arrow.svg",
-                        with_alpha(theme.colors.accent, 0.7),
+                        with_alpha(theme.colors.accent.foreground, 0.7),
                         px(14.0),
                     ),
                 ))
@@ -415,11 +415,11 @@ impl Render for IRebaseDragPreview {
                     .border_1()
                     .border_color(outlined_border)
                     .text_sm()
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .child(self.action.to_todo_str())
                     .child(crate::view::icons::svg_icon(
                         "icons/chevron_down.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     )),
             )
@@ -427,7 +427,7 @@ impl Render for IRebaseDragPreview {
                 div()
                     .flex_shrink_0()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .font_family("monospace")
                     .child(self.sha.clone()),
             )
@@ -435,7 +435,7 @@ impl Render for IRebaseDragPreview {
                 div()
                     .flex_1()
                     .text_sm()
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .overflow_x_hidden()
                     .whitespace_nowrap()
                     .child(self.summary.clone()),
@@ -734,9 +734,9 @@ impl MainPaneView {
         );
         let is_dropped = action == InteractiveRebaseAction::Drop;
         let row_text_color = if is_dropped {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         } else {
-            theme.colors.text
+            theme.colors.foreground.primary
         };
         let autosquash_active =
             st.mode == ICommitEditorMode::Rebase && st.autosquash_mode.is_some();
@@ -773,7 +773,7 @@ impl MainPaneView {
             .style(components::ButtonStyle::Outlined)
             .end_slot(crate::view::icons::svg_icon(
                 "icons/chevron_down.svg",
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 px(12.0),
             ))
             .render(theme, ui_scale_percent)
@@ -823,7 +823,7 @@ impl MainPaneView {
         let up_btn = components::Button::new(format!("up_{ix}"), "")
             .start_slot(crate::view::icons::svg_icon(
                 "icons/arrow_up.svg",
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 px(12.0),
             ))
             .style(components::ButtonStyle::Subtle)
@@ -850,7 +850,7 @@ impl MainPaneView {
         let down_btn = components::Button::new(format!("down_{ix}"), "")
             .start_slot(crate::view::icons::svg_icon(
                 "icons/arrow_down.svg",
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 px(12.0),
             ))
             .style(components::ButtonStyle::Subtle)
@@ -885,9 +885,9 @@ impl MainPaneView {
             .cursor(gpui::CursorStyle::PointingHand)
             .text_xs()
             .text_color(if is_dropped {
-                with_alpha(theme.colors.text_muted, 0.7)
+                with_alpha(theme.colors.foreground.secondary, 0.7)
             } else {
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             })
             .child("⠿")
             .on_drag(drag_val, move |_drag, _offset, _window, cx| {
@@ -902,7 +902,7 @@ impl MainPaneView {
             });
 
         let commit_id_val = CommitId(st.entries[ix].commit_id.clone().into());
-        let accent = theme.colors.accent;
+        let accent = theme.colors.accent.foreground;
         let row_div = div()
             .id(("irebase_row", ix))
             .relative()
@@ -913,10 +913,10 @@ impl MainPaneView {
             .py_0p5()
             .rounded(px(theme.radii.row))
             .when(!is_drag_source && is_selected, |d| {
-                d.bg(theme.colors.active)
+                d.bg(theme.colors.interaction.pressed_background)
             })
             .when(!is_drag_source && !is_selected, |d| {
-                d.hover(move |s| s.bg(theme.colors.hover))
+                d.hover(move |s| s.bg(theme.colors.interaction.hover_background))
             })
             .when(is_dropped, |d| d.opacity(0.5))
             .when(show_top_line, |d| {
@@ -950,10 +950,10 @@ impl MainPaneView {
                         .items_center()
                         .gap_1()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(crate::view::icons::svg_icon(
                             "icons/squash_arrow.svg",
-                            with_alpha(theme.colors.accent, 0.7),
+                            with_alpha(theme.colors.accent.foreground, 0.7),
                             px(12.0),
                         ))
                         .child(format!("squashed {}", folded_shas.join(", "))),
@@ -969,7 +969,7 @@ impl MainPaneView {
                         d.child(div().flex_shrink_0().flex().items_center().child(
                             crate::view::icons::svg_icon(
                                 "icons/squash_arrow.svg",
-                                with_alpha(theme.colors.accent, 0.7),
+                                with_alpha(theme.colors.accent.foreground, 0.7),
                                 px(14.0),
                             ),
                         ))
@@ -990,9 +990,9 @@ impl MainPaneView {
                             .flex_shrink_0()
                             .text_xs()
                             .text_color(if is_dropped {
-                                with_alpha(theme.colors.text_muted, 0.7)
+                                with_alpha(theme.colors.foreground.secondary, 0.7)
                             } else {
-                                theme.colors.text_muted
+                                theme.colors.foreground.secondary
                             })
                             .font_family("monospace")
                             .child(sha.clone()),
@@ -1003,7 +1003,7 @@ impl MainPaneView {
                             .text_sm()
                             .text_color(row_text_color)
                             .when(is_autosquash_eligible, |d| {
-                                d.text_color(theme.colors.accent)
+                                d.text_color(theme.colors.accent.foreground)
                             })
                             .overflow_x_hidden()
                             .whitespace_nowrap()
@@ -1191,21 +1191,21 @@ impl MainPaneView {
                 .px_2()
                 .py_2()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Preparing…")
                 .into_any_element(),
             Loadable::Loading => div()
                 .px_2()
                 .py_2()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Loading commits…")
                 .into_any_element(),
             Loadable::Error(e) => div()
                 .px_2()
                 .py_2()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(format!("Error: {e}"))
                 .into_any_element(),
             // The map entry is populated by `apply_state` on the same state
@@ -1227,7 +1227,7 @@ impl MainPaneView {
                     .px_2()
                     .py_2()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(match editor_mode {
                         ICommitEditorMode::Rebase => "No commits to rebase.".to_string(),
                         ICommitEditorMode::CherryPick => "No commits to cherry-pick.".to_string(),
@@ -1296,7 +1296,7 @@ impl MainPaneView {
                 .px_2()
                 .py_2()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Loading commits…")
                 .into_any_element(),
         };
@@ -1344,13 +1344,13 @@ impl MainPaneView {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(header_detail),
                     ),
             )
-            .child(div().border_t_1().border_color(theme.colors.border))
+            .child(div().border_t_1().border_color(theme.colors.stroke.default))
             .child(entry_content)
-            .child(div().border_t_1().border_color(theme.colors.border))
+            .child(div().border_t_1().border_color(theme.colors.stroke.default))
             .child(
                 div()
                     .px_2()
@@ -1369,7 +1369,7 @@ impl MainPaneView {
                                     left.child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme.colors.text_muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .child("Auto Squash"),
                                     )
                                     .child(
@@ -1380,7 +1380,7 @@ impl MainPaneView {
                                         .style(components::ButtonStyle::Outlined)
                                         .end_slot(crate::view::icons::svg_icon(
                                             "icons/chevron_down.svg",
-                                            theme.colors.text_muted,
+                                            theme.colors.foreground.secondary,
                                             px(12.0),
                                         ))
                                         .on_click_with_bounds(

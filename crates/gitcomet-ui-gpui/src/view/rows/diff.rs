@@ -111,7 +111,7 @@ fn collapsed_hunk_bg_fill_bounds(bounds: gpui::Bounds<Pixels>) -> gpui::Bounds<P
 
 fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(
-        theme.colors.text_muted,
+        theme.colors.foreground.secondary,
         if theme.is_dark { 0.14 } else { 0.10 },
     )
 }
@@ -122,15 +122,21 @@ fn focused_diff_row_alpha(theme: AppTheme) -> f32 {
 
 fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(
-        theme.colors.text_muted,
+        theme.colors.foreground.secondary,
         if theme.is_dark { 0.26 } else { 0.16 },
     )
 }
 
 fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
     match kind {
-        DiffLineKind::Add => with_alpha(theme.colors.success, focused_diff_row_alpha(theme)),
-        DiffLineKind::Remove => with_alpha(theme.colors.danger, focused_diff_row_alpha(theme)),
+        DiffLineKind::Add => with_alpha(
+            theme.colors.status.success.foreground,
+            focused_diff_row_alpha(theme),
+        ),
+        DiffLineKind::Remove => with_alpha(
+            theme.colors.status.danger.foreground,
+            focused_diff_row_alpha(theme),
+        ),
         DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
             focused_diff_neutral_row_bg(theme)
         }
@@ -138,7 +144,10 @@ fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
 }
 
 fn focused_collapsed_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
-    with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 })
+    with_alpha(
+        theme.colors.accent.foreground,
+        if theme.is_dark { 0.22 } else { 0.16 },
+    )
 }
 
 fn collapsed_inline_hunk_bg(
@@ -150,7 +159,7 @@ fn collapsed_inline_hunk_bg(
 }
 
 fn collapsed_inline_hunk_fg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
-    theme.colors.text_muted
+    theme.colors.foreground.secondary
 }
 
 fn collapsed_split_hunk_bg(
@@ -162,7 +171,7 @@ fn collapsed_split_hunk_bg(
 }
 
 fn collapsed_split_hunk_fg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::Rgba {
-    theme.colors.text_muted
+    theme.colors.foreground.secondary
 }
 
 fn collapsed_hunk_reveal_button(
@@ -189,8 +198,8 @@ fn collapsed_hunk_reveal_button(
     if enabled {
         button = button
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
+            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
@@ -298,8 +307,8 @@ impl gpui::Element for ScrollPinnedHunkShell {
 /// Returns the word-highlight color for a diff line kind.
 fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgba> {
     match kind {
-        DiffLineKind::Add => Some(theme.colors.diff_add_text),
-        DiffLineKind::Remove => Some(theme.colors.diff_remove_text),
+        DiffLineKind::Add => Some(theme.colors.diff.added.foreground),
+        DiffLineKind::Remove => Some(theme.colors.diff.removed.foreground),
         _ => None,
     }
 }
@@ -313,9 +322,9 @@ fn file_diff_split_word_color(
 ) -> Option<gpui::Rgba> {
     match column {
         PatchSplitColumn::Left => matches!(kind, FileDiffRowKind::Remove | FileDiffRowKind::Modify)
-            .then_some(theme.colors.diff_remove_text),
+            .then_some(theme.colors.diff.removed.foreground),
         PatchSplitColumn::Right => matches!(kind, FileDiffRowKind::Add | FileDiffRowKind::Modify)
-            .then_some(theme.colors.diff_add_text),
+            .then_some(theme.colors.diff.added.foreground),
     }
 }
 
@@ -329,7 +338,7 @@ fn diff_placeholder_row(
         .h(diff_row_height(ui_scale_percent))
         .px_2()
         .text_xs()
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .child("")
         .into_any_element()
 }
@@ -2352,14 +2361,14 @@ fn diff_row(
             .px_2()
             .bg(crate::theme::content_header_bg(theme))
             .border_b_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .text_sm()
             .font_weight(FontWeight::BOLD)
             .child(selectable_cached_diff_text(
                 visible_ix,
                 DiffTextRegion::Inline,
                 DiffClickKind::FileHeader,
-                theme.colors.text,
+                theme.colors.foreground.primary,
                 None,
                 file,
                 cx,
@@ -2390,21 +2399,21 @@ fn diff_row(
             .items_center()
             .px_2()
             .bg(with_alpha(
-                theme.colors.accent,
+                theme.colors.accent.foreground,
                 if theme.is_dark { 0.10 } else { 0.07 },
             ))
             .border_b_1()
             .border_color(with_alpha(
-                theme.colors.accent,
+                theme.colors.accent.foreground,
                 if theme.is_dark { 0.28 } else { 0.22 },
             ))
             .text_xs()
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(selectable_cached_diff_text(
                 visible_ix,
                 DiffTextRegion::Inline,
                 DiffClickKind::HunkHeader,
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 None,
                 display,
                 cx,
@@ -2437,7 +2446,7 @@ fn diff_row(
             row = row.bg(focused_diff_neutral_row_bg(theme));
         }
         if context_menu_active {
-            row = row.bg(theme.colors.active);
+            row = row.bg(theme.colors.interaction.pressed_background);
         }
 
         return row.into_any_element();
@@ -2640,7 +2649,7 @@ fn collapsed_inline_header_row(
                     visible_ix,
                     DiffTextRegion::Inline,
                     DiffClickKind::FileHeader,
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     styled,
                     display,
                     cx,
@@ -2656,7 +2665,7 @@ fn collapsed_inline_header_row(
                 .min_w(min_width)
                 .bg(header_bg)
                 .border_b_1()
-                .border_color(theme.colors.border_variant)
+                .border_color(theme.colors.stroke.subtle)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
                     None,
@@ -2839,7 +2848,7 @@ fn collapsed_inline_header_row(
                 row = row.bg(painted_row_bg);
             }
             if context_menu_active {
-                row = row.bg(theme.colors.active);
+                row = row.bg(theme.colors.interaction.pressed_background);
             }
 
             div()
@@ -3006,14 +3015,14 @@ fn patch_split_header_row(
                 .px_2()
                 .bg(crate::theme::content_header_bg(theme))
                 .border_b_1()
-                .border_color(theme.colors.border)
+                .border_color(theme.colors.stroke.default)
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
                     region,
                     DiffClickKind::FileHeader,
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     styled,
                     display,
                     cx,
@@ -3049,21 +3058,21 @@ fn patch_split_header_row(
                 .items_center()
                 .px_2()
                 .bg(with_alpha(
-                    theme.colors.accent,
+                    theme.colors.accent.foreground,
                     if theme.is_dark { 0.10 } else { 0.07 },
                 ))
                 .border_b_1()
                 .border_color(with_alpha(
-                    theme.colors.accent,
+                    theme.colors.accent.foreground,
                     if theme.is_dark { 0.28 } else { 0.22 },
                 ))
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(selectable_cached_diff_text(
                     visible_ix,
                     region,
                     DiffClickKind::HunkHeader,
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     styled,
                     display,
                     cx,
@@ -3103,7 +3112,7 @@ fn patch_split_header_row(
                 row = row.bg(focused_diff_neutral_row_bg(theme));
             }
             if context_menu_active {
-                row = row.bg(theme.colors.active);
+                row = row.bg(theme.colors.interaction.pressed_background);
             }
 
             row.into_any_element()
@@ -3179,7 +3188,7 @@ fn collapsed_split_header_row(
                     visible_ix,
                     region,
                     DiffClickKind::FileHeader,
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     styled,
                     display,
                     cx,
@@ -3195,7 +3204,7 @@ fn collapsed_split_header_row(
                 .min_w(min_width)
                 .bg(header_bg)
                 .border_b_1()
-                .border_color(theme.colors.border_variant)
+                .border_color(theme.colors.stroke.subtle)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
                     None,
@@ -3409,7 +3418,7 @@ fn collapsed_split_header_row(
                 row = row.bg(painted_row_bg);
             }
             if context_menu_active {
-                row = row.bg(theme.colors.active);
+                row = row.bg(theme.colors.interaction.pressed_background);
             }
 
             div()
@@ -3588,13 +3597,13 @@ mod tests {
         let (staged, _) =
             build_row_blame_paint_inner(&ctx, true, Some(1), Some(1), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(staged.border, theme.colors.diff_add_text);
+        assert_eq!(staged.border, theme.colors.diff.added.foreground);
         assert_eq!(staged.when.as_ref(), "Staged");
         // Added line -> unstaged: red diff-remove bar.
         let (unstaged, _) =
             build_row_blame_paint_inner(&ctx, false, None, Some(2), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(unstaged.border, theme.colors.diff_remove_text);
+        assert_eq!(unstaged.border, theme.colors.diff.removed.foreground);
         assert_eq!(unstaged.when.as_ref(), "Unstaged");
     }
 
@@ -3608,7 +3617,7 @@ mod tests {
         let (paint, _) =
             build_row_blame_paint_inner(&ctx, false, Some(1), Some(1), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(paint.border, theme.colors.diff_remove_text);
+        assert_eq!(paint.border, theme.colors.diff.removed.foreground);
         assert_eq!(paint.when.as_ref(), "Unstaged");
     }
 
@@ -3621,7 +3630,7 @@ mod tests {
         let (paint, _) =
             build_row_blame_paint_inner(&ctx, false, None, Some(1), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(paint.border, theme.colors.diff_add_text);
+        assert_eq!(paint.border, theme.colors.diff.added.foreground);
         assert_eq!(paint.when.as_ref(), "Staged");
     }
 
@@ -3752,7 +3761,7 @@ mod tests {
         let prev = std::cell::Cell::new(BlamePrev::default());
         let removal =
             build_row_blame_paint_tracked(&ctx, false, Some(5), None, &prev, None, theme).unwrap();
-        assert_eq!(removal.border, theme.colors.diff_remove_text);
+        assert_eq!(removal.border, theme.colors.diff.removed.foreground);
         assert_eq!(removal.when.as_ref(), "Unstaged");
         // Revision blame has no staged/unstaged concept, so removals get no bar.
         let ctx_rev = blame_ctx(Vec::new(), None);
@@ -3766,8 +3775,10 @@ mod tests {
     #[test]
     fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-            let text_selection_bg =
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 });
+            let text_selection_bg = with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.28 } else { 0.18 },
+            );
             let add_focus = focused_diff_line_bg(theme, DiffLineKind::Add);
             let remove_focus = focused_diff_line_bg(theme, DiffLineKind::Remove);
             let neutral_focus = focused_diff_line_bg(theme, DiffLineKind::Context);
@@ -3780,7 +3791,10 @@ mod tests {
             assert_ne!(neutral_focus, text_selection_bg);
             assert_ne!(
                 neutral_focus,
-                with_alpha(theme.colors.warning, focused_diff_row_alpha(theme))
+                with_alpha(
+                    theme.colors.status.warning.foreground,
+                    focused_diff_row_alpha(theme)
+                )
             );
             assert_ne!(add_focus, add_bg);
             assert_ne!(remove_focus, remove_bg);
@@ -3790,12 +3804,17 @@ mod tests {
             assert_ne!(remove_focus, neutral_focus);
 
             let collapsed_focus = focused_collapsed_hunk_bg(theme, None);
-            let expected_collapsed_focus =
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 });
+            let expected_collapsed_focus = with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.22 } else { 0.16 },
+            );
             assert_eq!(collapsed_focus, expected_collapsed_focus);
             assert_ne!(
                 collapsed_focus,
-                with_alpha(theme.colors.accent, focused_diff_row_alpha(theme))
+                with_alpha(
+                    theme.colors.accent.foreground,
+                    focused_diff_row_alpha(theme)
+                )
             );
             assert_ne!(collapsed_focus, text_selection_bg);
             assert_eq!(
@@ -3887,19 +3906,19 @@ mod tests {
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, false))),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(false, true))),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, true))),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, None),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
         }
     }
@@ -3967,11 +3986,11 @@ mod tests {
             );
             assert_eq!(
                 collapsed_split_hunk_fg(theme, PatchSplitColumn::Left),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_split_hunk_fg(theme, PatchSplitColumn::Right),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
         }
     }

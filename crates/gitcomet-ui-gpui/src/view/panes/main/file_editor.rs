@@ -1238,7 +1238,7 @@ impl MainPaneView {
             bracket_match.as_ref(),
         );
         let bracket_style = gpui::HighlightStyle {
-            background_color: Some(self.theme.colors.bracket_match_bg.into()),
+            background_color: Some(self.theme.colors.editor.bracket_match_background.into()),
             ..Default::default()
         };
         let provider = HighlightProvider::with_pending(
@@ -1382,7 +1382,7 @@ impl MainPaneView {
             .h_full()
             .min_h(px(0.0))
             .min_w(px(0.0))
-            .bg(theme.colors.window_bg)
+            .bg(theme.colors.editor.background)
             .font_family(editor_font_family)
             .when(show_line_numbers || show_blame, |row| {
                 row.child(
@@ -1392,8 +1392,9 @@ impl MainPaneView {
                         .h_full()
                         .min_h(px(0.0))
                         .flex_shrink_0()
+                        .bg(theme.colors.editor.gutter_background)
                         .border_r_1()
-                        .border_color(theme.colors.border)
+                        .border_color(theme.colors.editor.indent_guide)
                         // A wheel over the numbers has to move the code, not
                         // scroll the gutter out of step with it.
                         .on_scroll_wheel({
@@ -1543,7 +1544,7 @@ impl MainPaneView {
                                 .flex()
                                 .justify_end()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.editor.line_number)
                                 .child(if is_continuation {
                                     String::new()
                                 } else {

@@ -8,13 +8,13 @@ fn checkout_toggle(
 ) -> gpui::Stateful<gpui::Div> {
     let scaled_px = super::popover_scaled_px_fn(cx);
     let border = if enabled {
-        theme.colors.success
+        theme.colors.status.success.foreground
     } else {
-        theme.colors.border
+        theme.colors.stroke.default
     };
     let background = if enabled {
         with_alpha(
-            theme.colors.success,
+            theme.colors.status.success.foreground,
             if theme.is_dark { 0.18 } else { 0.12 },
         )
     } else {
@@ -44,7 +44,7 @@ fn checkout_toggle(
             .when(enabled, |this| {
                 this.child(crate::view::icons::svg_icon(
                     "icons/check.svg",
-                    theme.colors.success,
+                    theme.colors.status.success.foreground,
                     scaled_px(10.0),
                 ))
             }),
@@ -95,7 +95,7 @@ pub(super) fn panel(
                         .px_2()
                         .py_1()
                         .text_sm()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("Source:"),
                 )
                 .child(
@@ -134,7 +134,7 @@ pub(super) fn panel(
                         .px_2()
                         .py_1()
                         .text_sm()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("Source:"),
                 )
                 .child(div().px_2().pb_1().w_full().min_w(px(0.0)).child(search))
@@ -144,7 +144,7 @@ pub(super) fn panel(
             .px_2()
             .py_1()
             .text_sm()
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(format!("Source branch: {target}"))
     };
 
@@ -153,7 +153,7 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(540.0))
         .child(popover_title("Create branch"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(source_row)
         .child(input_label(theme, "New branch name"))
         .child(
@@ -176,7 +176,7 @@ pub(super) fn panel(
                 cx.notify();
             })),
         )
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

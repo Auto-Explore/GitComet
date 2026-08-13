@@ -565,9 +565,9 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         .cursor(CursorStyle::PointingHand)
         .text_xs()
         .text_color(if menu_open {
-            theme.colors.text
+            theme.colors.foreground.primary
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         })
         .when(menu_open, |toggle| toggle.bg(active_overlay))
         .hover(move |s| s.bg(hover_overlay))
@@ -575,7 +575,7 @@ fn sort_toggle(this: &PopoverHost, cx: &mut gpui::Context<PopoverHost>) -> impl 
         .child(sort_toggle_label(this.repo_picker_sort))
         .child(crate::view::icons::svg_icon(
             "icons/chevron_down.svg",
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             scaled_px(12.0),
         ))
         .on_click(cx.listener(|this, _e: &ClickEvent, _w, cx| {

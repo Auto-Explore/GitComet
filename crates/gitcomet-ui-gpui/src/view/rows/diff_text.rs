@@ -1244,11 +1244,54 @@ mod tests {
             in_query: false,
             syntax: SyntaxTokenKind::None,
         }];
-        let (text, highlights) =
-            styled_text_for_diff_segments(theme, &segments, Some(theme.colors.diff_remove_text));
+        let (text, highlights) = styled_text_for_diff_segments(
+            theme,
+            &segments,
+            Some(theme.colors.diff.removed.foreground),
+        );
         assert_eq!(text.as_ref(), "x");
         assert_eq!(highlights.len(), 1);
         assert!(highlights[0].1.background_color.is_some());
+    }
+
+    #[test]
+    fn light_word_and_search_highlights_use_paired_foregrounds() {
+        let theme = AppTheme::gitcomet_light();
+        let segments = vec![CachedDiffTextSegment {
+            text: "removed".into(),
+            in_word: true,
+            in_query: false,
+            syntax: SyntaxTokenKind::None,
+        }];
+        let (_text, highlights) = styled_text_for_diff_segments(
+            theme,
+            &segments,
+            Some(theme.colors.diff.removed.foreground),
+        );
+        assert_eq!(
+            highlights[0].1.background_color,
+            Some(theme.colors.diff.removed.word_background.into())
+        );
+        assert_eq!(
+            highlights[0].1.color,
+            Some(theme.colors.diff.removed.foreground.into())
+        );
+
+        let query_segments = vec![CachedDiffTextSegment {
+            text: "match".into(),
+            in_word: false,
+            in_query: true,
+            syntax: SyntaxTokenKind::String,
+        }];
+        let (_text, query_highlights) = styled_text_for_diff_segments(theme, &query_segments, None);
+        assert_eq!(
+            query_highlights[0].1.background_color,
+            Some(theme.colors.editor.search_match_background.into())
+        );
+        assert_eq!(
+            query_highlights[0].1.color,
+            Some(theme.colors.editor.search_match_foreground.into())
+        );
     }
 
     #[test]
@@ -1264,7 +1307,10 @@ mod tests {
         let (_text, highlights) = styled_text_for_diff_segments(theme, &segments, None);
         assert_eq!(highlights.len(), 1);
         assert_eq!(highlights[0].0, 0..2);
-        assert_ne!(highlights[0].1.color, Some(theme.colors.accent.into()));
+        assert_ne!(
+            highlights[0].1.color,
+            Some(theme.colors.accent.foreground.into())
+        );
     }
 
     #[test]
@@ -1506,49 +1552,15 @@ mod tests {
 
     #[test]
     fn syntax_highlight_style_uses_theme_syntax_overrides() {
-        let theme = AppTheme::from_json_str(
+        let theme = AppTheme::from_json_str(&crate::theme::test_theme_json_with_syntax(
+            "gitcomet_dark",
             r##"{
-                "name": "Fixture",
-                "themes": [
-                    {
-                        "key": "fixture",
-                        "name": "Fixture",
-                        "appearance": "dark",
-                        "colors": {
-                            "window_bg": "#0d1016ff",
-                            "surface_bg": "#1f2127ff",
-                            "surface_bg_elevated": "#1f2127ff",
-                            "active_section": "#2d2f34ff",
-                            "border": "#2d2f34ff",
-                            "text": "#bfbdb6ff",
-                            "text_muted": "#8a8986ff",
-                            "accent": "#5ac1feff",
-                            "hover": "#2d2f34ff",
-                            "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
-                            "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
-                            "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
-                            "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
-                            "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
-                            "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
-                            "danger": "#ef7177ff",
-                            "warning": "#feb454ff",
-                            "success": "#aad84cff"
-                        },
-                        "syntax": {
-                            "keyword": "#112233ff",
-                            "variable": "#445566ff",
-                            "diff_plus": "#abcdefff",
-                            "label": "#fedcbaff"
-                        },
-                        "radii": {
-                            "panel": 2.0,
-                            "pill": 2.0,
-                            "row": 2.0
-                        }
-                    }
-                ]
+                "keyword": "#112233ff",
+                "variable": "#445566ff",
+                "diff_plus": "#abcdefff",
+                "label": "#fedcbaff"
             }"##,
-        )
+        ))
         .expect("theme JSON should parse");
 
         let keyword = syntax_highlight_style(theme, SyntaxTokenKind::Keyword)
@@ -1567,7 +1579,6 @@ mod tests {
             .expect("label style should be present when overridden");
         assert_eq!(label.color, Some(gpui::rgba(0xfedcbaff).into()));
     }
-
     #[test]
     fn syntax_highlight_style_kind_table_covers_new_token_kinds() {
         for kind in [
@@ -1597,61 +1608,27 @@ mod tests {
 
     #[test]
     fn syntax_highlight_style_uses_all_new_theme_syntax_overrides() {
-        let theme = AppTheme::from_json_str(
+        let theme = AppTheme::from_json_str(&crate::theme::test_theme_json_with_syntax(
+            "gitcomet_dark",
             r##"{
-                "name": "Fixture",
-                "themes": [
-                    {
-                        "key": "fixture",
-                        "name": "Fixture",
-                        "appearance": "dark",
-                        "colors": {
-                            "window_bg": "#0d1016ff",
-                            "surface_bg": "#1f2127ff",
-                            "surface_bg_elevated": "#1f2127ff",
-                            "active_section": "#2d2f34ff",
-                            "border": "#2d2f34ff",
-                            "text": "#bfbdb6ff",
-                            "text_muted": "#8a8986ff",
-                            "accent": "#5ac1feff",
-                            "hover": "#2d2f34ff",
-                            "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
-                            "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
-                            "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
-                            "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
-                            "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
-                            "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
-                            "danger": "#ef7177ff",
-                            "warning": "#feb454ff",
-                            "success": "#aad84cff"
-                        },
-                        "syntax": {
-                            "string_regex": "#010101ff",
-                            "string_special": "#020202ff",
-                            "preproc": "#030303ff",
-                            "constructor": "#040404ff",
-                            "namespace": "#050505ff",
-                            "variable_builtin": "#060606ff",
-                            "label": "#070707ff",
-                            "constant_builtin": "#080808ff",
-                            "punctuation_special": "#090909ff",
-                            "punctuation_list_marker": "#0a0a0aff",
-                            "markup_heading": "#0b0b0bff",
-                            "markup_link": "#0c0c0cff",
-                            "text_literal": "#0d0d0dff",
-                            "diff_plus": "#0e0e0eff",
-                            "diff_minus": "#0f0f0fff",
-                            "diff_delta": "#101010ff"
-                        },
-                        "radii": {
-                            "panel": 2.0,
-                            "pill": 2.0,
-                            "row": 2.0
-                        }
-                    }
-                ]
+                "string_regex": "#010101ff",
+                "string_special": "#020202ff",
+                "preproc": "#030303ff",
+                "constructor": "#040404ff",
+                "namespace": "#050505ff",
+                "variable_builtin": "#060606ff",
+                "label": "#070707ff",
+                "constant_builtin": "#080808ff",
+                "punctuation_special": "#090909ff",
+                "punctuation_list_marker": "#0a0a0aff",
+                "markup_heading": "#0b0b0bff",
+                "markup_link": "#0c0c0cff",
+                "text_literal": "#0d0d0dff",
+                "diff_plus": "#0e0e0eff",
+                "diff_minus": "#0f0f0fff",
+                "diff_delta": "#101010ff"
             }"##,
-        )
+        ))
         .expect("theme JSON should parse");
 
         for (kind, color) in [
@@ -1681,7 +1658,6 @@ mod tests {
             );
         }
     }
-
     #[test]
     fn cached_styled_text_from_relative_highlights_expands_tabs_and_remaps_ranges() {
         let style = gpui::HighlightStyle {
@@ -2555,7 +2531,7 @@ mod tests {
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let style = gpui::HighlightStyle {
-            color: Some(theme.colors.text.into()),
+            color: Some(theme.colors.foreground.primary.into()),
             ..Default::default()
         };
         let base = CachedDiffStyledText {
@@ -2582,7 +2558,7 @@ mod tests {
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let style = gpui::HighlightStyle {
-            color: Some(theme.colors.warning.into()),
+            color: Some(theme.colors.status.warning.foreground.into()),
             ..Default::default()
         };
         let base = CachedDiffStyledText {
@@ -2597,7 +2573,7 @@ mod tests {
         assert_eq!(overlaid.highlights[1].0, 2..4);
         assert_eq!(
             overlaid.highlights[1].1.color,
-            Some(theme.colors.warning.into())
+            Some(theme.colors.status.warning.foreground.into())
         );
         assert!(overlaid.highlights[1].1.background_color.is_some());
         assert_ne!(overlaid.highlights_hash, base.highlights_hash);
@@ -2690,11 +2666,11 @@ mod tests {
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let left = gpui::HighlightStyle {
-            color: Some(theme.colors.warning.into()),
+            color: Some(theme.colors.status.warning.foreground.into()),
             ..Default::default()
         };
         let right = gpui::HighlightStyle {
-            color: Some(theme.colors.success.into()),
+            color: Some(theme.colors.status.success.foreground.into()),
             ..Default::default()
         };
         let base = CachedDiffStyledText {
@@ -2711,7 +2687,7 @@ mod tests {
         assert_eq!(overlaid.highlights[1].0, 2..3);
         assert_eq!(
             overlaid.highlights[1].1.color,
-            Some(theme.colors.warning.into())
+            Some(theme.colors.status.warning.foreground.into())
         );
         assert!(overlaid.highlights[1].1.background_color.is_some());
         assert_eq!(
@@ -2720,8 +2696,11 @@ mod tests {
                 3..5,
                 gpui::HighlightStyle {
                     background_color: Some(
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 })
-                            .into()
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.22 } else { 0.16 }
+                        )
+                        .into()
                     ),
                     ..Default::default()
                 }
@@ -2730,7 +2709,7 @@ mod tests {
         assert_eq!(overlaid.highlights[3].0, 5..7);
         assert_eq!(
             overlaid.highlights[3].1.color,
-            Some(theme.colors.success.into())
+            Some(theme.colors.status.success.foreground.into())
         );
         assert!(overlaid.highlights[3].1.background_color.is_some());
         assert_eq!(overlaid.highlights[4], (7..8, right));

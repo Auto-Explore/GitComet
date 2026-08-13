@@ -70,20 +70,32 @@ struct WorktreeBadgeColors {
 /// border at rest, accent-tinted when the badge refers to an open workspace.
 fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgePalette {
     WorktreeBadgePalette {
-        bg: theme.colors.surface_bg_elevated,
-        active_bg: with_alpha(theme.colors.accent, if theme.is_dark { 0.16 } else { 0.10 }),
-        border: with_alpha(theme.colors.border, 0.90),
+        bg: theme.colors.surface.raised,
+        active_bg: with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.16 } else { 0.10 },
+        ),
+        border: with_alpha(theme.colors.stroke.default, 0.90),
         hover_border: with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.55 } else { 0.40 },
         ),
-        open_border: with_alpha(theme.colors.accent, if theme.is_dark { 0.56 } else { 0.34 }),
-        open_hover_border: with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.46 }),
-        active_border: with_alpha(theme.colors.accent, if theme.is_dark { 0.84 } else { 0.68 }),
-        text: theme.colors.text_muted,
-        hover_text: theme.colors.text,
-        open_text: theme.colors.accent,
-        active_text: theme.colors.accent,
+        open_border: with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.56 } else { 0.34 },
+        ),
+        open_hover_border: with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.72 } else { 0.46 },
+        ),
+        active_border: with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.84 } else { 0.68 },
+        ),
+        text: theme.colors.foreground.secondary,
+        hover_text: theme.colors.foreground.primary,
+        open_text: theme.colors.accent.foreground,
+        active_text: theme.colors.accent.foreground,
     }
 }
 
@@ -365,8 +377,11 @@ impl SidebarPaneView {
         let repo_workdir = this.active_repo().map(|r| r.spec.workdir.clone());
         let theme = this.theme;
         let worktree_badge_palette = worktree_badge_palette(theme);
-        let icon_primary = theme.colors.accent;
-        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let icon_primary = theme.colors.accent.foreground;
+        let icon_muted = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.72 } else { 0.82 },
+        );
         let selected_branch = this.selected_branch().cloned();
         let (selected_commit, selected_branch_commit_id) =
             this.active_repo().map_or((None, None), |repo| {
@@ -418,8 +433,8 @@ impl SidebarPaneView {
                 .child(svg_icon(path, color, size_px))
         };
         let branch_tree_color = |section: BranchSection| match section {
-            BranchSection::Local => theme.colors.text,
-            BranchSection::Remote => theme.colors.text_muted,
+            BranchSection::Local => theme.colors.foreground.primary,
+            BranchSection::Remote => theme.colors.foreground.secondary,
         };
 
         let indent_px = |depth: usize| {
@@ -430,9 +445,9 @@ impl SidebarPaneView {
         // The style also resolves those overlays for label fades, so the fade
         // and the row can never disagree about a semantic state.
         let row_surface = if is_collapsed_popover {
-            theme.colors.surface_bg_elevated
+            theme.colors.surface.raised
         } else {
-            theme.colors.sidebar_bg
+            theme.colors.surface.chrome
         };
         let row_style = components::InteractiveRowStyle::new(theme, row_surface);
 
@@ -465,9 +480,9 @@ impl SidebarPaneView {
             // gpui only paints an svg when its own `text.color` is set, and it
             // does not inherit the ambient text color from ancestors.
             let rest_color = if menu_active {
-                theme.colors.text
+                theme.colors.foreground.primary
             } else {
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             };
             let btn_group: SharedString = format!("{id}_btn_{ix}").into();
             let button = div()
@@ -486,7 +501,9 @@ impl SidebarPaneView {
                         .h(scaled_px(16.0))
                         .flex_shrink_0()
                         .text_color(rest_color)
-                        .group_hover(btn_group.clone(), move |s| s.text_color(theme.colors.text)),
+                        .group_hover(btn_group.clone(), move |s| {
+                            s.text_color(theme.colors.foreground.primary)
+                        }),
                 )
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
                     if !e.standard_click() {
@@ -546,7 +563,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, components::InteractiveRowState::Idle)
                         .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.border_variant))
+                            d.child(top_divider(theme.colors.stroke.subtle))
                         })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot("icons/pin.svg", icon_primary, 13.0))
@@ -558,7 +575,7 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child(label.clone()),
                         )
                         .gitcomet_tooltip(theme, label)
@@ -608,7 +625,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.border_variant))
+                            d.child(top_divider(theme.colors.stroke.subtle))
                         })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(icon_path, icon_primary, 14.0))
@@ -620,7 +637,7 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child(label),
                         )
                         .gitcomet_tooltip(theme, tooltip.clone())
@@ -688,7 +705,7 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(label),
                         )
                         .into_any_element()
@@ -730,7 +747,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.border_variant))
+                            d.child(top_divider(theme.colors.stroke.subtle))
                         })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(STASH_ICON_PATH, icon_primary, 14.0))
@@ -742,7 +759,7 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child("Stash"),
                         )
                         .when(show_stash_spinner, |d| {
@@ -796,7 +813,7 @@ impl SidebarPaneView {
                     .w_full()
                     .px_2()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
                 BranchSidebarRow::StashItem {
@@ -896,7 +913,7 @@ impl SidebarPaneView {
                     .w_full()
                     .px_2()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
                 BranchSidebarRow::WorktreesHeader {
@@ -933,7 +950,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.border_variant))
+                            d.child(top_divider(theme.colors.stroke.subtle))
                         })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 14.0))
@@ -945,7 +962,7 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child("Worktrees"),
                         )
                         .when(show_worktrees_spinner, |d| {
@@ -1004,7 +1021,7 @@ impl SidebarPaneView {
                     .w_full()
                     .px_2()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(message)
                     .into_any_element(),
                 BranchSidebarRow::WorktreeItem {
@@ -1035,8 +1052,10 @@ impl SidebarPaneView {
                     let row_group: SharedString =
                         format!("worktree_row_{}_{}", repo_id.0, ix).into();
                     let row_debug_selector = row_group.as_ref().to_owned();
-                    let active_background =
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
+                    let active_background = with_alpha(
+                        theme.colors.accent.foreground,
+                        if theme.is_dark { 0.18 } else { 0.12 },
+                    );
                     let row_state = components::InteractiveRowState::default()
                         .selected(is_active, active_background)
                         .open(context_menu_active);
@@ -1080,7 +1099,7 @@ impl SidebarPaneView {
                                                 // style inside a deferred measure closure, which
                                                 // doesn't see ancestor `text_color` — so in the
                                                 // collapsed popover it would render near-black.
-                                                .text_color(theme.colors.text)
+                                                .text_color(theme.colors.foreground.primary)
                                                 .full_text_tooltip(this.tooltip_host.clone())
                                                 .render(cx),
                                         ),
@@ -1223,7 +1242,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.border_variant))
+                            d.child(top_divider(theme.colors.stroke.subtle))
                         })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot("icons/box.svg", icon_primary, 14.0))
@@ -1235,7 +1254,7 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child("Submodules"),
                         )
                         .when(show_submodules_spinner, |d| {
@@ -1298,7 +1317,7 @@ impl SidebarPaneView {
                     .items_center()
                     .gap(scaled_px(6.0))
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(
                         div()
                             .flex_1()
@@ -1355,12 +1374,16 @@ impl SidebarPaneView {
                             };
                             let icon_color = match status {
                                 SubmoduleStatus::NotInitialized => with_alpha(
-                                    theme.colors.text_muted,
+                                    theme.colors.foreground.secondary,
                                     if theme.is_dark { 0.78 } else { 0.92 },
                                 ),
-                                SubmoduleStatus::HeadMismatch => theme.colors.warning,
+                                SubmoduleStatus::HeadMismatch => {
+                                    theme.colors.status.warning.foreground
+                                }
                                 SubmoduleStatus::MergeConflict
-                                | SubmoduleStatus::MissingMapping => theme.colors.danger,
+                                | SubmoduleStatus::MissingMapping => {
+                                    theme.colors.status.danger.foreground
+                                }
                                 SubmoduleStatus::UpToDate | SubmoduleStatus::Unknown(_) => {
                                     icon_primary
                                 }
@@ -1431,19 +1454,19 @@ impl SidebarPaneView {
                                     .rounded(px(theme.radii.pill))
                                     .border_1()
                                     .border_color(if context_menu_active {
-                                        theme.colors.border
+                                        theme.colors.stroke.default
                                     } else {
                                         with_alpha(
-                                            theme.colors.text_muted,
+                                            theme.colors.foreground.secondary,
                                             if theme.is_dark { 0.32 } else { 0.24 },
                                         )
                                     })
                                     .bg(with_alpha(
-                                        theme.colors.surface_bg,
+                                        theme.colors.surface.panel,
                                         if theme.is_dark { 0.9 } else { 0.7 },
                                     ))
                                     .text_size(scaled_px(11.0))
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(badge_label),
                             )
                         })
@@ -1600,7 +1623,7 @@ impl SidebarPaneView {
                 } => {
                     let group_icon_color = match section {
                         BranchSection::Local => icon_primary,
-                        BranchSection::Remote => theme.colors.text_muted,
+                        BranchSection::Remote => theme.colors.foreground.secondary,
                     };
                     let row_group: SharedString =
                         format!("branch_group_row_{}_{}", repo_id.0, ix).into();
@@ -1619,7 +1642,7 @@ impl SidebarPaneView {
                         .interactive_row(row_style, row_state)
                         .text_xs()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot(
                             super::super::file_icons::folder_icon(!collapsed),
@@ -1631,8 +1654,8 @@ impl SidebarPaneView {
                                 filtered_label_element(
                                     label,
                                     &filter_query,
-                                    theme.colors.text_muted,
-                                    theme.colors.accent,
+                                    theme.colors.foreground.secondary,
+                                    theme.colors.accent.foreground,
                                     gpui::rems(0.75).into(),
                                     FontWeight::SEMIBOLD,
                                     cx,
@@ -1718,7 +1741,7 @@ impl SidebarPaneView {
                     let row_group: SharedString = format!("branch_row_{}_{}", repo_id.0, ix).into();
                     let row_debug_selector = row_group.as_ref().to_owned();
                     let branch_text_color = if muted {
-                        theme.colors.text_muted
+                        theme.colors.foreground.secondary
                     } else {
                         branch_tree_color(section)
                     };
@@ -1736,7 +1759,7 @@ impl SidebarPaneView {
                                 icon_primary
                             }
                         }
-                        BranchSection::Remote => theme.colors.text_muted,
+                        BranchSection::Remote => theme.colors.foreground.secondary,
                     };
                     let badge_gap_px = scaled_px(BRANCH_BADGE_GAP_PX);
                     let divergence_badge =
@@ -1769,18 +1792,20 @@ impl SidebarPaneView {
                             .px(scaled_px(6.0))
                             .rounded(px(theme.radii.pill))
                             .text_size(scaled_px(11.0))
-                            .text_color(theme.colors.accent)
-                            .bg(with_alpha(theme.colors.accent, 0.12))
+                            .text_color(theme.colors.accent.foreground)
+                            .bg(with_alpha(theme.colors.accent.foreground, 0.12))
                             .border_1()
-                            .border_color(with_alpha(theme.colors.accent, 0.35))
+                            .border_color(with_alpha(theme.colors.accent.foreground, 0.35))
                             .child("Upstream");
                         if let Some(debug_selector) = debug_selector {
                             badge = badge.debug_selector(move || debug_selector.clone());
                         }
                         badge
                     };
-                    let head_highlight =
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.18 } else { 0.12 });
+                    let head_highlight = with_alpha(
+                        theme.colors.accent.foreground,
+                        if theme.is_dark { 0.18 } else { 0.12 },
+                    );
                     let row_state = components::InteractiveRowState::default()
                         .selected(is_head, head_highlight)
                         .selected(branch_selected, branch_selected_bg)
@@ -1821,7 +1846,7 @@ impl SidebarPaneView {
                                         label,
                                         &filter_query,
                                         branch_selected_label_color,
-                                        theme.colors.accent,
+                                        theme.colors.accent.foreground,
                                         gpui::rems(0.875).into(),
                                         FontWeight::NORMAL,
                                         cx,
@@ -1849,7 +1874,7 @@ impl SidebarPaneView {
 
                     if divergence_behind.is_some() || divergence_ahead.is_some() {
                         if let Some(behind) = divergence_behind {
-                            let color = theme.colors.warning;
+                            let color = theme.colors.status.warning.foreground;
                             end_accessories = end_accessories.child(divergence_badge(
                                 "icons/arrow_down.svg",
                                 color,
@@ -1858,7 +1883,7 @@ impl SidebarPaneView {
                             ));
                         }
                         if let Some(ahead) = divergence_ahead {
-                            let color = theme.colors.success;
+                            let color = theme.colors.status.success.foreground;
                             end_accessories = end_accessories.child(divergence_badge(
                                 "icons/arrow_up.svg",
                                 color,
@@ -2225,12 +2250,12 @@ impl DetailsPaneView {
                     .cursor(CursorStyle::PointingHand)
                     .hover(move |s| {
                         if context_menu_active {
-                            s.bg(theme.colors.active)
+                            s.bg(theme.colors.interaction.pressed_background)
                         } else {
-                            s.bg(theme.colors.hover)
+                            s.bg(theme.colors.interaction.hover_background)
                         }
                     })
-                    .active(move |s| s.bg(theme.colors.active))
+                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
                     .child(
                         div()
                             .w(scaled_px(16.0))
@@ -2316,12 +2341,12 @@ impl DetailsPaneView {
 
                 if selected {
                     row = row.bg(with_alpha(
-                        theme.colors.accent,
+                        theme.colors.accent.foreground,
                         if theme.is_dark { 0.16 } else { 0.10 },
                     ));
                 }
                 if context_menu_active {
-                    row = row.bg(theme.colors.active);
+                    row = row.bg(theme.colors.interaction.pressed_background);
                 }
 
                 row.into_any_element()
@@ -2399,8 +2424,8 @@ impl DetailsPaneView {
                     .w_full()
                     .rounded(px(theme.radii.row))
                     .cursor(CursorStyle::PointingHand)
-                    .hover(move |s| s.bg(theme.colors.hover))
-                    .active(move |s| s.bg(theme.colors.active))
+                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
                     .child(
                         div()
                             .w(scaled_px(16.0))
@@ -2459,7 +2484,7 @@ impl DetailsPaneView {
 
                 if selected {
                     row = row.bg(with_alpha(
-                        theme.colors.accent,
+                        theme.colors.accent.foreground,
                         if theme.is_dark { 0.16 } else { 0.10 },
                     ));
                 }

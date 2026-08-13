@@ -181,7 +181,7 @@ impl MainPaneView {
                 }),
             )
             .when(show_external_mergetool_actions(self.view_mode), |d| {
-                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
+                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.stroke.default))
                     .child(
                         components::Button::new("keep_delete_mergetool", "External Mergetool")
                             .style(components::ButtonStyle::Outlined)
@@ -211,7 +211,7 @@ impl MainPaneView {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.text)
+                        .text_color(theme.colors.foreground.primary)
                         .child(title),
                 ),
             )
@@ -221,12 +221,12 @@ impl MainPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .border_1()
-                    .border_color(theme.colors.border)
+                    .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.row))
                     .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .bg(theme.colors.window_bg)
+                    .bg(theme.colors.surface.canvas)
                     // Conflict description
                     .child(
                         div()
@@ -235,9 +235,9 @@ impl MainPaneView {
                             .justify_center()
                             .px_3()
                             .py_2()
-                            .bg(theme.colors.surface_bg_elevated)
+                            .bg(theme.colors.surface.raised)
                             .border_b_1()
-                            .border_color(theme.colors.border)
+                            .border_color(theme.colors.stroke.default)
                             .child(
                                 div()
                                     .flex()
@@ -248,13 +248,13 @@ impl MainPaneView {
                                         div()
                                             .text_sm()
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .text_color(theme.colors.warning)
+                                            .text_color(theme.colors.status.warning.foreground)
                                             .child(spec.header_label),
                                     )
                                     .child(
                                         div()
                                             .text_sm()
-                                            .text_color(theme.colors.text_muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .child(spec.description),
                                     ),
                             ),
@@ -264,13 +264,13 @@ impl MainPaneView {
                             div()
                                 .px_3()
                                 .py_1()
-                                .bg(theme.colors.surface_bg_elevated)
+                                .bg(theme.colors.surface.raised)
                                 .border_b_1()
-                                .border_color(theme.colors.border)
+                                .border_color(theme.colors.stroke.default)
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme.colors.warning)
+                                        .text_color(theme.colors.status.warning.foreground)
                                         .child(
                                             "The keep side is unavailable in conflict stages; only deletion can be applied.",
                                         ),
@@ -286,7 +286,7 @@ impl MainPaneView {
                             .overflow_y_scroll()
                             .px_3()
                             .py_2()
-                            .child(div().text_sm().text_color(theme.colors.text_muted).child(
+                            .child(div().text_sm().text_color(theme.colors.foreground.secondary).child(
                                 format!("Deleted side ({}):", spec.deleted_side_label),
                             ))
                             .child(
@@ -294,11 +294,11 @@ impl MainPaneView {
                                     .mt_1()
                                     .text_sm()
                                     .font_family(editor_font_family.clone())
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .whitespace_nowrap()
                                     .child("(file deleted)"),
                             )
-                            .child(div().mt_2().text_sm().text_color(theme.colors.text_muted).child(
+                            .child(div().mt_2().text_sm().text_color(theme.colors.foreground.secondary).child(
                                 format!(
                                     "Surviving side ({}) ({} line{}):",
                                     spec.surviving_side_label,
@@ -311,7 +311,7 @@ impl MainPaneView {
                                     .mt_1()
                                     .text_sm()
                                     .font_family(editor_font_family)
-                                    .text_color(theme.colors.text)
+                                    .text_color(theme.colors.foreground.primary)
                                     .whitespace_nowrap()
                                     .child(surviving_text),
                             ),
@@ -320,7 +320,7 @@ impl MainPaneView {
                     .child(
                         div()
                             .border_t_1()
-                            .border_color(theme.colors.border)
+                            .border_color(theme.colors.stroke.default)
                             .px_3()
                             .py_2()
                             .child(action_section),

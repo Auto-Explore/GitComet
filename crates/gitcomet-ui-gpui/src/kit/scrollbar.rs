@@ -456,11 +456,11 @@ impl Scrollbar {
                     show
                 };
                 let thumb_color = if is_dragging {
-                    theme.colors.scrollbar_thumb_active
+                    theme.colors.scrollbar.thumb_pressed
                 } else if hovered {
-                    theme.colors.scrollbar_thumb_hover
+                    theme.colors.scrollbar.thumb_hover
                 } else {
-                    theme.colors.scrollbar_thumb
+                    theme.colors.scrollbar.thumb
                 };
 
                 if show {
@@ -696,8 +696,8 @@ fn marker_colors(
     theme: AppTheme,
     kind: ScrollbarMarkerKind,
 ) -> (Option<gpui::Rgba>, Option<gpui::Rgba>) {
-    let mut add = theme.colors.diff_add_text;
-    let mut rem = theme.colors.diff_remove_text;
+    let mut add = theme.colors.diff.added.foreground;
+    let mut rem = theme.colors.diff.removed.foreground;
     let alpha = if theme.is_dark { 0.70 } else { 0.55 };
     add.a = alpha;
     rem.a = alpha;
@@ -874,9 +874,9 @@ mod tests {
     fn scrollbar_thumb_alpha_in_range() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
             for c in [
-                theme.colors.scrollbar_thumb,
-                theme.colors.scrollbar_thumb_hover,
-                theme.colors.scrollbar_thumb_active,
+                theme.colors.scrollbar.thumb,
+                theme.colors.scrollbar.thumb_hover,
+                theme.colors.scrollbar.thumb_pressed,
             ] {
                 assert!(c.a >= 0.0 && c.a <= 1.0);
             }

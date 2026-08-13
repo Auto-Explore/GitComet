@@ -97,7 +97,7 @@ fn lane_color_palette(is_dark: bool) -> &'static [Rgba; LANE_COLOR_PALETTE_SIZE]
     if is_dark {
         DARK.get_or_init(|| build(0.62))
     } else {
-        LIGHT.get_or_init(|| build(0.45))
+        LIGHT.get_or_init(|| build(0.34))
     }
 }
 
