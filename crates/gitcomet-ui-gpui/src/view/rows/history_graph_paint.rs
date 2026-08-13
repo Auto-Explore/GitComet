@@ -27,23 +27,47 @@ pub(super) fn paint_history_graph(
     };
     let node_corner_radius = scaled_px(2.0);
 
+    let elbow_radius = scaled_px(HISTORY_GRAPH_ELBOW_RADIUS_PX);
+
     let y_top = bounds.top();
     let y_center = bounds.top() + bounds.size.height / 2.0;
     let y_bottom = bounds.bottom();
 
     let x_for_col = |col: usize| margin_x + col_gap * (col as f32);
+    let left = bounds.left();
+
     let node_x = x_for_col(usize::from(row.node_col));
+
+    // Whether column `col` draws a vertical down from the top edge of this row.
+    let has_incoming_vertical = |col: usize| {
+        row.lanes_now
+            .get(col)
+            .is_some_and(|lane| lane.is_active() && lane.incoming())
+            || connect_from_top_col == Some(col)
+    };
+    // A join whose source column also has an incoming vertical is drawn as one
+    // continuous elbow, so the plain vertical pass must not draw it twice.
+    let joins_out_of = |col: usize| {
+        row.joins_in
+            .iter()
+            .any(|edge| usize::from(edge.from_col) == col && edge.from_col != edge.to_col)
+    };
 
     // Incoming vertical segments.
     for (col, lane) in row.lanes_now.iter().enumerate() {
-        let incoming = lane.incoming;
-        if !(incoming || connect_from_top_col == Some(col)) {
+        if !lane.is_active() {
+            continue;
+        }
+        if !(lane.incoming() || connect_from_top_col == Some(col)) {
+            continue;
+        }
+        if joins_out_of(col) {
             continue;
         }
         let x = x_for_col(col);
         let mut path = PathBuilder::stroke(stroke_width);
-        path.move_to(point(bounds.left() + x, y_top));
-        path.line_to(point(bounds.left() + x, y_center));
+        path.move_to(point(left + x, y_top));
+        path.line_to(point(left + x, y_center));
         if let Ok(p) = path.build() {
             window.paint_path(p, history_graph::lane_color(theme, lane.color_ix));
         }
@@ -54,48 +78,57 @@ pub(super) fn paint_history_graph(
         if edge.from_col == edge.to_col {
             continue;
         }
-        let x_from = x_for_col(edge.from_col as usize);
-        let x_to = x_for_col(edge.to_col as usize);
-        let mut path = PathBuilder::stroke(stroke_width);
-        path.move_to(point(bounds.left() + x_from, y_center));
-        if (x_from - x_to).abs() < px(0.5) {
-            path.line_to(point(bounds.left() + x_to, y_center));
-        } else {
-            let ctrl = scaled_px(8.0);
-            path.cubic_bezier_to(
-                point(bounds.left() + x_to, y_center),
-                point(bounds.left() + x_from + ctrl, y_center),
-                point(bounds.left() + x_to - ctrl, y_center),
+        let from = usize::from(edge.from_col);
+        let color = history_graph::lane_color(theme, edge.color_ix);
+        if has_incoming_vertical(from) {
+            paint_lane_to_node(
+                left,
+                x_for_col(from),
+                x_for_col(usize::from(edge.to_col)),
+                y_top,
+                y_center,
+                elbow_radius,
+                stroke_width,
+                color,
+                window,
             );
-        }
-        if let Ok(p) = path.build() {
-            window.paint_path(p, history_graph::lane_color(theme, edge.color_ix));
+        } else {
+            // A fork whisker has nothing above it, so it stays a bare stub.
+            let mut path = PathBuilder::stroke(stroke_width);
+            path.move_to(point(left + x_for_col(from), y_center));
+            path.line_to(point(left + x_for_col(usize::from(edge.to_col)), y_center));
+            if let Ok(p) = path.build() {
+                window.paint_path(p, color);
+            }
         }
     }
 
     // Continuations from current row to next row.
     for (out_col, lane) in row.lanes_next.iter().enumerate() {
-        let x_out = x_for_col(out_col);
-
-        let x_from = lane
-            .from_col
-            .map(|col| x_for_col(col as usize))
-            .unwrap_or(node_x);
-
-        let mut path = PathBuilder::stroke(stroke_width);
-        path.move_to(point(bounds.left() + x_from, y_center));
-        if (x_from - x_out).abs() < px(0.5) {
-            path.line_to(point(bounds.left() + x_out, y_bottom));
-        } else {
-            let y_mid = y_center + (y_bottom - y_center) * 0.5;
-            path.cubic_bezier_to(
-                point(bounds.left() + x_out, y_bottom),
-                point(bounds.left() + x_from, y_mid),
-                point(bounds.left() + x_out, y_mid),
-            );
+        if !lane.is_active() {
+            continue;
         }
-        if let Ok(p) = path.build() {
-            window.paint_path(p, history_graph::lane_color(theme, lane.color_ix));
+        let x_out = x_for_col(out_col);
+        let color = history_graph::lane_color(theme, lane.color_ix);
+        if lane.starts_at_node() {
+            paint_node_to_lane(
+                left,
+                node_x,
+                x_out,
+                y_center,
+                y_bottom,
+                elbow_radius,
+                stroke_width,
+                color,
+                window,
+            );
+        } else {
+            let mut path = PathBuilder::stroke(stroke_width);
+            path.move_to(point(left + x_out, y_center));
+            path.line_to(point(left + x_out, y_bottom));
+            if let Ok(p) = path.build() {
+                window.paint_path(p, color);
+            }
         }
     }
 
@@ -104,29 +137,20 @@ pub(super) fn paint_history_graph(
         if edge.from_col == edge.to_col {
             continue;
         }
-        let x_to = x_for_col(edge.to_col as usize);
-        let mut path = PathBuilder::stroke(stroke_width);
-        path.move_to(point(bounds.left() + node_x, y_center));
-        if (node_x - x_to).abs() < px(0.5) {
-            path.line_to(point(bounds.left() + x_to, y_bottom));
-        } else {
-            let y_mid = y_center + (y_bottom - y_center) * 0.5;
-            path.cubic_bezier_to(
-                point(bounds.left() + x_to, y_bottom),
-                point(bounds.left() + node_x, y_mid),
-                point(bounds.left() + x_to, y_mid),
-            );
-        }
-        if let Ok(p) = path.build() {
-            window.paint_path(p, history_graph::lane_color(theme, edge.color_ix));
-        }
+        paint_node_to_lane(
+            left,
+            node_x,
+            x_for_col(usize::from(edge.to_col)),
+            y_center,
+            y_bottom,
+            elbow_radius,
+            stroke_width,
+            history_graph::lane_color(theme, edge.color_ix),
+            window,
+        );
     }
 
-    let node_color = row
-        .lanes_now
-        .get(usize::from(row.node_col))
-        .map(|l| history_graph::lane_color(theme, l.color_ix))
-        .unwrap_or(theme.colors.foreground.secondary);
+    let node_color = history_graph::lane_color(theme, row.node_color_ix);
 
     // Within one paint layer gpui draws all quads before any path, so the
     // node (a quad) would sit under the lane lines no matter the call
@@ -160,6 +184,94 @@ pub(super) fn paint_history_graph(
             );
         }
     });
+}
+
+/// Control-point ratio for approximating a circular quarter-arc with a cubic
+/// Bezier: `4/3 * (sqrt(2) - 1)`.
+const ELBOW_K: f32 = 0.552_284_7;
+
+/// Radius actually usable for a corner turning `dx` horizontally with `vertical`
+/// pixels of room. Clamped so a short jog or a small UI scale degrades into a
+/// tighter corner instead of overshooting past its own endpoints.
+fn elbow_radius(preferred: Pixels, dx: Pixels, vertical: Pixels) -> Pixels {
+    preferred.min(dx.abs()).min(vertical.max(px(0.0)))
+}
+
+/// Leaves the node horizontally, turns through a rounded corner, then runs
+/// straight down to the bottom of the row.
+#[allow(clippy::too_many_arguments)]
+fn paint_node_to_lane(
+    left: Pixels,
+    x_from: Pixels,
+    x_to: Pixels,
+    y_center: Pixels,
+    y_bottom: Pixels,
+    preferred_radius: Pixels,
+    stroke_width: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+) {
+    use gpui::PathBuilder;
+
+    let mut path = PathBuilder::stroke(stroke_width);
+    path.move_to(point(left + x_from, y_center));
+
+    let dx = x_to - x_from;
+    if dx.abs() < px(0.5) {
+        path.line_to(point(left + x_to, y_bottom));
+    } else {
+        let dir = if dx > px(0.0) { 1.0 } else { -1.0 };
+        let r = elbow_radius(preferred_radius, dx, y_bottom - y_center);
+        let turn_x = x_to - r * dir;
+        if (turn_x - x_from).abs() > px(0.05) {
+            path.line_to(point(left + turn_x, y_center));
+        }
+        path.cubic_bezier_to(
+            point(left + x_to, y_center + r),
+            point(left + turn_x + r * (dir * ELBOW_K), y_center),
+            point(left + x_to, y_center + r * (1.0 - ELBOW_K)),
+        );
+        path.line_to(point(left + x_to, y_bottom));
+    }
+
+    if let Ok(p) = path.build() {
+        window.paint_path(p, color);
+    }
+}
+
+/// Runs straight down the lane's own column from the top of the row, turns
+/// through a rounded corner, then runs horizontally into the node.
+#[allow(clippy::too_many_arguments)]
+fn paint_lane_to_node(
+    left: Pixels,
+    x_from: Pixels,
+    x_to: Pixels,
+    y_top: Pixels,
+    y_center: Pixels,
+    preferred_radius: Pixels,
+    stroke_width: Pixels,
+    color: gpui::Rgba,
+    window: &mut Window,
+) {
+    use gpui::PathBuilder;
+
+    let dx = x_to - x_from;
+    let dir = if dx > px(0.0) { 1.0 } else { -1.0 };
+    let r = elbow_radius(preferred_radius, dx, y_center - y_top);
+
+    let mut path = PathBuilder::stroke(stroke_width);
+    path.move_to(point(left + x_from, y_top));
+    path.line_to(point(left + x_from, y_center - r));
+    path.cubic_bezier_to(
+        point(left + x_from + r * dir, y_center),
+        point(left + x_from, y_center - r * (1.0 - ELBOW_K)),
+        point(left + x_from + r * (dir * ELBOW_K), y_center),
+    );
+    path.line_to(point(left + x_to, y_center));
+
+    if let Ok(p) = path.build() {
+        window.paint_path(p, color);
+    }
 }
 
 fn paint_commit_node(
@@ -241,5 +353,54 @@ fn paint_stash_node(
     );
     if let Ok(path) = handle.build() {
         window.paint_path(path, border_color);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Design geometry the radius has to sit inside: 16px column pitch, 14px
+    /// half-row.
+    const COL_GAP: f32 = HISTORY_GRAPH_COL_GAP_PX;
+    const HALF_ROW: f32 = 14.0;
+
+    #[test]
+    fn elbow_radius_fits_a_one_column_jog_at_normal_scale() {
+        let r = elbow_radius(px(HISTORY_GRAPH_ELBOW_RADIUS_PX), px(COL_GAP), px(HALF_ROW));
+        // Neither clamp binds, so the corner keeps its designed radius and
+        // leaves straight runs on both sides of the turn.
+        assert_eq!(r, px(HISTORY_GRAPH_ELBOW_RADIUS_PX));
+        assert!(r < px(COL_GAP));
+        assert!(r < px(HALF_ROW));
+    }
+
+    #[test]
+    fn elbow_radius_clamps_to_a_short_horizontal_run() {
+        let r = elbow_radius(px(HISTORY_GRAPH_ELBOW_RADIUS_PX), px(2.0), px(HALF_ROW));
+        assert_eq!(r, px(2.0));
+    }
+
+    #[test]
+    fn elbow_radius_clamps_to_a_short_vertical_run() {
+        let r = elbow_radius(px(HISTORY_GRAPH_ELBOW_RADIUS_PX), px(COL_GAP), px(3.0));
+        assert_eq!(r, px(3.0));
+    }
+
+    #[test]
+    fn elbow_radius_is_direction_agnostic_and_never_negative() {
+        let right = elbow_radius(px(HISTORY_GRAPH_ELBOW_RADIUS_PX), px(COL_GAP), px(HALF_ROW));
+        let left = elbow_radius(
+            px(HISTORY_GRAPH_ELBOW_RADIUS_PX),
+            px(-COL_GAP),
+            px(HALF_ROW),
+        );
+        assert_eq!(right, left);
+
+        // A degenerate row would otherwise produce a corner bulging the wrong way.
+        assert_eq!(
+            elbow_radius(px(HISTORY_GRAPH_ELBOW_RADIUS_PX), px(COL_GAP), px(-1.0)),
+            px(0.0)
+        );
     }
 }

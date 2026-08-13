@@ -1110,6 +1110,10 @@ pub struct RepoState {
     pub rebase_in_progress: Loadable<bool>,
     pub sequencer_state: Loadable<SequencerState>,
     pub merge_commit_message: Loadable<Option<String>>,
+    /// Commit whose full message the history hover card is showing, and the
+    /// message once it arrives. A single slot: only one card is ever open, and
+    /// the view keeps its own small cache of recently fetched messages.
+    pub hover_commit_message: Option<(CommitId, Loadable<Arc<str>>)>,
     pub interactive_rebase_setup: Option<InteractiveRebaseSetup>,
     pub interactive_cherry_pick_setup: Option<InteractiveCherryPickSetup>,
     pub merge_message_rev: u64,
@@ -1219,6 +1223,7 @@ impl RepoState {
             rebase_in_progress: Loadable::NotLoaded,
             sequencer_state: Loadable::NotLoaded,
             merge_commit_message: Loadable::NotLoaded,
+            hover_commit_message: None,
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,
             merge_message_rev: 0,
@@ -1827,6 +1832,14 @@ impl RepoState {
         self.history_state.commit_details = v;
         self.history_state.commit_details_rev =
             self.history_state.commit_details_rev.wrapping_add(1);
+    }
+
+    pub(crate) fn set_hover_commit_message(
+        &mut self,
+        commit_id: CommitId,
+        message: Loadable<Arc<str>>,
+    ) {
+        self.hover_commit_message = Some((commit_id, message));
     }
 
     pub(crate) fn set_merge_commit_message(&mut self, v: Loadable<Option<String>>) {

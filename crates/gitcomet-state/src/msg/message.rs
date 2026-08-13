@@ -313,6 +313,12 @@ pub enum Msg {
         repo_id: RepoId,
         limit: usize,
     },
+    /// Full `%B` message of a single commit, for the history hover card.
+    /// Message-only, so it skips the tree diff `commit_details` pays for.
+    LoadHoverCommitMessage {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -1046,6 +1052,11 @@ pub enum InternalMsg {
     MergeCommitMessageLoaded {
         repo_id: RepoId,
         result: Result<Option<String>, Error>,
+    },
+    HoverCommitMessageLoaded {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        result: Result<String, Error>,
     },
     FileHistoryLoaded {
         repo_id: RepoId,

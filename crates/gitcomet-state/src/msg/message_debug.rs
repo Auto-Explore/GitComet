@@ -176,6 +176,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::HoverCommitMessageLoaded {
+                repo_id,
+                commit_id,
+                result,
+            } => f
+                .debug_struct("HoverCommitMessageLoaded")
+                .field("repo_id", repo_id)
+                .field("commit_id", commit_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::FileHistoryLoaded {
                 repo_id,
                 path,

@@ -5456,6 +5456,7 @@ pub struct GitCometView {
     pub(super) tooltip_host: Entity<TooltipHost>,
     pub(super) toast_host: Entity<ToastHost>,
     pub(super) history_refs_hover_host: Entity<HistoryRefsHoverHost>,
+    pub(super) commit_message_hover_host: Entity<CommitMessageHoverHost>,
     pub(super) popover_host: Entity<PopoverHost>,
     pub(super) command_palette: Entity<super::command_palette::CommandPaletteView>,
     pub(super) command_palette_open: bool,

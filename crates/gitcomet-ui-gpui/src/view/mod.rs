@@ -147,6 +147,8 @@ mod chrome;
 pub(crate) mod clone_progress;
 mod color;
 mod command_palette;
+mod commit_message_hover;
+mod commit_message_text;
 pub(crate) mod components;
 mod conflict_markers;
 pub(crate) mod conflict_resolver;
@@ -220,6 +222,7 @@ pub(in crate::view) use terminal_preferences::{
 };
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
+use commit_message_hover::{CommitMessageHoverHost, CommitMessageHoverState};
 #[cfg(test)]
 use diff_text_model::CachedDiffTextSegment;
 use diff_text_model::{CachedDiffStyledText, SyntaxTokenKind};
@@ -285,6 +288,31 @@ const ERROR_BANNER_OVERFLOW_HINT_MIN_CHARS: usize = 240;
 
 const HISTORY_GRAPH_COL_GAP_PX: f32 = 16.0;
 const HISTORY_GRAPH_MARGIN_X_PX: f32 = 10.0;
+/// Corner radius where a graph line turns between columns. Against a 16px column
+/// pitch and a 14px half-row this leaves roughly a 10px straight horizontal run
+/// per column crossed and 8px of straight vertical below the corner, so the turn
+/// reads as a corner rather than as a diagonal.
+const HISTORY_GRAPH_ELBOW_RADIUS_PX: f32 = 6.0;
+
+/// Width of the lane-coloured wash at the right edge of the graph column. It
+/// fades from transparent into the border on the message cell, tying a commit's
+/// dot to its message.
+const HISTORY_GRAPH_FADE_WIDTH_PX: f32 = 44.0;
+/// Alpha the fade reaches where it meets the message border. Deliberately faint:
+/// it runs behind the lane strokes on every row, so anything stronger reads as a
+/// selection highlight.
+const HISTORY_GRAPH_FADE_ALPHA: f32 = 0.10;
+/// Below this much ref-column width the hover branch badge is dropped rather
+/// than truncated to an unreadable stub.
+const HISTORY_BRANCH_BADGE_MIN_W_PX: f32 = 34.0;
+/// Alpha of the hover branch badge. Faint by design -- it is an on-demand hint
+/// in a column that otherwise holds solid ref chips, and must not read as one.
+const HISTORY_BRANCH_BADGE_ALPHA: f32 = 0.70;
+/// Width of the lane-coloured border down the left edge of the message cell.
+const HISTORY_MESSAGE_BORDER_W_PX: f32 = 3.0;
+/// Vertical inset of that border, so consecutive rows read as separate borders
+/// rather than as one continuous stripe down the list.
+const HISTORY_MESSAGE_BORDER_INSET_Y_PX: f32 = 3.0;
 
 const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
 const PANE_COLLAPSED_PX: f32 = 34.0;
@@ -1130,6 +1158,28 @@ impl GitCometView {
         });
     }
 
+    pub(in crate::view) fn show_commit_message_hover(
+        &mut self,
+        next: CommitMessageHoverState,
+        pointer: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        // Same reasoning as the refs hover: the history canvas listens for
+        // mouse-move at the window level, so it still fires under an open
+        // overlay and the card would surface on top of it.
+        if self.is_overlay_open(cx) {
+            self.dismiss_commit_message_hover(cx);
+            return;
+        }
+        self.commit_message_hover_host
+            .update(cx, |host, cx| host.show(next, pointer, cx));
+    }
+
+    pub(in crate::view) fn dismiss_commit_message_hover(&mut self, cx: &mut gpui::Context<Self>) {
+        self.commit_message_hover_host
+            .update(cx, |host, cx| host.dismiss(cx));
+    }
+
     pub(in crate::view) fn close_history_refs_hover(&mut self, cx: &mut gpui::Context<Self>) {
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
@@ -1340,6 +1390,8 @@ impl GitCometView {
         let history_show_date = ui_session.history_show_date.unwrap_or(true);
         let history_show_sha = ui_session.history_show_sha.unwrap_or(false);
         let history_relative_dates = ui_session.history_relative_dates.unwrap_or(true);
+        let history_highlight_commit_chain =
+            ui_session.history_highlight_commit_chain.unwrap_or(true);
         let history_show_tags = ui_session.history_show_tags.unwrap_or(true);
         let history_tag_fetch_mode = ui_session.history_tag_fetch_mode.unwrap_or_default();
         let default_tag_type = ui_session.default_tag_type.unwrap_or_default();
@@ -1430,6 +1482,9 @@ impl GitCometView {
         let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let history_refs_hover_host =
             cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
+        let commit_message_hover_host = cx.new(|_cx| {
+            CommitMessageHoverHost::new(initial_theme, Arc::clone(&store), ui_model.clone())
+        });
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
                 Arc::clone(&store),
@@ -1472,6 +1527,7 @@ impl GitCometView {
                 timezone,
                 show_timezone,
                 history_relative_dates,
+                history_highlight_commit_chain,
                 diff_scroll_sync,
                 diff_content_mode,
                 diff_whitespace_mode,
@@ -1779,6 +1835,7 @@ impl GitCometView {
             tooltip_host,
             toast_host,
             history_refs_hover_host,
+            commit_message_hover_host,
             popover_host,
             command_palette,
             command_palette_open: false,
@@ -1915,6 +1972,8 @@ impl GitCometView {
         self.toast_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.history_refs_hover_host
+            .update(cx, |host, cx| host.set_theme(theme, cx));
+        self.commit_message_hover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
         self.popover_host
             .update(cx, |host, cx| host.set_theme(theme, cx));
@@ -2412,6 +2471,17 @@ impl GitCometView {
         self.main_pane
             .update(cx, |pane, cx| pane.reset_history_column_widths(cx));
         self.schedule_ui_settings_persist(cx);
+    }
+
+    pub(in crate::view) fn set_history_highlight_commit_chain(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.main_pane.update(cx, |pane, cx| {
+            pane.set_history_highlight_commit_chain(enabled, cx);
+        });
+        cx.notify();
     }
 
     pub(in crate::view) fn set_history_relative_dates(
@@ -3570,6 +3640,8 @@ impl Render for GitCometView {
                 this.tooltip_host.update(cx, |host, cx| {
                     host.clear_tooltip(cx);
                 });
+                this.commit_message_hover_host
+                    .update(cx, |host, cx| host.dismiss(cx));
             }));
 
         if show_custom_window_chrome {
@@ -4010,6 +4082,8 @@ impl Render for GitCometView {
             this.last_mouse_pos = e.position;
             this.history_refs_hover_host
                 .update(cx, |host, cx| host.on_mouse_moved(e.position, cx));
+            this.commit_message_hover_host
+                .update(cx, |host, cx| host.on_mouse_moved(e.position, cx));
             this.tooltip_host
                 .update(cx, |tooltip, cx| tooltip.on_mouse_moved(e.position, cx));
 
@@ -4085,6 +4159,7 @@ impl Render for GitCometView {
             .size_full()
             .child(self.command_palette.clone())
             .child(stable_overlay_view(self.history_refs_hover_host.clone()))
+            .child(stable_overlay_view(self.commit_message_hover_host.clone()))
             .child(stable_overlay_view(self.popover_host.clone()))
             .child(stable_overlay_view(self.toast_host.clone()))
             .child(stable_overlay_view(self.tooltip_host.clone()));

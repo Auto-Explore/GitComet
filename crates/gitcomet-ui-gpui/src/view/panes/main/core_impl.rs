@@ -1316,6 +1316,7 @@ impl MainPaneView {
         timezone: Timezone,
         show_timezone: bool,
         history_relative_dates: bool,
+        history_highlight_commit_chain: bool,
         diff_scroll_sync: DiffScrollSync,
         diff_content_mode: DiffContentMode,
         diff_whitespace_mode: DiffWhitespaceMode,
@@ -1560,6 +1561,7 @@ impl MainPaneView {
                 timezone,
                 show_timezone,
                 history_relative_dates,
+                history_highlight_commit_chain,
                 history_show_graph,
                 history_show_author,
                 history_show_date,
@@ -3736,6 +3738,21 @@ impl MainPaneView {
         self.history_view
             .update(cx, |view, cx| view.set_date_time_format(next, cx));
         cx.notify();
+    }
+
+    pub(in crate::view) fn set_history_highlight_commit_chain(
+        &mut self,
+        enabled: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view.update(cx, |view, cx| {
+            view.set_history_highlight_commit_chain(enabled, cx)
+        });
+        cx.notify();
+    }
+
+    pub(in crate::view) fn history_highlight_commit_chain(&self, cx: &App) -> bool {
+        self.history_view.read(cx).history_highlight_commit_chain
     }
 
     pub(in crate::view) fn set_history_relative_dates(

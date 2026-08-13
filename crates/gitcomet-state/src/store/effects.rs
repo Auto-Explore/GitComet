@@ -469,6 +469,13 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadHoverCommitMessage { repo_id, commit_id } => send(Msg::Internal(
+            crate::msg::InternalMsg::HoverCommitMessageLoaded {
+                repo_id,
+                commit_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::ResolveCommitForReveal { repo_id, reference } => send(Msg::Internal(
             crate::msg::InternalMsg::CommitRevealResolved {
                 repo_id,
@@ -1799,6 +1806,15 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_commit_details(
+                    executor, repos, msg_tx, repo_id, commit_id,
+                );
+            }
+        }
+        Effect::LoadHoverCommitMessage { repo_id, commit_id } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_load_hover_commit_message(
                     executor, repos, msg_tx, repo_id, commit_id,
                 );
             }
