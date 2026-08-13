@@ -450,6 +450,13 @@ impl Render for TitleBarView {
             with_alpha(theme.colors.accent, if theme.is_dark { 0.48 } else { 0.38 });
         let app_menu_hover_bg = theme.titlebar_hover_overlay();
         let app_menu_active_bg = theme.titlebar_active_overlay();
+        // Matches `ButtonStyle::Transparent`'s hover border exactly, so the
+        // hand-rolled repo-picker div and the `Button`s either side of it grow
+        // the same outline under the cursor.
+        let titlebar_hover_border = with_alpha(
+            theme.colors.text_muted,
+            if theme.is_dark { 0.40 } else { 0.30 },
+        );
         let bar_bg = title_bar_background(theme, window.is_window_active());
         let app_menu_focus_handle = self.app_menu_focus_handle.clone();
 
@@ -466,7 +473,6 @@ impl Render for TitleBarView {
                         scaled_px(16.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .borderless()
                     .selected(app_menu_open)
                     .selected_bg(app_menu_open_bg)
                     .focus_handle(app_menu_focus_handle)
@@ -481,7 +487,7 @@ impl Render for TitleBarView {
                     // content is what actually matches the two ends of the bar.
                     .h(scaled_px(26.0))
                     .w(scaled_px(32.0))
-                    .rounded(px(theme.radii.pill))
+                    .rounded(px(theme.radii.control))
                     .block_mouse_except_scroll()
                     .debug_selector(|| "app_menu".to_string())
                     .gitcomet_tooltip(theme, "Application menu".into()),
@@ -510,11 +516,16 @@ impl Render for TitleBarView {
                     .items_center()
                     .justify_center()
                     .cursor(CursorStyle::PointingHand)
-                    .rounded(px(theme.radii.pill))
+                    .rounded(px(theme.radii.control))
+                    // Reserved at rest so gaining the hover outline does not
+                    // shift the chevron by a pixel.
+                    .border_1()
+                    .border_color(gpui::transparent_black())
                     // Stay lit in the pressed/open color while the picker popover
                     // is open, mirroring the app-menu button.
                     .when(repo_picker_open, move |s| s.bg(app_menu_open_bg))
                     .hover(move |s| {
+                        let s = s.border_color(titlebar_hover_border);
                         if repo_picker_open {
                             s.bg(app_menu_open_bg)
                         } else {

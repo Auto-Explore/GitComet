@@ -1095,7 +1095,6 @@ impl Render for RepoTabsBarView {
                         scaled_px(14.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
-                    .borderless()
                     .on_click_with_bounds(theme, cx, move |_this, _e, bounds, window, cx| {
                         cx.stop_propagation();
                         let _ = root_view.update(cx, |root, cx| {

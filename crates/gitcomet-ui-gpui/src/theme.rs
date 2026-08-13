@@ -746,7 +746,7 @@ impl From<ThemeFile> for AppTheme {
     }
 }
 
-fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
+pub(crate) fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
     let t = t.clamp(0.0, 1.0);
     Rgba {
         r: a.r + (b.r - a.r) * t,

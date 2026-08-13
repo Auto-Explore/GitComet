@@ -6302,6 +6302,37 @@ fn bottom_status_bar_branding_opens_discord_and_release_notes(cx: &mut gpui::Tes
 }
 
 #[gpui::test]
+fn bottom_status_bar_brand_opens_the_website_and_shows_a_tooltip(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    open_repo_for_bottom_status_bar_test(cx, &view, RepoId(713), "bottom_status_brand_link");
+
+    let brand_bounds = cx
+        .debug_bounds("bottom_status_bar_brand_link")
+        .expect("expected the GitComet mark and wordmark to share one link");
+    let brand_center = brand_bounds.center();
+
+    cx.simulate_mouse_move(brand_center, None, Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("Open gitcomet.dev".into())
+    );
+
+    cx.simulate_click(brand_center, Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    assert_eq!(cx.opened_url(), Some(crate::view::WEBSITE_URL.to_string()));
+    assert!(
+        !popover_is_open(cx, &view),
+        "expected the wordmark click to leave popovers closed"
+    );
+}
+
+#[gpui::test]
 fn shared_context_menu_rows_fill_the_popover_width(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
