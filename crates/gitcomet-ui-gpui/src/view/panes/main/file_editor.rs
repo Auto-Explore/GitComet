@@ -1335,6 +1335,14 @@ impl MainPaneView {
 
         let editor_scroll = self.file_editor_scroll.clone();
         let gutter_scroll = self.file_editor_gutter_scroll.clone();
+        let scrollbar_gutter = components::Scrollbar::visible_gutter(
+            editor_scroll.clone(),
+            components::ScrollbarAxis::Vertical,
+        );
+        let editor_scrollbar =
+            components::Scrollbar::new("file_editor_scrollbar", editor_scroll.clone());
+        #[cfg(test)]
+        let editor_scrollbar = editor_scrollbar.debug_selector("file_editor_scrollbar");
 
         // Copy the editor's offset into the gutter *before* the list lays out,
         // not only after its children prepaint. A wheel event updates the
@@ -1407,26 +1415,38 @@ impl MainPaneView {
             })
             .child(
                 div()
-                    .id("file_editor_scroll")
-                    .debug_selector(|| "file_editor_scroll".to_string())
-                    // flex-col so a content-width input overflows to the right
-                    // instead of being shrunk to the viewport, which is what
-                    // gives the container a horizontal range to scroll. With
-                    // wrap on there is nothing to overflow, and the input is
-                    // stretched to the viewport so it has a width to wrap at.
+                    .relative()
                     .flex()
                     .flex_col()
-                    .when(soft_wrap, |d| d.items_stretch())
-                    .when(!soft_wrap, |d| d.items_start())
-                    .w_full()
+                    .flex_1()
                     .min_w(px(0.0))
                     .h_full()
                     .min_h(px(0.0))
-                    .pl_2()
-                    .when(soft_wrap, |d| d.overflow_y_scroll())
-                    .when(!soft_wrap, |d| d.overflow_scroll())
-                    .track_scroll(&self.file_editor_scroll)
-                    .child(self.file_editor_input.clone()),
+                    .child(
+                        div()
+                            .id("file_editor_scroll")
+                            .debug_selector(|| "file_editor_scroll".to_string())
+                            // flex-col so a content-width input overflows to the
+                            // right instead of being shrunk to the viewport,
+                            // which gives the container a horizontal range.
+                            .flex()
+                            .flex_col()
+                            .when(soft_wrap, |d| d.items_stretch())
+                            .when(!soft_wrap, |d| d.items_start())
+                            .w_full()
+                            .min_w(px(0.0))
+                            .h_full()
+                            .min_h(px(0.0))
+                            .pl_2()
+                            .pr(scrollbar_gutter)
+                            .when(soft_wrap, |d| d.overflow_y_scroll())
+                            .when(!soft_wrap, |d| d.overflow_scroll())
+                            .track_scroll(&self.file_editor_scroll)
+                            .child(self.file_editor_input.clone()),
+                    )
+                    // The track must be outside the moving scroll surface or
+                    // GPUI applies the content offset to the scrollbar itself.
+                    .child(editor_scrollbar.render(theme)),
             )
             .into_any_element()
     }

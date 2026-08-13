@@ -6,7 +6,7 @@ use super::util::{
     start_current_conflict_target_reload,
 };
 use crate::model::{
-    AppState, ConflictFileLoadMode, DiagnosticKind, InlineSubmoduleDiffEntry,
+    AppState, ConflictFileLoadMode, DiagnosticKind, FileEditReturnView, InlineSubmoduleDiffEntry,
     InlineSubmoduleDiffSection, InlineSubmoduleDiffState, Loadable, RepoId, RepoState,
     ViewHistoryEntry,
 };
@@ -241,6 +241,22 @@ pub(super) fn open_file_editor(
     repo_id: RepoId,
     path: std::path::PathBuf,
 ) -> Vec<Effect> {
+    let return_view = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .and_then(|repo| {
+            if repo.diff_state.edit_mode {
+                return repo.diff_state.edit_return_view.clone();
+            }
+            repo.diff_state
+                .diff_target
+                .clone()
+                .map(|target| FileEditReturnView {
+                    target,
+                    content_preview: repo.diff_state.content_preview,
+                })
+        });
     let target = DiffTarget::WorkingTree {
         path: path.clone(),
         area: DiffArea::Unstaged,
@@ -253,16 +269,17 @@ pub(super) fn open_file_editor(
     }
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(state, repo_id, target, ContentViewMode::Edit, &mut effects);
+    if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+        repo_state.diff_state.edit_return_view = return_view;
+    }
     effects.into_vec()
 }
 
-/// Leave the editor, without reloading the file.
+/// Leave the editor and reload the view that was behind it.
 ///
-/// Lands on the read-only content view of the same file rather than on whatever
-/// the pane showed before the editor opened: the editor is a mode of the
-/// file-content view, and the diff stays one click (or one viewer-nav step)
-/// away. There is no enable counterpart — entering always goes through
-/// [`open_file_editor`], which re-targets the working tree.
+/// Restores the diff or read-only content preview that opened the editor. When
+/// there is no recorded origin (for example a restored legacy session), it
+/// falls back to the read-only working-tree preview of the edited file.
 pub(super) fn exit_diff_edit_mode(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -270,9 +287,40 @@ pub(super) fn exit_diff_edit_mode(state: &mut AppState, repo_id: RepoId) -> Vec<
     if !repo_state.diff_state.edit_mode {
         return Vec::new();
     }
-    repo_state.diff_state.edit_mode = false;
-    repo_state.bump_diff_state_rev();
-    Vec::new()
+    let return_view = repo_state.diff_state.edit_return_view.take();
+    let fallback_target = repo_state.diff_state.diff_target.clone();
+
+    let (target, mode) = match return_view {
+        Some(return_view) => (
+            Some(return_view.target),
+            if return_view.content_preview {
+                ContentViewMode::Preview
+            } else {
+                ContentViewMode::Diff
+            },
+        ),
+        None => (fallback_target, ContentViewMode::Preview),
+    };
+    let Some(target) = target else {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return Vec::new();
+        };
+        repo_state.diff_state.edit_mode = false;
+        repo_state.diff_state.content_preview = true;
+        repo_state.bump_diff_state_rev();
+        return Vec::new();
+    };
+
+    if mode == ContentViewMode::Preview
+        && let Some(entry) = view_history_entry_for_target(&target)
+        && let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+    {
+        repo_state.view_history.seek_or_record(entry);
+    }
+
+    let mut effects = SelectDiffEffects::new();
+    fill_select_diff_inline(state, repo_id, target, mode, &mut effects);
+    effects.into_vec()
 }
 
 /// Map a `(source, path)` content view to its `DiffTarget`. Returns `None` for
@@ -488,6 +536,9 @@ pub(super) fn fill_select_diff_inline(
     clear_inline_submodule_diff_state(repo_state);
     repo_state.diff_state.content_preview = content_preview;
     repo_state.diff_state.edit_mode = mode == ContentViewMode::Edit;
+    if mode != ContentViewMode::Edit {
+        repo_state.diff_state.edit_return_view = None;
+    }
 
     if !content_preview && let Some(conflict_target) = selected_conflict_target(repo_state, &target)
     {
@@ -540,6 +591,8 @@ pub(super) fn select_conflict_diff(
 
     clear_inline_submodule_diff_state(repo_state);
     repo_state.diff_state.content_preview = false;
+    repo_state.diff_state.edit_mode = false;
+    repo_state.diff_state.edit_return_view = None;
 
     let target = DiffTarget::WorkingTree {
         path: path.clone(),
@@ -563,6 +616,8 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
 
     clear_inline_submodule_diff_state(repo_state);
     repo_state.diff_state.content_preview = false;
+    repo_state.diff_state.edit_mode = false;
+    repo_state.diff_state.edit_return_view = None;
 
     repo_state.set_diff_target(None);
     repo_state.diff_state.diff = Loadable::NotLoaded;
