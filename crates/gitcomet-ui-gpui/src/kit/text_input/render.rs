@@ -89,7 +89,10 @@ impl Render for TextInput {
         }
         let text_surface = text_surface.child(TextElement { input: cx.entity() });
 
-        let mut input = div();
+        // `track_focus` alone leaves the element stateless, and gpui only
+        // repaints on mouse-move for elements carrying an id — without one the
+        // unfocused hover border further down never reaches the screen.
+        let mut input = div().id(ElementId::from(("text_input_field", entity_id)));
         if content_width_layout {
             input = input.min_w_full();
         } else {

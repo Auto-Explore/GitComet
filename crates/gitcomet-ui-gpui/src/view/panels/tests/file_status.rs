@@ -4530,3 +4530,98 @@ fn stage_all_asks_before_staging_unresolved_conflicts(cx: &mut gpui::TestAppCont
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// The section header's action labels collapse to initials once the details
+/// pane is too narrow to hold the full wording. Verified by width because the
+/// test text system has no glyph metrics — but it does give every glyph the
+/// same advance, so a label with fewer characters is reliably narrower.
+#[gpui::test]
+fn stage_selected_label_shrinks_when_the_details_pane_is_narrow(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(1600.0), px(900.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(63);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_status_header_shrink",
+        std::process::id()
+    ));
+    let a = std::path::PathBuf::from("a.txt");
+    let b = std::path::PathBuf::from("b.txt");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            repo.open = gitcomet_state::model::Loadable::Ready(());
+            repo.status = gitcomet_state::model::Loadable::Ready(
+                gitcomet_core::domain::RepoStatus {
+                    staged: Vec::new(),
+                    unstaged: vec![
+                        gitcomet_core::domain::FileStatus {
+                            path: a.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        },
+                        gitcomet_core::domain::FileStatus {
+                            path: b.clone(),
+                            kind: gitcomet_core::domain::FileStatusKind::Modified,
+                            conflict: None,
+                        },
+                    ],
+                }
+                .into(),
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            this.details_pane.update(cx, |pane, cx| {
+                pane.status_multi_selection.insert(
+                    repo_id,
+                    StatusMultiSelection {
+                        unstaged: vec![a.clone(), b.clone()],
+                        unstaged_anchor: Some(a.clone()),
+                        ..Default::default()
+                    },
+                );
+                cx.notify();
+            });
+        });
+    });
+
+    let set_details_width = |cx: &mut gpui::VisualTestContext, width: f32| {
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.details_width = px(width);
+                this.details_render_width = px(width);
+                cx.notify();
+            });
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        // The header reads a width the probe measured while painting, so the
+        // switch lands on the frame after the one that resized the pane.
+        draw_and_drain_test_window(cx);
+    };
+
+    set_details_width(cx, 700.0);
+    let wide = cx
+        .debug_bounds("stage_selected_button")
+        .expect("expected the Stage (n) button while files are selected")
+        .size
+        .width;
+
+    set_details_width(cx, 300.0);
+    let narrow = cx
+        .debug_bounds("stage_selected_button")
+        .expect("expected the Stage (n) button to survive the narrower pane")
+        .size
+        .width;
+
+    assert!(
+        narrow < wide,
+        "expected `Stage (2)` to collapse to `S (2)` in a narrow pane (wide={wide:?}, narrow={narrow:?})"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}

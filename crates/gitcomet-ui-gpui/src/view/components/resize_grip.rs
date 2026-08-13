@@ -1,4 +1,4 @@
-use crate::theme::AppTheme;
+use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{Div, SharedString, div, px, relative};
@@ -15,6 +15,20 @@ pub enum ResizeGripAxis {
 const GRIP_LEN_PX: f32 = 44.0;
 /// Thickness of the tinted middle segment across the divider.
 const GRIP_THICKNESS_PX: f32 = 4.0;
+
+/// Hovered grip tint: a text-alpha overlay rather than `colors.hover`, which is
+/// a surface-level tint that all but disappears on the elevated chrome band the
+/// dividers sit on. Alphas are in scrollbar-thumb territory so a 4px pill still
+/// reads against both `window_bg` and `sidebar_bg`.
+fn hover_tint(theme: AppTheme) -> gpui::Rgba {
+    with_alpha(theme.colors.text, if theme.is_dark { 0.34 } else { 0.30 })
+}
+
+/// Dragged grip tint: the accent color, so an in-flight resize is unmistakable
+/// and clearly distinct from mere hover.
+fn drag_tint(theme: AppTheme) -> gpui::Rgba {
+    theme.colors.accent
+}
 
 /// Hover/drag visual for a resize divider: the whole strip stays interactive
 /// (cursor, drag, mouse handlers live on the strip), but only this centered
@@ -64,9 +78,9 @@ pub fn resize_grip(
         segment
             .flex_none()
             .rounded(px(theme.radii.pill))
-            .when(dragging, |segment| segment.bg(theme.colors.active))
+            .when(dragging, |segment| segment.bg(drag_tint(theme)))
             .when(!dragging, |segment| {
-                segment.group_hover(group.clone(), |s| s.bg(theme.colors.hover))
+                segment.group_hover(group.clone(), |s| s.bg(hover_tint(theme)))
             }),
     );
 

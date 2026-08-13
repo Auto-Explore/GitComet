@@ -3104,12 +3104,20 @@ impl MainPaneView {
                                 "Theirs (deleted)".into()
                             };
 
+                            // The body reserves this gutter for its vertical scrollbar; the
+                            // header has to reserve it too or the two halves split a wider
+                            // box than the rows do and the labels drift off their columns.
+                            let compare_scrollbar_gutter = components::Scrollbar::visible_gutter(
+                                self.diff_scroll.clone(),
+                                components::ScrollbarAxis::Vertical,
+                            );
                             let columns_header = components::split_columns_header(
                                 theme,
                                 ui_scale_percent,
                                 ours_label,
                                 theirs_label,
-                            );
+                            )
+                            .pr(compare_scrollbar_gutter);
 
                             let diff_len = self.conflict_resolver.two_way_split_visible_len();
 
@@ -3150,10 +3158,7 @@ impl MainPaneView {
                                                 div()
                                                     .h_full()
                                                     .min_h(px(0.0))
-                                                    .pr(components::Scrollbar::visible_gutter(
-                                                        self.diff_scroll.clone(),
-                                                        components::ScrollbarAxis::Vertical,
-                                                    ))
+                                                    .pr(compare_scrollbar_gutter)
                                                     .child(list),
                                             )
                                             .child(
@@ -3497,12 +3502,17 @@ impl MainPaneView {
                                                     "diff_split_columns_header".to_string()
                                                 })
                                                 .w_full()
+                                                // Same right inset as the body below, so both rows
+                                                // divide the identical content box and the column
+                                                // divider lines up. Padding keeps the band and its
+                                                // bottom border full-bleed.
+                                                .pr(shared_scrollbar_gutter)
                                                 .h(components::control_height(ui_scale_percent))
                                                 .flex()
                                                 .items_center()
                                                 .text_xs()
                                                 .text_color(theme.colors.text_muted)
-                                                .bg(theme.colors.surface_bg_elevated)
+                                                .bg(crate::theme::content_header_bg(theme))
                                                 .border_b_1()
                                                 .border_color(theme.colors.border)
                                                 .child(
@@ -3710,7 +3720,7 @@ impl MainPaneView {
             .w_full()
             .h_full()
             .min_h(px(0.0))
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(crate::theme::content_header_bg(theme))
             .when(diff_editor_menu_active, |d| d.bg(theme.colors.active))
             .track_focus(&self.diff_panel_focus_handle)
             .on_action(
@@ -3784,9 +3794,12 @@ impl MainPaneView {
                     .h(components::control_height_md(ui_scale_percent))
                     .px_2()
                     .bg(if historical_browse {
-                        crate::theme::historical_header_bg(theme, theme.colors.surface_bg_elevated)
+                        crate::theme::historical_header_bg(
+                            theme,
+                            crate::theme::content_header_bg(theme),
+                        )
                     } else {
-                        theme.colors.surface_bg_elevated
+                        crate::theme::content_header_bg(theme)
                     })
                     .border_b_1()
                     .border_color(theme.colors.border),

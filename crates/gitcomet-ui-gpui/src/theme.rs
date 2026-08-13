@@ -746,7 +746,7 @@ impl From<ThemeFile> for AppTheme {
     }
 }
 
-fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
+pub(crate) fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
     let t = t.clamp(0.0, 1.0);
     Rgba {
         r: a.r + (b.r - a.r) * t,
@@ -1224,6 +1224,21 @@ pub(crate) fn historical_header_bg(theme: AppTheme, base: Rgba) -> Rgba {
     )
 }
 
+/// Background for a header band that sits directly on the main content canvas
+/// (the diff/file toolbar, per-file diff headers, split column headers).
+///
+/// Dark themes match `window_bg` so the pane reads as one unbroken dark ground
+/// and the band is set off only by its bottom border. Light themes keep the
+/// raised `surface_bg_elevated`, where the elevation is what separates the band
+/// from the page-white content below it.
+pub(crate) fn content_header_bg(theme: AppTheme) -> Rgba {
+    if theme.is_dark {
+        theme.colors.window_bg
+    } else {
+        theme.colors.surface_bg_elevated
+    }
+}
+
 /// Recency "heat" border color for the blame/annotate column.
 ///
 /// `t` is the line's recency normalized to `[0, 1]` (0 = oldest commit in the
@@ -1270,9 +1285,9 @@ pub(crate) fn blame_unstaged_color(theme: AppTheme) -> Rgba {
 mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
-        GRAPH_LANE_PALETTE_SIZE, Rgba, available_themes, derived_syntax_color, has_theme_key,
-        load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
-        runtime_themes_with_dir, theme_label, with_alpha,
+        GRAPH_LANE_PALETTE_SIZE, Rgba, available_themes, content_header_bg, derived_syntax_color,
+        has_theme_key, load_theme_specs_from_json, merged_theme_options,
+        resolved_runtime_themes_dir, runtime_themes_with_dir, theme_label, with_alpha,
     };
     use std::{fs, path::PathBuf};
     use tempfile::tempdir;
@@ -1908,6 +1923,27 @@ mod tests {
         assert_eq!(theme.syntax.diff_plus, gpui::rgba(0x2e7638ff));
         assert_eq!(theme.syntax.variable, Some(gpui::rgba(0x2b241dff)));
         assert_eq!(theme_label("sunset_veil"), Some("Sunset Veil".to_string()));
+    }
+
+    #[test]
+    fn content_header_bg_matches_the_canvas_on_dark_and_stays_raised_on_light() {
+        for key in ["gitcomet_dark", "tokyo_night"] {
+            let theme = AppTheme::from_key(key).expect("dark theme should load");
+            assert_eq!(
+                content_header_bg(theme),
+                theme.colors.window_bg,
+                "{key}: header band should be the canvas color"
+            );
+        }
+
+        for key in ["gitcomet_light", "sunset_veil"] {
+            let theme = AppTheme::from_key(key).expect("light theme should load");
+            assert_eq!(
+                content_header_bg(theme),
+                theme.colors.surface_bg_elevated,
+                "{key}: header band should stay raised"
+            );
+        }
     }
 
     #[test]

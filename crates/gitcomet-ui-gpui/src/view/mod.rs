@@ -304,6 +304,7 @@ const TOAST_FADE_OUT_MS: u64 = 220;
 const TOAST_SLIDE_PX: f32 = 12.0;
 const TERMINAL_PANEL_DEFAULT_HEIGHT_PX: f32 = 220.0;
 const TERMINAL_PANEL_RESIZE_HANDLE_PX: f32 = 6.0;
+pub(crate) const WEBSITE_URL: &str = "https://gitcomet.dev";
 pub(crate) const EDITIONS_URL: &str = "https://gitcomet.dev/#editions";
 pub(crate) const RELEASES_URL: &str = "https://github.com/Auto-Explore/GitComet/releases";
 pub(crate) const DISCORD_URL: &str = "https://discord.com/invite/2ufDGP8RnA";

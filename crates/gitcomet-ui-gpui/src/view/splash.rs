@@ -12,7 +12,23 @@ const CONTENT_CARD_GAP_PX: f32 = 8.0;
 /// Bottom margin the main content card leaves for the bottom bar. The collapsed
 /// section popover matches it so its top/bottom gaps read symmetric.
 const CONTENT_CARD_BOTTOM_MARGIN_PX: f32 = 2.0;
+/// Width of the panel a collapsed-rail section (Local/Remote branches,
+/// Worktrees, Submodules, Stashes) opens into. Wider than the expanded
+/// sidebar's 280px default: the rail's popover is transient and floats over the
+/// canvas, so it can afford the room that branch names, worktree paths and
+/// stash summaries want, without the pane's permanent cost.
+const COLLAPSED_POPOVER_WIDTH_PX: f32 = 340.0;
 static SPLASH_BACKDROP_IMAGE_CACHE: OnceLock<Arc<gpui::Image>> = OnceLock::new();
+
+/// Corner radius of the main content card — squarer than the shared `panel`
+/// radius the floating dialogs and splash cards keep. This surface is chrome
+/// fused to the tab strip above it and the sidebar beside it, not a card
+/// floating on the canvas, so it takes the same radius as the controls
+/// (buttons, tabs) it sits among. The corner caps derive from this, so both
+/// move together.
+fn main_content_card_radius(theme: AppTheme) -> f32 {
+    theme.radii.control
+}
 
 struct SplashInteractiveColors {
     base: gpui::Rgba,
@@ -1032,7 +1048,7 @@ impl GitCometView {
             .ml(scaled_px(6.0))
             .top(scaled_px(4.0))
             .bottom(scaled_px(4.0) + px(CONTENT_CARD_BOTTOM_MARGIN_PX))
-            .w(scaled_px(268.0))
+            .w(scaled_px(COLLAPSED_POPOVER_WIDTH_PX))
             .flex()
             .flex_col()
             .child(panel)
@@ -1111,6 +1127,7 @@ impl GitCometView {
                         .child(
                             div()
                                 .id("sidebar_pane")
+                                .debug_selector(|| "sidebar_pane".to_string())
                                 .relative()
                                 .w(self.sidebar_render_width)
                                 .min_h(px(0.0))
@@ -1138,7 +1155,7 @@ impl GitCometView {
                                 .mb(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
                                 .mr(px(CONTENT_CARD_GAP_PX))
                                 .relative()
-                                .rounded(px(theme.radii.panel))
+                                .rounded(px(main_content_card_radius(theme)))
                                 .border_1()
                                 .border_color(theme.colors.border)
                                 .overflow_hidden()
@@ -1206,22 +1223,34 @@ impl GitCometView {
                                         )),
                                 )
                                 .child(card_corner_caps(
-                                    px((theme.radii.panel - 1.0).max(0.0)),
+                                    px((main_content_card_radius(theme) - 1.0).max(0.0)),
                                     theme.colors.sidebar_bg,
-                                ))
-                                .child(
-                                    // Sidebar resize grab strip overlaying the card's
-                                    // left edge, so the boundary consumes no layout
-                                    // space of its own.
-                                    div().absolute().left_0().top_0().bottom_0().child(
-                                        self.pane_resize_handle(
-                                            theme,
-                                            "pane_resize_sidebar",
-                                            PaneResizeHandle::Sidebar,
-                                            cx,
-                                        ),
-                                    ),
-                                ),
+                                )),
+                        )
+                        .child(
+                            // Sidebar resize grab strip, straddling the card's left
+                            // edge the way the details strip straddles its boundary,
+                            // so the grip centers on the rule instead of sitting
+                            // beside it. It hangs off the row rather than the card
+                            // because the card clips its overflow, and it matches the
+                            // card's bottom margin so both strips end on the same
+                            // line. Absolute, so the boundary still consumes no
+                            // layout space of its own.
+                            div()
+                                .absolute()
+                                .top_0()
+                                .bottom(px(CONTENT_CARD_BOTTOM_MARGIN_PX))
+                                .left(
+                                    (self.sidebar_render_width
+                                        - self.pane_resize_handle_width() / 2.0)
+                                        .max(px(0.0)),
+                                )
+                                .child(self.pane_resize_handle(
+                                    theme,
+                                    "pane_resize_sidebar",
+                                    PaneResizeHandle::Sidebar,
+                                    cx,
+                                )),
                         )
                         // Scrim only while open (not during fade-out).
                         .when(popover_open.is_some(), |d| {

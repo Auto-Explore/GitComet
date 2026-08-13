@@ -278,6 +278,118 @@ fn visible_bounds_probe() -> Div {
     div().absolute().top_0().left_0().size_full()
 }
 
+/// Which wording the changed-files section headers draw. The full labels stop
+/// fitting once the details pane is dragged narrow, and an over-wide action
+/// group shoves the section title out of the panel — so the labels collapse to
+/// initials before that happens.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum StatusActionLabels {
+    Full,
+    Compact,
+}
+
+/// Average glyph advances at `text_sm` (14px at 100% zoom), regular and bold.
+/// Budgeted rather than measured, the same way the history columns decide what
+/// to drop (`view/panes/history.rs`).
+///
+/// Calibrated against the shipped UI font rather than guessed: at 100% zoom
+/// `Stage all changes` renders 108px of ink over 17 characters (6.35/char) and
+/// the bold `Unstaged` renders 59px over 8 (7.4/char). Guessed values that ran
+/// a little high kept the header on the short labels while ~20px of room was
+/// still going spare, so keep these honest — the header truncates its title
+/// gracefully if a budget ever falls slightly short, but a budget that runs
+/// long silently withholds the full wording.
+const STATUS_ACTION_CHAR_WIDTH_PX: f32 = 6.4;
+const STATUS_HEADER_TITLE_CHAR_WIDTH_PX: f32 = 7.4;
+/// The header's own `px_2`, and the `gap_2` between the title and the action
+/// group and between the buttons themselves.
+const STATUS_HEADER_PAD_X_PX: f32 = 8.0;
+const STATUS_HEADER_GAP_PX: f32 = 8.0;
+/// A change-tracking dropdown title's `px_1` either side, its `gap_1`, and the
+/// 12px chevron.
+const STATUS_HEADER_DROPDOWN_EXTRA_PX: f32 = 24.0;
+const STATUS_HEADER_SPINNER_PX: f32 = 14.0;
+
+fn status_action_button_width_px(label_chars: usize) -> f32 {
+    // `control_pad_x` each side, plus the 1px border every style reserves.
+    2.0 * components::CONTROL_PAD_X_PX + 2.0 + label_chars as f32 * STATUS_ACTION_CHAR_WIDTH_PX
+}
+
+fn status_action_labels_for_width(
+    available_width: Pixels,
+    title_chars: usize,
+    title_is_dropdown: bool,
+    action_label_chars: &[usize],
+    has_spinner: bool,
+    ui_scale_percent: u32,
+) -> StatusActionLabels {
+    if available_width <= px(0.0) || action_label_chars.is_empty() {
+        return StatusActionLabels::Full;
+    }
+
+    let mut needed = 2.0 * STATUS_HEADER_PAD_X_PX
+        + title_chars as f32 * STATUS_HEADER_TITLE_CHAR_WIDTH_PX
+        + if title_is_dropdown {
+            STATUS_HEADER_DROPDOWN_EXTRA_PX
+        } else {
+            0.0
+        }
+        // Between the title and the action group.
+        + STATUS_HEADER_GAP_PX;
+    if has_spinner {
+        needed += STATUS_HEADER_SPINNER_PX + STATUS_HEADER_GAP_PX;
+    }
+    for (ix, chars) in action_label_chars.iter().enumerate() {
+        if ix > 0 {
+            needed += STATUS_HEADER_GAP_PX;
+        }
+        needed += status_action_button_width_px(*chars);
+    }
+
+    if crate::ui_scale::design_px_from_percent(needed, ui_scale_percent) <= available_width {
+        StatusActionLabels::Full
+    } else {
+        StatusActionLabels::Compact
+    }
+}
+
+/// Clipped forms of the action verbs. A bare initial was ambiguous — `S` and
+/// `U` read as the same family, and the two of them plus `D` gave no clue which
+/// button did what. These stay pronounceable at a glance.
+fn status_action_short_word(word: &'static str) -> &'static str {
+    match word {
+        "Stage" => "Stg",
+        "Discard" => "Disc",
+        "Unstage" => "Ustg",
+        other => other,
+    }
+}
+
+/// `Stage (3)` → `Stg (3)`, `Stage all changes` → `All`.
+fn status_action_count_label(
+    labels: StatusActionLabels,
+    word: &'static str,
+    count: usize,
+) -> String {
+    match labels {
+        StatusActionLabels::Full => format!("{word} ({count})"),
+        StatusActionLabels::Compact => {
+            format!("{} ({count})", status_action_short_word(word))
+        }
+    }
+}
+
+fn status_action_all_label(labels: StatusActionLabels, full: &'static str) -> &'static str {
+    match labels {
+        StatusActionLabels::Full => full,
+        StatusActionLabels::Compact => "All",
+    }
+}
+
+fn status_action_file_count(count: usize) -> &'static str {
+    if count == 1 { "file" } else { "files" }
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct StatusSectionActionSelection {
     paths: Vec<std::path::PathBuf>,
@@ -1756,23 +1868,99 @@ impl DetailsPaneView {
         let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
-        let stage_all = components::Button::new("stage_all", "Stage all changes")
-            .style(components::ButtonStyle::Subtle)
-            .disabled(local_actions_in_flight)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                let Some(repo_id) = this.active_repo_id() else {
-                    return;
-                };
-                // Empty paths: this button stages every change there is.
-                this.stage_all_with_conflict_confirmation(repo_id, Vec::new(), _w, cx);
-            })
-            .gitcomet_tooltip(theme, "Stage all changes".into());
+        // Measured last frame by the probe on the sections container below; the
+        // prepaint callback refreshes the window when it changes. Unmeasured on
+        // the very first frame, which reads as "plenty of room" and settles on
+        // the next one.
+        let header_width = self
+            .current_status_sections_bounds()
+            .map(|bounds| bounds.size.width)
+            .unwrap_or(Pixels::MAX);
+        let labels_for =
+            |title_chars: usize, title_is_dropdown: bool, action_label_chars: &[usize]| {
+                status_action_labels_for_width(
+                    header_width,
+                    title_chars,
+                    title_is_dropdown,
+                    action_label_chars,
+                    local_actions_in_flight,
+                    ui_scale_percent,
+                )
+            };
+        let count_chars =
+            |word: &str, count: usize| word.chars().count() + 3 + count.to_string().len();
+        let unstaged_labels = if selected_combined_unstaged > 0 {
+            labels_for(
+                "Unstaged".len(),
+                true,
+                &[
+                    count_chars("Stage", selected_combined_unstaged),
+                    count_chars("Discard", selected_combined_unstaged),
+                    "Stage all changes".len(),
+                ],
+            )
+        } else {
+            labels_for("Unstaged".len(), true, &["Stage all changes".len()])
+        };
+        let untracked_labels = if selected_untracked > 0 {
+            labels_for(
+                "Untracked".len(),
+                true,
+                &[
+                    count_chars("Stage", selected_untracked),
+                    count_chars("Discard", selected_untracked),
+                    "Stage all".len(),
+                ],
+            )
+        } else {
+            labels_for("Untracked".len(), true, &["Stage all".len()])
+        };
+        let split_unstaged_labels = if selected_split_unstaged > 0 {
+            labels_for(
+                "Unstaged".len(),
+                true,
+                &[
+                    count_chars("Stage", selected_split_unstaged),
+                    count_chars("Discard", selected_split_unstaged),
+                    "Stage all".len(),
+                ],
+            )
+        } else {
+            labels_for("Unstaged".len(), true, &["Stage all".len()])
+        };
+        let staged_labels = if selected_staged > 0 {
+            labels_for(
+                "Staged".len(),
+                false,
+                &[
+                    count_chars("Unstage", selected_staged),
+                    "Unstage all changes".len(),
+                ],
+            )
+        } else {
+            labels_for("Staged".len(), false, &["Unstage all changes".len()])
+        };
+
+        let stage_all = components::Button::new(
+            "stage_all",
+            status_action_all_label(unstaged_labels, "Stage all changes"),
+        )
+        .style(components::ButtonStyle::Subtle)
+        .disabled(local_actions_in_flight)
+        .on_click(theme, cx, |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            // Empty paths: this button stages every change there is.
+            this.stage_all_with_conflict_confirmation(repo_id, Vec::new(), _w, cx);
+        })
+        .gitcomet_tooltip(theme, "Stage all changes".into());
 
         let stage_selected = components::Button::new(
             "stage_selected",
-            format!("Stage ({selected_combined_unstaged})"),
+            status_action_count_label(unstaged_labels, "Stage", selected_combined_unstaged),
         )
-        .style(components::ButtonStyle::Outlined)
+        .style(components::ButtonStyle::Subtle)
         .disabled(local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
@@ -1806,13 +1994,22 @@ impl DetailsPaneView {
                 paths: paths.into(),
             });
             cx.notify();
-        });
+        })
+        .debug_selector(|| "stage_selected_button".to_string())
+        .gitcomet_tooltip(
+            theme,
+            format!(
+                "Stage {selected_combined_unstaged} selected {}",
+                status_action_file_count(selected_combined_unstaged)
+            )
+            .into(),
+        );
 
         let discard_selected = components::Button::new(
             "discard_selected",
-            format!("Discard ({selected_combined_unstaged})"),
+            status_action_count_label(unstaged_labels, "Discard", selected_combined_unstaged),
         )
-        .style(components::ButtonStyle::Outlined)
+        .style(components::ButtonStyle::Subtle)
         .disabled(local_actions_in_flight)
         .on_click(theme, cx, |this, e, window, cx| {
             let Some(repo_id) = this.active_repo_id() else {
@@ -1834,34 +2031,46 @@ impl DetailsPaneView {
                 cx,
             );
             cx.notify();
-        });
+        })
+        .gitcomet_tooltip(
+            theme,
+            format!(
+                "Discard changes in {selected_combined_unstaged} selected {}",
+                status_action_file_count(selected_combined_unstaged)
+            )
+            .into(),
+        );
 
         let untracked_paths_for_stage_all =
             gitcomet_state::msg::RepoPathList::from(untracked_paths.clone());
-        let stage_all_untracked = components::Button::new("stage_all_untracked", "Stage all")
-            .style(components::ButtonStyle::Subtle)
-            .disabled(local_actions_in_flight || untracked_paths_for_stage_all.is_empty())
-            .on_click(theme, cx, move |this, _e, _w, cx| {
-                let Some(repo_id) = this.active_repo_id() else {
-                    return;
-                };
-                if untracked_paths_for_stage_all.is_empty() {
-                    return;
-                }
-                this.status_multi_selection.remove(&repo_id);
-                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                this.store.dispatch(Msg::StagePaths {
-                    repo_id,
-                    paths: untracked_paths_for_stage_all.clone(),
-                });
-                cx.notify();
+        let stage_all_untracked = components::Button::new(
+            "stage_all_untracked",
+            status_action_all_label(untracked_labels, "Stage all"),
+        )
+        .style(components::ButtonStyle::Subtle)
+        .disabled(local_actions_in_flight || untracked_paths_for_stage_all.is_empty())
+        .on_click(theme, cx, move |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            if untracked_paths_for_stage_all.is_empty() {
+                return;
+            }
+            this.status_multi_selection.remove(&repo_id);
+            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            this.store.dispatch(Msg::StagePaths {
+                repo_id,
+                paths: untracked_paths_for_stage_all.clone(),
             });
+            cx.notify();
+        })
+        .gitcomet_tooltip(theme, "Stage all untracked files".into());
 
         let stage_selected_untracked = components::Button::new(
             "stage_selected_untracked",
-            format!("Stage ({selected_untracked})"),
+            status_action_count_label(untracked_labels, "Stage", selected_untracked),
         )
-        .style(components::ButtonStyle::Outlined)
+        .style(components::ButtonStyle::Subtle)
         .disabled(local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
@@ -1894,13 +2103,21 @@ impl DetailsPaneView {
                 paths: paths.into(),
             });
             cx.notify();
-        });
+        })
+        .gitcomet_tooltip(
+            theme,
+            format!(
+                "Stage {selected_untracked} selected {}",
+                status_action_file_count(selected_untracked)
+            )
+            .into(),
+        );
 
         let discard_selected_untracked = components::Button::new(
             "discard_selected_untracked",
-            format!("Discard ({selected_untracked})"),
+            status_action_count_label(untracked_labels, "Discard", selected_untracked),
         )
-        .style(components::ButtonStyle::Outlined)
+        .style(components::ButtonStyle::Subtle)
         .disabled(local_actions_in_flight)
         .on_click(theme, cx, |this, e, window, cx| {
             let Some(repo_id) = this.active_repo_id() else {
@@ -1921,36 +2138,47 @@ impl DetailsPaneView {
                 cx,
             );
             cx.notify();
-        });
+        })
+        .gitcomet_tooltip(
+            theme,
+            format!(
+                "Discard changes in {selected_untracked} selected {}",
+                status_action_file_count(selected_untracked)
+            )
+            .into(),
+        );
 
         let split_unstaged_paths_for_stage_all = split_unstaged_paths.clone();
-        let stage_all_split_unstaged =
-            components::Button::new("stage_all_split_unstaged", "Stage all")
-                .style(components::ButtonStyle::Subtle)
-                .disabled(local_actions_in_flight || split_unstaged_paths_for_stage_all.is_empty())
-                .on_click(theme, cx, move |this, _e, _w, cx| {
-                    let Some(repo_id) = this.active_repo_id() else {
-                        return;
-                    };
-                    if split_unstaged_paths_for_stage_all.is_empty() {
-                        return;
-                    }
-                    // Named paths: this button stages the tracked-changes
-                    // section only — conflicted files among them, so it needs
-                    // the same confirmation the combined view's button gets.
-                    this.stage_all_with_conflict_confirmation(
-                        repo_id,
-                        split_unstaged_paths_for_stage_all.clone(),
-                        _w,
-                        cx,
-                    );
-                });
+        let stage_all_split_unstaged = components::Button::new(
+            "stage_all_split_unstaged",
+            status_action_all_label(split_unstaged_labels, "Stage all"),
+        )
+        .style(components::ButtonStyle::Subtle)
+        .disabled(local_actions_in_flight || split_unstaged_paths_for_stage_all.is_empty())
+        .on_click(theme, cx, move |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            if split_unstaged_paths_for_stage_all.is_empty() {
+                return;
+            }
+            // Named paths: this button stages the tracked-changes section only —
+            // conflicted files among them, so it needs the same confirmation the
+            // combined view's button gets.
+            this.stage_all_with_conflict_confirmation(
+                repo_id,
+                split_unstaged_paths_for_stage_all.clone(),
+                _w,
+                cx,
+            );
+        })
+        .gitcomet_tooltip(theme, "Stage all unstaged changes".into());
 
         let stage_selected_split_unstaged = components::Button::new(
             "stage_selected_split_unstaged",
-            format!("Stage ({selected_split_unstaged})"),
+            status_action_count_label(split_unstaged_labels, "Stage", selected_split_unstaged),
         )
-        .style(components::ButtonStyle::Outlined)
+        .style(components::ButtonStyle::Subtle)
         .disabled(local_actions_in_flight)
         .on_click(theme, cx, |this, _e, _w, cx| {
             let Some(repo_id) = this.active_repo_id() else {
@@ -1983,13 +2211,21 @@ impl DetailsPaneView {
                 paths: paths.into(),
             });
             cx.notify();
-        });
+        })
+        .gitcomet_tooltip(
+            theme,
+            format!(
+                "Stage {selected_split_unstaged} selected {}",
+                status_action_file_count(selected_split_unstaged)
+            )
+            .into(),
+        );
 
         let discard_selected_split_unstaged = components::Button::new(
             "discard_selected_split_unstaged",
-            format!("Discard ({selected_split_unstaged})"),
+            status_action_count_label(split_unstaged_labels, "Discard", selected_split_unstaged),
         )
-        .style(components::ButtonStyle::Outlined)
+        .style(components::ButtonStyle::Subtle)
         .disabled(local_actions_in_flight)
         .on_click(theme, cx, |this, e, window, cx| {
             let Some(repo_id) = this.active_repo_id() else {
@@ -2010,46 +2246,67 @@ impl DetailsPaneView {
                 cx,
             );
             cx.notify();
-        });
+        })
+        .gitcomet_tooltip(
+            theme,
+            format!(
+                "Discard changes in {selected_split_unstaged} selected {}",
+                status_action_file_count(selected_split_unstaged)
+            )
+            .into(),
+        );
 
-        let unstage_all = components::Button::new("unstage_all", "Unstage all changes")
-            .style(components::ButtonStyle::Subtle)
-            .disabled(local_actions_in_flight)
-            .on_click(theme, cx, |this, _e, _w, cx| {
-                let Some(repo_id) = this.active_repo_id() else {
-                    return;
-                };
-                this.status_multi_selection.remove(&repo_id);
-                this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                this.store.dispatch(Msg::UnstagePaths {
-                    repo_id,
-                    paths: Default::default(),
-                });
-                cx.notify();
-            })
-            .gitcomet_tooltip(theme, "Unstage all changes".into());
+        let unstage_all = components::Button::new(
+            "unstage_all",
+            status_action_all_label(staged_labels, "Unstage all changes"),
+        )
+        .style(components::ButtonStyle::Subtle)
+        .disabled(local_actions_in_flight)
+        .on_click(theme, cx, |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            this.status_multi_selection.remove(&repo_id);
+            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            this.store.dispatch(Msg::UnstagePaths {
+                repo_id,
+                paths: Default::default(),
+            });
+            cx.notify();
+        })
+        .gitcomet_tooltip(theme, "Unstage all changes".into());
 
-        let unstage_selected =
-            components::Button::new("unstage_selected", format!("Unstage ({selected_staged})"))
-                .style(components::ButtonStyle::Outlined)
-                .disabled(local_actions_in_flight)
-                .on_click(theme, cx, |this, _e, _w, cx| {
-                    let Some(repo_id) = this.active_repo_id() else {
-                        return;
-                    };
-                    let paths = this
-                        .take_status_section_action_selection(repo_id, StatusSection::Staged)
-                        .paths;
-                    if paths.is_empty() {
-                        return;
-                    }
-                    this.store.dispatch(Msg::ClearDiffSelection { repo_id });
-                    this.store.dispatch(Msg::UnstagePaths {
-                        repo_id,
-                        paths: paths.into(),
-                    });
-                    cx.notify();
-                });
+        let unstage_selected = components::Button::new(
+            "unstage_selected",
+            status_action_count_label(staged_labels, "Unstage", selected_staged),
+        )
+        .style(components::ButtonStyle::Subtle)
+        .disabled(local_actions_in_flight)
+        .on_click(theme, cx, |this, _e, _w, cx| {
+            let Some(repo_id) = this.active_repo_id() else {
+                return;
+            };
+            let paths = this
+                .take_status_section_action_selection(repo_id, StatusSection::Staged)
+                .paths;
+            if paths.is_empty() {
+                return;
+            }
+            this.store.dispatch(Msg::ClearDiffSelection { repo_id });
+            this.store.dispatch(Msg::UnstagePaths {
+                repo_id,
+                paths: paths.into(),
+            });
+            cx.notify();
+        })
+        .gitcomet_tooltip(
+            theme,
+            format!(
+                "Unstage {selected_staged} selected {}",
+                status_action_file_count(selected_staged)
+            )
+            .into(),
+        );
 
         let section_header = |id: &'static str,
                               title: gpui::AnyElement,
@@ -2062,10 +2319,22 @@ impl DetailsPaneView {
                 .flex()
                 .items_center()
                 .justify_between()
+                .gap_2()
                 .h(components::control_height_md(ui_scale_percent))
                 .px_2()
-                .child(title)
-                .when(show_action, |d| d.child(action))
+                .overflow_hidden()
+                // The labels shrink before this matters, but a UI zoom or a font
+                // wider than the budget assumes can still overrun the header —
+                // and then the title, not the actions, is what gives way.
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .min_w(px(0.0))
+                        .overflow_hidden()
+                        .child(title),
+                )
+                .when(show_action, |d| d.child(div().flex_none().child(action)))
                 .into_any_element()
         };
 
@@ -2073,6 +2342,8 @@ impl DetailsPaneView {
             div()
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
+                .line_clamp(1)
+                .whitespace_nowrap()
                 .child(label)
                 .into_any_element()
         };
@@ -2782,14 +3053,13 @@ impl DetailsPaneView {
         .container_id(("commit_message_container", repo_key))
         .render(theme, self.commit_message_input.clone());
         let commit_main = components::Button::new("commit", commit_label)
-            .borderless()
+            .rounded_left()
             .start_slot(if commit_in_flight {
                 spinner(("commit_spinner", repo_key)).into_any_element()
             } else {
                 icon("icons/check.svg").into_any_element()
             })
             .style(components::ButtonStyle::Subtle)
-            .no_hover_border()
             .disabled(!can_submit_commit)
             .on_click(theme, cx, |this, _e, _w, cx| {
                 let _ = this.submit_commit(cx);
@@ -2797,14 +3067,13 @@ impl DetailsPaneView {
             .debug_selector(|| "commit_button".to_string())
             .gitcomet_tooltip(theme, commit_tooltip.into());
         let commit_menu = components::Button::new("commit_options", "")
-            .borderless()
+            .rounded_right()
             .start_slot(svg_icon(
                 "icons/chevron_down.svg",
                 menu_icon_color,
                 px(14.0),
             ))
             .style(components::ButtonStyle::Subtle)
-            .no_hover_border()
             .selected(commit_options_active)
             .selected_bg(menu_selected_bg)
             .disabled(self.active_repo_id().is_none())
@@ -2827,7 +3096,7 @@ impl DetailsPaneView {
                 previous_messages_icon_color,
                 px(14.0),
             ))
-            .style(components::ButtonStyle::Outlined)
+            .style(components::ButtonStyle::Subtle)
             .selected(previous_messages_active)
             .selected_bg(menu_selected_bg)
             .disabled(self.active_repo_id().is_none())
@@ -2878,6 +3147,199 @@ mod tests {
                 workdir: PathBuf::from("/tmp/repo"),
             },
         )
+    }
+
+    /// Label lengths the unstaged header asks about when three files are picked:
+    /// `Stage (3)`, `Discard (3)`, `Stage all changes`.
+    fn unstaged_header_with_selection() -> [usize; 3] {
+        [
+            "Stage (3)".len(),
+            "Discard (3)".len(),
+            "Stage all changes".len(),
+        ]
+    }
+
+    #[test]
+    fn status_action_labels_stay_full_in_a_wide_panel() {
+        assert_eq!(
+            status_action_labels_for_width(
+                px(600.0),
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Full
+        );
+    }
+
+    /// Guards the calibration in one direction only: a budget that runs long
+    /// withholds the full wording while there is visibly room for it, which is
+    /// the failure this pins. The number comes from measuring the shipped font
+    /// — `Stage (3)`, `Discard (3)` and `Stage all changes` plus their padding,
+    /// gaps and the `Unstaged` dropdown title need ~424px of real ink and box.
+    #[test]
+    fn status_action_labels_expand_as_soon_as_the_row_really_fits() {
+        assert_eq!(
+            status_action_labels_for_width(
+                px(430.0),
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Full,
+            "the full labels fit at this width in the real app, so the header must show them"
+        );
+    }
+
+    #[test]
+    fn status_action_labels_shrink_once_the_panel_is_narrow() {
+        assert_eq!(
+            status_action_labels_for_width(
+                px(200.0),
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Compact
+        );
+    }
+
+    #[test]
+    fn status_action_labels_survive_narrower_without_a_selection() {
+        // With nothing selected the header carries one button, so the width that
+        // forces the three-button header to shrink is still comfortable here.
+        let width = px(260.0);
+        assert_eq!(
+            status_action_labels_for_width(
+                width,
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Compact
+        );
+        assert_eq!(
+            status_action_labels_for_width(
+                width,
+                "Unstaged".len(),
+                true,
+                &["Stage all changes".len()],
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Full
+        );
+    }
+
+    #[test]
+    fn status_action_labels_account_for_the_in_flight_spinner() {
+        // Sized to fit the buttons and title exactly, so the spinner is the only
+        // thing that can push it over.
+        let mut width = px(0.0);
+        for candidate in (200..=600).step_by(2) {
+            width = px(candidate as f32);
+            if status_action_labels_for_width(
+                width,
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ) == StatusActionLabels::Full
+            {
+                break;
+            }
+        }
+        assert_eq!(
+            status_action_labels_for_width(
+                width,
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                true,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Compact,
+            "the spinner's own width has to count against the budget"
+        );
+    }
+
+    #[test]
+    fn status_action_labels_shrink_earlier_when_zoomed_in() {
+        let width = px(500.0);
+        assert_eq!(
+            status_action_labels_for_width(
+                width,
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Full
+        );
+        assert_eq!(
+            status_action_labels_for_width(
+                width,
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                200,
+            ),
+            StatusActionLabels::Compact
+        );
+    }
+
+    #[test]
+    fn status_action_labels_default_to_full_before_the_panel_is_measured() {
+        assert_eq!(
+            status_action_labels_for_width(
+                px(0.0),
+                "Unstaged".len(),
+                true,
+                &unstaged_header_with_selection(),
+                false,
+                crate::ui_scale::DEFAULT_UI_SCALE_PERCENT,
+            ),
+            StatusActionLabels::Full
+        );
+    }
+
+    #[test]
+    fn status_action_labels_rewrite_the_wording() {
+        assert_eq!(
+            status_action_count_label(StatusActionLabels::Full, "Discard", 12),
+            "Discard (12)"
+        );
+        assert_eq!(
+            status_action_count_label(StatusActionLabels::Compact, "Stage", 3),
+            "Stg (3)"
+        );
+        assert_eq!(
+            status_action_count_label(StatusActionLabels::Compact, "Discard", 12),
+            "Disc (12)"
+        );
+        assert_eq!(
+            status_action_count_label(StatusActionLabels::Compact, "Unstage", 1),
+            "Ustg (1)"
+        );
+        assert_eq!(
+            status_action_all_label(StatusActionLabels::Full, "Unstage all changes"),
+            "Unstage all changes"
+        );
+        assert_eq!(
+            status_action_all_label(StatusActionLabels::Compact, "Unstage all changes"),
+            "All"
+        );
     }
 
     fn file_status(path: &str, kind: FileStatusKind) -> FileStatus {
