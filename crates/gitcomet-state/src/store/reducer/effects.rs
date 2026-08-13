@@ -2118,6 +2118,65 @@ pub(super) fn squash_rebase_setup_loaded(
     }]
 }
 
+/// Start revealing a commit referenced from elsewhere.
+///
+/// The reference is remembered and resolved off-thread. Selecting only happens
+/// once it resolves, so a reference that turns out to be a build id or a Gerrit
+/// change id never sends the log walking.
+pub(super) fn reveal_commit(
+    state: &mut AppState,
+    repo_id: RepoId,
+    reference: CommitId,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    repo_state.set_reveal_target(Some(reference.clone()));
+    vec![Effect::ResolveCommitForReveal { repo_id, reference }]
+}
+
+pub(super) fn finish_commit_reveal(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        repo_state.set_reveal_target(None);
+    }
+    Vec::new()
+}
+
+pub(super) fn commit_reveal_resolved(
+    state: &mut AppState,
+    repo_id: RepoId,
+    reference: CommitId,
+    result: std::result::Result<CommitDetails, Error>,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // A reply for a reveal the user has already left behind.
+    if repo_state.history_state.reveal_target.as_ref() != Some(&reference) {
+        return Vec::new();
+    }
+
+    let details = match result {
+        Ok(details) => details,
+        Err(e) => {
+            repo_state.set_reveal_target(None);
+            push_notification(
+                state,
+                crate::model::AppNotificationKind::Warning,
+                format!("Could not find commit {reference}: {e}"),
+            );
+            return Vec::new();
+        }
+    };
+
+    // Publish the details before selecting: the selection path then sees them
+    // already loaded and does not ask git for the same commit twice.
+    let commit_id = details.id.clone();
+    repo_state.set_reveal_target(Some(commit_id.clone()));
+    repo_state.set_commit_details(Loadable::Ready(Arc::new(details)));
+    select_commit(state, repo_id, commit_id)
+}
+
 pub(super) fn commit_details_loaded(
     state: &mut AppState,
     repo_id: RepoId,

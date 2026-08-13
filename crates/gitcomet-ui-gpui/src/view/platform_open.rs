@@ -197,14 +197,14 @@ fn validate_external_url(url: &str) -> Result<&str, io::Error> {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "URL is empty"));
     }
 
-    let Some((scheme, _)) = trimmed.split_once(':') else {
+    if !trimmed.contains(':') {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             "URL is missing a scheme",
         ));
-    };
+    }
 
-    if is_allowed_url_scheme(scheme) {
+    if is_supported_link_url(trimmed) {
         Ok(trimmed)
     } else {
         Err(io::Error::new(
@@ -214,10 +214,45 @@ fn validate_external_url(url: &str) -> Result<&str, io::Error> {
     }
 }
 
-fn is_allowed_url_scheme(scheme: &str) -> bool {
-    scheme.eq_ignore_ascii_case("http")
-        || scheme.eq_ignore_ascii_case("https")
-        || scheme.eq_ignore_ascii_case("mailto")
+/// Schemes we refuse to hand to the OS handler no matter how they are written.
+///
+/// `javascript:`/`data:`/`vbscript:` are script payloads, and `file:` would let
+/// text we did not author — a commit message in a cloned repository, say — open
+/// an arbitrary local file with its default application.
+const DENIED_URL_SCHEMES: [&str; 4] = ["javascript", "data", "vbscript", "file"];
+
+/// Whether a URL is something the app is willing to linkify and open.
+///
+/// Anything with a hierarchical `scheme://` part qualifies (`ssh://`, `git://`,
+/// `vscode://`, …) plus the flat `mailto:`. Requiring `://` is what keeps the
+/// script schemes out structurally — they are written `javascript:…`, never with
+/// an authority — and [`DENIED_URL_SCHEMES`] covers the rest.
+pub(crate) fn is_supported_link_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once(':') else {
+        return false;
+    };
+    if !is_url_scheme(scheme) {
+        return false;
+    }
+    if DENIED_URL_SCHEMES
+        .iter()
+        .any(|denied| scheme.eq_ignore_ascii_case(denied))
+    {
+        return false;
+    }
+
+    if scheme.eq_ignore_ascii_case("mailto") {
+        !rest.is_empty()
+    } else {
+        rest.strip_prefix("//").is_some_and(|body| !body.is_empty())
+    }
+}
+
+/// The RFC 3986 scheme grammar: `ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )`.
+fn is_url_scheme(scheme: &str) -> bool {
+    let mut bytes = scheme.bytes();
+    bytes.next().is_some_and(|byte| byte.is_ascii_alphabetic())
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'-' | b'.'))
 }
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
@@ -387,6 +422,90 @@ fn file_uri_for_file_manager(path: &Path) -> Result<String, io::Error> {
     }
 
     Ok(uri)
+}
+
+#[cfg(test)]
+mod url_policy_tests {
+    use super::{is_supported_link_url, validate_external_url};
+
+    #[test]
+    fn hierarchical_schemes_are_supported() {
+        for url in [
+            "http://example.com",
+            "https://example.com/a?b=c#d",
+            "HTTPS://EXAMPLE.COM",
+            "ssh://git@example.com/repo.git",
+            "git://example.com/repo.git",
+            "ftp://example.com/pub",
+            "vscode://file/tmp/x",
+        ] {
+            assert!(is_supported_link_url(url), "expected {url} to be supported");
+        }
+    }
+
+    #[test]
+    fn mailto_is_supported_without_an_authority() {
+        assert!(is_supported_link_url("mailto:someone@example.com"));
+        assert!(is_supported_link_url("MAILTO:someone@example.com"));
+        // A bare `mailto:` addresses nobody.
+        assert!(!is_supported_link_url("mailto:"));
+    }
+
+    #[test]
+    fn script_and_file_schemes_are_refused() {
+        for url in [
+            "javascript:alert(1)",
+            // Denied even when disguised with an authority.
+            "javascript://example.com/%0Aalert(1)",
+            "data:text/html,<script>alert(1)</script>",
+            "vbscript:msgbox(1)",
+            "file:///etc/passwd",
+            "FILE:///etc/passwd",
+        ] {
+            assert!(!is_supported_link_url(url), "expected {url} to be refused");
+        }
+    }
+
+    #[test]
+    fn flat_schemes_other_than_mailto_are_refused() {
+        // Requiring `://` is what keeps script payloads out structurally, so
+        // every other flat scheme falls on the same side of the line.
+        assert!(!is_supported_link_url("tel:+358401234567"));
+        assert!(!is_supported_link_url("http:example.com"));
+        assert!(!is_supported_link_url("https://"));
+    }
+
+    #[test]
+    fn malformed_urls_are_refused() {
+        assert!(!is_supported_link_url("example.com"));
+        assert!(!is_supported_link_url("://example.com"));
+        assert!(!is_supported_link_url("1http://example.com"));
+        assert!(!is_supported_link_url("ht tp://example.com"));
+    }
+
+    #[test]
+    fn validation_trims_and_reports_why_it_refused() {
+        assert_eq!(
+            validate_external_url("  https://example.com  ").expect("supported url"),
+            "https://example.com"
+        );
+        assert_eq!(
+            validate_external_url("   ").expect_err("empty").to_string(),
+            "URL is empty"
+        );
+        assert_eq!(
+            validate_external_url("example.com")
+                .expect_err("no scheme")
+                .to_string(),
+            "URL is missing a scheme"
+        );
+        assert_eq!(
+            validate_external_url("javascript:alert(1)")
+                .expect_err("denied scheme")
+                .to_string(),
+            "URL scheme is not allowed"
+        );
+    }
 }
 
 #[cfg(all(test, any(target_os = "linux", target_os = "freebsd")))]

@@ -196,6 +196,12 @@ pub(in super::super) struct PopoverHost {
     /// Focus held by the App/Add Repository menu invoker, restored when that
     /// menu is dismissed without replacing it with another prompt.
     menu_invoker_focus: Option<FocusHandle>,
+    /// Whether the open popover was invoked from inside the diff panel.
+    ///
+    /// Some menus — the web link menu above all — can be raised from either the
+    /// diff panel or the commit details pane, and only the former should hand
+    /// focus back to the diff panel when it closes.
+    popover_opened_from_diff_panel: bool,
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
@@ -407,7 +413,8 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::RepoTabMenu { .. }
-            | PopoverKind::MarkdownLinkMenu { .. }
+            | PopoverKind::WebLinkMenu { .. }
+            | PopoverKind::CommitShaLinkMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
             | PopoverKind::InteractiveRebaseAutosquashMenu
@@ -678,6 +685,12 @@ pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
         .child(label)
 }
 
+/// Which corner of the popover is placed on its anchor.
+///
+/// Most menus hang off a button on the right of their row, so they open
+/// leftwards. The link menus are the exception: their anchor is the box of a
+/// span of text, and a menu that reads as belonging to that span has to start
+/// where the span starts.
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
@@ -732,7 +745,6 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
-        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
@@ -837,9 +849,12 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             Some(DIALOG_440_WIDTH)
         }
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
-        PopoverKind::MarkdownLinkMenu { .. } | PopoverKind::DiffActionMenu => {
+        PopoverKind::WebLinkMenu { .. } | PopoverKind::DiffActionMenu => {
             Some(DIFF_ACTION_MENU_WIDTH)
         }
+        // Shares "Browse repository at this point" with the commit menu, and so
+        // needs the same extra room.
+        PopoverKind::CommitShaLinkMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
         // "Browse repository at this point" needs more room than the default
         // context-menu width.
         PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
@@ -1595,6 +1610,7 @@ impl PopoverHost {
             cherry_pick_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
+            popover_opened_from_diff_panel: false,
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
@@ -1746,6 +1762,20 @@ impl PopoverHost {
     #[cfg(test)]
     pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn popover_opened_from_diff_panel_for_tests(&self) -> bool {
+        self.popover_opened_from_diff_panel
+    }
+
+    /// The box the open popover hangs off, when it was anchored to one.
+    #[cfg(test)]
+    pub(in super::super) fn popover_anchor_bounds_for_tests(&self) -> Option<Bounds<Pixels>> {
+        match self.popover_anchor {
+            Some(PopoverAnchor::Bounds(bounds)) => Some(bounds),
+            _ => None,
+        }
     }
 
     #[cfg(test)]
@@ -1906,13 +1936,15 @@ impl PopoverHost {
             Some(
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
-                    | PopoverKind::MarkdownLinkMenu { .. }
+                    | PopoverKind::WebLinkMenu { .. }
                     | PopoverKind::DiffActionMenu
                     | PopoverKind::MergetoolSettingsMenu
                     | PopoverKind::DiffHunkMenu { .. }
                     | PopoverKind::DiffEditorMenu { .. }
-            )
-        );
+            ) // A web link menu can also be opened from a commit message in the
+              // details pane, and handing that click's focus to the diff panel would
+              // move the keyboard somewhere the user never was.
+        ) && self.popover_opened_from_diff_panel;
         self.close_popover(cx);
         if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
@@ -2884,6 +2916,13 @@ impl PopoverHost {
             } else {
                 None
             };
+        // The diff panel takes focus on any left press inside it, so its focus
+        // state at open time is a faithful record of where the click landed.
+        self.popover_opened_from_diff_panel = self
+            .main_pane
+            .read(cx)
+            .diff_panel_focus_handle
+            .is_focused(window);
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu
             || matches!(
@@ -3852,9 +3891,21 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
-            PopoverKind::MarkdownLinkMenu { url } => {
-                self.context_menu_view(PopoverKind::MarkdownLinkMenu { url }, cx)
+            PopoverKind::WebLinkMenu { url } => {
+                self.context_menu_view(PopoverKind::WebLinkMenu { url }, cx)
             }
+            PopoverKind::CommitShaLinkMenu {
+                repo_id,
+                commit_id,
+                allow_navigate,
+            } => self.context_menu_view(
+                PopoverKind::CommitShaLinkMenu {
+                    repo_id,
+                    commit_id,
+                    allow_navigate,
+                },
+                cx,
+            ),
             PopoverKind::MergetoolSettingsMenu => {
                 self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
             }

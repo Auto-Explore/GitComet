@@ -1174,6 +1174,30 @@ pub(super) fn schedule_load_commit_details(
     });
 }
 
+/// Resolve a possibly abbreviated reference and load its details in one call.
+///
+/// `commit_details` runs the reference through `rev-parse`, so this answers
+/// "does it exist, and is it unambiguous?" as a side effect of the load the
+/// details pane needs anyway.
+pub(super) fn schedule_resolve_commit_for_reveal(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    reference: gitcomet_core::domain::CommitId,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
+                repo_id,
+                reference: reference.clone(),
+                result: repo.commit_details(&reference),
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_load_range_files(
     executor: &TaskExecutor,
     repos: &RepoMap,

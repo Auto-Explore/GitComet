@@ -462,6 +462,13 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::ResolveCommitForReveal { repo_id, reference } => send(Msg::Internal(
+            crate::msg::InternalMsg::CommitRevealResolved {
+                repo_id,
+                reference,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadRangeFiles {
             repo_id,
             from,
@@ -1781,6 +1788,15 @@ pub(super) fn schedule_effect(
             {
                 repo_load::schedule_load_commit_details(
                     executor, repos, msg_tx, repo_id, commit_id,
+                );
+            }
+        }
+        Effect::ResolveCommitForReveal { repo_id, reference } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_resolve_commit_for_reveal(
+                    executor, repos, msg_tx, repo_id, reference,
                 );
             }
         }

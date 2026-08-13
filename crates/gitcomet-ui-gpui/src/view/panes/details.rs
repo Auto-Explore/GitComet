@@ -47,12 +47,12 @@ pub(in super::super) struct DetailsPaneView {
 
     pub(in super::super) commit_message_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_message_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_message_sha_menu: Entity<components::CommitShaHoverMenu>,
-    pub(in super::super) commit_details_sha_menu: Entity<components::CommitShaHoverMenu>,
+    pub(in super::super) commit_details_message_link_menu: Entity<components::CommitLinkMenu>,
+    pub(in super::super) commit_details_sha_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_details_sha_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_date_input: Entity<components::TextInput>,
     pub(in super::super) commit_details_parent_input: Entity<components::TextInput>,
-    pub(in super::super) commit_details_parent_sha_menu: Entity<components::CommitShaHoverMenu>,
+    pub(in super::super) commit_details_parent_link_menu: Entity<components::CommitLinkMenu>,
     pub(in super::super) commit_message_drafts: HashMap<RepoId, SharedString>,
     pub(in super::super) commit_amend_enabled: bool,
     pub(in super::super) commit_push_after_enabled: bool,
@@ -275,17 +275,13 @@ impl DetailsPaneView {
                 cx,
             )
         });
-        let commit_details_message_sha_menu = cx.new(|cx| {
-            components::CommitShaHoverMenu::new(
+        let commit_details_message_link_menu = cx.new(|_cx| {
+            components::CommitLinkMenu::new(
                 commit_details_message_input.clone(),
                 RepoId(0),
-                Arc::<[components::CommitShaLink]>::from([]),
-                theme,
-                crate::ui_scale::UiScale::current(cx),
-                "commit_details_message_sha_hover_menu",
+                Arc::<[components::MessageLink]>::from([]),
+                "commit_details_message_link_menu",
                 root_view.clone(),
-                true,
-                cx,
             )
         });
 
@@ -328,31 +324,23 @@ impl DetailsPaneView {
             input.set_display_truncation(Some(components::TextTruncationProfile::Middle), cx);
             input
         });
-        let commit_details_parent_sha_menu = cx.new(|cx| {
-            components::CommitShaHoverMenu::new(
+        let commit_details_parent_link_menu = cx.new(|_cx| {
+            components::CommitLinkMenu::new(
                 commit_details_parent_input.clone(),
                 RepoId(0),
-                Arc::<[components::CommitShaLink]>::from([]),
-                theme,
-                crate::ui_scale::UiScale::current(cx),
-                "commit_details_parent_sha_hover_menu",
+                Arc::<[components::MessageLink]>::from([]),
+                "commit_details_parent_link_menu",
                 root_view.clone(),
-                true,
-                cx,
             )
         });
 
-        let commit_details_sha_menu = cx.new(|cx| {
-            components::CommitShaHoverMenu::new(
+        let commit_details_sha_link_menu = cx.new(|_cx| {
+            components::CommitLinkMenu::new(
                 commit_details_sha_input.clone(),
                 RepoId(0),
-                Arc::<[components::CommitShaLink]>::from([]),
-                theme,
-                crate::ui_scale::UiScale::current(cx),
-                "commit_details_sha_hover_menu",
+                Arc::<[components::MessageLink]>::from([]),
+                "commit_details_sha_link_menu",
                 root_view.clone(),
-                false,
-                cx,
             )
         });
 
@@ -406,12 +394,12 @@ impl DetailsPaneView {
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
             commit_details_message_input,
-            commit_details_message_sha_menu,
-            commit_details_sha_menu,
+            commit_details_message_link_menu,
+            commit_details_sha_link_menu,
             commit_details_sha_input,
             commit_details_date_input,
             commit_details_parent_input,
-            commit_details_parent_sha_menu,
+            commit_details_parent_link_menu,
             commit_message_drafts: HashMap::default(),
             commit_amend_enabled: false,
             commit_push_after_enabled,

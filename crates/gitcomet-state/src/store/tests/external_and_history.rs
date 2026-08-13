@@ -14,6 +14,20 @@ fn active_log_seq(repo_state: &RepoState) -> crate::model::LogLoadSeq {
         .expect("a log walk is in flight")
 }
 
+fn commit_details_for(id: &CommitId, message: &str) -> gitcomet_core::domain::CommitDetails {
+    gitcomet_core::domain::CommitDetails {
+        id: id.clone(),
+        message: message.to_string(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
+        committed_at: "2026-03-08 12:34:56 +0200".to_string(),
+        committed_at_unix: 0,
+        parent_ids: vec![],
+        files: vec![],
+    }
+}
+
 fn expect_log_reply(
     repo_state: &mut RepoState,
     scope: LogScope,
@@ -1816,6 +1830,259 @@ fn log_loaded_reconciles_commit_multi_selection() {
     assert_eq!(sel.anchor, None);
     assert_eq!(sel.anchor_index, None);
     assert_eq!(sel.anchor_log_rev, None);
+}
+
+/// A reveal asks git to resolve the reference before touching the selection, so
+/// an abbreviation lands on the full id and the details pane fills in without
+/// the log having paged anywhere near the commit.
+#[test]
+fn reveal_commit_resolves_an_abbreviation_and_shows_it_immediately() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let reference = CommitId("deadbee".into());
+    let full = CommitId("deadbeef0123456789abcdef0123456789abcdef".into());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RevealCommit {
+            repo_id: RepoId(1),
+            reference: reference.clone(),
+        },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::ResolveCommitForReveal { reference: r, .. } if *r == reference
+        )),
+        "asking to reveal should resolve the reference, got {effects:?}"
+    );
+    // Nothing is selected until it is known to exist.
+    assert_eq!(state.repos[0].history_state.selected_commit, None);
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
+            repo_id: RepoId(1),
+            reference,
+            result: Ok(commit_details_for(&full, "the reland")),
+        }),
+    );
+
+    let history = &state.repos[0].history_state;
+    assert_eq!(history.selected_commit.as_ref(), Some(&full));
+    assert_eq!(history.reveal_target.as_ref(), Some(&full));
+    assert!(
+        matches!(&history.commit_details, Loadable::Ready(details) if details.id == full),
+        "the details fetched to resolve the reference should be the ones shown"
+    );
+}
+
+/// A hex-looking run that is not a commit — a Gerrit change id, say — must fail
+/// loudly and cheaply instead of sending the log walking to the root.
+#[test]
+fn reveal_commit_reports_an_unresolvable_reference_without_selecting() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let reference = CommitId("7a5d480873e839444e4e188ffa87f9c635e2fb81".into());
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RevealCommit {
+            repo_id: RepoId(1),
+            reference: reference.clone(),
+        },
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
+            repo_id: RepoId(1),
+            reference,
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("unknown revision".to_string()),
+            )),
+        }),
+    );
+
+    assert!(effects.is_empty(), "a dead reference starts no work");
+    let history = &state.repos[0].history_state;
+    assert_eq!(history.selected_commit, None);
+    assert_eq!(history.reveal_target, None);
+    assert!(
+        state
+            .notifications
+            .iter()
+            .any(|note| note.message.contains("Could not find commit")),
+        "the user has to be told the reference went nowhere"
+    );
+}
+
+/// A "load more" only ever grows the page, so a selection it does not contain
+/// has not been paged in yet — it has not vanished. Clearing it there used to
+/// make the details pane flip to the working tree once per batch for the whole
+/// length of a reveal.
+#[test]
+fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let commit = |id: &str| Commit {
+        id: CommitId(id.into()),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: "s".into(),
+        author: "a".into(),
+        time: SystemTime::UNIX_EPOCH,
+    };
+
+    let deep = CommitId("deep".into());
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.set_log(Loadable::Ready(Arc::new(LogPage {
+        commits: vec![commit("c1")],
+        next_cursor: Some(LogCursor {
+            last_seen: CommitId("c1".into()),
+            resume_from: None,
+            resume_token: None,
+        }),
+    })));
+    repo_state.set_selected_commit(Some(deep.clone()));
+    repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
+        commits: vec![deep.clone()],
+        anchor: Some(deep.clone()),
+        anchor_index: Some(0),
+        anchor_log_rev: Some(repo_state.history_state.log_rev),
+    };
+
+    let seq = expect_log_reply(
+        &mut state.repos[0],
+        LogScope::CurrentBranch,
+        None,
+        Some(LogCursor {
+            last_seen: CommitId("c1".into()),
+            resume_from: None,
+            resume_token: None,
+        }),
+    );
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor: Some(LogCursor {
+                last_seen: CommitId("c1".into()),
+                resume_from: None,
+                resume_token: None,
+            }),
+            result: Ok(LogPage {
+                commits: vec![commit("c2")],
+                next_cursor: Some(LogCursor {
+                    last_seen: CommitId("c2".into()),
+                    resume_from: None,
+                    resume_token: None,
+                }),
+            }),
+        }),
+    );
+
+    let history = &state.repos[0].history_state;
+    assert_eq!(history.selected_commit.as_ref(), Some(&deep));
+    assert_eq!(history.multi_selection.commits, vec![deep]);
+}
+
+/// A first page *replaces* the log, so it can genuinely retire a selection —
+/// unless a reveal is still walking toward exactly that commit, which is what a
+/// mid-reveal scope switch does.
+#[test]
+fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(RepoId(1));
+
+    let commit = |id: &str| Commit {
+        id: CommitId(id.into()),
+        parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+        summary: "s".into(),
+        author: "a".into(),
+        time: SystemTime::UNIX_EPOCH,
+    };
+
+    let target = CommitId("target".into());
+    let repo_state = &mut state.repos[0];
+    repo_state.history_state.history_scope = LogScope::CurrentBranch;
+    repo_state.set_reveal_target(Some(target.clone()));
+    repo_state.set_selected_commit(Some(target.clone()));
+    repo_state.history_state.multi_selection = crate::model::CommitMultiSelection {
+        commits: vec![target.clone()],
+        anchor: Some(target.clone()),
+        anchor_index: Some(0),
+        anchor_log_rev: Some(repo_state.history_state.log_rev),
+    };
+
+    let seq = expect_log_reply(&mut state.repos[0], LogScope::CurrentBranch, None, None);
+
+    let _effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::LogLoaded {
+            repo_id: RepoId(1),
+            seq,
+            scope: LogScope::CurrentBranch,
+            cursor: None,
+            result: Ok(LogPage {
+                commits: vec![commit("other")],
+                next_cursor: None,
+            }),
+        }),
+    );
+
+    let history = &state.repos[0].history_state;
+    assert_eq!(history.selected_commit.as_ref(), Some(&target));
+    assert_eq!(history.multi_selection.commits, vec![target]);
 }
 
 #[test]

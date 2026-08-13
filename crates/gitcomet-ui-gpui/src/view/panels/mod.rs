@@ -77,6 +77,12 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    /// Scroll the history to a commit referenced from somewhere else and
+    /// show its details.
+    RevealHistoryCommit {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     BrowseRepositoryAtCommit {
         repo_id: RepoId,
         commit_id: CommitId,

@@ -278,6 +278,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("commit_id", commit_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::CommitRevealResolved {
+                repo_id,
+                reference,
+                result,
+            } => f
+                .debug_struct("CommitRevealResolved")
+                .field("repo_id", repo_id)
+                .field("reference", reference)
+                .field("result", result)
+                .finish(),
             InternalMsg::RangeFilesLoaded {
                 repo_id,
                 from,

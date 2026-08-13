@@ -1566,6 +1566,54 @@ fn hotspot_bounds_match_range_extent(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn hotspot_bounds_report_only_the_first_line_of_a_range_that_wraps(cx: &mut gpui::TestAppContext) {
+    let (input, cx) = cx.add_window_view(|window, cx| {
+        TextInput::new(
+            TextInputOptions {
+                multiline: true,
+                read_only: true,
+                chromeless: true,
+                ..Default::default()
+            },
+            window,
+            cx,
+        )
+    });
+
+    let text = "deadbee\nfeedface";
+    cx.update(|window, app| {
+        input.update(app, |input, cx| {
+            input.set_text(text.to_string(), cx);
+        });
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let input = input.read(app);
+        let first_line = input
+            .hotspot_bounds(&(0..7))
+            .expect("expected hotspot bounds for a range on one line");
+        // The second line's x carries no information about how far the first
+        // one runs, and can even sit left of where the range started.
+        let across_lines = input
+            .hotspot_bounds(&(0..text.len()))
+            .expect("expected hotspot bounds for a range that spans two lines");
+
+        assert_eq!(
+            across_lines.origin, first_line.origin,
+            "a range that wraps still begins where its first line begins"
+        );
+        assert_eq!(
+            across_lines.bottom(),
+            first_line.bottom(),
+            "and it still ends with that line rather than a later one"
+        );
+        assert!(across_lines.size.width > px(0.0));
+        assert!(across_lines.size.height > px(0.0));
+    });
+}
+
+#[gpui::test]
 fn truncated_line_hit_testing_snaps_ellipsis_to_hidden_range_boundaries(
     cx: &mut gpui::TestAppContext,
 ) {

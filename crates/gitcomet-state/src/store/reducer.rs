@@ -122,6 +122,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::OpenFileAtCommitParent { .. }
             | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
+            | Msg::RevealCommit { .. }
             | Msg::ResetBrowseToLive { .. }
             | Msg::ViewerNavBack { .. }
             | Msg::ViewerNavForward { .. }
@@ -752,6 +753,9 @@ fn is_view_navigation(msg: &Msg) -> bool {
             | Msg::ExitDiffEditMode { .. }
             | Msg::OpenFileAtCommit { .. }
             | Msg::BrowseRepositoryAtCommit { .. }
+            // A reveal moves the main view when its reference resolves, not
+            // when it is asked for.
+            | Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved { .. })
             | Msg::ResetBrowseToLive { .. }
             | Msg::OpenInlineSubmoduleDiff { .. }
             | Msg::SelectInlineSubmoduleDiff { .. }
@@ -1055,6 +1059,10 @@ fn reduce_inner(
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
             effects::browse_repository_at_commit(state, repo_id, commit_id)
         }
+        Msg::RevealCommit { repo_id, reference } => {
+            effects::reveal_commit(state, repo_id, reference)
+        }
+        Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
         Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
             diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Back)
@@ -2021,6 +2029,11 @@ fn reduce_inner(
             commit_id,
             result,
         }) => effects::commit_details_loaded(state, repo_id, commit_id, result),
+        Msg::Internal(crate::msg::InternalMsg::CommitRevealResolved {
+            repo_id,
+            reference,
+            result,
+        }) => effects::commit_reveal_resolved(state, repo_id, reference, result),
         Msg::Internal(crate::msg::InternalMsg::RangeFilesLoaded {
             repo_id,
             from,

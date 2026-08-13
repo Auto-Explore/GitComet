@@ -1,10 +1,10 @@
 use super::*;
 
 pub(super) fn model(url: &str) -> ContextMenuModel {
-    model_for_markdown_link(url)
+    model_for_web_link(url)
 }
 
-fn model_for_markdown_link(url: &str) -> ContextMenuModel {
+fn model_for_web_link(url: &str) -> ContextMenuModel {
     ContextMenuModel::new(vec![
         ContextMenuItem::Header("Link".into()),
         ContextMenuItem::Label(url.to_owned().into()),
@@ -47,7 +47,7 @@ mod tests {
 
     #[test]
     fn model_offers_opening_and_copying_the_link() {
-        let model = model_for_markdown_link("https://example.com/page");
+        let model = model_for_web_link("https://example.com/page");
 
         assert_eq!(
             entry_labels(&model),
@@ -62,7 +62,7 @@ mod tests {
 
     #[test]
     fn open_entry_carries_the_link_url() {
-        let model = model_for_markdown_link("https://example.com/page");
+        let model = model_for_web_link("https://example.com/page");
         let open = model
             .items
             .iter()
@@ -87,7 +87,7 @@ mod tests {
         // A link's address is never on screen — the document shows its text —
         // so the copy has to announce itself. That is what separates this from
         // the plain `CopyText` every other menu uses.
-        let model = model_for_markdown_link("https://example.com/page");
+        let model = model_for_web_link("https://example.com/page");
         let copy = model
             .items
             .iter()
