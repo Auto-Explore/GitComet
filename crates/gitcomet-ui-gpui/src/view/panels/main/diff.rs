@@ -737,12 +737,17 @@ impl MainPaneView {
                                         .id("diff_split_columns_header")
                                         .debug_selector(|| "diff_split_columns_header".to_string())
                                         .w_full()
+                                        // Same right inset as the body below, so both rows divide
+                                        // the identical content box and the column divider lines
+                                        // up. Padding keeps the band and its bottom border
+                                        // full-bleed.
+                                        .pr(shared_scrollbar_gutter)
                                         .h(components::control_height(ui_scale_percent))
                                         .flex()
                                         .items_center()
                                         .text_xs()
                                         .text_color(theme.colors.text_muted)
-                                        .bg(theme.colors.surface_bg_elevated)
+                                        .bg(crate::theme::content_header_bg(theme))
                                         .border_b_1()
                                         .border_color(theme.colors.border)
                                         .child(
