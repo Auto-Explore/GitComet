@@ -161,15 +161,15 @@ impl PopoverHost {
                     // floating over, so the menu goes before the targets below
                     // are read — otherwise it keeps the arrow keys while the
                     // list moves under its highlight.
-                    repo_picker::close_row_menu_on_query_change(this, query, cx);
-                    Some(repo_picker::nav_targets(this, query))
+                    picker_row_menu::close_on_query_change(this, query, cx);
+                    Some(repo_picker::nav_targets(this, query, cx))
                 },
                 repo_picker::dismiss,
                 |this, sel, cx| {
                     // Both of these replace the repository rows as the arrow
                     // keys' target, so the selection is not a row index to
                     // scroll to.
-                    if this.repo_picker_sort_menu_open || this.repo_picker_row_menu.is_some() {
+                    if this.repo_picker_sort_menu_open || this.picker_row_menu.is_some() {
                         return;
                     }
                     let query = this
@@ -223,7 +223,18 @@ impl PopoverHost {
                 cx,
                 |this| this.inline_branch_picker_active(),
                 |this| &mut this.branch_picker_selected_index,
-                |this, query, _cx| {
+                |this, query, cx| {
+                    // A menu floating over a row takes the arrow keys, and an
+                    // edit to the filter dismisses it — the rows underneath are
+                    // about to be re-filtered out from under its highlight.
+                    picker_row_menu::close_on_query_change(this, query, cx);
+                    if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+                        return Some(
+                            (0..actions.len())
+                                .map(branch_picker::BranchPickerNavTarget::RowAction)
+                                .collect(),
+                        );
+                    }
                     // The checkout picker renders sectioned, multi-part rows, so
                     // its nav order must come from the picker's own layout over
                     // the very same items. `match_branches` sorts differently
@@ -241,8 +252,19 @@ impl PopoverHost {
                             .collect(),
                     )
                 },
-                |this, cx| this.handle_inline_branch_picker_escape(cx),
+                |this, cx| {
+                    // Escape backs out of the menu before it closes the picker.
+                    if this.picker_row_menu.is_some() {
+                        picker_row_menu::close(this, cx);
+                        return;
+                    }
+                    this.handle_inline_branch_picker_escape(cx)
+                },
                 |this, sel, cx| {
+                    // The selection indexes the open menu's entries, not a row.
+                    if this.picker_row_menu.is_some() {
+                        return;
+                    }
                     let query = this
                         .branch_picker_search_input
                         .as_ref()
@@ -272,6 +294,11 @@ impl PopoverHost {
                     );
                 },
                 |this, payload, query, window, cx| {
+                    // Enter runs the highlighted menu entry while a menu is up.
+                    if let Some(branch_picker::BranchPickerNavTarget::RowAction(ix)) = payload {
+                        picker_row_menu::activate_nth(this, ix, window, cx);
+                        return;
+                    }
                     let Some(repo_id) = this.active_repo().map(|repo| repo.id) else {
                         return;
                     };
@@ -400,14 +427,35 @@ impl PopoverHost {
                     cx,
                     |this| workspace_picker_state(this).is_some(),
                     |this| &mut this.workspace_picker_selected_index,
-                    |this, query, _cx| {
+                    |this, query, cx| {
+                        // A menu floating over a row takes the arrow keys, and an
+                        // edit to the filter dismisses it.
+                        picker_row_menu::close_on_query_change(this, query, cx);
+                        if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+                            return Some(
+                                (0..actions.len())
+                                    .map(workspace_picker::WorkspaceRow::RowAction)
+                                    .collect(),
+                            );
+                        }
                         let repo_id = workspace_picker_state(this)?;
                         // Layout-driven so Enter can never land on a different
                         // row than the highlighted one.
                         Some(workspace_picker::nav_targets(this, repo_id, query))
                     },
-                    |this, cx| this.close_popover(cx),
+                    |this, cx| {
+                        // Escape backs out of the menu before it closes the picker.
+                        if this.picker_row_menu.is_some() {
+                            picker_row_menu::close(this, cx);
+                            return;
+                        }
+                        this.close_popover(cx)
+                    },
                     |this, sel, cx| {
+                        // The selection indexes the open menu's entries, not a row.
+                        if this.picker_row_menu.is_some() {
+                            return;
+                        }
                         let Some(repo_id) = workspace_picker_state(this) else {
                             return;
                         };
@@ -426,6 +474,11 @@ impl PopoverHost {
                         );
                     },
                     |this, payload, query, window, cx| {
+                        // Enter runs the highlighted menu entry while a menu is up.
+                        if let Some(workspace_picker::WorkspaceRow::RowAction(ix)) = payload {
+                            picker_row_menu::activate_nth(this, ix, window, cx);
+                            return;
+                        }
                         let Some(repo_id) = workspace_picker_state(this) else {
                             return;
                         };

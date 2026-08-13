@@ -20,6 +20,7 @@ mod force_push_confirm;
 mod force_remove_worktree_confirm;
 mod merge_abort_confirm;
 mod picker_nav;
+mod picker_row_menu;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_onto_confirm;
@@ -204,7 +205,7 @@ pub(in super::super) struct PopoverHost {
     repo_picker_sort_menu_open: bool,
     /// Repository row whose context menu floats over the picker, and the window
     /// position it was invoked at. The picker stays open underneath it.
-    repo_picker_row_menu: Option<repo_picker::RepoPickerRowMenu>,
+    picker_row_menu: Option<picker_row_menu::PickerRowMenu>,
     branch_picker_selected_index: Option<usize>,
     worktree_picker_selected_index: Option<usize>,
     workspace_picker_selected_index: Option<usize>,
@@ -261,6 +262,10 @@ pub(in super::super) struct PopoverHost {
     create_branch_source_target: String,
     worktree_ref_source_target: String,
     suppress_worktree_submit_after_ref_enter: bool,
+    /// Set while a row menu floating over a picker runs one of its entries. The
+    /// menu has already closed itself by then, and the popover underneath is the
+    /// picker — which stays up so the next row can be acted on.
+    suppress_popover_close_after_action: bool,
     create_branch_from_ref_checkout_focus_handle: FocusHandle,
     create_branch_from_ref_focus: DialogFocus,
     create_tag_annotated: bool,
@@ -1581,7 +1586,7 @@ impl PopoverHost {
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
             repo_picker_sort: repo_picker::RepoPickerSort::default(),
             repo_picker_sort_menu_open: false,
-            repo_picker_row_menu: None,
+            picker_row_menu: None,
             branch_picker_selected_index: None,
             worktree_picker_selected_index: None,
             workspace_picker_selected_index: None,
@@ -1622,6 +1627,7 @@ impl PopoverHost {
             create_branch_source_target: String::new(),
             worktree_ref_source_target: String::new(),
             suppress_worktree_submit_after_ref_enter: false,
+            suppress_popover_close_after_action: false,
             create_branch_from_ref_checkout_focus_handle,
             create_branch_from_ref_focus,
             create_tag_annotated: false,
@@ -1757,7 +1763,7 @@ impl PopoverHost {
         self.popover = None;
         self.popover_anchor = None;
         self.context_menu_selected_ix = None;
-        self.repo_picker_row_menu = None;
+        self.picker_row_menu = None;
         self.menu_invoker_focus = None;
         self.notify_fingerprint = 0;
         self.sync_titlebar_app_menu_state(cx);
@@ -2869,7 +2875,7 @@ impl PopoverHost {
         // Belongs with the reset above, not with the RepoPicker arm below: every
         // popover kind draws `row_menu_layer`, so a menu left over from a closed
         // picker would spread its occluding scrim over an unrelated popover.
-        self.repo_picker_row_menu = None;
+        self.picker_row_menu = None;
         self.branch_picker_selected_index = None;
         self.worktree_picker_selected_index = None;
         self.workspace_picker_selected_index = None;
@@ -3559,6 +3565,49 @@ impl PopoverHost {
         });
     }
 
+    /// The search input of whichever picker is open, so a row menu floating over
+    /// it can read the filter without knowing which picker it is over.
+    fn open_picker_search_input(&self) -> Option<&Entity<components::TextInput>> {
+        match &self.popover {
+            Some(PopoverKind::RepoPicker) => self.repo_picker_search_input.as_ref(),
+            Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_search_input.as_ref(),
+            Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
+                ..
+            }) => self.workspace_picker_search_input.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// The selection index of whichever picker is open. A row menu parks it while
+    /// it is up — the arrow keys walk the menu then — and restores it on the way
+    /// out. **Every picker kind that can host a row menu has to be here**; a
+    /// missing arm parks the wrong picker's selection with nothing on screen to
+    /// say so.
+    fn open_picker_selected_index(&mut self) -> Option<&mut Option<usize>> {
+        match &self.popover {
+            Some(PopoverKind::RepoPicker) => Some(&mut self.repo_picker_selected_index),
+            Some(PopoverKind::BranchPicker { .. }) => Some(&mut self.branch_picker_selected_index),
+            Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
+                ..
+            }) => Some(&mut self.workspace_picker_selected_index),
+            _ => None,
+        }
+    }
+
+    fn open_picker_selected_index_value(&self) -> Option<usize> {
+        match &self.popover {
+            Some(PopoverKind::RepoPicker) => self.repo_picker_selected_index,
+            Some(PopoverKind::BranchPicker { .. }) => self.branch_picker_selected_index,
+            Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::BadgePicker),
+                ..
+            }) => self.workspace_picker_selected_index,
+            _ => None,
+        }
+    }
+
     fn push_toast(
         &mut self,
         kind: components::ToastKind,
@@ -3607,7 +3656,7 @@ impl Render for PopoverHost {
         // Painted after the popover, so it hit-tests above the picker it floats
         // over and its own scrim intercepts the click that would otherwise
         // reach `popover_scrim` and close the whole picker.
-        if let Some(row_menu) = repo_picker::row_menu_layer(self, window, cx) {
+        if let Some(row_menu) = picker_row_menu::layer(self, window, cx) {
             layer = layer.child(row_menu);
         }
         layer.into_any_element()

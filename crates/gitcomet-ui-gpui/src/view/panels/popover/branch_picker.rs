@@ -16,6 +16,9 @@ pub(super) enum BranchPickerNavTarget {
     RemoteBranch { remote: String, branch: String },
     /// Create (and check out) a branch with this name.
     CreateBranch(String),
+    /// The nth entry of the row menu floating over the picker, which takes the
+    /// arrow keys while it is up.
+    RowAction(usize),
 }
 
 pub(super) struct BranchRows {
@@ -430,6 +433,8 @@ pub(super) fn activate(
     cx: &mut gpui::Context<PopoverHost>,
 ) {
     match target {
+        // Menu entries never reach here: they run through the row menu itself.
+        BranchPickerNavTarget::RowAction(_) => {}
         BranchPickerNavTarget::Ref(name) => {
             this.handle_inline_branch_picker_select(name, repo_id, window, cx);
         }
@@ -516,6 +521,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         let query = search.read_with(cx, |input, _| input.text().trim().to_string());
         let built = cached(this, &query);
         let row_payloads = Rc::clone(&built.payloads);
+        let menu_payloads = Rc::clone(&built.payloads);
         let empty_text = match this.active_repo().map(|repo| &repo.branches) {
             Some(Loadable::Loading) | Some(Loadable::NotLoaded) => "Loading",
             Some(Loadable::Error(_)) => "Could not list branches",
@@ -532,8 +538,38 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
                 .tooltip_host(this.tooltip_host.clone())
                 .empty_text(empty_text)
                 .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
-                .selected_index(this.branch_picker_selected_index)
+                .selected_index(
+                    // While a row menu is open the arrow keys walk its entries,
+                    // so the list's highlight marks the invoking row instead.
+                    this.picker_row_menu
+                        .as_ref()
+                        .map(|menu| menu.display_index)
+                        .or(this.branch_picker_selected_index),
+                )
                 .marked_index(built.marked_index)
+                // Right-click offers the branch its sidebar row offers, floating
+                // over the picker rather than replacing it.
+                .on_context_menu(cx.listener(
+                    move |this, event: &components::PickerPromptContextMenuEvent, _window, cx| {
+                        let (Some(repo_id), Some(row)) = (
+                            this.active_repo().map(|repo| repo.id),
+                            menu_payloads.get(event.original_index).cloned(),
+                        ) else {
+                            return;
+                        };
+                        let target = picker_row_menu::PickerRowMenuTarget::Branch { repo_id, row };
+                        if !target.has_menu(this) {
+                            return;
+                        }
+                        picker_row_menu::open(
+                            this,
+                            target,
+                            event.display_index,
+                            event.position,
+                            cx,
+                        );
+                    },
+                ))
                 .render(
                     theme,
                     ui_scale_percent,

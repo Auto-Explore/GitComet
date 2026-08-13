@@ -398,7 +398,7 @@ fn repo_picker_sort_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestApp
         popover_host.update(app, |host, cx| {
             repo_picker::toggle_sort_menu(host, cx);
             assert_eq!(
-                repo_picker::nav_targets(host, "").len(),
+                repo_picker::nav_targets(host, "", cx).len(),
                 repo_picker::RepoPickerSort::ALL.len(),
                 "arrow keys should walk the sort options while the menu is open"
             );
@@ -497,16 +497,18 @@ fn repo_picker_pins_outlive_the_recents_list_subprocess(cx: &mut gpui::TestAppCo
     });
     cx.update(|window, app| {
         popover_host.update(app, |host, cx| {
-            repo_picker::open_row_menu(
+            picker_row_menu::open(
                 host,
-                open_entry.clone(),
+                picker_row_menu::PickerRowMenuTarget::Repo(open_entry.clone()),
                 1,
                 gpui::point(gpui::px(120.0), gpui::px(120.0)),
                 cx,
             );
-            repo_picker::activate_row_action(
+            picker_row_menu::activate(
                 host,
-                repo_picker::RepoPickerRowAction::Pin,
+                ContextMenuAction::PinRepository {
+                    path: open_workdir.clone(),
+                },
                 window,
                 cx,
             );
@@ -720,22 +722,22 @@ fn repo_picker_row_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         popover_host.update(app, |host, cx| {
-            let row_actions = repo_picker::nav_targets(host, "").len();
-            repo_picker::open_row_menu(
+            let row_actions = repo_picker::nav_targets(host, "", cx).len();
+            picker_row_menu::open(
                 host,
-                entry.clone(),
+                picker_row_menu::PickerRowMenuTarget::Repo(entry.clone()),
                 0,
                 gpui::point(gpui::px(140.0), gpui::px(120.0)),
                 cx,
             );
             assert!(
-                repo_picker::nav_targets(host, "").len() > row_actions,
+                repo_picker::nav_targets(host, "", cx).len() > row_actions,
                 "the arrow keys should walk the menu's actions while it is open"
             );
 
             // Escape backs out of the menu before it closes the picker.
             repo_picker::dismiss(host, cx);
-            assert!(host.repo_picker_row_menu.is_none());
+            assert!(host.picker_row_menu.is_none());
             assert!(host.is_open(), "expected the picker to stay open");
 
             repo_picker::dismiss(host, cx);
@@ -745,23 +747,13 @@ fn repo_picker_row_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestAppC
 
     cx.update(|_window, app| {
         let host = popover_host.read(app);
-        let labels = |entry| {
-            repo_picker::row_menu_items(host, entry)
-                .into_iter()
-                .filter_map(|item| match item {
-                    repo_picker::RepoPickerRowMenuItem::Entry {
-                        label, disabled, ..
-                    } => Some((label, disabled)),
-                    repo_picker::RepoPickerRowMenuItem::Separator => None,
-                })
-                .collect::<Vec<_>>()
-        };
+        let labels = |entry| row_menu_labels(host, entry);
 
         // The active repository cannot be activated again, so that entry is
         // present but disabled — a row menu never offers a no-op. No editor is
         // configured in tests, so that entry is absent rather than dead.
         assert_eq!(
-            labels(&entry),
+            as_str_pairs(&labels(&entry)),
             vec![
                 ("Pin repository", false),
                 ("Activate", true),
@@ -775,7 +767,7 @@ fn repo_picker_row_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestAppC
         // closing.
         let closed = repo_picker::RepoPickerEntry::Closed("/tmp/not-open".into());
         assert_eq!(
-            labels(&closed),
+            as_str_pairs(&labels(&closed)),
             vec![
                 ("Pin repository", false),
                 ("Open repository", false),
@@ -822,7 +814,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
     });
 
     let menu = cx
-        .debug_bounds("repo_picker_row_menu")
+        .debug_bounds("picker_row_menu")
         .expect("right-clicking a row should open its menu");
     // Within a pixel: the anchored element lands on a device-pixel boundary.
     assert!(
@@ -854,7 +846,7 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
         let _ = window.draw(app);
     });
 
-    assert!(cx.debug_bounds("repo_picker_row_menu").is_none());
+    assert!(cx.debug_bounds("picker_row_menu").is_none());
     assert!(
         cx.update(|_window, app| popover_host.read(app).is_open()),
         "dismissing the row menu must not also close the picker"
@@ -897,9 +889,9 @@ fn repo_picker_row_menu_closes_when_the_filter_changes(cx: &mut gpui::TestAppCon
 
     cx.update(|window, app| {
         popover_host.update(app, |host, cx| {
-            repo_picker::open_row_menu(
+            picker_row_menu::open(
                 host,
-                entry.clone(),
+                picker_row_menu::PickerRowMenuTarget::Repo(entry.clone()),
                 display_index,
                 gpui::point(gpui::px(140.0), gpui::px(120.0)),
                 cx,
@@ -914,7 +906,7 @@ fn repo_picker_row_menu_closes_when_the_filter_changes(cx: &mut gpui::TestAppCon
     cx.simulate_keystrokes("down");
     cx.run_until_parked();
     assert!(
-        cx.update(|_window, app| popover_host.read(app).repo_picker_row_menu.is_some()),
+        cx.update(|_window, app| popover_host.read(app).picker_row_menu.is_some()),
         "arrowing inside the menu must not dismiss it"
     );
 
@@ -924,7 +916,7 @@ fn repo_picker_row_menu_closes_when_the_filter_changes(cx: &mut gpui::TestAppCon
     cx.update(|_window, app| {
         let host = popover_host.read(app);
         assert!(
-            host.repo_picker_row_menu.is_none(),
+            host.picker_row_menu.is_none(),
             "editing the filter should dismiss the row menu"
         );
         let filtered = repo_picker::filtered_layout(host, "zeb").0;
@@ -969,9 +961,9 @@ fn repo_picker_row_menu_escape_reanchors_to_its_row(cx: &mut gpui::TestAppContex
 
     cx.update(|_window, app| {
         popover_host.update(app, |host, cx| {
-            repo_picker::open_row_menu(
+            picker_row_menu::open(
                 host,
-                entry.clone(),
+                picker_row_menu::PickerRowMenuTarget::Repo(entry.clone()),
                 stale_index,
                 gpui::point(gpui::px(140.0), gpui::px(120.0)),
                 cx,
@@ -992,9 +984,9 @@ fn repo_picker_row_menu_escape_reanchors_to_its_row(cx: &mut gpui::TestAppContex
             );
 
             // And when the row is gone altogether there is nothing to restore.
-            repo_picker::open_row_menu(
+            picker_row_menu::open(
                 host,
-                entry.clone(),
+                picker_row_menu::PickerRowMenuTarget::Repo(entry.clone()),
                 0,
                 gpui::point(gpui::px(140.0), gpui::px(120.0)),
                 cx,
@@ -1029,15 +1021,9 @@ fn repo_picker_forget_refuses_a_pinned_repository(cx: &mut gpui::TestAppContext)
             host.cached_recent_repos = vec![pinned.clone()];
 
             assert!(
-                !repo_picker::row_menu_items(host, &entry)
-                    .into_iter()
-                    .any(|item| matches!(
-                        item,
-                        repo_picker::RepoPickerRowMenuItem::Entry {
-                            action: repo_picker::RepoPickerRowAction::ForgetRecent,
-                            ..
-                        }
-                    )),
+                !row_menu_labels(host, &entry)
+                    .iter()
+                    .any(|(label, _)| *label == "Remove from recently closed"),
                 "a pinned row must not offer the forget action"
             );
 
@@ -1073,16 +1059,18 @@ fn repo_picker_close_row_action_promotes_the_recents_cache(cx: &mut gpui::TestAp
             // The repository is already on the list from when it was opened, so
             // closing it has to move that entry rather than add a second one.
             host.cached_recent_repos = vec![older.clone(), workdir.clone()];
-            repo_picker::open_row_menu(
+            picker_row_menu::open(
                 host,
-                entry.clone(),
+                picker_row_menu::PickerRowMenuTarget::Repo(entry.clone()),
                 0,
                 gpui::point(gpui::px(140.0), gpui::px(120.0)),
                 cx,
             );
-            repo_picker::activate_row_action(
+            picker_row_menu::activate(
                 host,
-                repo_picker::RepoPickerRowAction::Close,
+                ContextMenuAction::CloseRepo {
+                    repo_id: gitcomet_state::model::RepoId(1),
+                },
                 window,
                 cx,
             );
@@ -1092,7 +1080,7 @@ fn repo_picker_close_row_action_promotes_the_recents_cache(cx: &mut gpui::TestAp
                 vec![workdir.clone(), older.clone()],
                 "the closed repository should lead the list, exactly once"
             );
-            assert!(host.repo_picker_row_menu.is_none());
+            assert!(host.picker_row_menu.is_none());
             assert_eq!(host.repo_picker_selected_index, None);
             assert!(
                 host.is_open(),
@@ -1126,9 +1114,9 @@ fn repo_picker_row_action_says_so_when_the_repository_is_gone(cx: &mut gpui::Tes
                 host.workdir_for_repo(gitcomet_state::model::RepoId(999))
                     .is_none()
             );
-            repo_picker::open_row_menu(
+            picker_row_menu::open(
                 host,
-                entry.clone(),
+                picker_row_menu::PickerRowMenuTarget::Repo(entry.clone()),
                 0,
                 gpui::point(gpui::px(140.0), gpui::px(120.0)),
                 cx,
@@ -1136,17 +1124,30 @@ fn repo_picker_row_action_says_so_when_the_repository_is_gone(cx: &mut gpui::Tes
         });
     });
 
+    cx.update(|_window, app| {
+        let host = popover_host.read(app);
+        let labels = row_menu_labels(host, &entry);
+        assert!(
+            labels
+                .iter()
+                .all(|(label, _)| label != "Pin repository" && label != "Copy path"),
+            "a row with no path must not offer the entries that need one, got {labels:?}"
+        );
+    });
+
     cx.update(|window, app| {
         popover_host.update(app, |host, cx| {
-            repo_picker::activate_row_action(
+            picker_row_menu::activate(
                 host,
-                repo_picker::RepoPickerRowAction::Pin,
+                ContextMenuAction::CloseRepo {
+                    repo_id: gitcomet_state::model::RepoId(999),
+                },
                 window,
                 cx,
             );
             assert!(
                 host.cached_pinned_repos.is_empty(),
-                "there is no path to pin, so nothing should have been pinned"
+                "nothing should have been pinned"
             );
         });
     });
@@ -1193,9 +1194,9 @@ fn repo_picker_row_menu_stays_inside_a_short_window(cx: &mut gpui::TestAppContex
     let entry = repo_picker::RepoPickerEntry::Open(gitcomet_state::model::RepoId(1));
     cx.update(|_window, app| {
         popover_host.update(app, |host, cx| {
-            repo_picker::open_row_menu(
+            picker_row_menu::open(
                 host,
-                entry,
+                picker_row_menu::PickerRowMenuTarget::Repo(entry),
                 0,
                 gpui::point(gpui::px(200.0), window_h / 2.0),
                 cx,
@@ -1207,11 +1208,11 @@ fn repo_picker_row_menu_stays_inside_a_short_window(cx: &mut gpui::TestAppContex
     });
 
     assert!(
-        cx.debug_bounds("repo_picker_row_menu_scroll").is_some(),
+        cx.debug_bounds("picker_row_menu_scroll").is_some(),
         "the menu needs a scroll container to reach what the cap cuts off"
     );
     let menu = cx
-        .debug_bounds("repo_picker_row_menu")
+        .debug_bounds("picker_row_menu")
         .expect("the row menu should be on screen");
     assert!(
         menu.bottom() <= window_h,
@@ -1249,7 +1250,13 @@ fn repo_picker_row_menu_scrim_feeds_the_tooltip_host(cx: &mut gpui::TestAppConte
     let entry = repo_picker::RepoPickerEntry::Open(gitcomet_state::model::RepoId(1));
     cx.update(|_window, app| {
         popover_host.update(app, |host, cx| {
-            repo_picker::open_row_menu(host, entry, 0, row_center, cx);
+            picker_row_menu::open(
+                host,
+                picker_row_menu::PickerRowMenuTarget::Repo(entry),
+                0,
+                row_center,
+                cx,
+            );
         });
     });
     cx.update(|window, app| {
@@ -1258,7 +1265,7 @@ fn repo_picker_row_menu_scrim_feeds_the_tooltip_host(cx: &mut gpui::TestAppConte
 
     // Over the scrim, clear of the menu itself.
     let menu = cx
-        .debug_bounds("repo_picker_row_menu")
+        .debug_bounds("picker_row_menu")
         .expect("the row menu should be on screen");
     let over_scrim = gpui::point(
         menu.origin.x - gpui::px(40.0),
@@ -1529,6 +1536,30 @@ fn repo_picker_rows_are_reused_until_their_data_changes(cx: &mut gpui::TestAppCo
         !std::rc::Rc::ptr_eq(&previous, &filtered),
         "a different query must rebuild the rows"
     );
+}
+
+fn as_str_pairs(labels: &[(String, bool)]) -> Vec<(&str, bool)> {
+    labels
+        .iter()
+        .map(|(label, disabled)| (label.as_str(), *disabled))
+        .collect()
+}
+
+/// The `(label, disabled)` of every entry a row's menu offers, in menu order.
+fn row_menu_labels(
+    host: &PopoverHost,
+    entry: &repo_picker::RepoPickerEntry,
+) -> Vec<(String, bool)> {
+    host.repo_picker_row_menu_model(entry)
+        .items
+        .into_iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } => Some((label.to_string(), disabled)),
+            _ => None,
+        })
+        .collect()
 }
 
 fn open_repo_picker(view: &gpui::Entity<GitCometView>, cx: &mut gpui::VisualTestContext) {
