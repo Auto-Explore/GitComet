@@ -30,6 +30,9 @@ impl HistoryView {
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
         let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        // Scheduled here rather than from the row builder: the walk goes to a
+        // background task, and the row builder runs during layout.
+        self.ensure_history_related_commits_cache(show_working_tree_summary_row, cx);
         let repo = self.active_repo();
         let commits_count = self
             .history_cache

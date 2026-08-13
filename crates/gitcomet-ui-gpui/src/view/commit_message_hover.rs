@@ -67,13 +67,37 @@ struct CommitMessageHoverLayout {
     max_panel_h: Pixels,
 }
 
+/// The shaped form of the card's body, kept so a re-render that changes nothing
+/// does not copy and re-scan the message again.
+///
+/// The theme is deliberately not part of the key: it feeds the highlight colours,
+/// but `set_theme` already knows when it changes and drops this outright, which
+/// is cheaper than carrying a >2KB [`AppTheme`] here and field-comparing it on
+/// every frame.
+struct CommitMessageHoverBody {
+    commit_id: CommitId,
+    /// Whether the full `%B` body had arrived when this was built. The card
+    /// opens on the subject line alone and swaps to the body once loaded, and
+    /// that is the only content transition it has.
+    loaded: bool,
+    message: SharedString,
+    highlights: crate::view::commit_message_text::TextHighlights,
+}
+
 pub(in crate::view) struct CommitMessageHoverHost {
     theme: AppTheme,
     /// Held directly rather than reached through the root view: the root opens
     /// this host inside its own update, so calling back into it from here would
-    /// be a re-entrant lease.
+    /// be a re-entrant lease. Used only to dispatch; state is read from
+    /// `ui_model` below.
     store: Arc<AppStore>,
+    /// The poller-synced snapshot every other view renders from. Reading the
+    /// store directly here would take its lock on the UI thread once per frame
+    /// -- see the note in `poller.rs` -- and could show a snapshot newer than
+    /// the one the rest of the frame was laid out from.
+    ui_model: Entity<AppUiModel>,
     state: Option<CommitMessageHoverState>,
+    body: Option<CommitMessageHoverBody>,
     pending_show: Option<CommitMessageHoverState>,
     /// Pointer position the running open-delay was armed from.
     armed_at: Option<Point<Pixels>>,
@@ -86,11 +110,17 @@ pub(in crate::view) struct CommitMessageHoverHost {
 }
 
 impl CommitMessageHoverHost {
-    pub(in crate::view) fn new(theme: AppTheme, store: Arc<AppStore>) -> Self {
+    pub(in crate::view) fn new(
+        theme: AppTheme,
+        store: Arc<AppStore>,
+        ui_model: Entity<AppUiModel>,
+    ) -> Self {
         Self {
             theme,
             store,
+            ui_model,
             state: None,
+            body: None,
             pending_show: None,
             armed_at: None,
             show_seq: 0,
@@ -102,6 +132,9 @@ impl CommitMessageHoverHost {
 
     pub(in crate::view) fn set_theme(&mut self, theme: AppTheme, cx: &mut gpui::Context<Self>) {
         self.theme = theme;
+        // The cached body carries theme-coloured highlights, so it is rebuilt
+        // from here rather than by comparing themes on every render.
+        self.body = None;
         cx.notify();
     }
 
@@ -112,12 +145,13 @@ impl CommitMessageHoverHost {
         cx: &mut gpui::Context<Self>,
     ) {
         // Already open on this commit: only the pointer moved within the row.
+        // Nothing to do -- a close armed by an earlier excursion is cancelled by
+        // `on_mouse_moved`, which is the one place that arms it.
         if self
             .state
             .as_ref()
             .is_some_and(|state| same_hover_target(state, &next))
         {
-            self.close_delay = None;
             return;
         }
 
@@ -186,27 +220,46 @@ impl CommitMessageHoverHost {
         position: Point<Pixels>,
         cx: &mut gpui::Context<Self>,
     ) {
-        if let Some(pending) = &self.pending_show
-            && !pending.source_bounds.contains(&position)
-        {
-            self.pending_show = None;
-            self.armed_at = None;
-            self.show_seq = self.show_seq.wrapping_add(1);
-        }
         if self
-            .state
+            .pending_show
             .as_ref()
-            .is_some_and(|state| !state.source_bounds.contains(&position))
+            .is_some_and(|pending| !pending.source_bounds.contains(&position))
         {
-            self.schedule_close(cx);
+            self.cancel_pending_show();
         }
+        let Some(state) = self.state.as_ref() else {
+            return;
+        };
+        if state.source_bounds.contains(&position) {
+            // Back on the row the card belongs to, so a close armed by an
+            // earlier excursion is off again. This lives here rather than in
+            // `show`: the timer is armed from this handler, so it has to be
+            // disarmed from it too, or a pointer that dips out of the cell and
+            // returns inside the grace period loses the card it is pointing at.
+            self.close_delay = None;
+            return;
+        }
+        self.schedule_close(cx);
+    }
+
+    /// Abandons a card that was waiting out its open delay. Bumping the
+    /// generation is what makes the timer still running for it a no-op.
+    fn cancel_pending_show(&mut self) {
+        self.pending_show = None;
+        self.armed_at = None;
+        self.show_seq = self.show_seq.wrapping_add(1);
+    }
+
+    /// Takes the open card down. Returns whether there was one, so callers that
+    /// only notify on a real change can say so.
+    fn clear_card(&mut self) -> bool {
+        self.body = None;
+        self.state.take().is_some()
     }
 
     /// Called when the pointer leaves the row that opened the card.
     pub(in crate::view) fn schedule_close(&mut self, cx: &mut gpui::Context<Self>) {
-        self.pending_show = None;
-        self.armed_at = None;
-        self.show_seq = self.show_seq.wrapping_add(1);
+        self.cancel_pending_show();
         if self.state.is_none() {
             return;
         }
@@ -231,22 +284,30 @@ impl CommitMessageHoverHost {
         if self.close_seq != seq {
             return;
         }
-        if self.state.take().is_some() {
+        if self.clear_card() {
             cx.notify();
         }
     }
 
     /// Hides the card outright, e.g. on a click or when a menu opens over it.
     pub(in crate::view) fn dismiss(&mut self, cx: &mut gpui::Context<Self>) {
-        self.pending_show = None;
-        self.armed_at = None;
+        self.cancel_pending_show();
         self.open_delay = None;
         self.close_delay = None;
-        self.show_seq = self.show_seq.wrapping_add(1);
         self.close_seq = self.close_seq.wrapping_add(1);
-        if self.state.take().is_some() {
+        if self.clear_card() {
             cx.notify();
         }
+    }
+
+    #[cfg(test)]
+    fn is_open(&self) -> bool {
+        self.state.is_some()
+    }
+
+    #[cfg(test)]
+    fn close_is_armed(&self) -> bool {
+        self.close_delay.is_some()
     }
 }
 
@@ -330,19 +391,43 @@ impl Render for CommitMessageHoverHost {
         let theme = self.theme;
         let ui_scale = ui_scale::UiScale::current(cx);
         let loaded = self
-            .store
-            .snapshot()
+            .ui_model
+            .read(cx)
+            .state
             .repos
             .iter()
             .find(|repo| repo.id == state.repo_id)
-            .and_then(|repo| repo.hover_commit_message.clone())
+            .and_then(|repo| repo.hover_commit_message.as_ref())
             .and_then(|(id, message)| match message {
-                Loadable::Ready(message) if id == state.commit_id => Some(message),
+                Loadable::Ready(message) if *id == state.commit_id => Some(Arc::clone(message)),
                 _ => None,
             });
 
-        let message = hover_card_message(&state, loaded.as_ref());
-        let highlights = commit_message_highlights(message.as_ref(), theme);
+        // Copying the body and scanning it for links is proportional to the
+        // message length and the card re-renders on every root render, so it is
+        // done once per (commit, loaded) rather than once per frame.
+        if self.body.as_ref().is_some_and(|body| {
+            body.commit_id != state.commit_id || body.loaded != loaded.is_some()
+        }) {
+            self.body = None;
+        }
+        // `get_or_insert_with` rather than a store-then-unwrap: the body is
+        // borrowed straight out of the cache, so there is no `Option` to
+        // unwrap and no panic path through `render`.
+        let body = self.body.get_or_insert_with(|| {
+            let message = hover_card_message(&state, loaded.as_ref());
+            let highlights = commit_message_highlights(message.as_ref(), theme);
+            CommitMessageHoverBody {
+                commit_id: state.commit_id.clone(),
+                loaded: loaded.is_some(),
+                message,
+                highlights,
+            }
+        });
+        // Handed to `compute_runs` as an iterator, so the cached highlights are
+        // read in place instead of being copied into a fresh `Vec` per frame.
+        let message_text = gpui::StyledText::new(body.message.clone())
+            .with_default_highlights(&window.text_style(), body.highlights.iter().cloned());
 
         let layout = commit_message_hover_layout(
             state.source_bounds,
@@ -406,10 +491,7 @@ impl Render for CommitMessageHoverHost {
                     .shadow(crate::theme::shadow_popover(theme))
                     .text_xs()
                     .text_color(theme.colors.tooltip_text)
-                    .child(
-                        gpui::StyledText::new(message)
-                            .with_default_highlights(&window.text_style(), highlights),
-                    )
+                    .child(message_text)
                     .when(has_footer, |card| {
                         card.child(
                             // Separated and a size down, so it reads as
@@ -433,15 +515,146 @@ mod tests {
     use super::*;
 
     fn state(summary: &str) -> CommitMessageHoverState {
+        state_for("abc", summary)
+    }
+
+    fn state_for(commit: &str, summary: &str) -> CommitMessageHoverState {
         CommitMessageHoverState {
             repo_id: RepoId(1),
-            commit_id: CommitId("abc".into()),
+            commit_id: CommitId(commit.into()),
             summary: summary.to_string().into(),
             author: "Ada Lovelace".into(),
             when: "2 days ago".into(),
             source_bounds: Bounds::new(point(px(0.0), px(100.0)), size(px(400.0), px(28.0))),
             source_pointer_x: px(120.0),
         }
+    }
+
+    /// Inside `state()`'s `source_bounds`, and outside it.
+    fn on_row() -> Point<Pixels> {
+        point(px(120.0), px(110.0))
+    }
+    fn off_row() -> Point<Pixels> {
+        point(px(120.0), px(400.0))
+    }
+
+    struct NoopBackend;
+
+    impl gitcomet_core::services::GitBackend for NoopBackend {
+        fn open(
+            &self,
+            _workdir: &std::path::Path,
+        ) -> std::result::Result<
+            Arc<dyn gitcomet_core::services::GitRepository>,
+            gitcomet_core::error::Error,
+        > {
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Unsupported("no repositories in this test"),
+            ))
+        }
+    }
+
+    fn host(cx: &mut gpui::TestAppContext) -> Entity<CommitMessageHoverHost> {
+        let (store, _events) = AppStore::new(Arc::new(NoopBackend));
+        let store = Arc::new(store);
+        cx.update(|cx| {
+            let ui_model = cx.new(|_cx| AppUiModel::new(store.snapshot()));
+            cx.new(|_cx| CommitMessageHoverHost::new(AppTheme::gitcomet_dark(), store, ui_model))
+        })
+    }
+
+    /// The open/close delays only exist under the live runtime; the
+    /// deterministic one runs both immediately, which is what makes the
+    /// timer-free assertions below deterministic.
+    fn live<T>(f: impl FnOnce() -> T) -> T {
+        crate::ui_runtime::with_override(crate::ui_runtime::UiRuntime::live(), f)
+    }
+
+    #[gpui::test]
+    fn a_pointer_returning_to_the_row_cancels_the_pending_close(cx: &mut gpui::TestAppContext) {
+        let host = host(cx);
+
+        host.update(cx, |host, cx| {
+            live(|| {
+                host.show(state("Fix the thing"), on_row(), cx);
+                // The live runtime waits out the open delay, so drive the card
+                // open directly rather than sleeping for it.
+                host.open_pending(host.show_seq, cx);
+                assert!(host.is_open(), "the card should be open to begin with");
+
+                // A pointer that leaves the message cell arms the grace timer...
+                host.on_mouse_moved(off_row(), cx);
+                assert!(host.close_is_armed(), "leaving the row arms the close");
+                assert!(host.is_open(), "but the card stays up during the grace");
+
+                // ...and coming back inside it disarms the timer again. Without
+                // this the card closes 120ms later with the pointer sitting on
+                // the very message it describes.
+                host.on_mouse_moved(on_row(), cx);
+                assert!(
+                    !host.close_is_armed(),
+                    "returning to the row must cancel the pending close"
+                );
+                assert!(host.is_open());
+            })
+        });
+    }
+
+    #[gpui::test]
+    fn leaving_the_row_closes_the_card_once_the_grace_elapses(cx: &mut gpui::TestAppContext) {
+        let host = host(cx);
+
+        // Deterministic runtime: no timers, so the close lands inline.
+        host.update(cx, |host, cx| {
+            host.show(state("Fix the thing"), on_row(), cx);
+            assert!(host.is_open());
+            host.on_mouse_moved(off_row(), cx);
+            assert!(!host.is_open(), "the card closes once the pointer is away");
+        });
+    }
+
+    #[gpui::test]
+    fn hovering_a_second_commit_replaces_the_card(cx: &mut gpui::TestAppContext) {
+        let host = host(cx);
+
+        host.update(cx, |host, cx| {
+            host.show(state_for("aaa", "first"), on_row(), cx);
+            host.show(state_for("bbb", "second"), on_row(), cx);
+            assert_eq!(
+                host.state.as_ref().map(|state| state.commit_id.clone()),
+                Some(CommitId("bbb".into()))
+            );
+        });
+    }
+
+    #[gpui::test]
+    fn dismiss_drops_the_open_card_and_anything_pending(cx: &mut gpui::TestAppContext) {
+        let host = host(cx);
+
+        host.update(cx, |host, cx| {
+            live(|| {
+                // One card open, another waiting out its delay behind it.
+                host.show(state_for("aaa", "first"), on_row(), cx);
+                host.open_pending(host.show_seq, cx);
+                host.show(state_for("bbb", "second"), on_row(), cx);
+                assert!(host.is_open());
+                assert!(host.pending_show.is_some());
+
+                host.dismiss(cx);
+                assert!(!host.is_open(), "dismiss takes the card down");
+                assert!(host.pending_show.is_none(), "and abandons the pending one");
+                assert!(
+                    host.body.is_none(),
+                    "the cached body must not outlive the card it belongs to"
+                );
+
+                // The abandoned open-delay must not resurrect the card when it
+                // fires: the generation it captured is stale.
+                let stale_seq = host.show_seq.wrapping_sub(1);
+                host.open_pending(stale_seq, cx);
+                assert!(!host.is_open(), "a stale open timer must not reopen it");
+            })
+        });
     }
 
     #[test]

@@ -590,8 +590,12 @@ pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
 /// very same directory and the repository would be listed twice.
 ///
 /// Falls back to the path as given when it cannot be canonicalized, so a
-/// repository that has since been deleted or unmounted still round-trips and
-/// stays removable from the list.
+/// repository that has since been deleted or unmounted still round-trips.
+///
+/// That fallback is one-way: once the directory is gone the canonical form it
+/// was stored under can no longer be reconstructed from the path alone. Removal
+/// therefore normalizes the *stored* side too rather than relying on this key
+/// alone -- see [`remove_recent_repo_to_path`].
 fn recent_repo_storage_key(workdir: &Path) -> String {
     path_storage_key(&gitcomet_core::path_utils::canonicalize_or_original(
         workdir.to_path_buf(),
@@ -646,10 +650,29 @@ pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> i
             return Ok(());
         };
         // `raw_key` also clears entries left by older builds, which stored the
-        // path uncanonicalized.
+        // path uncanonicalized. Entries are normalized on their own side as
+        // well, so an entry and a caller that spell the same directory
+        // differently -- one through a symlink, one not -- still match: keying
+        // off `workdir` alone cannot bridge that once the directory is gone,
+        // because `canonicalize` no longer resolves it.
         recent_repos.retain(|path| {
             let path = path.trim();
-            path != workdir_key && path != raw_key
+            if path == workdir_key || path == raw_key {
+                return false;
+            }
+            // Through the storage-key decoder, not `Path::new`: a non-UTF-8
+            // workdir is stored hex-encoded, and canonicalizing that encoding
+            // as a literal path would quietly never match.
+            let decoded = path_from_storage_key(path);
+            // Only absolute entries are resolved. A relative one -- which only
+            // a hand-edited file can produce -- would canonicalize against the
+            // process working directory and could match a repository the user
+            // never asked to forget.
+            if !decoded.is_absolute() {
+                return true;
+            }
+            let normalized = recent_repo_storage_key(&decoded);
+            normalized != workdir_key && normalized != raw_key
         });
 
         persist_to_path(session_file_path, &file)
@@ -3263,6 +3286,160 @@ mod tests {
         assert!(
             loaded.recent_repos.is_empty(),
             "legacy uncanonicalized entry should have been removed, got {:?}",
+            loaded.recent_repos
+        );
+    }
+
+    /// The mirror of the case above: the caller spells the repository one way
+    /// and the stored entry spells it another. Matching on the caller's key
+    /// alone misses it, so removal normalizes the stored side too.
+    #[test]
+    fn remove_recent_repo_matches_an_entry_spelled_through_a_symlink() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-normalized-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo);
+        let canonical = gitcomet_core::path_utils::canonicalize_or_original(repo.clone());
+        // Only meaningful where the temp directory is reached through a symlink
+        // (macOS /var -> /private/var); elsewhere the two forms coincide.
+        if canonical == repo {
+            return;
+        }
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                // Stored uncanonicalized, while the caller below passes the
+                // canonical form -- so neither of the two keys built from the
+                // caller's path matches this string.
+                recent_repos: Some(vec![path_storage_key(&repo)]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        remove_recent_repo_to_path(&canonical, &path).expect("remove recent repo");
+
+        let loaded = load_from_path(&path);
+        assert!(
+            loaded.recent_repos.is_empty(),
+            "an entry that resolves to the same directory should have been removed, got {:?}",
+            loaded.recent_repos
+        );
+    }
+
+    /// Storage keys are not paths: a non-UTF-8 workdir is stored hex-encoded
+    /// behind [`SESSION_PATH_BYTES_PREFIX`], so normalizing an entry has to run
+    /// it back through [`path_from_storage_key`] first. Reading the encoded key
+    /// as a literal path makes it look relative, and the entry is skipped.
+    ///
+    /// Exercised with an encoded key for a *UTF-8* path, which the encoder
+    /// itself never produces but a hand-edited or older file can hold: APFS
+    /// rejects the invalid bytes outright, so a genuinely non-UTF-8 directory
+    /// cannot be created to test against.
+    #[cfg(unix)]
+    #[test]
+    fn remove_recent_repo_normalizes_an_encoded_entry_through_its_decoder() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-encoded-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo = dir.join("repo-a");
+        let _ = fs::create_dir_all(&repo);
+        let canonical = gitcomet_core::path_utils::canonicalize_or_original(repo.clone());
+        // Only meaningful where the two spellings differ (macOS /var -> /private/var):
+        // the entry has to need normalizing, not just decoding.
+        if canonical == repo {
+            return;
+        }
+
+        let encoded = format!(
+            "{SESSION_PATH_BYTES_PREFIX}{}",
+            hex_encode(repo.as_os_str().as_encoded_bytes())
+        );
+        assert_eq!(
+            path_from_storage_key(&encoded),
+            repo,
+            "the fixture has to decode back to the repository it names"
+        );
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                recent_repos: Some(vec![encoded]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        remove_recent_repo_to_path(&canonical, &path).expect("remove recent repo");
+
+        let loaded = load_from_path(&path);
+        assert!(
+            loaded.recent_repos.is_empty(),
+            "an encoded entry naming the same directory should have been removed, got {:?}",
+            loaded.recent_repos
+        );
+    }
+
+    /// Entries a hand-edited file can hold that must never be resolved against
+    /// the process working directory.
+    #[test]
+    fn remove_recent_repo_leaves_relative_entries_alone() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-remove-recent-relative-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                open_repos: Vec::new(),
+                active_repo: None,
+                recent_repos: Some(vec![".".to_string(), "../elsewhere".to_string()]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        // `.` resolves to whatever directory the test process happens to be in.
+        // Removing some unrelated repository must not take it with it.
+        remove_recent_repo_to_path(&dir.join("repo-a"), &path).expect("remove recent repo");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.recent_repos.len(),
+            2,
+            "relative entries must survive an unrelated removal, got {:?}",
             loaded.recent_repos
         );
     }

@@ -1,11 +1,12 @@
 use super::super::*;
 use crate::view::caches::{
-    HistoryRelatedCommitsCache, HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm,
-    analyze_history_stashes, build_history_branch_containment_bits,
-    build_history_branch_ref_items_by_target, build_history_branch_text_by_target,
-    build_history_related_commit_bits, build_history_tag_names_by_target,
-    build_history_visible_indices, history_ref_items_from_displayed_refs,
-    next_history_stash_tip_for_commit_ix, related_commit_contains,
+    HistoryRelatedCommitsCache, HistoryRelatedCommitsCacheRequest, HistoryShortShaVm,
+    HistoryVisibleIndices, HistoryWhenVm, analyze_history_stashes,
+    build_history_branch_containment_bits, build_history_branch_ref_items_by_target,
+    build_history_branch_text_by_target, build_history_related_commit_bits,
+    build_history_tag_names_by_target, build_history_visible_indices,
+    history_ref_items_from_displayed_refs, next_history_stash_tip_for_commit_ix,
+    related_commit_contains,
 };
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
@@ -937,6 +938,8 @@ pub(in super::super) struct HistoryView {
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
     pub(in super::super) history_related_commits_cache: Option<HistoryRelatedCommitsCache>,
+    history_related_commits_inflight: Option<HistoryRelatedCommitsCacheRequest>,
+    history_related_commits_seq: u64,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
     /// Minute tick that re-renders the table while the relative date format is
@@ -1073,6 +1076,8 @@ impl HistoryView {
             history_worktree_summary_cache: None,
             history_stash_ids_cache: None,
             history_related_commits_cache: None,
+            history_related_commits_inflight: None,
+            history_related_commits_seq: 0,
             history_scroll: UniformListScrollHandle::default(),
             history_panel_focus_handle,
             relative_time_tick: None,
@@ -1443,8 +1448,10 @@ impl HistoryView {
         self.history_highlight_commit_chain = enabled;
         // The relation cache is only consulted while the setting is on, but
         // dropping it keeps a stale bitset from being reused if it goes back on
-        // after the log has moved.
+        // after the log has moved. The in-flight marker goes with it so a build
+        // still running cannot land its result afterwards.
         self.history_related_commits_cache = None;
+        self.history_related_commits_inflight = None;
         cx.notify();
     }
 
@@ -1752,28 +1759,21 @@ impl HistoryView {
     /// the sidebar goes through here too, because that selects the branch's tip
     /// commit -- so picking a branch lights its history without a second
     /// mechanism.
+    ///
+    /// The walk itself is two sweeps over the page plus, for any non-linear
+    /// history, an id -> index map with an entry per commit, so it goes to a
+    /// background task exactly like [`Self::ensure_history_cache`]. Running it
+    /// inline would put that work on the UI thread on every arrow-key press.
     pub(in super::super) fn ensure_history_related_commits_cache(
         &mut self,
         show_worktree_summary_row: bool,
-    ) -> Option<&HistoryRelatedCommitsCache> {
-        enum Action {
-            Clear,
-            CacheOk,
-            Rebuild {
-                repo_id: RepoId,
-                log_fingerprint: u64,
-                anchor: Option<CommitId>,
-                related: Arc<[u64]>,
-            },
-        }
-
-        let action = (|| {
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some((request, page)) = (|| {
             if !self.history_highlight_commit_chain {
-                return Action::Clear;
+                return None;
             }
-            let Some(repo) = self.active_repo() else {
-                return Action::Clear;
-            };
+            let repo = self.active_repo()?;
             // A multi-selection has no single commit to relate to, so the whole
             // list stays at full strength rather than picking one arbitrarily.
             let anchor = if repo.history_state.multi_selection.is_multi() {
@@ -1790,62 +1790,102 @@ impl HistoryView {
                 })
             };
             let page = Self::display_log_page_for_repo(repo);
-            let log_fingerprint = page
-                .as_deref()
-                .map_or(0, |page| Self::log_fingerprint(&page.commits));
-
-            if let Some(cache) = &self.history_related_commits_cache
-                && cache.repo_id == repo.id
-                && cache.log_fingerprint == log_fingerprint
-                && cache.anchor == anchor
-            {
-                return Action::CacheOk;
-            }
-
-            let Some(anchor) = anchor else {
-                return Action::Rebuild {
+            Some((
+                HistoryRelatedCommitsCacheRequest {
                     repo_id: repo.id,
-                    log_fingerprint,
-                    anchor: None,
-                    related: Arc::from(Vec::new()),
-                };
-            };
-            let related = page
-                .as_deref()
-                .map(|page| build_history_related_commit_bits(&page.commits, &anchor))
-                .unwrap_or_else(|| Arc::from(Vec::new()));
-
-            Action::Rebuild {
-                repo_id: repo.id,
-                log_fingerprint,
-                anchor: Some(anchor),
-                related,
-            }
-        })();
-
-        match action {
-            Action::Clear => {
-                self.history_related_commits_cache = None;
-            }
-            Action::CacheOk => {}
-            Action::Rebuild {
-                repo_id,
-                log_fingerprint,
-                anchor,
-                related,
-            } => {
-                self.history_related_commits_cache = Some(HistoryRelatedCommitsCache {
-                    repo_id,
-                    log_fingerprint,
+                    log_fingerprint: page
+                        .as_deref()
+                        .map_or(0, |page| Self::log_fingerprint(&page.commits)),
                     anchor,
-                    related,
-                });
-            }
+                },
+                page,
+            ))
+        })() else {
+            self.history_related_commits_cache = None;
+            self.history_related_commits_inflight = None;
+            return;
+        };
+
+        if self
+            .history_related_commits_cache
+            .as_ref()
+            .is_some_and(|cache| cache.request == request)
+        {
+            self.history_related_commits_inflight = None;
+            return;
         }
 
+        // Nothing to walk, so settle it here rather than paying for a task.
+        let (Some(anchor), Some(page)) = (request.anchor.clone(), page) else {
+            self.history_related_commits_inflight = None;
+            self.history_related_commits_cache = Some(HistoryRelatedCommitsCache {
+                request,
+                related: Arc::from(Vec::new()),
+            });
+            return;
+        };
+
+        if self.history_related_commits_inflight.as_ref() == Some(&request) {
+            return;
+        }
+        // The bitset the previous anchor produced stays on screen while the
+        // rebuild runs. It describes the chain of the *previous* selection, but
+        // dropping it would blank the highlight between every keypress, and at
+        // key-repeat rates that strobes rather than tracking the selection --
+        // a briefly stale chain reads far better than a flashing one.
+        //
+        // Only while it still indexes the same page of the same repository,
+        // though: against a different page the bit indices mean nothing.
+        let stale_still_indexes_this_page = self
+            .history_related_commits_cache
+            .as_ref()
+            .is_some_and(|cache| {
+                cache.request.repo_id == request.repo_id
+                    && cache.request.log_fingerprint == request.log_fingerprint
+            });
+        if !stale_still_indexes_this_page {
+            self.history_related_commits_cache = None;
+        }
+        self.history_related_commits_inflight = Some(request.clone());
+        self.history_related_commits_seq = self.history_related_commits_seq.wrapping_add(1);
+        let seq = self.history_related_commits_seq;
+
+        cx.spawn(
+            async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
+                let build = move || build_history_related_commit_bits(&page.commits, &anchor);
+                let related: Arc<[u64]> = if crate::ui_runtime::current().uses_background_compute()
+                {
+                    smol::unblock(build).await
+                } else {
+                    build()
+                };
+
+                let _ = view.update(cx, |this, cx| {
+                    if this.history_related_commits_seq != seq {
+                        return;
+                    }
+                    if this.history_related_commits_inflight.as_ref() != Some(&request) {
+                        return;
+                    }
+                    this.history_related_commits_inflight = None;
+                    this.history_related_commits_cache =
+                        Some(HistoryRelatedCommitsCache { request, related });
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+    }
+
+    /// Bitset of the rows related to the current selection, or `None` when
+    /// there is nothing to highlight: the feature is off, no single commit is
+    /// selected, the selection is not in this page, or the rebuild above is
+    /// still in flight.
+    pub(in super::super) fn history_related_commits_bits(&self) -> Option<Arc<[u64]>> {
         self.history_related_commits_cache
             .as_ref()
             .filter(|cache| !cache.is_empty())
+            .map(|cache| Arc::clone(&cache.related))
     }
 
     pub(in super::super) fn ensure_history_worktree_summary_cache(
@@ -2375,7 +2415,8 @@ fn build_history_decoration_cache(
     // follow whichever lane slid into the column.
     let mut branch_names: Vec<SharedString> = Vec::new();
     // Owned keys: the names come from per-row `ref_items` that do not outlive
-    // the iteration.
+    // the iteration. Only ever written on a *miss*, so the allocations are
+    // bounded by the number of distinct branch names rather than by rows.
     let mut branch_name_ix: HashMap<String, u16> = HashMap::default();
     // Local branches with an upstream, so attribution can prefer shared history
     // over a branch that only exists on this machine.
@@ -2393,14 +2434,21 @@ fn build_history_decoration_cache(
     // to draw the lane it sits on -- carrying names down lanes alone gets this
     // wrong the moment a feature branch diverges, because the shared history
     // below the fork keeps whichever lane won the node.
-    let integration_containment: Vec<(String, Arc<[u64]>)> =
-        integration_branch_tips(branches, remote_branches)
-            .into_iter()
-            .map(|(name, tip)| {
-                let bits = build_history_branch_containment_bits(&page.commits, &tip);
-                (name, bits)
+    //
+    // The names are interned up front, so the per-row lookup below yields an
+    // index straight away rather than cloning a `String` on every row.
+    let integration_containment: Vec<(u16, Arc<[u64]>)> = {
+        let tips = integration_branch_tips(branches, remote_branches);
+        let containment =
+            build_history_branch_containment_bits(&page.commits, tips.iter().map(|(_, tip)| tip));
+        tips.iter()
+            .zip(containment)
+            .filter_map(|((name, _), bits)| {
+                let ix = intern_branch_name(&mut branch_names, &mut branch_name_ix, name)?;
+                Some((ix, bits))
             })
-            .collect();
+            .collect()
+    };
 
     for (visible_ix, (commit_ix, base_row)) in base
         .visible_indices
@@ -2456,22 +2504,20 @@ fn build_history_decoration_cache(
         }
 
         // Containment in an integration branch outranks everything: the commit
-        // genuinely belongs to that branch, whatever lane it is drawn on.
+        // genuinely belongs to that branch, whatever lane it is drawn on. The
+        // name is already interned, so the common case allocates nothing.
         let contained_in = integration_containment
             .iter()
             .find(|(_, bits)| related_commit_contains(bits, commit_ix))
-            .map(|(name, _)| name.clone());
+            .map(|(ix, _)| *ix);
 
         // Otherwise a branch ref on this row beats anything inherited: the row
         // *is* that branch's head.
-        if let Some(name) = contained_in.or_else(|| {
-            history_row_attribution_branch(&ref_items, &tracked_local_branches).map(str::to_owned)
-        }) {
-            let next_ix = u16::try_from(branch_names.len()).unwrap_or(u16::MAX);
-            let ix = *branch_name_ix.entry(name.clone()).or_insert_with(|| {
-                branch_names.push(SharedString::from(name));
-                next_ix
-            });
+        let attributed = contained_in.or_else(|| {
+            let name = history_row_attribution_branch(&ref_items, &tracked_local_branches)?;
+            intern_branch_name(&mut branch_names, &mut branch_name_ix, name)
+        });
+        if let Some(ix) = attributed {
             resolved = Some((ix, visible_ix));
         }
 
@@ -2512,6 +2558,29 @@ fn build_history_decoration_cache(
         row_vms: row_vms.into(),
         branch_names: branch_names.into(),
     }
+}
+
+/// Records `name` in the decoration cache's shared name table and returns its
+/// index, reusing the index when the name is already there.
+///
+/// `None` once the table is full. The index is a `u16`, and saturating at
+/// `u16::MAX` instead would hand the same slot to every name past the cap while
+/// the table kept growing, so rows would be labelled with someone else's branch.
+fn intern_branch_name(
+    names: &mut Vec<SharedString>,
+    ix_by_name: &mut HashMap<String, u16>,
+    name: &str,
+) -> Option<u16> {
+    // Probed by `&str` first: on the hit path -- which is nearly every row in a
+    // repo with an integration branch -- this must not allocate a key.
+    if let Some(ix) = ix_by_name.get(name) {
+        return Some(*ix);
+    }
+    let ix = u16::try_from(names.len()).ok()?;
+    let owned = name.to_owned();
+    names.push(SharedString::from(owned.clone()));
+    ix_by_name.insert(owned, ix);
+    Some(ix)
 }
 
 /// Branch name a rendered ref stands for, or `None` for tags and detached HEAD.
@@ -3861,6 +3930,244 @@ mod tests {
         let display = HistoryView::display_log_page_for_repo(&repo)
             .expect("retained log should remain available while loading");
         assert!(Arc::ptr_eq(&display, &page));
+    }
+
+    /// A repository whose page is `feat`, `tip`, `base`, with `feat` and `tip`
+    /// both forked off `base`, and `selected` selected in the history.
+    fn related_commits_test_state(repo_id: RepoId, selected: Option<&str>) -> Arc<AppState> {
+        let page = Arc::new(log_page(
+            vec![
+                commit("feat", &["base"], "feature work"),
+                commit("tip", &["base"], "tip"),
+                commit("base", &[], "base"),
+            ],
+            None,
+        ));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-related-commits"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        repo.branches_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+        repo.history_state.selected_commit = selected.map(|id| CommitId(id.into()));
+
+        Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        })
+    }
+
+    fn related_commits_view(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<GitCometView>,
+    ) -> gpui::Entity<HistoryView> {
+        cx.update(|_window, app| view.read(app).main_pane.read(app).history_view.clone())
+    }
+
+    /// What `history_view_inner` does once per render, without needing the pane
+    /// to be on screen. Does not park, so the caller can observe the state while
+    /// the build is still in flight.
+    fn schedule_related_commits(
+        cx: &mut gpui::VisualTestContext,
+        history_view: &gpui::Entity<HistoryView>,
+    ) {
+        cx.update(|_window, app| {
+            history_view.update(app, |history, cx| {
+                history.ensure_history_related_commits_cache(false, cx);
+            });
+        });
+    }
+
+    /// The chain highlight is built off the UI thread now, so the bitset only
+    /// appears once the task has run -- and it has to actually appear.
+    #[gpui::test]
+    fn selecting_a_commit_marks_its_chain_related_once_the_build_lands(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(41);
+        ensure_history_cache_for_tests(cx, &view, related_commits_test_state(repo_id, Some("tip")));
+        let history_view = related_commits_view(cx, &view);
+
+        schedule_related_commits(cx, &history_view);
+        wait_until(cx, "the selected commit's chain to be marked", |cx| {
+            cx.update(|_window, app| {
+                history_view
+                    .read(app)
+                    .history_related_commits_bits()
+                    .is_some()
+            })
+        });
+
+        cx.update(|_window, app| {
+            let history = history_view.read(app);
+            let bits = history
+                .history_related_commits_bits()
+                .expect("chain bitset after the background build");
+            assert!(
+                related_commit_contains(&bits, 1),
+                "the selected commit is part of its own chain"
+            );
+            assert!(
+                related_commit_contains(&bits, 2),
+                "and so is the commit it descends from"
+            );
+            assert!(
+                !related_commit_contains(&bits, 0),
+                "a sibling forked off the same base is not"
+            );
+            assert!(
+                history.history_related_commits_inflight.is_none(),
+                "a settled build must clear its in-flight marker, or it never rebuilds again"
+            );
+        });
+
+        // Moving the selection within the same page keeps the previous bitset on
+        // screen until the replacement lands, rather than blanking the highlight
+        // between keypresses.
+        set_history_view_state_for_tests(
+            cx,
+            &view,
+            related_commits_test_state(repo_id, Some("feat")),
+        );
+        schedule_related_commits(cx, &history_view);
+        cx.update(|_window, app| {
+            assert!(
+                history_view
+                    .read(app)
+                    .history_related_commits_bits()
+                    .is_some(),
+                "the highlight must not blank out while the rebuild is in flight"
+            );
+        });
+
+        wait_until(cx, "the chain to follow the new selection", |cx| {
+            schedule_related_commits(cx, &history_view);
+            cx.update(|_window, app| {
+                history_view
+                    .read(app)
+                    .history_related_commits_bits()
+                    .is_some_and(|bits| related_commit_contains(&bits, 0))
+            })
+        });
+    }
+
+    /// Turning the setting off has to stop the highlight immediately, and
+    /// turning it back on has to rebuild rather than resurrect the old bitset.
+    #[gpui::test]
+    fn turning_the_chain_highlight_off_drops_it_and_back_on_rebuilds_it(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(43);
+        ensure_history_cache_for_tests(cx, &view, related_commits_test_state(repo_id, Some("tip")));
+        let history_view = related_commits_view(cx, &view);
+
+        schedule_related_commits(cx, &history_view);
+        wait_until(cx, "the chain to be marked", |cx| {
+            cx.update(|_window, app| {
+                history_view
+                    .read(app)
+                    .history_related_commits_bits()
+                    .is_some()
+            })
+        });
+
+        cx.update(|_window, app| {
+            history_view.update(app, |history, cx| {
+                history.set_history_highlight_commit_chain(false, cx);
+            });
+        });
+        schedule_related_commits(cx, &history_view);
+        cx.update(|_window, app| {
+            let history = history_view.read(app);
+            assert!(
+                history.history_related_commits_bits().is_none(),
+                "the highlight stops the moment the setting is turned off"
+            );
+            assert!(
+                history.history_related_commits_inflight.is_none(),
+                "and nothing is left scheduled behind it"
+            );
+        });
+
+        cx.update(|_window, app| {
+            history_view.update(app, |history, cx| {
+                history.set_history_highlight_commit_chain(true, cx);
+            });
+        });
+        wait_until(cx, "the chain to come back", |cx| {
+            schedule_related_commits(cx, &history_view);
+            cx.update(|_window, app| {
+                history_view
+                    .read(app)
+                    .history_related_commits_bits()
+                    .is_some_and(|bits| related_commit_contains(&bits, 1))
+            })
+        });
+    }
+
+    /// A selection left over from a wider page must read as "nothing to relate
+    /// to", not as "every row is unrelated" -- otherwise the whole list dims.
+    #[gpui::test]
+    fn an_anchor_missing_from_the_page_leaves_every_row_unhighlighted(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(42);
+        ensure_history_cache_for_tests(
+            cx,
+            &view,
+            related_commits_test_state(repo_id, Some("filtered-out")),
+        );
+        let history_view = related_commits_view(cx, &view);
+
+        schedule_related_commits(cx, &history_view);
+        wait_until(cx, "the empty relation to settle", |cx| {
+            cx.update(|_window, app| {
+                history_view
+                    .read(app)
+                    .history_related_commits_cache
+                    .is_some()
+            })
+        });
+
+        cx.update(|_window, app| {
+            let history = history_view.read(app);
+            assert!(
+                history
+                    .history_related_commits_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.related.is_empty()),
+                "an anchor outside the page yields an empty bitset"
+            );
+            assert!(
+                history.history_related_commits_bits().is_none(),
+                "and that must not reach the rows, or every one of them renders dimmed"
+            );
+        });
     }
 
     #[gpui::test]

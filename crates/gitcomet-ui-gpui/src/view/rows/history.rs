@@ -2724,9 +2724,9 @@ impl HistoryView {
         let stash_ids = this.ensure_history_stash_ids_cache();
         // Cloned out of `this` so the row loop below can borrow it immutably
         // alongside the repo snapshot; it is an `Arc` bitset, so this is cheap.
-        let related_commits = this
-            .ensure_history_related_commits_cache(show_working_tree_summary_row)
-            .map(|cache| cache.related.clone());
+        // The cache behind it is scheduled from the panel's own render, never
+        // built here -- this runs during layout.
+        let related_commits = this.history_related_commits_bits();
 
         let Some(repo) = this.active_repo() else {
             return Vec::new();

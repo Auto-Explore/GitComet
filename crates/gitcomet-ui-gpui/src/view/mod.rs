@@ -1482,8 +1482,9 @@ impl GitCometView {
         let toast_host = cx.new(|_cx| ToastHost::new(initial_theme, weak_view.clone()));
         let history_refs_hover_host =
             cx.new(|_cx| HistoryRefsHoverHost::new(initial_theme, weak_view.clone()));
-        let commit_message_hover_host =
-            cx.new(|_cx| CommitMessageHoverHost::new(initial_theme, Arc::clone(&store)));
+        let commit_message_hover_host = cx.new(|_cx| {
+            CommitMessageHoverHost::new(initial_theme, Arc::clone(&store), ui_model.clone())
+        });
         let repo_tabs_bar = cx.new(|cx| {
             RepoTabsBarView::new(
                 Arc::clone(&store),

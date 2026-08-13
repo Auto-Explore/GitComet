@@ -193,11 +193,6 @@ fn history_row_is_selected_branch_tip(
         .any(|item| history_ref_is_selected_branch(&item.kind, selected_branch))
 }
 
-/// How far an unrelated summary is pushed toward muted text while a commit is
-/// selected. All the way: against pure white/black on the related rows, anything
-/// short of this left the two too close to separate at a glance.
-const UNRELATED_SUMMARY_MIX: f32 = 1.0;
-
 /// How far an unrelated row's lane colour is pushed toward muted, so the message
 /// border and the graph-column fade recede with the text instead of staying
 /// fully saturated on rows that have nothing to do with the selection.
@@ -225,11 +220,9 @@ fn history_summary_color(
 ) -> gpui::Rgba {
     match related_to_selection {
         Some(true) => full_contrast_text(theme),
-        Some(false) => crate::theme::mix_colors(
-            theme.colors.text,
-            theme.colors.text_muted,
-            UNRELATED_SUMMARY_MIX,
-        ),
+        // All the way to muted: against pure white/black on the related rows,
+        // anything short of this left the two too close to separate at a glance.
+        Some(false) => theme.colors.text_muted,
         None if is_selected_branch_tip => selected_branch_label_color(theme),
         None => theme.colors.text,
     }
@@ -1021,26 +1014,56 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
+            // One move listener for both hover affordances. They share the
+            // row-level hit test below and differ only in which cell they watch,
+            // and a second closure per row would re-box its whole capture set on
+            // every frame.
             window.on_mouse_event({
                 let view = view.clone();
                 let commit_id = commit_id.clone();
                 let summary = summary.shared().clone();
                 let hover_author = author.shared().clone();
                 let hover_when = when.shared().clone();
+                let ref_items = Arc::clone(&ref_items);
                 let hitbox = hitbox.clone();
                 move |event: &gpui::MouseMoveEvent, phase, window, cx| {
-                    if phase != DispatchPhase::Bubble {
-                        return;
-                    }
-                    // Scoped to the message cell rather than the whole row: the
-                    // card is about the message, and pointing at the graph, the
-                    // refs, the author or the date should not summon it.
-                    if !(hitbox.is_hovered(window) && summary_bounds.contains(&event.position)) {
-                        // Closing is driven centrally from the window root, so
-                        // rows the pointer merely passes over do no work.
+                    // The row's hitbox — not its bounds — decides whether this
+                    // row owns the pointer: window-level listeners run whatever
+                    // is painted on top, so anything overlaying the history (the
+                    // collapsed sidebar's popover, a panel, a menu) must win.
+                    if phase != DispatchPhase::Bubble || !hitbox.is_hovered(window) {
                         return;
                     }
 
+                    if !ref_items.is_empty() && branch_bounds.contains(&event.position) {
+                        view.update(cx, |this, cx| {
+                            this.show_history_refs_hover(
+                                repo_id,
+                                commit_id.clone(),
+                                branch_bounds,
+                                Arc::clone(&ref_items),
+                                event.position,
+                                window,
+                                cx,
+                            );
+                        });
+                        return;
+                    }
+
+                    // The card is scoped to the message cell rather than the
+                    // whole row: it is about the message, and pointing at the
+                    // graph, the refs, the author or the date should not summon
+                    // it. Closing is driven centrally from the window root, so
+                    // rows the pointer merely passes over do no work.
+                    if !summary_bounds.contains(&event.position) {
+                        return;
+                    }
+                    // Deliberately no "is the card already open on this commit"
+                    // shortcut here. Answering it means reading the root view
+                    // and the hover host, and `Entity::read` aborts the process
+                    // when its target is mid-update -- which the `cx.defer`
+                    // below exists precisely because it can be. `show` is
+                    // already a no-op for a card that is open on this commit.
                     let next = CommitMessageHoverState {
                         repo_id,
                         commit_id: commit_id.clone(),
@@ -1058,38 +1081,6 @@ pub(super) fn history_commit_row_canvas(
                         view.update(cx, |this, cx| {
                             this.show_commit_message_hover(next, pointer, cx)
                         });
-                    });
-                }
-            });
-
-            window.on_mouse_event({
-                let view = view.clone();
-                let commit_id = commit_id.clone();
-                let ref_items = Arc::clone(&ref_items);
-                let hitbox = hitbox.clone();
-                move |event: &gpui::MouseMoveEvent, phase, window, cx| {
-                    // The row's hitbox — not its bounds — decides whether this
-                    // row owns the pointer: window-level listeners run whatever
-                    // is painted on top, so anything overlaying the history (the
-                    // collapsed sidebar's popover, a panel, a menu) must win.
-                    if phase != DispatchPhase::Bubble
-                        || ref_items.is_empty()
-                        || !hitbox.is_hovered(window)
-                        || !branch_bounds.contains(&event.position)
-                    {
-                        return;
-                    }
-
-                    view.update(cx, |this, cx| {
-                        this.show_history_refs_hover(
-                            repo_id,
-                            commit_id.clone(),
-                            branch_bounds,
-                            Arc::clone(&ref_items),
-                            event.position,
-                            window,
-                            cx,
-                        );
                     });
                 }
             });

@@ -1057,12 +1057,17 @@ pub(super) fn branch_sidebar_cache_store(
 /// Deliberately its own cache rather than a field on [`HistoryBaseCache`]:
 /// folding the selection into that cache's request would rebuild the entire
 /// graph -- up to 50k rows -- on every arrow-key press.
-#[derive(Clone, Debug)]
-pub(super) struct HistoryRelatedCommitsCache {
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct HistoryRelatedCommitsCacheRequest {
     pub(super) repo_id: RepoId,
     pub(super) log_fingerprint: u64,
-    /// Commit the relation was computed around.
+    /// Commit the relation is computed around.
     pub(super) anchor: Option<CommitId>,
+}
+
+#[derive(Clone, Debug)]
+pub(super) struct HistoryRelatedCommitsCache {
+    pub(super) request: HistoryRelatedCommitsCacheRequest,
     /// One bit per index into the log page's `commits`, set when that commit is
     /// related to the anchor. Indexed by commit index, which is what the row
     /// renderer already resolves through `visible_indices`.
@@ -1070,8 +1075,12 @@ pub(super) struct HistoryRelatedCommitsCache {
 }
 
 impl HistoryRelatedCommitsCache {
+    /// Nothing to highlight. Either there is no anchor, or the anchor is not in
+    /// the current page and the bitset came back empty -- which must read as
+    /// "no selection to relate to" rather than "every row is unrelated", or a
+    /// selection left over from a narrower reload would dim the whole list.
     pub(super) fn is_empty(&self) -> bool {
-        self.anchor.is_none()
+        self.request.anchor.is_none() || self.related.is_empty()
     }
 }
 
@@ -1133,21 +1142,30 @@ fn ancestor_bits<'a>(
     bits
 }
 
-/// Commits contained in the branch whose tip is `tip`: the tip itself and
-/// everything it descends from. Empty when the tip is not in the page.
-pub(super) fn build_history_branch_containment_bits(
+/// Commits contained in each branch whose tip is listed, in the order given: the
+/// tip itself and everything it descends from. An empty bitset stands in for a
+/// tip that is not in the page.
+///
+/// Takes every tip at once so the one id -> index map `ancestor_bits` builds
+/// lazily is shared across them. That map holds an entry per commit in the page,
+/// so building one per tip would hash every commit id again for each branch.
+pub(super) fn build_history_branch_containment_bits<'t>(
     commits: &[Commit],
-    tip: &CommitId,
-) -> Arc<[u64]> {
-    let tip_id = tip.as_ref();
-    let Some(tip_ix) = commits
-        .iter()
-        .position(|commit| commit.id.as_ref() == tip_id)
-    else {
-        return Arc::from(Vec::new());
-    };
+    tips: impl IntoIterator<Item = &'t CommitId>,
+) -> Vec<Arc<[u64]>> {
     let mut id_to_index: Option<HashMap<&str, usize>> = None;
-    Arc::from(ancestor_bits(commits, tip_ix, &mut id_to_index))
+    tips.into_iter()
+        .map(|tip| {
+            let tip_id = tip.as_ref();
+            let Some(tip_ix) = commits
+                .iter()
+                .position(|commit| commit.id.as_ref() == tip_id)
+            else {
+                return Arc::from(Vec::new());
+            };
+            Arc::from(ancestor_bits(commits, tip_ix, &mut id_to_index))
+        })
+        .collect()
 }
 
 /// Shared by the ancestor pass and the relation builder; a free fn because the

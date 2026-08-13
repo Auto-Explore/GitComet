@@ -3009,3 +3009,224 @@ fn cancelling_repo_loads_clears_the_scan_progress() {
         "the banner must not outlive the walk it was counting for"
     );
 }
+
+/// An open repository with nothing loaded, for the hover-message reducer tests
+/// below.
+fn hover_message_state(repo_id: RepoId) -> AppState {
+    let mut state = AppState::default();
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.active_repo = Some(repo_id);
+    state
+}
+
+fn hover_message_slot(state: &AppState) -> Option<(CommitId, Loadable<Arc<str>>)> {
+    state.repos[0].hover_commit_message.clone()
+}
+
+#[test]
+fn hovering_a_commit_reads_its_message_once_however_often_the_row_is_re_entered() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = hover_message_state(repo_id);
+    let commit_id = CommitId("abc".into());
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: commit_id.clone(),
+        },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadHoverCommitMessage { commit_id: c, .. } if *c == commit_id
+        )),
+        "the first hover has to issue the read, got {effects:?}"
+    );
+    assert!(matches!(
+        hover_message_slot(&state),
+        Some((id, Loadable::Loading)) if id == commit_id
+    ));
+
+    // The pointer wandering within the same row re-dispatches; the read is
+    // already in flight, so it must not be issued a second time.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: commit_id.clone(),
+        },
+    );
+    assert!(effects.is_empty(), "a read in flight is not re-issued");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
+            repo_id,
+            commit_id: commit_id.clone(),
+            result: Ok("Fix the thing\n\nWhy it broke.".to_string()),
+        }),
+    );
+    assert!(matches!(
+        hover_message_slot(&state),
+        Some((id, Loadable::Ready(message)))
+            if id == commit_id && message.as_ref() == "Fix the thing\n\nWhy it broke."
+    ));
+
+    // And once it has arrived, re-hovering re-reads nothing at all.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: commit_id.clone(),
+        },
+    );
+    assert!(effects.is_empty(), "a message already held is not re-read");
+}
+
+#[test]
+fn a_hover_message_that_failed_is_retried_on_the_next_hover() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = hover_message_state(repo_id);
+    let commit_id = CommitId("abc".into());
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: commit_id.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
+            repo_id,
+            commit_id: commit_id.clone(),
+            result: Err(Error::new(ErrorKind::Backend("boom".to_string()))),
+        }),
+    );
+    assert!(matches!(
+        hover_message_slot(&state),
+        Some((id, Loadable::Error(_))) if id == commit_id
+    ));
+    assert!(
+        state.notifications.is_empty(),
+        "a hover losing its race is not worth telling the user about, got {:?}",
+        state.notifications
+    );
+
+    // Unlike the loading and loaded cases, a failure does not suppress the next
+    // attempt -- otherwise one transient error kills the card for that commit
+    // for the rest of the session.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: commit_id.clone(),
+        },
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadHoverCommitMessage { commit_id: c, .. } if *c == commit_id
+        )),
+        "a failed read is retried, got {effects:?}"
+    );
+}
+
+#[test]
+fn a_hover_message_for_a_commit_the_pointer_has_left_is_dropped() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = hover_message_state(repo_id);
+    let first = CommitId("aaa".into());
+    let second = CommitId("bbb".into());
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: first.clone(),
+        },
+    );
+    // The pointer moves to another row before the first read comes back.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: second.clone(),
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::HoverCommitMessageLoaded {
+            repo_id,
+            commit_id: first,
+            result: Ok("the row the pointer already left".to_string()),
+        }),
+    );
+
+    assert!(
+        matches!(
+            hover_message_slot(&state),
+            Some((id, Loadable::Loading)) if id == second
+        ),
+        "the late result must not overwrite the row now under the pointer"
+    );
+}
+
+#[test]
+fn hovering_a_repository_that_is_not_open_yet_reads_nothing() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let repo_id = RepoId(1);
+    let mut state = hover_message_state(repo_id);
+    state.repos[0].set_open(Loadable::Loading);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadHoverCommitMessage {
+            repo_id,
+            commit_id: CommitId("abc".into()),
+        },
+    );
+
+    assert!(effects.is_empty(), "got {effects:?}");
+    assert!(
+        hover_message_slot(&state).is_none(),
+        "and nothing is recorded as being fetched"
+    );
+}
