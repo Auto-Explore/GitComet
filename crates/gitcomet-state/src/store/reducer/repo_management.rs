@@ -533,8 +533,14 @@ pub(super) fn close_repo(
 
     append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
     let was_active = state.active_repo == Some(repo_id);
+    // Recorded here rather than at the affordance that asked for the close, so
+    // the Recently Closed list is ordered by when repositories were closed no
+    // matter which of them (tab `x`, tab menu, picker row menu, close-others)
+    // the user reached for.
+    let closed_workdir = state.repos[removed_repo_ix].spec.workdir.clone();
     state.repos.remove(removed_repo_ix);
     repos.remove(&repo_id);
+    effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
     if was_active {
         let next_active_repo = if state.repos.is_empty() {
             None
@@ -581,10 +587,22 @@ pub(super) fn close_repos(
         original_active.and_then(|repo_id| original_order.iter().position(|id| *id == repo_id));
 
     let mut effects =
-        Vec::with_capacity(close_ids.len() + 2 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
-    for repo_id in close_ids.iter().copied().collect::<Vec<_>>() {
+        Vec::with_capacity(2 * close_ids.len() + 2 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
+    // Tab order, not `close_ids` iteration order: a `HashSet` would leave the
+    // Recently Closed entries for one bulk close in an order that varies run to
+    // run. Walking left to right puts the rightmost tab at the top of the list.
+    for repo_id in original_order.iter().copied() {
+        if !close_ids.contains(&repo_id) {
+            continue;
+        }
         clear_banner_error_for_repo(state, repo_id);
         append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
+        if let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) {
+            effects.push(persist_recent_repo_effect(
+                Some(repo_id),
+                repo.spec.workdir.clone(),
+            ));
+        }
         repos.remove(&repo_id);
     }
 

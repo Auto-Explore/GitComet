@@ -22,6 +22,7 @@ mod previous_commit_messages;
 mod pull;
 mod push;
 mod remote;
+mod repo_picker_row;
 mod repo_tab;
 mod stash;
 mod status_file;
@@ -174,7 +175,7 @@ pub(in super::super) fn context_menu_shortcut_entry_ix(
 }
 
 impl PopoverHost {
-    fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
+    pub(super) fn workdir_for_repo(&self, repo_id: RepoId) -> Option<std::path::PathBuf> {
         self.state
             .repos
             .iter()
@@ -301,6 +302,33 @@ impl PopoverHost {
             self.clear_status_multi_selection(repo_id, cx);
         }
         (paths, used_selection)
+    }
+
+    fn repo_is_open(&self, repo_id: RepoId) -> bool {
+        self.state.repos.iter().any(|repo| repo.id == repo_id)
+    }
+
+    /// A toast rather than an error banner: nothing failed, the row just went
+    /// stale, and the banner belongs to whichever repository is active now — not
+    /// to the one that left.
+    fn warn_repository_gone(&mut self, cx: &mut gpui::Context<Self>) {
+        self.push_toast(
+            components::ToastKind::Warning,
+            "That repository is no longer open.".to_owned(),
+            cx,
+        );
+    }
+
+    /// The menu a repository row in the picker offers. Not reachable through
+    /// [`Self::context_menu_model`] because it has no popover kind of its own:
+    /// it is only ever floated over the picker by
+    /// [`super::picker_row_menu`](crate::view::panels::popover), never opened as
+    /// a popover in its own right.
+    pub(super) fn repo_picker_row_menu_model(
+        &self,
+        entry: &repo_picker::RepoPickerEntry,
+    ) -> ContextMenuModel {
+        repo_picker_row::model(self, entry)
     }
 
     pub(in super::super) fn context_menu_model(
@@ -638,10 +666,51 @@ impl PopoverHost {
                 self.store.dispatch(Msg::OpenRepo(path));
             }
             ContextMenuAction::ActivateRepo { repo_id } => {
+                if !self.repo_is_open(repo_id) {
+                    self.warn_repository_gone(cx);
+                    return;
+                }
                 self.store.dispatch(Msg::SetActiveRepo { repo_id });
             }
+            ContextMenuAction::CloseRepo { repo_id } if !self.repo_is_open(repo_id) => {
+                // The row this came from went stale — a concurrent close from a
+                // repo tab, say. Dispatching would be a no-op the user cannot
+                // see, and the menu is already down by now.
+                self.warn_repository_gone(cx);
+                return;
+            }
             ContextMenuAction::CloseRepo { repo_id } => {
+                // The reducer records the close as a recent; this keeps the
+                // repository picker's own snapshot of that list in step, cap
+                // included, for the frames before it next reads the session.
+                if let Some(workdir) = self.workdir_for_repo(repo_id) {
+                    session::promote_recent_repo(&mut self.cached_recent_repos, &workdir);
+                }
                 self.store.dispatch(Msg::CloseRepo { repo_id });
+            }
+            ContextMenuAction::PinRepository { path } => {
+                let _ = session::persist_pinned_repo(&path);
+                if !self.cached_pinned_repos.contains(&path) {
+                    self.cached_pinned_repos.push(path);
+                }
+                // Pinning is bookkeeping, not navigation: the menu that offered
+                // it goes, but the list it was over stays.
+                close_after_action = false;
+            }
+            ContextMenuAction::UnpinRepository { path } => {
+                let _ = session::remove_pinned_repo(&path);
+                self.cached_pinned_repos.retain(|pin| pin != &path);
+                close_after_action = false;
+            }
+            ContextMenuAction::ForgetRecentRepository { path } => {
+                // Open and pinned repositories have no entry for this, and the
+                // guard keeps it that way: a pin is what keeps a closed
+                // repository listed, so forgetting one would strand it.
+                if !self.cached_pinned_repos.contains(&path) {
+                    let _ = session::remove_recent_repo(&path);
+                    self.cached_recent_repos.retain(|recent| recent != &path);
+                }
+                close_after_action = false;
             }
             ContextMenuAction::CloseRepos {
                 repo_ids,
@@ -1383,7 +1452,10 @@ impl PopoverHost {
                 });
             }
         }
-        if close_after_action {
+        // A menu floating over a picker is not the popover: it closed itself on
+        // the way in, and whether the picker underneath survives is the picker's
+        // call, not the action's.
+        if close_after_action && !self.suppress_popover_close_after_action {
             self.close_popover_and_restore_focus(window, cx);
         } else {
             if restore_diff_panel_focus_after_action {

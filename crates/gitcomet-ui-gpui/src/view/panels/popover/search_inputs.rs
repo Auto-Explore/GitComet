@@ -43,25 +43,25 @@ impl PopoverHost {
         window.focus(&focus_handle, cx);
     }
 
-    fn scroll_picker_prompt_to_item(&mut self, sel: usize, _cx: &mut gpui::Context<Self>) {
-        self.picker_prompt_scroll.scroll_to_item(sel);
-    }
-
-    /// Scrolls the badge pickers' row list so the selected row is in view.
+    /// Scrolls a windowed picker's row list so the selected row is in view.
     ///
-    /// These two lists are windowed once they grow past a couple of viewports, so
-    /// a row further down has no element for `ScrollHandle::scroll_to_item` to
+    /// These lists are windowed once they grow past a couple of viewports, so a
+    /// row further down has no element for `ScrollHandle::scroll_to_item` to
     /// find; the row geometry says where it would be instead.
+    ///
+    /// `viewport_px` must be the same height the panel gave the picker as its
+    /// `max_height`, since that is the viewport the window was built for.
     fn scroll_picker_prompt_to_row(
         &self,
         items: &[components::PickerPromptItem],
         layout: &components::PickerPromptLayout,
         sel: usize,
+        viewport_px: f32,
         cx: &mut gpui::Context<Self>,
     ) {
         let ui_scale = super::popover_ui_scale(cx);
         let geometry = components::PickerPromptGeometry::new(items, layout, ui_scale);
-        let viewport = ui_scale.px(components::PICKER_LIST_MAX_HEIGHT_PX);
+        let viewport = ui_scale.px(viewport_px);
         let current = -self.picker_prompt_scroll.offset().y;
         let offset = geometry.reveal_offset(sel, viewport, current);
         self.picker_prompt_scroll
@@ -86,7 +86,13 @@ impl PopoverHost {
             .map(|input| input.read(cx).text().trim().to_string())
             .unwrap_or_default();
         let (items, layout) = author_filter::rendered_rows(self, repo_id, &query);
-        self.scroll_picker_prompt_to_row(&items, &layout, sel, cx);
+        self.scroll_picker_prompt_to_row(
+            &items,
+            &layout,
+            sel,
+            components::PICKER_LIST_MAX_HEIGHT_PX,
+            cx,
+        );
     }
 
     /// Shared keyboard-navigation subscription for picker search inputs.
@@ -177,10 +183,20 @@ impl PopoverHost {
                 // highlighted row — including across the two sections. While
                 // the sort menu covers the list, it walks the sort options
                 // instead.
-                |this, query, _cx| Some(repo_picker::nav_targets(this, query)),
+                |this, query, cx| {
+                    // Editing the filter re-orders the rows a row menu is
+                    // floating over, so the menu goes before the targets below
+                    // are read — otherwise it keeps the arrow keys while the
+                    // list moves under its highlight.
+                    picker_row_menu::close_on_query_change(this, query, cx);
+                    Some(repo_picker::nav_targets(this, query, cx))
+                },
                 repo_picker::dismiss,
                 |this, sel, cx| {
-                    if this.repo_picker_sort_menu_open {
+                    // Both of these replace the repository rows as the arrow
+                    // keys' target, so the selection is not a row index to
+                    // scroll to.
+                    if this.repo_picker_sort_menu_open || this.picker_row_menu.is_some() {
                         return;
                     }
                     let query = this
@@ -188,19 +204,22 @@ impl PopoverHost {
                         .as_ref()
                         .map(|input| input.read(cx).text().trim().to_string())
                         .unwrap_or_default();
-                    // Section headers occupy scroll children too, so scroll to
-                    // the row's child slot rather than its selection index.
-                    let child_ix = repo_picker::filtered_layout(this, &query)
-                        .1
-                        .child_indices
-                        .get(sel)
-                        .copied()
-                        .unwrap_or(sel);
-                    this.picker_prompt_scroll.scroll_to_item(child_ix);
+                    // The list is windowed, so a row past the viewport has no
+                    // element to scroll to by child slot: its geometry says
+                    // where it would be. Headers are part of that geometry, so
+                    // scrolling to a section's first row shows its header too.
+                    let rows = repo_picker::cached(this, &query);
+                    this.scroll_picker_prompt_to_row(
+                        &rows.items,
+                        &rows.layout,
+                        sel,
+                        repo_picker::REPO_PICKER_LIST_MAX_HEIGHT_PX,
+                        cx,
+                    );
                 },
-                |this, payload, _query, _window, cx| {
+                |this, payload, _query, window, cx| {
                     if let Some(target) = payload {
-                        repo_picker::activate_nav_target(this, target, cx);
+                        repo_picker::activate_nav_target(this, target, window, cx);
                     }
                 },
             ));
@@ -231,7 +250,18 @@ impl PopoverHost {
                 cx,
                 |this| this.inline_branch_picker_active(),
                 |this| &mut this.branch_picker_selected_index,
-                |this, query, _cx| {
+                |this, query, cx| {
+                    // A menu floating over a row takes the arrow keys, and an
+                    // edit to the filter dismisses it — the rows underneath are
+                    // about to be re-filtered out from under its highlight.
+                    picker_row_menu::close_on_query_change(this, query, cx);
+                    if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+                        return Some(
+                            (0..actions.len())
+                                .map(branch_picker::BranchPickerNavTarget::RowAction)
+                                .collect(),
+                        );
+                    }
                     // The checkout picker renders sectioned, multi-part rows, so
                     // its nav order must come from the picker's own layout over
                     // the very same items. `match_branches` sorts differently
@@ -242,50 +272,24 @@ impl PopoverHost {
                         return Some(branch_picker::nav_targets(this, query));
                     }
 
-                    // The current branch is not offered as a rebase target (it
-                    // cannot be rebased onto itself) and cannot be deleted.
-                    let hide_current_branch = matches!(
-                        this.popover,
-                        Some(PopoverKind::BranchPicker {
-                            purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto
-                        })
-                    );
-                    let with_refs = branch_picker_offers_refs(this);
-                    let repo = this.active_repo()?;
-                    let Loadable::Ready(branches) = &repo.branches else {
-                        return None;
-                    };
-                    let head_branch = match &repo.head_branch {
-                        Loadable::Ready(head) => Some(head.as_str()),
-                        _ => None,
-                    };
-                    let mut names: Vec<String> = branches
-                        .iter()
-                        .filter_map(|b| {
-                            if hide_current_branch && head_branch == Some(b.name.as_str()) {
-                                None
-                            } else {
-                                Some(b.name.clone())
-                            }
-                        })
-                        .collect();
-                    if with_refs {
-                        names.insert(0, "HEAD".to_string());
-                        if let Loadable::Ready(tags) = &repo.tags {
-                            names.extend(tags.iter().map(|t| t.name.clone()));
-                        }
-                    }
                     Some(
-                        match_branches(&names, query)
+                        branch_picker::ref_nav_targets(this, ref_rows_spec(this), query)
                             .into_iter()
                             .map(branch_picker::BranchPickerNavTarget::Ref)
                             .collect(),
                     )
                 },
-                |this, cx| this.handle_inline_branch_picker_escape(cx),
+                |this, cx| {
+                    // Escape backs out of the menu before it closes the picker.
+                    if this.picker_row_menu.is_some() {
+                        picker_row_menu::close(this, cx);
+                        return;
+                    }
+                    this.handle_inline_branch_picker_escape(cx)
+                },
                 |this, sel, cx| {
-                    if !branch_picker::is_checkout_picker(this) {
-                        this.picker_prompt_scroll.scroll_to_item(sel);
+                    // The selection indexes the open menu's entries, not a row.
+                    if this.picker_row_menu.is_some() {
                         return;
                     }
                     let query = this
@@ -293,10 +297,35 @@ impl PopoverHost {
                         .as_ref()
                         .map(|input| input.read(cx).text().trim().to_string())
                         .unwrap_or_default();
-                    let rows = branch_picker::cached(this, &query);
-                    this.scroll_picker_prompt_to_row(&rows.items, &rows.layout, sel, cx);
+                    // The checkout picker's sectioned rows and the plain ref
+                    // lists are laid out differently, so each scrolls by its own
+                    // geometry — and each was built for its own viewport.
+                    if branch_picker::is_checkout_picker(this) {
+                        let rows = branch_picker::cached(this, &query);
+                        this.scroll_picker_prompt_to_row(
+                            &rows.items,
+                            &rows.layout,
+                            sel,
+                            components::PICKER_LIST_MAX_HEIGHT_PX,
+                            cx,
+                        );
+                        return;
+                    }
+                    let rows = branch_picker::ref_rows_cached(this, ref_rows_spec(this), &query);
+                    this.scroll_picker_prompt_to_row(
+                        &rows.items,
+                        &rows.layout,
+                        sel,
+                        branch_picker::REF_PICKER_LIST_MAX_HEIGHT_PX,
+                        cx,
+                    );
                 },
                 |this, payload, query, window, cx| {
+                    // Enter runs the highlighted menu entry while a menu is up.
+                    if let Some(branch_picker::BranchPickerNavTarget::RowAction(ix)) = payload {
+                        picker_row_menu::activate_nth(this, ix, window, cx);
+                        return;
+                    }
                     let Some(repo_id) = this.active_repo().map(|repo| repo.id) else {
                         return;
                     };
@@ -318,7 +347,9 @@ impl PopoverHost {
                         }
                         return;
                     }
-                    if branch_picker_offers_refs(this) {
+                    // The prompts that branch from a ref accept a typed name that
+                    // matched nothing, so Enter can create one.
+                    if ref_rows_spec(this).offers_source_refs() {
                         let name = match payload {
                             Some(branch_picker::BranchPickerNavTarget::Ref(name)) => name,
                             _ => query,
@@ -365,26 +396,30 @@ impl PopoverHost {
                     |this| worktree_picker_state(this).is_some(),
                     |this| &mut this.worktree_picker_selected_index,
                     |this, query, _cx| {
-                        let (repo_id, _) = worktree_picker_state(this)?;
-                        let repo = this.state.repos.iter().find(|r| r.id == repo_id)?;
-                        let Loadable::Ready(worktrees) = &repo.worktrees else {
-                            return None;
-                        };
-                        let workdir = &repo.spec.workdir;
-                        Some(filter_by_query(
-                            worktrees.iter().filter(|w| &w.path != workdir).map(|w| {
-                                let text = if let Some(branch) = &w.branch {
-                                    format!("{}{}", branch, w.path.display())
-                                } else {
-                                    w.path.display().to_string()
-                                };
-                                (w.path.clone(), text)
-                            }),
-                            query,
+                        let (repo_id, is_remove) = worktree_picker_state(this)?;
+                        Some(worktree_picker::nav_targets(
+                            this, repo_id, is_remove, query,
                         ))
                     },
                     |this, cx| this.close_popover(cx),
-                    Self::scroll_picker_prompt_to_item,
+                    |this, sel, cx| {
+                        let Some((repo_id, is_remove)) = worktree_picker_state(this) else {
+                            return;
+                        };
+                        let query = this
+                            .worktree_picker_search_input
+                            .as_ref()
+                            .map(|input| input.read(cx).text().trim().to_string())
+                            .unwrap_or_default();
+                        let rows = worktree_picker::cached(this, repo_id, is_remove, &query);
+                        this.scroll_picker_prompt_to_row(
+                            &rows.items,
+                            &rows.layout,
+                            sel,
+                            worktree_picker::WORKTREE_PICKER_LIST_MAX_HEIGHT_PX,
+                            cx,
+                        );
+                    },
                     |this, payload, _query, window, cx| {
                         let Some(path) = payload else {
                             return;
@@ -392,19 +427,7 @@ impl PopoverHost {
                         let Some((repo_id, is_remove)) = worktree_picker_state(this) else {
                             return;
                         };
-                        if is_remove {
-                            this.open_popover_centered(
-                                PopoverKind::worktree(
-                                    repo_id,
-                                    WorktreePopoverKind::RemoveConfirm { path, branch: None },
-                                ),
-                                window,
-                                cx,
-                            );
-                        } else {
-                            this.store.dispatch(Msg::OpenRepo(path));
-                            this.close_popover(cx);
-                        }
+                        worktree_picker::activate(this, repo_id, is_remove, path, None, window, cx);
                     },
                 ));
         }
@@ -431,14 +454,35 @@ impl PopoverHost {
                     cx,
                     |this| workspace_picker_state(this).is_some(),
                     |this| &mut this.workspace_picker_selected_index,
-                    |this, query, _cx| {
+                    |this, query, cx| {
+                        // A menu floating over a row takes the arrow keys, and an
+                        // edit to the filter dismisses it.
+                        picker_row_menu::close_on_query_change(this, query, cx);
+                        if let Some(actions) = picker_row_menu::nav_actions(this, cx) {
+                            return Some(
+                                (0..actions.len())
+                                    .map(workspace_picker::WorkspaceRow::RowAction)
+                                    .collect(),
+                            );
+                        }
                         let repo_id = workspace_picker_state(this)?;
                         // Layout-driven so Enter can never land on a different
                         // row than the highlighted one.
                         Some(workspace_picker::nav_targets(this, repo_id, query))
                     },
-                    |this, cx| this.close_popover(cx),
+                    |this, cx| {
+                        // Escape backs out of the menu before it closes the picker.
+                        if this.picker_row_menu.is_some() {
+                            picker_row_menu::close(this, cx);
+                            return;
+                        }
+                        this.close_popover(cx)
+                    },
                     |this, sel, cx| {
+                        // The selection indexes the open menu's entries, not a row.
+                        if this.picker_row_menu.is_some() {
+                            return;
+                        }
                         let Some(repo_id) = workspace_picker_state(this) else {
                             return;
                         };
@@ -448,9 +492,20 @@ impl PopoverHost {
                             .map(|input| input.read(cx).text().trim().to_string())
                             .unwrap_or_default();
                         let rows = workspace_picker::cached(this, repo_id, &query);
-                        this.scroll_picker_prompt_to_row(&rows.items, &rows.layout, sel, cx);
+                        this.scroll_picker_prompt_to_row(
+                            &rows.items,
+                            &rows.layout,
+                            sel,
+                            components::PICKER_LIST_MAX_HEIGHT_PX,
+                            cx,
+                        );
                     },
                     |this, payload, query, window, cx| {
+                        // Enter runs the highlighted menu entry while a menu is up.
+                        if let Some(workspace_picker::WorkspaceRow::RowAction(ix)) = payload {
+                            picker_row_menu::activate_nth(this, ix, window, cx);
+                            return;
+                        }
                         let Some(repo_id) = workspace_picker_state(this) else {
                             return;
                         };
@@ -499,48 +554,37 @@ impl PopoverHost {
                     |this| &mut this.submodule_picker_selected_index,
                     |this, query, _cx| {
                         let (repo_id, _) = submodule_picker_state(this)?;
-                        let repo = this.state.repos.iter().find(|r| r.id == repo_id)?;
-                        let Loadable::Ready(submodules) = &repo.submodules else {
-                            return None;
-                        };
-                        Some(filter_by_query(
-                            submodules
-                                .iter()
-                                .map(|s| (s.path.clone(), s.path.display().to_string())),
-                            query,
-                        ))
+                        Some(submodule_picker::nav_targets(this, repo_id, query))
                     },
                     |this, cx| this.close_popover(cx),
-                    Self::scroll_picker_prompt_to_item,
+                    |this, sel, cx| {
+                        let Some((repo_id, _)) = submodule_picker_state(this) else {
+                            return;
+                        };
+                        let query = this
+                            .submodule_picker_search_input
+                            .as_ref()
+                            .map(|input| input.read(cx).text().trim().to_string())
+                            .unwrap_or_default();
+                        let rows = submodule_picker::cached(this, repo_id, &query);
+                        this.scroll_picker_prompt_to_row(
+                            &rows.items,
+                            &rows.layout,
+                            sel,
+                            submodule_picker::SUBMODULE_PICKER_LIST_MAX_HEIGHT_PX,
+                            cx,
+                        );
+                    },
                     |this, payload, _query, window, cx| {
-                        let Some(rel_path) = payload else {
+                        let Some(path) = payload else {
                             return;
                         };
                         let Some((repo_id, is_remove)) = submodule_picker_state(this) else {
                             return;
                         };
-                        if is_remove {
-                            this.open_popover_centered(
-                                PopoverKind::submodule(
-                                    repo_id,
-                                    SubmodulePopoverKind::RemoveConfirm { path: rel_path },
-                                ),
-                                window,
-                                cx,
-                            );
-                        } else {
-                            let Some(base) = this
-                                .state
-                                .repos
-                                .iter()
-                                .find(|r| r.id == repo_id)
-                                .map(|r| r.spec.workdir.clone())
-                            else {
-                                return;
-                            };
-                            this.store.dispatch(Msg::OpenRepo(base.join(&rel_path)));
-                            this.close_popover(cx);
-                        }
+                        submodule_picker::activate(
+                            this, repo_id, is_remove, path, None, window, cx,
+                        );
                     },
                 ));
         }
@@ -566,19 +610,25 @@ impl PopoverHost {
                 cx,
                 |this| matches!(this.popover, Some(PopoverKind::StashPickerPrompt { .. })),
                 |this| &mut this.stash_picker_prompt_selected_index,
-                |this, query, _cx| {
-                    let Loadable::Ready(stashes) = &this.active_repo()?.stashes else {
-                        return None;
-                    };
-                    Some(filter_by_query(
-                        stashes.iter().map(|s| (s.index, s.message.to_string())),
-                        query,
-                    ))
-                },
+                |this, query, _cx| Some(stash_picker_prompt::nav_targets(this, query)),
                 |this, cx| this.close_popover(cx),
-                Self::scroll_picker_prompt_to_item,
-                |this, payload, _query, _window, cx| {
-                    let Some(git_index) = payload else {
+                |this, sel, cx| {
+                    let query = this
+                        .stash_picker_search_input
+                        .as_ref()
+                        .map(|input| input.read(cx).text().trim().to_string())
+                        .unwrap_or_default();
+                    let rows = stash_picker_prompt::cached(this, &query);
+                    this.scroll_picker_prompt_to_row(
+                        &rows.items,
+                        &rows.layout,
+                        sel,
+                        stash_picker_prompt::STASH_PICKER_LIST_MAX_HEIGHT_PX,
+                        cx,
+                    );
+                },
+                |this, payload, _query, window, cx| {
+                    let Some(row) = payload else {
                         return;
                     };
                     let Some(PopoverKind::StashPickerPrompt { repo_id, purpose }) =
@@ -586,28 +636,7 @@ impl PopoverHost {
                     else {
                         return;
                     };
-                    match purpose {
-                        StashPickerPurpose::Pop => {
-                            this.store.dispatch(Msg::PopStash {
-                                repo_id,
-                                index: git_index,
-                            });
-                        }
-                        StashPickerPurpose::Apply => {
-                            this.store.dispatch(Msg::ApplyStash {
-                                repo_id,
-                                index: git_index,
-                            });
-                        }
-                        StashPickerPurpose::Drop => {
-                            this.store.dispatch(Msg::DropStash {
-                                repo_id,
-                                index: git_index,
-                            });
-                        }
-                    }
-                    this.store.dispatch(Msg::LoadStashes { repo_id });
-                    this.close_popover(cx);
+                    stash_picker_prompt::activate(this, repo_id, purpose, row, window, cx);
                 },
             ));
         }
@@ -633,23 +662,23 @@ impl PopoverHost {
                 cx,
                 |this| matches!(this.popover, Some(PopoverKind::FileHistory { .. })),
                 |this| &mut this.file_history_selected_index,
-                |this, query, _cx| {
-                    let Some(PopoverKind::FileHistory { repo_id, .. }) = &this.popover else {
-                        return None;
-                    };
-                    let repo = this.state.repos.iter().find(|r| r.id == *repo_id)?;
-                    let Loadable::Ready(page) = &repo.history_state.file_history else {
-                        return None;
-                    };
-                    Some(filter_by_query(
-                        page.commits
-                            .iter()
-                            .map(|c| (c.id.clone(), file_history_match_text(c))),
-                        query,
-                    ))
-                },
+                |this, query, _cx| Some(file_history::nav_targets(this, query)),
                 |this, cx| this.close_popover(cx),
-                Self::scroll_picker_prompt_to_item,
+                |this, sel, cx| {
+                    let query = this
+                        .file_history_search_input
+                        .as_ref()
+                        .map(|input| input.read(cx).text().trim().to_string())
+                        .unwrap_or_default();
+                    let rows = file_history::cached(this, &query);
+                    this.scroll_picker_prompt_to_row(
+                        &rows.items,
+                        &rows.layout,
+                        sel,
+                        file_history::FILE_HISTORY_LIST_MAX_HEIGHT_PX,
+                        cx,
+                    );
+                },
                 |this, payload, _query, _window, cx| {
                     let Some(commit_id) = payload else {
                         return;
@@ -736,15 +765,21 @@ impl PopoverHost {
 
 /// True when the branch picker should offer refs beyond branches (HEAD, tags)
 /// and accept a free-form ref typed into the search box.
-fn branch_picker_offers_refs(this: &PopoverHost) -> bool {
-    matches!(
-        this.popover,
+/// Which ref list the popover in hand is showing. The prompts that branch from a
+/// ref offer HEAD and tags as well; delete and rebase-onto list branches alone
+/// and cannot offer the one that is checked out.
+fn ref_rows_spec(this: &PopoverHost) -> branch_picker::RefRowsSpec {
+    match &this.popover {
         Some(PopoverKind::CreateBranchFromRefPrompt { .. })
-            | Some(PopoverKind::Repo {
-                kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
-                ..
-            })
-    )
+        | Some(PopoverKind::Repo {
+            kind: RepoPopoverKind::Worktree(WorktreePopoverKind::AddPrompt),
+            ..
+        }) => branch_picker::RefRowsSpec::source_ref(),
+        Some(PopoverKind::BranchPicker {
+            purpose: BranchPickerPurpose::Delete | BranchPickerPurpose::RebaseOnto,
+        }) => branch_picker::RefRowsSpec::branches(true),
+        _ => branch_picker::RefRowsSpec::branches(false),
+    }
 }
 
 fn worktree_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
@@ -783,41 +818,73 @@ fn submodule_picker_state(this: &PopoverHost) -> Option<(RepoId, bool)> {
     }
 }
 
-fn file_history_match_text(commit: &gitcomet_core::domain::Commit) -> String {
-    let sha = commit.id.as_ref();
-    let short = sha.get(0..8).unwrap_or(sha);
-    format!("{}{}", short, commit.summary)
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// Case-insensitive substring filter over `(payload, match_text)` pairs,
-/// preserving input order. An empty query matches everything.
-fn filter_by_query<T>(items: impl IntoIterator<Item = (T, String)>, query: &str) -> Vec<T> {
-    let q = query.to_ascii_lowercase();
-    items
-        .into_iter()
-        .filter(|(_, text)| q.is_empty() || text.to_ascii_lowercase().contains(&q))
-        .map(|(item, _)| item)
-        .collect()
-}
-
-fn match_branches(branches: &[String], query: &str) -> Vec<String> {
-    if query.is_empty() {
-        return branches.to_vec();
+    /// `match_branches` — deleted with this commit — used to filter the plain ref
+    /// lists for the arrow keys while the rows themselves were filtered by the
+    /// picker's own matcher. The two agreed only by luck of the row shape, and
+    /// the ref lists now go through the picker's matcher alone. This keeps the
+    /// old ordering rule as an oracle so that agreement stays pinned: the order
+    /// the user sees must not move.
+    ///
+    /// They coincide because these rows are single-part and section-less, which
+    /// collapses the layout's sort key `(group, match_start, display_len,
+    /// display_text)` to the old `(match_start, name_len, name)`.
+    fn match_branches_oracle(branches: &[String], query: &str) -> Vec<String> {
+        if query.is_empty() {
+            return branches.to_vec();
+        }
+        let query_lower = query.to_ascii_lowercase();
+        let mut out: Vec<_> = branches
+            .iter()
+            .filter_map(|name| {
+                let lower = name.to_ascii_lowercase();
+                lower
+                    .find(&query_lower)
+                    .map(|start| (start, name.len(), name.clone()))
+            })
+            .collect();
+        out.sort_by(|a, b| {
+            a.0.cmp(&b.0)
+                .then_with(|| a.1.cmp(&b.1))
+                .then_with(|| a.2.cmp(&b.2))
+        });
+        out.into_iter().map(|(.., name)| name).collect()
     }
-    let query_lower = query.to_ascii_lowercase();
-    let mut out: Vec<_> = branches
-        .iter()
-        .filter_map(|name| {
-            let lower = name.to_ascii_lowercase();
-            lower
-                .find(&query_lower)
-                .map(|start| (start, name.len(), name.clone()))
-        })
+
+    #[test]
+    fn the_picker_matcher_orders_plain_ref_rows_the_way_match_branches_did() {
+        let names: Vec<String> = [
+            "main",
+            "feature/alpha",
+            "release/main-line",
+            "MAIN-uppercase",
+            "topic/mainly",
+            "hotfix",
+        ]
+        .into_iter()
+        .map(str::to_string)
         .collect();
-    out.sort_by(|a, b| {
-        a.0.cmp(&b.0)
-            .then_with(|| a.1.cmp(&b.1))
-            .then_with(|| a.2.cmp(&b.2))
-    });
-    out.into_iter().map(|(.., name)| name).collect()
+
+        for query in ["", "main", "MAIN", "ma", "e", "zzz"] {
+            let items: Vec<components::PickerPromptItem> = names
+                .iter()
+                .map(|name| components::PickerPromptItem::plain(name.clone()))
+                .collect();
+            let layout = components::picker_prompt_layout(&items, query);
+            let through_layout: Vec<String> = layout
+                .item_indices
+                .iter()
+                .map(|ix| names[*ix].clone())
+                .collect();
+
+            assert_eq!(
+                through_layout,
+                match_branches_oracle(&names, query),
+                "the two matchers must agree for {query:?}"
+            );
+        }
+    }
 }

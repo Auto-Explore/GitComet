@@ -197,6 +197,7 @@ impl GitCometView {
                             change_tracking_view: Some(this.change_tracking_view.key().to_string()),
                             // Owned by the repository picker, not this snapshot.
                             repo_picker_sort: None,
+                            repo_picker_collapsed_sections: None,
                             diff_scroll_sync: Some(this.diff_scroll_sync.key().to_string()),
                             diff_content_mode: Some(this.diff_content_mode.key().to_string()),
                             diff_whitespace_mode: Some(

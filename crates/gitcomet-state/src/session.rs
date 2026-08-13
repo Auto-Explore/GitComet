@@ -16,7 +16,14 @@ pub struct UiSession {
     pub open_repos: Vec<PathBuf>,
     pub active_repo: Option<PathBuf>,
     pub recent_repos: Vec<PathBuf>,
+    /// Repositories the user pinned in the repository picker, in the order they
+    /// were pinned. Independent of `recent_repos`, so a pin outlives the
+    /// recents cap.
+    pub pinned_repos: Vec<PathBuf>,
     pub repo_picker_sort: Option<String>,
+    /// Storage keys of the repository picker sections the user folded away.
+    /// Every section defaults to expanded, so this only ever holds deviations.
+    pub repo_picker_collapsed_sections: BTreeSet<String>,
     pub repo_sidebar_collapsed_items: BTreeMap<PathBuf, BTreeSet<String>>,
     pub repo_sidebar_pinned_branches: BTreeMap<PathBuf, BTreeSet<String>>,
     pub window_width: Option<u32>,
@@ -154,7 +161,9 @@ struct UiSessionFile {
     open_repos: Vec<String>,
     active_repo: Option<String>,
     recent_repos: Option<Vec<String>>,
+    pinned_repos: Option<Vec<String>>,
     repo_picker_sort: Option<String>,
+    repo_picker_collapsed_sections: Option<BTreeSet<String>>,
     repo_sidebar_collapsed_items: Option<BTreeMap<String, BTreeSet<String>>>,
     repo_sidebar_pinned_branches: Option<BTreeMap<String, BTreeSet<String>>>,
     window_width: Option<u32>,
@@ -264,6 +273,7 @@ pub fn load_from_path(path: &Path) -> UiSession {
 
     let (open_repos, active_repo) = parse_repos(file.open_repos, file.active_repo);
     let recent_repos = parse_path_list(file.recent_repos.unwrap_or_default());
+    let pinned_repos = parse_path_list(file.pinned_repos.unwrap_or_default());
     let repo_sidebar_collapsed_items =
         parse_path_keyed_string_sets(file.repo_sidebar_collapsed_items.unwrap_or_default());
     let repo_sidebar_pinned_branches =
@@ -272,7 +282,9 @@ pub fn load_from_path(path: &Path) -> UiSession {
         open_repos,
         active_repo,
         recent_repos,
+        pinned_repos,
         repo_picker_sort: file.repo_picker_sort,
+        repo_picker_collapsed_sections: file.repo_picker_collapsed_sections.unwrap_or_default(),
         repo_sidebar_collapsed_items,
         repo_sidebar_pinned_branches,
         window_width: file.window_width,
@@ -540,6 +552,23 @@ pub fn persist_repos_snapshot_to_path(
     })
 }
 
+/// Moves `value` to the front of an MRU list, dropping any earlier copy of it
+/// and holding the list to [`MAX_RECENT_REPOS`]. The cap lives here alone so
+/// the session file and the in-memory caches the UI shows can never disagree
+/// about how long the list is.
+fn promote_within_recents_cap<T: PartialEq>(list: &mut Vec<T>, value: T) {
+    list.retain(|existing| existing != &value);
+    list.insert(0, value);
+    list.truncate(MAX_RECENT_REPOS);
+}
+
+/// [`promote_within_recents_cap`] for a caller holding its own copy of what
+/// [`UiSession::recent_repos`] last returned: applies one recents bump to that
+/// copy so it still matches the file after [`persist_recent_repo`] writes it.
+pub fn promote_recent_repo(recents: &mut Vec<PathBuf>, workdir: &Path) {
+    promote_within_recents_cap(recents, workdir.to_path_buf());
+}
+
 pub fn persist_recent_repo(workdir: &Path) -> io::Result<()> {
     let Some(path) = default_session_file_path() else {
         return Ok(());
@@ -554,12 +583,19 @@ pub fn persist_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> 
 
         let workdir_key = path_storage_key(workdir);
         let recent_repos = file.recent_repos.get_or_insert_with(Vec::new);
-        recent_repos.retain(|path| path.trim() != workdir_key);
-        recent_repos.retain(|path| !path.trim().is_empty());
-        recent_repos.insert(0, workdir_key);
-        if recent_repos.len() > MAX_RECENT_REPOS {
-            recent_repos.truncate(MAX_RECENT_REPOS);
-        }
+        // Blanks go, and a key a hand-edited file padded is normalized in place
+        // so the promotion below still recognizes it as the same repository.
+        recent_repos.retain_mut(|path| {
+            let trimmed = path.trim();
+            if trimmed.is_empty() {
+                return false;
+            }
+            if trimmed.len() != path.len() {
+                *path = trimmed.to_owned();
+            }
+            true
+        });
+        promote_within_recents_cap(recent_repos, workdir_key);
 
         persist_to_path(session_file_path, &file)
     })
@@ -587,6 +623,55 @@ pub fn remove_recent_repo_to_path(workdir: &Path, session_file_path: &Path) -> i
     })
 }
 
+pub fn persist_pinned_repo(workdir: &Path) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    persist_pinned_repo_to_path(workdir, &path)
+}
+
+/// Appends a repository to the pin list. Unlike the recents, pins keep the
+/// order the user created them in and are never capped — they leave the list
+/// only when the user unpins them. Pinning something already pinned therefore
+/// leaves it where it is rather than moving it to the end.
+pub fn persist_pinned_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+
+        let workdir_key = path_storage_key(workdir);
+        let pinned_repos = file.pinned_repos.get_or_insert_with(Vec::new);
+        pinned_repos.retain(|path| !path.trim().is_empty());
+        if !pinned_repos.iter().any(|path| path.trim() == workdir_key) {
+            pinned_repos.push(workdir_key);
+        }
+
+        persist_to_path(session_file_path, &file)
+    })
+}
+
+pub fn remove_pinned_repo(workdir: &Path) -> io::Result<()> {
+    let Some(path) = default_session_file_path() else {
+        return Ok(());
+    };
+    remove_pinned_repo_to_path(workdir, &path)
+}
+
+pub fn remove_pinned_repo_to_path(workdir: &Path, session_file_path: &Path) -> io::Result<()> {
+    with_session_file_persist_lock(|| {
+        let mut file = load_file(session_file_path).unwrap_or_default();
+        file.version = CURRENT_SESSION_FILE_VERSION;
+
+        let workdir_key = path_storage_key(workdir);
+        let Some(pinned_repos) = file.pinned_repos.as_mut() else {
+            return Ok(());
+        };
+        pinned_repos.retain(|path| path.trim() != workdir_key);
+
+        persist_to_path(session_file_path, &file)
+    })
+}
+
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct UiSettings {
     pub window_width: Option<u32>,
@@ -606,6 +691,9 @@ pub struct UiSettings {
     pub show_timezone: Option<bool>,
     pub change_tracking_view: Option<String>,
     pub repo_picker_sort: Option<String>,
+    /// Whole replacement set — the repository picker owns it and always writes
+    /// every collapsed section it knows about.
+    pub repo_picker_collapsed_sections: Option<BTreeSet<String>>,
     pub diff_scroll_sync: Option<String>,
     pub diff_content_mode: Option<String>,
     pub diff_whitespace_mode: Option<String>,
@@ -701,6 +789,10 @@ pub fn persist_ui_settings_to_path(settings: UiSettings, path: &Path) -> io::Res
         }
         if let Some(value) = settings.repo_picker_sort {
             file.repo_picker_sort = Some(value);
+        }
+        // Owned by the repository picker (`repo_picker::persist_collapsed_sections`).
+        if let Some(value) = settings.repo_picker_collapsed_sections {
+            file.repo_picker_collapsed_sections = Some(value);
         }
         if let Some(value) = settings.diff_scroll_sync {
             file.diff_scroll_sync = Some(value);
@@ -2816,6 +2908,226 @@ mod tests {
 
         let loaded = load_from_path(&path);
         assert_eq!(loaded.recent_repos, vec![repo_a]);
+    }
+
+    #[test]
+    fn persist_pinned_repo_appends_in_pin_order_and_dedupes() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-pinned-repos-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        let repo_a = dir.join("repo-a");
+        let repo_b = dir.join("repo-b");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_pinned_repo_to_path(&repo_a, &path).expect("pin first repo");
+        persist_pinned_repo_to_path(&repo_b, &path).expect("pin second repo");
+        // Re-pinning keeps the original position rather than moving the repo,
+        // unlike the recents, which are an MRU list.
+        persist_pinned_repo_to_path(&repo_a, &path).expect("re-pin first repo");
+
+        let loaded = load_from_path(&path);
+        assert_eq!(
+            loaded.pinned_repos,
+            vec![repo_a.clone(), repo_b.clone()],
+            "re-pinning must not reorder the pin list"
+        );
+
+        remove_pinned_repo_to_path(&repo_b, &path).expect("unpin second repo");
+        assert_eq!(load_from_path(&path).pinned_repos, vec![repo_a]);
+    }
+
+    /// A UI holding its own copy of the recents has to be able to apply a bump
+    /// without re-reading the file, and the copy has to still match the file
+    /// afterwards — including at the cap, where the file drops its tail.
+    #[test]
+    fn promote_recent_repo_matches_the_file_at_the_cap() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-promote-recent-cap-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        // One more repository than the list can hold, so the cap is in play.
+        let repos: Vec<PathBuf> = (0..=MAX_RECENT_REPOS)
+            .map(|ix| dir.join(format!("repo-{ix}")))
+            .collect();
+        for repo in &repos {
+            persist_recent_repo_to_path(repo, &path).expect("record repo as recent");
+        }
+
+        let mut cached = load_from_path(&path).recent_repos;
+        assert_eq!(cached.len(), MAX_RECENT_REPOS);
+
+        // The one the cap pushed off comes back to the front, on both sides.
+        let evicted = repos[0].clone();
+        assert!(!cached.contains(&evicted));
+        promote_recent_repo(&mut cached, &evicted);
+        persist_recent_repo_to_path(&evicted, &path).expect("re-record the evicted repo");
+
+        assert_eq!(
+            cached.len(),
+            MAX_RECENT_REPOS,
+            "the in-memory list has to honour the same cap the file does"
+        );
+        assert_eq!(
+            cached,
+            load_from_path(&path).recent_repos,
+            "a promoted cache must match what the next load returns"
+        );
+
+        // Re-promoting something already listed moves it without growing the list.
+        let already_listed = cached[3].clone();
+        promote_recent_repo(&mut cached, &already_listed);
+        assert_eq!(cached.len(), MAX_RECENT_REPOS);
+        assert_eq!(cached.first(), Some(&already_listed));
+        assert_eq!(
+            cached
+                .iter()
+                .filter(|path| **path == already_listed)
+                .count(),
+            1
+        );
+    }
+
+    /// The stored keys are written trimmed, but a hand-edited file can pad them.
+    /// A padded copy is still the same repository, so it must not survive the
+    /// promotion as a second entry.
+    #[test]
+    fn persist_recent_repo_collapses_a_padded_duplicate() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-recent-padded-dupe-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+        let repo = dir.join("repo-padded");
+
+        persist_to_path(
+            &path,
+            &UiSessionFile {
+                version: CURRENT_SESSION_FILE_VERSION,
+                recent_repos: Some(vec![
+                    format!("  {}  ", path_storage_key(&repo)),
+                    "   ".to_owned(),
+                ]),
+                ..UiSessionFile::default()
+            },
+        )
+        .expect("seed session file");
+
+        persist_recent_repo_to_path(&repo, &path).expect("record repo as recent");
+
+        assert_eq!(
+            load_from_path(&path).recent_repos,
+            vec![repo],
+            "the padded entry and the blank should both be gone"
+        );
+    }
+
+    #[test]
+    fn pinned_repos_survive_the_recent_repository_cap() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-pinned-repo-cap-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+        let pinned = dir.join("repo-pinned");
+
+        persist_pinned_repo_to_path(&pinned, &path).expect("pin repo");
+        persist_recent_repo_to_path(&pinned, &path).expect("record repo as recent");
+        for ix in 0..MAX_RECENT_REPOS {
+            persist_recent_repo_to_path(&dir.join(format!("repo-{ix}")), &path)
+                .expect("push the pinned repo off the recents tail");
+        }
+
+        let loaded = load_from_path(&path);
+        assert!(
+            !loaded.recent_repos.contains(&pinned),
+            "the pinned repository should have fallen off the capped recents list"
+        );
+        assert_eq!(
+            loaded.pinned_repos,
+            vec![pinned],
+            "pins are a separate, uncapped list, so the repository is still reachable"
+        );
+    }
+
+    #[test]
+    fn persist_ui_settings_round_trips_repo_picker_collapsed_sections() {
+        let dir = env::temp_dir().join(format!(
+            "gitcomet-picker-collapse-test-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("session.json");
+
+        assert!(
+            load_from_path(&path)
+                .repo_picker_collapsed_sections
+                .is_empty()
+        );
+
+        let collapsed = BTreeSet::from(["open".to_string(), "recently_closed".to_string()]);
+        persist_ui_settings_to_path(
+            UiSettings {
+                repo_picker_collapsed_sections: Some(collapsed.clone()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist collapsed sections");
+        assert_eq!(
+            load_from_path(&path).repo_picker_collapsed_sections,
+            collapsed
+        );
+
+        // An unrelated write must leave the collapse state alone.
+        persist_ui_settings_to_path(
+            UiSettings {
+                repo_picker_sort: Some("name".to_string()),
+                ..UiSettings::default()
+            },
+            &path,
+        )
+        .expect("persist unrelated setting");
+        assert_eq!(
+            load_from_path(&path).repo_picker_collapsed_sections,
+            collapsed
+        );
     }
 
     #[test]

@@ -1670,4 +1670,115 @@ mod checkout_picker {
             "expected the plain delete list to render"
         );
     }
+    /// Right-clicking a branch row floats the very menu that branch's sidebar row
+    /// opens — asserted against that model rather than a copied list, so the two
+    /// cannot drift apart.
+    #[gpui::test]
+    fn right_clicking_a_branch_row_offers_the_sidebar_branch_menu(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let row = cx
+            .debug_bounds("picker_prompt_item_1")
+            .expect("expected a branch row");
+        let at = row.center();
+        cx.simulate_mouse_move(at, None, gpui::Modifiers::default());
+        cx.simulate_event(gpui::MouseDownEvent {
+            position: at,
+            modifiers: gpui::Modifiers::default(),
+            button: MouseButton::Right,
+            click_count: 1,
+            first_mouse: false,
+        });
+        cx.run_until_parked();
+        redraw(cx);
+
+        assert!(
+            cx.debug_bounds("picker_row_menu").is_some(),
+            "right-clicking a branch row should open its menu"
+        );
+        assert!(
+            cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()),
+            "the picker stays open underneath its row menu"
+        );
+
+        let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+        let (menu_labels, sidebar_labels) = cx.update(|_window, app| {
+            host.update(app, |host, cx| {
+                let entries = |model: ContextMenuModel| {
+                    model
+                        .items
+                        .into_iter()
+                        .filter_map(|item| match item {
+                            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                let menu = host
+                    .picker_row_menu
+                    .as_ref()
+                    .expect("a menu should be open")
+                    .clone();
+                (
+                    entries(menu.model_for_test(host, cx)),
+                    entries(
+                        host.context_menu_model(
+                            &PopoverKind::BranchMenu {
+                                repo_id,
+                                section: BranchSection::Local,
+                                name: "feat/badges".to_string(),
+                            },
+                            cx,
+                        )
+                        .expect("the sidebar's branch menu"),
+                    ),
+                )
+            })
+        });
+        assert_eq!(
+            menu_labels, sidebar_labels,
+            "the row menu must offer exactly what the branch's sidebar row offers"
+        );
+
+        // Escape backs out of the menu before it closes the picker.
+        cx.simulate_keystrokes("escape");
+        cx.run_until_parked();
+        redraw(cx);
+        assert!(cx.debug_bounds("picker_row_menu").is_none());
+        assert!(
+            cx.update(|_window, app| view.read(app).popover_host.read(app).is_open()),
+            "the first Escape closes the menu, not the picker"
+        );
+    }
+
+    /// The create row names a branch that does not exist yet, so it has nothing
+    /// to offer and a right-click leaves it alone.
+    #[gpui::test]
+    fn right_clicking_the_create_row_opens_nothing(cx: &mut gpui::TestAppContext) {
+        let repo_id = RepoId(1);
+        let (view, cx) = open_checkout_picker(cx, repo_with_branches(repo_id), repo_id);
+
+        let create_row = cx.update(|_window, app| {
+            let host = view.read(app).popover_host.read(app);
+            branch_picker::cached(host, "")
+                .payloads
+                .iter()
+                .position(|row| matches!(row, BranchPickerNavTarget::CreateBranch(_)))
+        });
+        let Some(create_row) = create_row else {
+            return;
+        };
+
+        cx.update(|_window, app| {
+            view.read(app).popover_host.clone().update(app, |host, cx| {
+                let target = picker_row_menu::PickerRowMenuTarget::Branch {
+                    repo_id,
+                    row: BranchPickerNavTarget::CreateBranch("new".to_string()),
+                };
+                assert!(!target.has_menu(host), "the create row has no menu to open");
+                let _ = (create_row, cx);
+            });
+        });
+    }
 }

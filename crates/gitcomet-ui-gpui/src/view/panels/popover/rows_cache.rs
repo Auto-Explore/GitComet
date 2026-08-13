@@ -1,22 +1,28 @@
-//! Memoises the row model the badge pickers build.
+//! Memoises the row model every picker builds.
 //!
 //! `PopoverHost` is an uncached overlay view, so anything that notifies it —
 //! most often a hover moving from one row to the next — re-renders the whole
 //! popover. Rebuilding every branch label, remote label and metadata line on
 //! each of those frames is what made the workspace and branch badge pickers feel
-//! sluggish. The rows only change when the repository data behind them changes,
-//! so they are built once per change and reused until then.
+//! sluggish. The rows only change when the data behind them changes, so they are
+//! built once per change and reused until then.
+//!
+//! Going through here also gives a picker one list rather than two: the rows the
+//! panel renders and the list the arrow keys walk come out of the same build, so
+//! Enter cannot land on a different row than the highlighted one.
 //!
 //! The cache lives in a `RefCell` because the row builders read the repository
 //! out of the host while the cache slot is written, and the pickers reach here
 //! from both `&PopoverHost` and `&mut PopoverHost` call sites.
 //!
-//! **The key must name every revision the rows read.** A missing one shows stale
-//! rows with no visible error — the same trap [`super::fingerprint`] documents,
-//! whose match arms for these two popover kinds list the same revisions.
+//! **The signature must name every input the rows read.** A missing one shows
+//! stale rows with no visible error — the same trap [`super::fingerprint`]
+//! documents. Each picker computes its own signature next to the code that reads
+//! those inputs, so the two stay in each other's sight.
 
 use super::*;
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::time::SystemTime;
 
@@ -30,80 +36,75 @@ const DATE_BUCKET_SECS: u64 = 60;
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum RowsCacheOwner {
     BranchCheckout,
+    BranchRefs,
     Workspace,
+    RepoPicker,
+    Stash,
+    FileHistory,
+    Submodule,
+    Worktree,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct RowsCacheKey {
     owner: RowsCacheOwner,
-    repo_id: RepoId,
-    /// Revisions of every field the row builders read.
-    revs: RowsCacheRevs,
-    /// The workspace picker marks the row whose path is the active workdir.
-    workdir: std::path::PathBuf,
+    /// Digest of every input the picker's rows are built from, computed by the
+    /// picker itself with [`signature`]. A `u64` rather than the values because
+    /// the inputs are lists — holding them by value would mean cloning every
+    /// path, ref name or commit id on every render, which costs more than the
+    /// rebuild it is here to save.
+    signature: u64,
     query: String,
-    date_bucket: u64,
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-struct RowsCacheRevs {
-    head_branch: u64,
-    branches: u64,
-    remote_branches: u64,
-    ref_metadata: u64,
-    worktrees: u64,
-    /// `Loadable` kind of the repo's open state — the builders return early
-    /// while a repository is still opening.
-    open: u8,
+    /// Sections folded away while these rows were laid out. Part of the key
+    /// because [`get_or_build`] resolves the layout, and a folded section drops
+    /// its rows from it.
+    collapsed: BTreeSet<gpui::SharedString>,
 }
 
 impl RowsCacheKey {
-    /// Key for the branch badge's checkout picker. Mirrors the
-    /// `PopoverKind::BranchPicker` arm of [`super::fingerprint`].
-    pub(super) fn for_branch_checkout(repo: &RepoState, query: &str) -> Self {
+    pub(super) fn new(owner: RowsCacheOwner, signature: u64, query: &str) -> Self {
         Self {
-            owner: RowsCacheOwner::BranchCheckout,
-            repo_id: repo.id,
-            revs: RowsCacheRevs {
-                head_branch: repo.head_branch_rev,
-                branches: repo.branches_rev,
-                remote_branches: repo.remote_branches_rev,
-                ref_metadata: repo.ref_metadata_rev,
-                ..RowsCacheRevs::default()
-            },
-            workdir: std::path::PathBuf::new(),
+            owner,
+            signature,
             query: query.to_string(),
-            date_bucket: date_bucket(SystemTime::now()),
+            collapsed: BTreeSet::new(),
         }
     }
 
-    /// Key for the workspace badge's picker. Mirrors the
-    /// `RepoPopoverKind::Worktree` arm of [`super::fingerprint`], which tracks
-    /// HEAD as well because the create row names the ref it would branch from.
-    pub(super) fn for_workspace(repo: &RepoState, query: &str) -> Self {
-        Self {
-            owner: RowsCacheOwner::Workspace,
-            repo_id: repo.id,
-            revs: RowsCacheRevs {
-                head_branch: repo.head_branch_rev,
-                worktrees: repo.worktrees_rev,
-                open: loadable_kind(&repo.open),
-                ..RowsCacheRevs::default()
-            },
-            workdir: repo.spec.workdir.clone(),
-            query: query.to_string(),
-            // No relative dates on these rows, so the clock is not part of the
-            // key: the worktree rows say what is checked out and where, not when.
-            date_bucket: 0,
-        }
+    /// For the one picker that folds sections away. Everything else lays its rows
+    /// out with nothing folded.
+    pub(super) fn with_collapsed(mut self, collapsed: &BTreeSet<gpui::SharedString>) -> Self {
+        self.collapsed = collapsed.clone();
+        self
     }
 
     fn query(&self) -> &str {
         &self.query
     }
+
+    fn collapsed(&self) -> &BTreeSet<gpui::SharedString> {
+        &self.collapsed
+    }
 }
 
-fn loadable_kind<T>(loadable: &Loadable<T>) -> u8 {
+/// Digests the inputs a picker's rows are built from into one `u64`.
+///
+/// Every input the build closure reads has to be hashed in here — a missing one
+/// leaves the picker showing rows built from data that has since changed, with
+/// nothing on screen to say so.
+pub(super) fn signature(
+    inputs: impl FnOnce(&mut std::collections::hash_map::DefaultHasher),
+) -> u64 {
+    use std::hash::Hasher;
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    inputs(&mut hasher);
+    hasher.finish()
+}
+
+/// Which arm of a `Loadable` is in hand, for signatures whose rows change shape
+/// between "loading" and "ready" (most builders return early on the others).
+pub(super) fn loadable_kind<T>(loadable: &Loadable<T>) -> u8 {
     match loadable {
         Loadable::NotLoaded => 0,
         Loadable::Loading => 1,
@@ -112,7 +113,9 @@ fn loadable_kind<T>(loadable: &Loadable<T>) -> u8 {
     }
 }
 
-fn date_bucket(now: SystemTime) -> u64 {
+/// Coarsens a clock reading for signatures whose rows show relative dates, so
+/// they rebuild at most once a bucket rather than on every frame.
+pub(super) fn date_bucket(now: SystemTime) -> u64 {
     now.duration_since(SystemTime::UNIX_EPOCH)
         .map(|since| since.as_secs() / DATE_BUCKET_SECS)
         .unwrap_or(0)
@@ -193,7 +196,10 @@ where
     }
 
     let (items, payloads, marked_index) = build(SystemTime::now());
-    let layout = components::picker_prompt_layout(&items, key.query());
+    // The collapsed set is empty for every picker but the repository one, where
+    // this is the same call `picker_prompt_layout` makes.
+    let layout =
+        components::picker_prompt_layout_with_collapsed(&items, key.query(), key.collapsed());
     let built = Rc::new(CachedRows {
         items: Rc::from(items),
         payloads: Rc::from(payloads),
@@ -235,22 +241,32 @@ mod tests {
         });
     }
 
+    fn workspace_key(repo: &RepoState, query: &str) -> RowsCacheKey {
+        RowsCacheKey::new(
+            RowsCacheOwner::Workspace,
+            workspace_picker::rows_signature(repo),
+            query,
+        )
+    }
+
     #[test]
     fn an_unchanged_repo_reuses_the_built_rows() {
         let repo = repo();
         let cache = RowsCache::default();
         let builds = std::cell::Cell::new(0);
 
-        build_once(&cache, RowsCacheKey::for_workspace(&repo, ""), &builds);
-        build_once(&cache, RowsCacheKey::for_workspace(&repo, ""), &builds);
+        build_once(&cache, workspace_key(&repo, ""), &builds);
+        build_once(&cache, workspace_key(&repo, ""), &builds);
 
         assert_eq!(builds.get(), 1, "the second frame must reuse the rows");
     }
 
+    /// An input missing from a signature shows stale rows with no visible error,
+    /// so each picker's is checked against the fields its builder reads rather
+    /// than trusted. The signatures live beside those builders; these assert they
+    /// stayed in step.
     #[test]
-    fn every_revision_the_rows_read_invalidates_them() {
-        // A revision missing from the key shows stale rows with no visible
-        // error, so each one is checked here rather than trusted.
+    fn every_input_the_branch_rows_read_invalidates_them() {
         let bumps: Vec<RevisionBump> = vec![
             ("head_branch_rev", |repo| {
                 repo.head_branch_rev = repo.head_branch_rev.wrapping_add(1)
@@ -268,27 +284,18 @@ mod tests {
 
         for (label, bump) in bumps {
             let mut repo = repo();
-            let cache = RowsCache::default();
-            let builds = std::cell::Cell::new(0);
-            build_once(
-                &cache,
-                RowsCacheKey::for_branch_checkout(&repo, ""),
-                &builds,
-            );
-
+            let before = branch_picker::rows_signature(&repo);
             bump(&mut repo);
-            build_once(
-                &cache,
-                RowsCacheKey::for_branch_checkout(&repo, ""),
-                &builds,
+            assert_ne!(
+                before,
+                branch_picker::rows_signature(&repo),
+                "{label} must invalidate the branch rows"
             );
-
-            assert_eq!(builds.get(), 2, "{label} must invalidate the branch rows");
         }
     }
 
     #[test]
-    fn the_workspace_key_tracks_worktrees_head_and_the_active_workdir() {
+    fn the_workspace_signature_tracks_worktrees_head_and_the_active_workdir() {
         let checks: Vec<RevisionBump> = vec![
             ("worktrees_rev", |repo| {
                 repo.worktrees_rev = repo.worktrees_rev.wrapping_add(1)
@@ -304,16 +311,11 @@ mod tests {
 
         for (label, bump) in checks {
             let mut repo = repo();
-            let cache = RowsCache::default();
-            let builds = std::cell::Cell::new(0);
-            build_once(&cache, RowsCacheKey::for_workspace(&repo, ""), &builds);
-
+            let before = workspace_picker::rows_signature(&repo);
             bump(&mut repo);
-            build_once(&cache, RowsCacheKey::for_workspace(&repo, ""), &builds);
-
-            assert_eq!(
-                builds.get(),
-                2,
+            assert_ne!(
+                before,
+                workspace_picker::rows_signature(&repo),
                 "{label} must invalidate the workspace rows"
             );
         }
@@ -325,14 +327,14 @@ mod tests {
         let cache = RowsCache::default();
         let builds = std::cell::Cell::new(0);
 
-        build_once(&cache, RowsCacheKey::for_workspace(&repo, ""), &builds);
-        build_once(&cache, RowsCacheKey::for_workspace(&repo, "fea"), &builds);
+        build_once(&cache, workspace_key(&repo, ""), &builds);
+        build_once(&cache, workspace_key(&repo, "fea"), &builds);
 
         assert_eq!(builds.get(), 2);
     }
 
     #[test]
-    fn the_branch_key_buckets_the_clock_so_relative_dates_refresh() {
+    fn the_branch_signature_buckets_the_clock_so_relative_dates_refresh() {
         // Aligned to a bucket boundary: the split points are fixed, so an
         // arbitrary reading can sit anywhere inside its bucket.
         let now =

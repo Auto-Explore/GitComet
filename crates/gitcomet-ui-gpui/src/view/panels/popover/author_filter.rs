@@ -157,7 +157,8 @@ pub(super) fn nav_targets(
     query: &str,
 ) -> Vec<AuthorTarget> {
     let rows = rows_for_repo(this, repo_id);
-    components::picker_prompt_layout(&rows.items, query)
+    let layout = components::picker_prompt_layout(&rows.items, query);
+    layout
         .item_indices
         .iter()
         .filter_map(|&ix| rows.targets.get(ix).cloned())
@@ -246,20 +247,23 @@ pub(super) fn panel(
         "No match — Enter filters on what you typed"
     };
 
+    // Items and layout together, so the rows rendered and the rows navigation
+    // walks are one derivation rather than two that could order differently.
+    let layout = std::rc::Rc::new(components::picker_prompt_layout(&rows.items, &query));
+    let items: std::rc::Rc<[components::PickerPromptItem]> = rows.items.into();
     let prompt = components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-        .items(rows.items)
+        .prebuilt_items(items, layout)
         .tooltip_host(this.tooltip_host.clone())
         .empty_text(empty_text)
         .max_height(scaled_px(components::PICKER_LIST_MAX_HEIGHT_PX))
         .selected_index(this.history_author_filter_selected_index)
         .marked_index(rows.marked_index)
         .accent_selection()
-        .padded_query_row()
-        // A busy repository has thousands of contributors: build only the rows
-        // on screen, so every author stays scrollable without the whole list
-        // being laid out each frame. Keyboard navigation scrolls by the row
-        // geometry to match (`scroll_picker_prompt_to_row`).
-        .windowed_rows();
+        // A busy repository has thousands of contributors, and the list windows
+        // itself past a couple of viewports: only the rows on screen are built.
+        // Keyboard navigation scrolls by the row geometry to match
+        // (`scroll_picker_prompt_to_row`).
+        .padded_query_row();
 
     components::context_menu(
         theme,

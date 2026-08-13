@@ -20,6 +20,89 @@ fn file_history_item(
     ])
 }
 
+/// Height this picker caps its row list at. Shared between the panel that
+/// renders the list and the keyboard navigation that scrolls it: the list is
+/// windowed once it outgrows a couple of viewports (200 commits do), and it is
+/// built for exactly this viewport.
+pub(super) const FILE_HISTORY_LIST_MAX_HEIGHT_PX: f32 = 340.0;
+
+/// The popover's repository and the commit its rows are about, or `None` when
+/// the popover is not the file history.
+fn file_history_repo(this: &PopoverHost) -> Option<(&RepoState, Option<CommitId>)> {
+    let Some(PopoverKind::FileHistory { repo_id, .. }) = &this.popover else {
+        return None;
+    };
+    let repo = this.state.repos.iter().find(|r| r.id == *repo_id)?;
+    // The commit the viewer currently shows this file at, so its row can be
+    // marked "you are here". `None` for the working-tree view.
+    let current_commit = match &repo.diff_state.diff_target {
+        Some(DiffTarget::Commit { commit_id, .. }) => Some(commit_id.clone()),
+        _ => None,
+    };
+    Some((repo, current_commit))
+}
+
+/// Everything the rows below read.
+fn rows_signature(this: &PopoverHost) -> u64 {
+    use std::hash::Hash;
+
+    super::rows_cache::signature(|hasher| {
+        let Some((repo, current_commit)) = file_history_repo(this) else {
+            return;
+        };
+        repo.id.hash(hasher);
+        repo.history_state.file_history_path.hash(hasher);
+        super::rows_cache::loadable_kind(&repo.history_state.file_history).hash(hasher);
+        // No revision counter on the history page, and a commit id is a content
+        // hash — so the ids are the page's identity. Hashing 200 of them costs
+        // far less than rebuilding 200 rows, which is what this decides.
+        if let Loadable::Ready(page) = &repo.history_state.file_history {
+            page.commits.len().hash(hasher);
+            for commit in &page.commits {
+                commit.id.hash(hasher);
+            }
+        }
+        // Decides which row carries the "you are here" marker.
+        current_commit.hash(hasher);
+    })
+}
+
+/// The rows for `query`, built once per change to the history page. The panel
+/// and the arrow keys both read them from here.
+pub(super) fn cached(
+    this: &PopoverHost,
+    query: &str,
+) -> std::rc::Rc<super::rows_cache::CachedRows<CommitId>> {
+    let key = super::rows_cache::RowsCacheKey::new(
+        super::rows_cache::RowsCacheOwner::FileHistory,
+        rows_signature(this),
+        query,
+    );
+    super::rows_cache::get_or_build(&this.file_history_rows_cache, key, |_now| {
+        let Some((repo, current_commit)) = file_history_repo(this) else {
+            return (Vec::new(), Vec::new(), None);
+        };
+        let Loadable::Ready(page) = &repo.history_state.file_history else {
+            return (Vec::new(), Vec::new(), None);
+        };
+        let (items, payloads) = page
+            .commits
+            .iter()
+            .map(|commit| {
+                (
+                    file_history_item(commit, current_commit.as_ref() == Some(&commit.id)),
+                    commit.id.clone(),
+                )
+            })
+            .unzip();
+        (items, payloads, None)
+    })
+}
+
+pub(super) fn nav_targets(this: &PopoverHost, query: &str) -> Vec<CommitId> {
+    cached(this, query).filtered_payloads()
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     repo_id: RepoId,
@@ -31,13 +114,9 @@ pub(super) fn panel(
     let ui_scale_percent = ui_scale.percent();
     let width = super::LARGE_PICKER_WIDTH;
     let scaled_px = |value: f32| super::popover_scaled_px_from_percent(value, ui_scale_percent);
+    // Only for the load-state arms below; the rows themselves come from the
+    // cache, which resolves the repository and the marked commit itself.
     let repo = this.state.repos.iter().find(|r| r.id == repo_id);
-    // The commit the viewer currently shows this file at, so its row can be
-    // marked "you are here". `None` for the working-tree view.
-    let current_commit = repo.and_then(|r| match &r.diff_state.diff_target {
-        Some(DiffTarget::Commit { commit_id, .. }) => Some(commit_id.clone()),
-        _ => None,
-    });
     let title: SharedString = path.display().to_string().into();
 
     let header = div()
@@ -110,24 +189,19 @@ pub(super) fn panel(
             cx,
         )
         .into_any_element(),
-        Some(Loadable::Ready(page)) => {
-            let commit_ids = page
-                .commits
-                .iter()
-                .map(|c| c.id.clone())
-                .collect::<Vec<_>>();
-            let items = page
-                .commits
-                .iter()
-                .map(|c| file_history_item(c, current_commit.as_ref() == Some(&c.id)))
-                .collect::<Vec<_>>();
-
+        Some(Loadable::Ready(_)) => {
             if let Some(search) = this.file_history_search_input.clone() {
+                let query = search.read(cx).text().trim().to_string();
+                let built = cached(this, &query);
+                let commit_ids = std::rc::Rc::clone(&built.payloads);
                 components::PickerPrompt::new(search, this.picker_prompt_scroll.clone())
-                    .items(items)
+                    .prebuilt_items(
+                        std::rc::Rc::clone(&built.items),
+                        std::rc::Rc::clone(&built.layout),
+                    )
                     .tooltip_host(this.tooltip_host.clone())
                     .empty_text("No commits")
-                    .max_height(scaled_px(340.0))
+                    .max_height(scaled_px(FILE_HISTORY_LIST_MAX_HEIGHT_PX))
                     .selected_index(this.file_history_selected_index)
                     .render(theme, ui_scale_percent, cx, move |this, ix, _e, _w, cx| {
                         let Some(commit_id) = commit_ids.get(ix).cloned() else {
