@@ -185,6 +185,63 @@ impl MainPaneView {
         })
     }
 
+    /// The box a range of one row's text occupies on screen — the inverse of
+    /// [`Self::diff_text_pos_in_hitbox`], for anchoring a menu to the run of
+    /// text it acts on.
+    ///
+    /// `range` is in the offset space that method reports. A range that wraps
+    /// reports its first visual line only: that is where it begins, and an end
+    /// x taken from a later line says nothing about how far the first one runs.
+    fn diff_text_bounds_in_hitbox(
+        &self,
+        hitbox: &DiffTextHitbox,
+        range: Range<usize>,
+    ) -> Option<Bounds<Pixels>> {
+        let local = |offset: usize| {
+            offset
+                .saturating_sub(hitbox.text_start_offset)
+                .min(hitbox.text_len)
+        };
+        let (start, end) = (local(range.start), local(range.end));
+
+        if let Some(wrapped) = &hitbox.wrapped {
+            let top_left = wrapped
+                .layout
+                .position_for_index(wrapped.painted_offset(start))?;
+            let right = wrapped
+                .layout
+                .position_for_index(wrapped.painted_offset(end))
+                .filter(|tail| tail.y <= top_left.y)
+                .map_or(hitbox.bounds.right(), |tail| tail.x);
+            return Some(Bounds::from_corners(
+                top_left,
+                point(
+                    right.max(top_left.x),
+                    top_left.y + wrapped.layout.line_height(),
+                ),
+            ));
+        }
+
+        let x_for = |offset: usize| -> Option<Pixels> {
+            let display_offset = hitbox
+                .offset_map
+                .as_ref()
+                .map(|map| map.display_offset_for_source(offset))
+                .unwrap_or(offset);
+            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+                return Some(cell_width * display_offset as f32);
+            }
+            let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
+            Some(layout.x_for_index(display_offset.min(layout.len())))
+        };
+        let left = hitbox.bounds.left() + x_for(start)?;
+        let right = hitbox.bounds.left() + x_for(end)?;
+        Some(Bounds::from_corners(
+            point(left, hitbox.bounds.top()),
+            point(right.max(left), hitbox.bounds.bottom()),
+        ))
+    }
+
     fn diff_text_pos_for_mouse(&self, position: Point<Pixels>) -> Option<DiffTextPos> {
         if self.diff_text_hitboxes.is_empty() {
             return None;
@@ -435,31 +492,45 @@ impl MainPaneView {
         if click_count > 1 || self.diff_text_has_selection() {
             return false;
         }
-        let Some(url) = self.markdown_preview_link_at(visible_ix, region, position) else {
+        let Some((url, span)) = self.markdown_preview_link_span_at(visible_ix, region, position)
+        else {
             return false;
         };
 
-        // Anchor under the row so the menu sits below the link rather than on
-        // top of the text it describes.
+        // Anchor on the link's own box, so the menu opens flush under the words
+        // it describes rather than under the row that happens to hold them.
         let anchor = self
             .diff_text_hitboxes
             .get(&(visible_ix, region))
-            .map(|hitbox| point(position.x, hitbox.bounds.bottom()))
-            .unwrap_or(position);
-        self.open_popover_at(PopoverKind::MarkdownLinkMenu { url }, anchor, window, cx);
+            .and_then(|hitbox| self.diff_text_bounds_in_hitbox(hitbox, span));
+        match anchor {
+            Some(bounds) => {
+                self.open_popover_for_bounds(PopoverKind::WebLinkMenu { url }, bounds, window, cx)
+            }
+            None => self.open_popover_at(PopoverKind::WebLinkMenu { url }, position, window, cx),
+        }
         true
     }
 
     /// Open the link menu for something that is a link in its own right — a
     /// badge or any other picture wrapped in one — rather than a span of text.
+    ///
+    /// The picture's own box is what the menu wants to hang off; the click
+    /// point stands in for the frames where it has not been painted yet.
     pub(in crate::view) fn open_markdown_preview_link_menu(
         &mut self,
         url: SharedString,
-        anchor: Point<Pixels>,
+        anchor_bounds: Option<Bounds<Pixels>>,
+        position: Point<Pixels>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
-        self.open_popover_at(PopoverKind::MarkdownLinkMenu { url }, anchor, window, cx);
+        match anchor_bounds {
+            Some(bounds) => {
+                self.open_popover_for_bounds(PopoverKind::WebLinkMenu { url }, bounds, window, cx)
+            }
+            None => self.open_popover_at(PopoverKind::WebLinkMenu { url }, position, window, cx),
+        }
     }
 
     pub(in super::super::super) fn handle_diff_text_mouse_down(

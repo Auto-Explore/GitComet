@@ -2214,6 +2214,13 @@ impl TextInput {
         })
     }
 
+    /// The box a hotspot occupies, in window coordinates, for anchoring a menu
+    /// to the run of text it acts on.
+    ///
+    /// A hotspot that wraps has its end on a later visual line, where the end x
+    /// says nothing about the run's extent and can even sit left of its start.
+    /// Those report the first visual line only, running to the right edge of the
+    /// input, so the box always describes where the hotspot begins.
     pub fn hotspot_bounds(&self, range: &Range<usize>) -> Option<Bounds<Pixels>> {
         if !self.valid_hotspot_range(range) {
             return None;
@@ -2226,6 +2233,11 @@ impl TextInput {
         };
         let start = self.hotspot_position(range.start)?;
         let end = self.hotspot_position(range.end)?;
+        let end = if end.y > start.y {
+            point(self.layout.bounds?.right(), start.y)
+        } else {
+            end
+        };
         Some(Bounds::from_corners(
             start,
             point(end.x, end.y + line_height),

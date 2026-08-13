@@ -51,7 +51,8 @@ pub(super) fn notify_fingerprint(state: &AppState, popover: &PopoverKind) -> u64
             }
         }
         PopoverKind::DiffContentModeSettings
-        | PopoverKind::MarkdownLinkMenu { .. }
+        | PopoverKind::WebLinkMenu { .. }
+        | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -129,7 +130,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::MarkdownLinkMenu { .. }
+        | PopoverKind::WebLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -172,6 +173,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
         | PopoverKind::DiscardChangesConfirm { repo_id, .. }
+        | PopoverKind::AddToGitignorePrompt { repo_id, .. }
         | PopoverKind::StageConflictMarkersConfirm { repo_id, .. }
         | PopoverKind::PullReconcilePrompt { repo_id }
         | PopoverKind::RebaseOntoConfirm { repo_id, .. }
@@ -191,7 +193,8 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::TerminalMenu { repo_id, .. }
         | PopoverKind::TagRefMenu { repo_id, .. }
         | PopoverKind::HistoryBranchFilter { repo_id }
-        | PopoverKind::HistoryAuthorFilter { repo_id } => Some(*repo_id),
+        | PopoverKind::HistoryAuthorFilter { repo_id }
+        | PopoverKind::CommitShaLinkMenu { repo_id, .. } => Some(*repo_id),
     }?;
 
     state.repos.iter().find(|r| r.id == repo_id)
@@ -355,8 +358,13 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
+        // Its contents are computed once when it opens and then owned by the
+        // text input. Re-hashing status would rebuild the dialog under the
+        // user's cursor when a refresh lands mid-edit.
+        | PopoverKind::AddToGitignorePrompt { .. }
         | PopoverKind::DiffContentModeSettings
-        | PopoverKind::MarkdownLinkMenu { .. }
+        | PopoverKind::WebLinkMenu { .. }
+        | PopoverKind::CommitShaLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::ChangeTrackingSettings
@@ -452,9 +460,19 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::ChangeTrackingSettings => 66u8.hash(hasher),
         PopoverKind::DiffContentModeSettings => 67u8.hash(hasher),
         PopoverKind::UiScalePicker => 68u8.hash(hasher),
-        PopoverKind::MarkdownLinkMenu { url } => {
+        PopoverKind::WebLinkMenu { url } => {
             96u8.hash(hasher);
             url.hash(hasher);
+        }
+        PopoverKind::CommitShaLinkMenu {
+            repo_id,
+            commit_id,
+            allow_navigate,
+        } => {
+            98u8.hash(hasher);
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
+            allow_navigate.hash(hasher);
         }
         PopoverKind::DiffActionMenu => 69u8.hash(hasher),
         PopoverKind::MergetoolSettingsMenu => 75u8.hash(hasher),
@@ -534,6 +552,16 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             path,
         } => {
             34u8.hash(hasher);
+            repo_id.hash(hasher);
+            hash_diff_area(*area, hasher);
+            path.hash(hasher);
+        }
+        PopoverKind::AddToGitignorePrompt {
+            repo_id,
+            area,
+            path,
+        } => {
+            82u8.hash(hasher);
             repo_id.hash(hasher);
             hash_diff_area(*area, hasher);
             path.hash(hasher);

@@ -5,8 +5,8 @@ const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
 type TextHighlight = (std::ops::Range<usize>, gpui::HighlightStyle);
 type TextHighlights = Vec<TextHighlight>;
-type CommitShaLinks = Arc<[components::CommitShaLink]>;
-type CommitMessageShaHighlights = (TextHighlights, CommitShaLinks);
+type MessageLinks = Arc<[components::MessageLink]>;
+type CommitMessageLinkHighlights = (TextHighlights, MessageLinks);
 
 fn merge_active(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|r| matches!(&r.merge_commit_message, Loadable::Ready(Some(_))))
@@ -124,12 +124,12 @@ fn commit_details_monospace_element(value: AnyElement) -> AnyElement {
 }
 
 /// Emphasis for the commit message's summary line (everything before the first
-/// newline), skipping stretches already claimed by SHA-link highlights so the
+/// newline), skipping stretches already claimed by link highlights so the
 /// resulting highlight set stays sorted and non-overlapping.
 fn commit_message_summary_highlights(
     message: &str,
     theme: AppTheme,
-    sha_highlights: &[TextHighlight],
+    link_highlights: &[TextHighlight],
 ) -> TextHighlights {
     let summary_end = message.find('\n').unwrap_or(message.len());
     if summary_end == 0 {
@@ -143,7 +143,7 @@ fn commit_message_summary_highlights(
 
     let mut out = Vec::new();
     let mut cursor = 0usize;
-    for (range, _) in sha_highlights
+    for (range, _) in link_highlights
         .iter()
         .filter(|(range, _)| range.start < summary_end)
     {
@@ -158,7 +158,7 @@ fn commit_message_summary_highlights(
     out
 }
 
-fn commit_sha_link_style(theme: AppTheme) -> gpui::HighlightStyle {
+fn commit_link_style(theme: AppTheme) -> gpui::HighlightStyle {
     gpui::HighlightStyle {
         color: Some(theme.colors.accent.into()),
         underline: Some(gpui::UnderlineStyle {
@@ -170,30 +170,57 @@ fn commit_sha_link_style(theme: AppTheme) -> gpui::HighlightStyle {
     }
 }
 
-fn commit_message_sha_highlights(message: &str, theme: AppTheme) -> CommitMessageShaHighlights {
-    let style = commit_sha_link_style(theme);
-    let ranges = crate::text_selection::commit_sha_ranges(message);
-    let highlights = ranges
+fn commit_message_link_highlights(message: &str, theme: AppTheme) -> CommitMessageLinkHighlights {
+    use crate::text_selection::MessageLinkKind;
+
+    let style = commit_link_style(theme);
+    let found = crate::text_selection::commit_message_link_ranges(message);
+    let highlights = found
         .iter()
-        .cloned()
-        .map(|range| (range, style))
+        .map(|link| (link.range.clone(), style))
         .collect::<Vec<_>>();
-    let links = ranges
+    let links = found
         .into_iter()
-        .map(|range| components::CommitShaLink {
-            commit_id: CommitId(message[range.clone()].to_ascii_lowercase().into()),
-            range,
+        .map(|link| {
+            let text = &message[link.range.clone()];
+            let target = match link.kind {
+                MessageLinkKind::CommitSha => components::LinkTarget::Commit {
+                    commit_id: CommitId(text.to_ascii_lowercase().into()),
+                    allow_navigate: true,
+                },
+                MessageLinkKind::Url => components::LinkTarget::Url(text.to_owned().into()),
+            };
+            components::MessageLink {
+                range: link.range,
+                target,
+            }
         })
         .collect::<Vec<_>>();
 
     (highlights, Arc::from(links))
 }
 
+/// The whole of a SHA field is one link, without scanning: the field holds
+/// nothing but the id.
+fn commit_sha_field_links(sha: &str, interactive: bool, allow_navigate: bool) -> MessageLinks {
+    if interactive {
+        Arc::from([components::MessageLink {
+            range: 0..sha.len(),
+            target: components::LinkTarget::Commit {
+                commit_id: CommitId(sha.to_string().into()),
+                allow_navigate,
+            },
+        }])
+    } else {
+        Arc::<[components::MessageLink]>::from([])
+    }
+}
+
 fn commit_sha_field_highlights(value: &str, theme: AppTheme) -> TextHighlights {
     if value.is_empty() || value == "—" {
         Vec::new()
     } else {
-        vec![(0..value.len(), commit_sha_link_style(theme))]
+        vec![(0..value.len(), commit_link_style(theme))]
     }
 }
 
@@ -783,7 +810,7 @@ impl DetailsPaneView {
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,
     ) {
-        let (mut highlights, links) = commit_message_sha_highlights(message, theme);
+        let (mut highlights, links) = commit_message_link_highlights(message, theme);
         let mut merged = commit_message_summary_highlights(message, theme, &highlights);
         merged.append(&mut highlights);
         merged.sort_by_key(|(range, _)| range.start);
@@ -793,17 +820,16 @@ impl DetailsPaneView {
             }
             input.set_highlights(merged, cx);
         });
-        self.commit_details_message_sha_menu.update(cx, |menu, cx| {
-            menu.sync(
-                self.commit_details_message_input.clone(),
-                repo_id,
-                links,
-                theme,
-                self.ui_scale(),
-                "commit_details_message_sha_hover_menu",
-                cx,
-            );
-        });
+        self.commit_details_message_link_menu
+            .update(cx, |menu, cx| {
+                menu.sync(
+                    self.commit_details_message_input.clone(),
+                    repo_id,
+                    links,
+                    "commit_details_message_link_menu",
+                    cx,
+                );
+            });
     }
 
     fn sync_commit_details_parent_input(
@@ -818,22 +844,13 @@ impl DetailsPaneView {
         self.commit_details_parent_input.update(cx, |input, cx| {
             input.set_highlights(commit_sha_field_highlights(parent, theme), cx);
         });
-        let parent_links: Arc<[components::CommitShaLink]> = if interactive {
-            Arc::from([components::CommitShaLink {
-                range: 0..parent.len(),
-                commit_id: CommitId(parent.to_string().into()),
-            }])
-        } else {
-            Arc::<[components::CommitShaLink]>::from([])
-        };
-        self.commit_details_parent_sha_menu.update(cx, |menu, cx| {
+        let parent_links = commit_sha_field_links(parent, interactive, true);
+        self.commit_details_parent_link_menu.update(cx, |menu, cx| {
             menu.sync(
                 self.commit_details_parent_input.clone(),
                 repo_id,
                 parent_links,
-                theme,
-                self.ui_scale(),
-                "commit_details_parent_sha_hover_menu",
+                "commit_details_parent_link_menu",
                 cx,
             );
         });
@@ -851,22 +868,14 @@ impl DetailsPaneView {
         self.commit_details_sha_input.update(cx, |input, cx| {
             input.set_highlights(commit_sha_field_highlights(sha, theme), cx);
         });
-        let sha_links: Arc<[components::CommitShaLink]> = if interactive {
-            Arc::from([components::CommitShaLink {
-                range: 0..sha.len(),
-                commit_id: CommitId(sha.to_string().into()),
-            }])
-        } else {
-            Arc::<[components::CommitShaLink]>::from([])
-        };
-        self.commit_details_sha_menu.update(cx, |menu, cx| {
+        // A commit's own SHA has nowhere to navigate to.
+        let sha_links = commit_sha_field_links(sha, interactive, false);
+        self.commit_details_sha_link_menu.update(cx, |menu, cx| {
             menu.sync(
                 self.commit_details_sha_input.clone(),
                 repo_id,
                 sha_links,
-                theme,
-                self.ui_scale(),
-                "commit_details_sha_hover_menu",
+                "commit_details_sha_link_menu",
                 cx,
             );
         });
@@ -884,17 +893,16 @@ impl DetailsPaneView {
             }
             input.set_highlights(commit_message_summary_highlights(message, theme, &[]), cx);
         });
-        self.commit_details_message_sha_menu.update(cx, |menu, cx| {
-            menu.sync(
-                self.commit_details_message_input.clone(),
-                RepoId(0),
-                Arc::<[components::CommitShaLink]>::from([]),
-                self.theme,
-                self.ui_scale(),
-                "commit_details_message_sha_hover_menu",
-                cx,
-            );
-        });
+        self.commit_details_message_link_menu
+            .update(cx, |menu, cx| {
+                menu.sync(
+                    self.commit_details_message_input.clone(),
+                    RepoId(0),
+                    Arc::<[components::MessageLink]>::from([]),
+                    "commit_details_message_link_menu",
+                    cx,
+                );
+            });
     }
 
     /// Selected commits resolved against the loaded log page, in log order
@@ -1410,7 +1418,7 @@ impl DetailsPaneView {
         )
         .container_id(("commit_details_message_container", repo_id.0))
         .debug_selector("commit_details_message_scroll_surface")
-        .render(theme, self.commit_details_message_sha_menu.clone())
+        .render(theme, self.commit_details_message_link_menu.clone())
     }
 
     pub(in super::super) fn commit_details_view(
@@ -1717,7 +1725,9 @@ impl DetailsPaneView {
                                         theme,
                                         "Commit SHA",
                                         commit_details_monospace_element(
-                                            self.commit_details_sha_menu.clone().into_any_element(),
+                                            self.commit_details_sha_link_menu
+                                                .clone()
+                                                .into_any_element(),
                                         ),
                                     ))
                                     .child(commit_details_selectable_row(
@@ -1731,7 +1741,7 @@ impl DetailsPaneView {
                                         theme,
                                         "Parent commit SHA",
                                         commit_details_monospace_element(
-                                            self.commit_details_parent_sha_menu
+                                            self.commit_details_parent_link_menu
                                                 .clone()
                                                 .into_any_element(),
                                         ),

@@ -2,6 +2,7 @@ use super::*;
 use gitcomet_core::services::InteractiveRebaseAction;
 
 mod add_repo_menu;
+mod add_to_gitignore_prompt;
 mod app_menu;
 mod author_filter;
 mod branch_picker;
@@ -196,6 +197,12 @@ pub(in super::super) struct PopoverHost {
     /// Focus held by the App/Add Repository menu invoker, restored when that
     /// menu is dismissed without replacing it with another prompt.
     menu_invoker_focus: Option<FocusHandle>,
+    /// Whether the open popover was invoked from inside the diff panel.
+    ///
+    /// Some menus — the web link menu above all — can be raised from either the
+    /// diff panel or the commit details pane, and only the former should hand
+    /// focus back to the diff panel when it closes.
+    popover_opened_from_diff_panel: bool,
     prompt_tab_group_focus_handle: FocusHandle,
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
@@ -243,6 +250,19 @@ pub(in super::super) struct PopoverHost {
     create_tag_input: Entity<components::TextInput>,
     create_tag_message_input: Entity<components::TextInput>,
     create_tag_message_scroll: ScrollHandle,
+    /// One `.gitignore` line per row. Multiline so a multi-file selection and a
+    /// single file share one code path, and so the field reads like the file it
+    /// is about to become.
+    gitignore_patterns_input: Entity<components::TextInput>,
+    gitignore_patterns_scroll: ScrollHandle,
+    /// Which scope's patterns the input was last prefilled with. Only a prefill
+    /// shortcut — submit reads the input, never this.
+    gitignore_scope: gitcomet_core::gitignore::GitignoreScope,
+    /// Computed once when the dialog opens, so a status refresh arriving
+    /// mid-edit cannot change the offered scopes under the user.
+    gitignore_suggestions: Option<gitcomet_core::gitignore::GitignoreSuggestions>,
+    /// The paths the dialog is about, for the "Ignore <file>" body text.
+    gitignore_paths: Vec<std::path::PathBuf>,
     squash_message_input: Entity<components::TextInput>,
     squash_description_input: Entity<components::TextInput>,
     squash_description_scroll: ScrollHandle,
@@ -407,7 +427,8 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::CommitOptionsMenu { .. }
             | PopoverKind::PreviousCommitMessagesMenu { .. }
             | PopoverKind::RepoTabMenu { .. }
-            | PopoverKind::MarkdownLinkMenu { .. }
+            | PopoverKind::WebLinkMenu { .. }
+            | PopoverKind::CommitShaLinkMenu { .. }
             | PopoverKind::DiffActionMenu
             | PopoverKind::InteractiveRebaseActionMenu { .. }
             | PopoverKind::InteractiveRebaseAutosquashMenu
@@ -464,6 +485,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
+            | PopoverKind::AddToGitignorePrompt { .. }
             | PopoverKind::StageConflictMarkersConfirm { .. }
             | PopoverKind::ResetPrompt { .. }
             | PopoverKind::PullReconcilePrompt { .. }
@@ -678,6 +700,12 @@ pub(super) fn input_label(theme: AppTheme, label: &'static str) -> gpui::Div {
         .child(label)
 }
 
+/// Which corner of the popover is placed on its anchor.
+///
+/// Most menus hang off a button on the right of their row, so they open
+/// leftwards. The link menus are the exception: their anchor is the box of a
+/// span of text, and a menu that reads as belonging to that span has to start
+/// where the span starts.
 fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
     match kind {
         PopoverKind::PullPicker
@@ -732,7 +760,6 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         | PopoverKind::CommitOptionsMenu { .. }
         | PopoverKind::PreviousCommitMessagesMenu { .. }
         | PopoverKind::RepoTabMenu { .. }
-        | PopoverKind::MarkdownLinkMenu { .. }
         | PopoverKind::DiffActionMenu
         | PopoverKind::MergetoolSettingsMenu
         | PopoverKind::HistoryBranchFilter { .. }
@@ -790,7 +817,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CherryPickCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
-        PopoverKind::PullReconcilePrompt { .. } => Some(DIALOG_440_WIDTH),
+        PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {
+            Some(DIALOG_440_WIDTH)
+        }
         PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Remote(
@@ -837,9 +866,12 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
             Some(DIALOG_440_WIDTH)
         }
         PopoverKind::TerminalMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
-        PopoverKind::MarkdownLinkMenu { .. } | PopoverKind::DiffActionMenu => {
+        PopoverKind::WebLinkMenu { .. } | PopoverKind::DiffActionMenu => {
             Some(DIFF_ACTION_MENU_WIDTH)
         }
+        // Shares "Browse repository at this point" with the commit menu, and so
+        // needs the same extra room.
+        PopoverKind::CommitShaLinkMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
         // "Browse repository at this point" needs more room than the default
         // context-menu width.
         PopoverKind::CommitMenu { .. } => Some(PopoverWidthSpec::range(300.0, 220.0, 400.0)),
@@ -1126,6 +1158,23 @@ impl PopoverHost {
                 cx,
             );
             input.set_vertical_scroll_handle(Some(create_tag_message_scroll.clone()));
+            input
+        });
+
+        let gitignore_patterns_scroll = ScrollHandle::new();
+        let gitignore_patterns_input = cx.new(|cx| {
+            let mut input = components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "/path/to/file".into(),
+                    multiline: true,
+                    soft_wrap: true,
+                    min_lines: 3,
+                    ..Default::default()
+                },
+                window,
+                cx,
+            );
+            input.set_vertical_scroll_handle(Some(gitignore_patterns_scroll.clone()));
             input
         });
 
@@ -1595,6 +1644,7 @@ impl PopoverHost {
             cherry_pick_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
+            popover_opened_from_diff_panel: false,
             prompt_tab_group_focus_handle,
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
@@ -1627,6 +1677,11 @@ impl PopoverHost {
             create_tag_input,
             create_tag_message_input,
             create_tag_message_scroll,
+            gitignore_patterns_input,
+            gitignore_patterns_scroll,
+            gitignore_scope: gitcomet_core::gitignore::GitignoreScope::File,
+            gitignore_suggestions: None,
+            gitignore_paths: Vec::new(),
             squash_message_input,
             squash_description_input,
             squash_description_scroll,
@@ -1691,6 +1746,7 @@ impl PopoverHost {
             &self.rebase_onto_input,
             &self.create_tag_input,
             &self.create_tag_message_input,
+            &self.gitignore_patterns_input,
             &self.squash_message_input,
             &self.squash_description_input,
             &self.remote_name_input,
@@ -1746,6 +1802,20 @@ impl PopoverHost {
     #[cfg(test)]
     pub(in super::super) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
+    }
+
+    #[cfg(test)]
+    pub(in super::super) fn popover_opened_from_diff_panel_for_tests(&self) -> bool {
+        self.popover_opened_from_diff_panel
+    }
+
+    /// The box the open popover hangs off, when it was anchored to one.
+    #[cfg(test)]
+    pub(in super::super) fn popover_anchor_bounds_for_tests(&self) -> Option<Bounds<Pixels>> {
+        match self.popover_anchor {
+            Some(PopoverAnchor::Bounds(bounds)) => Some(bounds),
+            _ => None,
+        }
     }
 
     #[cfg(test)]
@@ -1906,13 +1976,15 @@ impl PopoverHost {
             Some(
                 PopoverKind::ChangeTrackingSettings
                     | PopoverKind::DiffContentModeSettings
-                    | PopoverKind::MarkdownLinkMenu { .. }
+                    | PopoverKind::WebLinkMenu { .. }
                     | PopoverKind::DiffActionMenu
                     | PopoverKind::MergetoolSettingsMenu
                     | PopoverKind::DiffHunkMenu { .. }
                     | PopoverKind::DiffEditorMenu { .. }
-            )
-        );
+            ) // A web link menu can also be opened from a commit message in the
+              // details pane, and handing that click's focus to the diff panel would
+              // move the keyboard somewhere the user never was.
+        ) && self.popover_opened_from_diff_panel;
         self.close_popover(cx);
         if restore_diff_panel_focus {
             let focus = self.main_pane.read(cx).diff_panel_focus_handle.clone();
@@ -2884,6 +2956,13 @@ impl PopoverHost {
             } else {
                 None
             };
+        // The diff panel takes focus on any left press inside it, so its focus
+        // state at open time is a faithful record of where the click landed.
+        self.popover_opened_from_diff_panel = self
+            .main_pane
+            .read(cx)
+            .diff_panel_focus_handle
+            .is_focused(window);
         let is_context_menu = popover_is_context_menu(&kind);
         let keep_active_invoker = is_context_menu
             || matches!(
@@ -3331,6 +3410,17 @@ impl PopoverHost {
                     // Focus the primary (Rebase) button so Enter confirms and
                     // Tab/Esc still reach Cancel.
                     window.focus(&self.rebase_onto_submit_focus_handle, cx);
+                }
+                // Must sit above the generic confirm-dialog arm below, which
+                // would otherwise swallow it and park focus on the tab group
+                // instead of the pattern field.
+                PopoverKind::AddToGitignorePrompt {
+                    repo_id,
+                    area,
+                    path,
+                } => {
+                    let (repo_id, area, path) = (*repo_id, *area, path.clone());
+                    self.prepare_add_to_gitignore(repo_id, area, &path, window, cx);
                 }
                 k if popover_is_confirm_dialog(k) => {
                     window.focus(&self.prompt_tab_group_focus_handle, cx);
@@ -3835,6 +3925,11 @@ impl PopoverHost {
                 area,
                 path,
             } => discard_changes_confirm::panel(self, repo_id, area, path.clone(), cx),
+            PopoverKind::AddToGitignorePrompt {
+                repo_id,
+                area,
+                path,
+            } => add_to_gitignore_prompt::panel(self, repo_id, area, path.clone(), cx),
             PopoverKind::StageConflictMarkersConfirm {
                 repo_id,
                 paths,
@@ -3852,9 +3947,21 @@ impl PopoverHost {
                 pull_reconcile_prompt::panel(self, repo_id, cx)
             }
             PopoverKind::DiffActionMenu => self.context_menu_view(PopoverKind::DiffActionMenu, cx),
-            PopoverKind::MarkdownLinkMenu { url } => {
-                self.context_menu_view(PopoverKind::MarkdownLinkMenu { url }, cx)
+            PopoverKind::WebLinkMenu { url } => {
+                self.context_menu_view(PopoverKind::WebLinkMenu { url }, cx)
             }
+            PopoverKind::CommitShaLinkMenu {
+                repo_id,
+                commit_id,
+                allow_navigate,
+            } => self.context_menu_view(
+                PopoverKind::CommitShaLinkMenu {
+                    repo_id,
+                    commit_id,
+                    allow_navigate,
+                },
+                cx,
+            ),
             PopoverKind::MergetoolSettingsMenu => {
                 self.context_menu_view(PopoverKind::MergetoolSettingsMenu, cx)
             }

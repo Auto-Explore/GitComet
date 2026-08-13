@@ -618,6 +618,15 @@ impl DiffTextWrappedHit {
             None => painted_offset,
         }
     }
+
+    /// Offset in the painted text for an offset in row coordinates — the
+    /// inverse of [`Self::row_offset`].
+    pub(super) fn painted_offset(&self, row_offset: usize) -> usize {
+        match &self.untabbed {
+            Some(raw) => crate::view::rows::markdown_flow_painted_offset(raw, row_offset),
+            None => row_offset,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -4379,6 +4388,17 @@ pub(super) enum PopoverKind {
         area: DiffArea,
         path: Option<std::path::PathBuf>,
     },
+    /// Add the clicked status path — or its folder, or its extension — to the
+    /// repo-root `.gitignore`.
+    ///
+    /// `path` is the clicked row only. The multi-selection it may stand for is
+    /// re-derived when the dialog opens and consumed only on submit, so
+    /// cancelling leaves the selection intact.
+    AddToGitignorePrompt {
+        repo_id: RepoId,
+        area: DiffArea,
+        path: std::path::PathBuf,
+    },
     /// Staging would mark files resolved that still contain conflict markers.
     /// `paths` is the stage request as issued (empty means everything);
     /// `unresolved` is what the user is being warned about.
@@ -4420,9 +4440,17 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         src_ix: usize,
     },
-    /// Actions for a web link clicked in the rendered markdown preview.
-    MarkdownLinkMenu {
+    /// Actions for a web link clicked in the rendered markdown preview or in a
+    /// commit message.
+    WebLinkMenu {
         url: SharedString,
+    },
+    /// Actions for a commit id clicked in a commit message or a SHA field.
+    CommitShaLinkMenu {
+        repo_id: RepoId,
+        commit_id: CommitId,
+        /// A commit's own SHA field cannot navigate to itself.
+        allow_navigate: bool,
     },
     DiffEditorMenu {
         repo_id: RepoId,

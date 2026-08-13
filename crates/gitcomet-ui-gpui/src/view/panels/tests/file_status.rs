@@ -1568,25 +1568,256 @@ fn commit_details_metadata_fields_are_selectable(cx: &mut gpui::TestAppContext) 
     });
 }
 
-fn show_commit_sha_hover_menu(
+/// Click inside a commit-details text input and report which menu, if any, the
+/// popover host opened for it.
+fn click_commit_details_link(
     cx: &mut gpui::VisualTestContext,
-    hover_point: gpui::Point<Pixels>,
-    menu_selector: &'static str,
-) -> gpui::Bounds<Pixels> {
-    cx.simulate_mouse_move(hover_point, None, Modifiers::default());
+    view: &gpui::Entity<crate::view::GitCometView>,
+    click: gpui::Point<Pixels>,
+    click_count: usize,
+) -> Option<PopoverKind> {
+    simulate_counted_click(cx, click, click_count);
     cx.run_until_parked();
-    cx.executor()
-        .advance_clock(std::time::Duration::from_millis(301));
-    cx.run_until_parked();
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx);
+        });
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    })
+}
+
+/// The first point inside the commit message, which every fixture below puts a
+/// link at.
+fn commit_details_message_link_point(cx: &mut gpui::VisualTestContext) -> gpui::Point<Pixels> {
+    let bounds = cx
+        .debug_bounds("commit_details_message_scroll_surface")
+        .expect("expected commit details message bounds");
+    point(bounds.left() + px(4.0), bounds.top() + px(8.0))
+}
+
+/// Show a single commit whose message is `message`, so its links can be clicked.
+fn show_commit_details_message(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<crate::view::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &str,
+    message: &str,
+) {
+    let current_sha = "0123456789abcdef0123456789abcdef01234567";
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, Path::new(workdir));
+            repo.open = Loadable::Ready(());
+            repo.head_branch = Loadable::Ready("main".into());
+            repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+            repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                commits: vec![gitcomet_core::domain::Commit {
+                    id: gitcomet_core::domain::CommitId(current_sha.into()),
+                    parent_ids: gitcomet_core::domain::CommitParentIds::new(),
+                    summary: "current".into(),
+                    author: "Alice".into(),
+                    time: std::time::SystemTime::UNIX_EPOCH,
+                }],
+                next_cursor: None,
+            }));
+            repo.log_rev = 1;
+            repo.history_state.selected_commit =
+                Some(gitcomet_core::domain::CommitId(current_sha.into()));
+            repo.history_state.commit_details =
+                Loadable::Ready(Arc::new(gitcomet_core::domain::CommitDetails {
+                    id: gitcomet_core::domain::CommitId(current_sha.into()),
+                    message: message.to_string(),
+                    author_name: String::new(),
+                    author_email: String::new(),
+                    authored_at_unix: 0,
+                    committed_at: "2026-03-08 12:34:56 +0200".into(),
+                    committed_at_unix: 0,
+                    parent_ids: vec![],
+                    files: vec![],
+                }));
+
+            let next_state = app_state_with_repo(repo, repo_id);
+            this.store
+                .replace_snapshot_for_test(Arc::clone(&next_state));
+            push_test_state(this, next_state, cx);
+        });
+    });
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    cx.debug_bounds(menu_selector)
-        .unwrap_or_else(|| panic!("expected hover menu `{menu_selector}`"))
 }
 
 #[gpui::test]
-fn commit_details_message_sha_hover_menu_navigate_reveals_referenced_commit(
+fn commit_details_message_url_click_opens_the_web_link_menu(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    show_commit_details_message(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(41),
+        "/tmp/repo-commit-message-url",
+        "https://example.com/issues/42 is fixed",
+    );
+
+    let link = commit_details_message_link_point(cx);
+    let popover = click_commit_details_link(cx, &view, link, 1);
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::WebLinkMenu { ref url })
+                if url.as_ref() == "https://example.com/issues/42"
+        ),
+        "clicking a URL should open the same menu the markdown preview shows, got {popover:?}"
+    );
+
+    // The same menu the markdown preview offers, entry for entry.
+    assert!(
+        cx.debug_bounds("context_menu_open_in_web_browser")
+            .is_some(),
+        "expected an entry that opens the link"
+    );
+    assert!(
+        cx.debug_bounds("context_menu_copy_link_address").is_some(),
+        "expected an entry that copies the address"
+    );
+
+    // Reached from the details pane, so closing it must not hand the keyboard
+    // to the diff panel the way a preview link does.
+    cx.update(|_window, app| {
+        assert!(
+            !view
+                .read(app)
+                .popover_host
+                .read(app)
+                .popover_opened_from_diff_panel_for_tests(),
+            "a commit message is not a diff-panel invoker"
+        );
+    });
+
+    // The menu hangs off the link's own box, not off the row or the panel, so
+    // it opens flush under the words it describes.
+    cx.update(|_window, app| {
+        let anchor = view
+            .read(app)
+            .popover_host
+            .read(app)
+            .popover_anchor_bounds_for_tests()
+            .expect("a link menu anchors on the link's box");
+        let details_pane = view.read(app).details_pane.clone();
+        let expected = details_pane
+            .read(app)
+            .commit_details_message_input
+            .read(app)
+            .hotspot_bounds(&(0.."https://example.com/issues/42".len()))
+            .expect("expected bounds for the link");
+        assert_eq!(anchor, expected);
+        assert!(anchor.contains(&link), "the click landed inside that box");
+    });
+}
+
+#[gpui::test]
+fn commit_details_message_mailto_click_opens_the_web_link_menu(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    show_commit_details_message(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(42),
+        "/tmp/repo-commit-message-mailto",
+        "mailto:maintainer@example.com reported this",
+    );
+
+    let link = commit_details_message_link_point(cx);
+    let popover = click_commit_details_link(cx, &view, link, 1);
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::WebLinkMenu { ref url })
+                if url.as_ref() == "mailto:maintainer@example.com"
+        ),
+        "clicking a mailto link should open the link menu, got {popover:?}"
+    );
+}
+
+/// The message that motivated the stricter commit-id rules, end to end: build
+/// ids, a Gerrit change id and URL path segments all used to linkify as commits.
+#[gpui::test]
+fn commit_details_message_trailers_do_not_linkify_as_commits(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    show_commit_details_message(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(43),
+        "/tmp/repo-commit-message-trailers",
+        concat!(
+            "Cr-Original-Build-Id: 8674534147806418049\n",
+            "Change-Id: I7a5d480873e839444e4e188ffa87f9c635e2fb81\n",
+        ),
+    );
+
+    let link = commit_details_message_link_point(cx);
+    let popover = click_commit_details_link(cx, &view, link, 1);
+    assert!(
+        popover.is_none(),
+        "a build id is not a commit id, so clicking it should open nothing, got {popover:?}"
+    );
+}
+
+/// A Chromium PGO roll: two build artifacts whose names are built out of two
+/// full-length hashes each. Every one of them used to linkify.
+#[gpui::test]
+fn commit_details_message_filename_hashes_do_not_linkify_as_commits(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    show_commit_details_message(
+        cx,
+        &view,
+        gitcomet_state::model::RepoId(44),
+        "/tmp/repo-commit-message-profdata",
+        concat!(
+            "Roll Chrome Mac PGO profile from ",
+            "chrome-mac-7922-1785736271-37240ae8aae5f01fc00cbf0b7ea19b73826e0dba",
+            "-d9e99b2bafcc6df3c2a5bf803fcb5483d33dbdd0.profdata to ",
+            "chrome-mac-7922-1785755104-c2eee60da6765f60eca833b7c5c0d85ddcbc2940",
+            "-551a1e94b700524e479bd2d64ccaf8cdb71d43a6.profdata",
+        ),
+    );
+
+    cx.update(|_window, app| {
+        let details_pane = view.read(app).details_pane.clone();
+        let links = details_pane
+            .read(app)
+            .commit_details_message_link_menu
+            .read(app)
+            .links_for_tests();
+        assert!(
+            links.is_empty(),
+            "hashes joined into a filename are not commit ids, got {links:?}"
+        );
+    });
+}
+
+#[gpui::test]
+fn commit_details_message_sha_click_menu_navigate_reveals_referenced_commit(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -1651,22 +1882,24 @@ fn commit_details_message_sha_hover_menu_navigate_reveals_referenced_commit(
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    let bounds = cx
-        .debug_bounds("commit_details_message_scroll_surface")
-        .expect("expected commit details message bounds");
-    let hover = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
-    let menu_bounds =
-        show_commit_sha_hover_menu(cx, hover, "commit_details_message_sha_hover_menu_menu");
-    cx.simulate_mouse_move(menu_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
+    let link = commit_details_message_link_point(cx);
+    let popover = click_commit_details_link(cx, &view, link, 1);
     assert!(
-        cx.debug_bounds("commit_details_message_sha_hover_menu_menu")
-            .is_some(),
-        "expected hover menu to remain visible while moving into it"
+        matches!(
+            popover,
+            Some(PopoverKind::CommitShaLinkMenu {
+                ref commit_id,
+                allow_navigate: true,
+                ..
+            }) if commit_id.as_ref() == target_sha
+        ),
+        // The message spells the SHA in upper case; the link resolves to the
+        // lower-case id the repository uses.
+        "clicking a commit id should open its menu, got {popover:?}"
     );
 
     let navigate_bounds = cx
-        .debug_bounds("commit_details_message_sha_hover_menu_navigate")
+        .debug_bounds("context_menu_navigate")
         .expect("expected navigate entry");
     simulate_counted_click(cx, navigate_bounds.center(), 1);
     cx.run_until_parked();
@@ -1690,10 +1923,10 @@ fn commit_details_message_sha_hover_menu_navigate_reveals_referenced_commit(
     });
 }
 
+/// Only the link opens a menu. Clicking the prose beside it must leave the
+/// popover host alone, otherwise every caret placement would raise a menu.
 #[gpui::test]
-fn commit_details_message_sha_hover_menu_closes_after_leaving_trigger_and_menu(
-    cx: &mut gpui::TestAppContext,
-) {
+fn commit_details_message_click_beside_a_sha_opens_no_menu(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -1756,42 +1989,27 @@ fn commit_details_message_sha_hover_menu_closes_after_leaving_trigger_and_menu(
     let bounds = cx
         .debug_bounds("commit_details_message_scroll_surface")
         .expect("expected commit details message bounds");
-    let hover = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
-    let menu_bounds =
-        show_commit_sha_hover_menu(cx, hover, "commit_details_message_sha_hover_menu_menu");
-    cx.simulate_mouse_move(menu_bounds.center(), None, Modifiers::default());
-    cx.run_until_parked();
+    // The SHA occupies the head of the line; " fixes the regression" follows it.
+    let link = commit_details_message_link_point(cx);
+    let beside_link = point(link.x + px(320.0), link.y);
     assert!(
-        cx.debug_bounds("commit_details_message_sha_hover_menu_menu")
-            .is_some(),
-        "expected hover menu to remain visible while on the menu"
-    );
-    cx.simulate_mouse_move(
-        point(bounds.right() + px(40.0), bounds.bottom() + px(40.0)),
-        None,
-        Modifiers::default(),
-    );
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
-    assert!(
-        cx.debug_bounds("commit_details_message_sha_hover_menu_menu")
-            .is_some(),
-        "expected hover menu to remain visible during the close delay"
+        beside_link.x < bounds.right(),
+        "the point past the SHA has to stay inside the message"
     );
 
-    cx.executor()
-        .advance_clock(std::time::Duration::from_millis(201));
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
-
+    let popover = click_commit_details_link(cx, &view, beside_link, 1);
     assert!(
-        cx.debug_bounds("commit_details_message_sha_hover_menu_menu")
-            .is_none(),
-        "expected hover menu to close after leaving both trigger and menu"
+        popover.is_none(),
+        "clicking plain message text should open no menu, got {popover:?}"
+    );
+
+    // …and the link itself still does, so the point above was not simply outside
+    // the input.
+    let popover = click_commit_details_link(cx, &view, link, 1);
+    assert!(
+        matches!(popover, Some(PopoverKind::CommitShaLinkMenu { ref commit_id, .. })
+            if commit_id.as_ref() == target_sha),
+        "clicking the commit id should open its menu, got {popover:?}"
     );
 }
 
@@ -1896,15 +2114,22 @@ fn commit_details_message_sha_retained_details_are_inert_after_selection_changes
         let expected = gitcomet_core::domain::CommitId(selected_sha.into());
         assert_eq!(selected, Some(&expected));
     });
+    let popover = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    });
     assert!(
-        cx.debug_bounds("commit_details_message_sha_hover_menu_menu")
-            .is_none(),
-        "expected retained details to stay inert"
+        popover.is_none(),
+        "expected retained details to stay inert, got {popover:?}"
     );
 }
 
+/// Opening the menu is not the same as acting on it: the click itself must not
+/// move the history, only offer to.
 #[gpui::test]
-fn commit_details_message_sha_left_click_only_places_caret_without_revealing(
+fn commit_details_message_sha_click_opens_the_menu_without_navigating(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -1960,19 +2185,13 @@ fn commit_details_message_sha_left_click_only_places_caret_without_revealing(
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    let bounds = cx
-        .debug_bounds("commit_details_message_scroll_surface")
-        .expect("expected commit details message bounds");
-    let click = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
-
-    simulate_counted_click(cx, click, 1);
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        view.update(app, |this, cx| {
-            crate::view::test_support::sync_store_snapshot(this, cx);
-        });
-        let _ = window.draw(app);
-    });
+    let click = commit_details_message_link_point(cx);
+    let popover = click_commit_details_link(cx, &view, click, 1);
+    assert!(
+        matches!(popover, Some(PopoverKind::CommitShaLinkMenu { ref commit_id, .. })
+            if commit_id.as_ref() == target_sha),
+        "expected the commit link menu, got {popover:?}"
+    );
 
     cx.update(|_window, app| {
         let pane = view.read(app).details_pane.read(app);
@@ -1992,8 +2211,10 @@ fn commit_details_message_sha_left_click_only_places_caret_without_revealing(
     });
 }
 
+/// Selecting the words of a link has to keep working, so only a plain click
+/// follows it — a double click is a word selection like anywhere else.
 #[gpui::test]
-fn commit_details_message_sha_keeps_hover_menu_open_while_link_is_focused(
+fn commit_details_message_sha_double_click_selects_instead_of_opening_the_menu(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -2049,39 +2270,28 @@ fn commit_details_message_sha_keeps_hover_menu_open_while_link_is_focused(
     cx.update(|window, app| {
         let _ = window.draw(app);
     });
-    let bounds = cx
-        .debug_bounds("commit_details_message_scroll_surface")
-        .expect("expected commit details message bounds");
-    let click = point(bounds.left() + px(4.0), bounds.top() + px(8.0));
-
-    show_commit_sha_hover_menu(cx, click, "commit_details_message_sha_hover_menu_menu");
-    simulate_counted_click(cx, click, 1);
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        view.update(app, |this, cx| {
-            crate::view::test_support::sync_store_snapshot(this, cx);
-        });
-        let _ = window.draw(app);
-    });
-    cx.simulate_mouse_move(
-        point(bounds.right() + px(40.0), bounds.bottom() + px(40.0)),
-        None,
-        Modifiers::default(),
-    );
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
-
+    let click = commit_details_message_link_point(cx);
+    let popover = click_commit_details_link(cx, &view, click, 2);
     assert!(
-        cx.debug_bounds("commit_details_message_sha_hover_menu_menu")
-            .is_some(),
-        "expected menu to stay open while the link caret remains focused"
+        popover.is_none(),
+        "a double click on a link should select its text, not open a menu, got {popover:?}"
     );
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        assert_eq!(
+            pane.commit_details_message_input
+                .read(app)
+                .selected_text()
+                .as_deref(),
+            Some(target_sha),
+            "the double click should have selected the whole commit id"
+        );
+    });
 }
 
 #[gpui::test]
-fn commit_details_parent_sha_hover_menu_navigate_reveals_referenced_commit(
+fn commit_details_parent_sha_click_menu_navigate_reveals_referenced_commit(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -2145,15 +2355,28 @@ fn commit_details_parent_sha_hover_menu_navigate_reveals_referenced_commit(
         let _ = window.draw(app);
     });
     let parent_bounds = cx
-        .debug_bounds("commit_details_parent_sha_hover_menu")
-        .expect("expected parent sha hover target");
-    show_commit_sha_hover_menu(
+        .debug_bounds("commit_details_parent_link_menu")
+        .expect("expected parent sha link target");
+    let popover = click_commit_details_link(
         cx,
+        &view,
         point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        "commit_details_parent_sha_hover_menu_menu",
+        1,
     );
+    assert!(
+        matches!(
+            popover,
+            Some(PopoverKind::CommitShaLinkMenu {
+                ref commit_id,
+                allow_navigate: true,
+                ..
+            }) if commit_id.as_ref() == parent_sha
+        ),
+        "clicking the parent id should open its menu, got {popover:?}"
+    );
+
     let navigate_bounds = cx
-        .debug_bounds("commit_details_parent_sha_hover_menu_navigate")
+        .debug_bounds("context_menu_navigate")
         .expect("expected parent navigate entry");
     simulate_counted_click(cx, navigate_bounds.center(), 1);
     cx.run_until_parked();
@@ -2178,7 +2401,7 @@ fn commit_details_parent_sha_hover_menu_navigate_reveals_referenced_commit(
 }
 
 #[gpui::test]
-fn commit_details_parent_sha_dash_has_no_hover_menu(cx: &mut gpui::TestAppContext) {
+fn commit_details_parent_sha_dash_has_no_link_menu(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
         super::super::GitCometView::new(store, events, None, window, cx)
@@ -2230,25 +2453,18 @@ fn commit_details_parent_sha_dash_has_no_hover_menu(cx: &mut gpui::TestAppContex
         let _ = window.draw(app);
     });
     let parent_bounds = cx
-        .debug_bounds("commit_details_parent_sha_hover_menu")
-        .expect("expected parent sha hover target");
-    cx.simulate_mouse_move(
+        .debug_bounds("commit_details_parent_link_menu")
+        .expect("expected parent sha link target");
+    let popover = click_commit_details_link(
+        cx,
+        &view,
         point(parent_bounds.left() + px(4.0), parent_bounds.center().y),
-        None,
-        Modifiers::default(),
+        1,
     );
-    cx.run_until_parked();
-    cx.executor()
-        .advance_clock(std::time::Duration::from_millis(301));
-    cx.run_until_parked();
-    cx.update(|window, app| {
-        let _ = window.draw(app);
-    });
 
     assert!(
-        cx.debug_bounds("commit_details_parent_sha_hover_menu_menu")
-            .is_none(),
-        "expected placeholder parent value to stay non-interactive"
+        popover.is_none(),
+        "expected placeholder parent value to stay non-interactive, got {popover:?}"
     );
 }
 

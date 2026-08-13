@@ -602,14 +602,25 @@ pub(super) fn log_loaded(
         // Reconcile the commit multi-selection against the reloaded page: drop
         // ids that no longer exist, and drop the anchor index hint since row
         // indices may have shifted.
-        if !repo_state.history_state.multi_selection.commits.is_empty()
+        //
+        // Only a *replaced* page can say an id no longer exists. A "load more"
+        // appends, so an id missing from the grown page was equally missing
+        // before, and dropping it there would fight every reveal that is still
+        // paging toward its target — one clear per batch, which the details pane
+        // shows as a flicker between the commit and the working tree.
+        if !is_load_more
+            && !repo_state.history_state.multi_selection.commits.is_empty()
             && let Loadable::Ready(page) = &repo_state.log
         {
+            let reveal_target = repo_state.history_state.reveal_target.clone();
+            let survives = |id: &gitcomet_core::domain::CommitId| {
+                reveal_target.as_ref() == Some(id) || page.commits.iter().any(|c| c.id == *id)
+            };
+
             let mut next = repo_state.history_state.multi_selection.clone();
-            next.commits
-                .retain(|id| page.commits.iter().any(|c| c.id == *id));
+            next.commits.retain(&survives);
             if let Some(anchor) = &next.anchor
-                && !page.commits.iter().any(|c| c.id == *anchor)
+                && !survives(anchor)
             {
                 next.anchor = None;
             }
@@ -620,11 +631,15 @@ pub(super) fn log_loaded(
             // have vanished — an external amend/rebase can replace exactly the
             // focused commit. Re-point focus at a surviving selected commit so
             // the details pane never trails a commit that no longer exists.
+            //
+            // A reveal's target is exempt: it is deliberately selected ahead of
+            // the page that will contain it, and a scope switch mid-reveal
+            // restarts the log from its first page.
             let focus_gone = repo_state
                 .history_state
                 .selected_commit
                 .as_ref()
-                .is_some_and(|id| !page.commits.iter().any(|c| c.id == *id));
+                .is_some_and(|id| !survives(id));
             let refocus = focus_gone.then(|| next.commits.last().cloned()).flatten();
 
             repo_state.set_commit_multi_selection(next);

@@ -241,6 +241,10 @@ pub(super) fn save_worktree_file(
     }]
 }
 
+pub(super) fn append_gitignore_patterns(repo_id: RepoId, patterns: Vec<String>) -> Vec<Effect> {
+    vec![Effect::AppendGitignorePatterns { repo_id, patterns }]
+}
+
 pub(super) fn commit(repo_id: RepoId, message: String) -> Vec<Effect> {
     vec![Effect::Commit {
         repo_id,
@@ -970,6 +974,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::CheckoutConflictBase { .. }
             | RepoCommandKind::LaunchMergetool { .. }
             | RepoCommandKind::SaveWorktreeFile { .. }
+            | RepoCommandKind::AppendGitignorePatterns { .. }
             | RepoCommandKind::ExportPatch { .. }
             | RepoCommandKind::ApplyPatch { .. }
             | RepoCommandKind::AddSubmodule { .. }

@@ -135,6 +135,12 @@ pub enum Effect {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Resolve a possibly abbreviated commit reference and load its details in
+    /// one call, so a reveal can show the commit before the log reaches it.
+    ResolveCommitForReveal {
+        repo_id: RepoId,
+        reference: CommitId,
+    },
     LoadRangeFiles {
         repo_id: RepoId,
         from: CommitId,
@@ -226,6 +232,10 @@ pub enum Effect {
         path: PathBuf,
         contents: String,
         stage: bool,
+    },
+    AppendGitignorePatterns {
+        repo_id: RepoId,
+        patterns: Vec<String>,
     },
 
     CheckoutBranch {

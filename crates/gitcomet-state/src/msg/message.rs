@@ -405,6 +405,20 @@ pub enum Msg {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Show a commit referenced from elsewhere — a SHA in a commit message, a
+    /// branch tip — without waiting for the history walk to reach its row.
+    ///
+    /// `reference` may be abbreviated. It is resolved against the object
+    /// database, so an ambiguous or unknown reference is reported instead of
+    /// sending the log on a walk that can only end in silence.
+    RevealCommit {
+        repo_id: RepoId,
+        reference: CommitId,
+    },
+    /// The history view has finished (or given up on) the pending reveal.
+    FinishCommitReveal {
+        repo_id: RepoId,
+    },
     ResetBrowseToLive {
         repo_id: RepoId,
     },
@@ -592,6 +606,12 @@ pub enum Msg {
         path: PathBuf,
         contents: String,
         stage: bool,
+    },
+    /// Append patterns to the repository-root `.gitignore`, creating it when
+    /// absent. Patterns already present are skipped, so re-running is a no-op.
+    AppendGitignorePatterns {
+        repo_id: RepoId,
+        patterns: Vec<String>,
     },
     Commit {
         repo_id: RepoId,
@@ -1082,6 +1102,12 @@ pub enum InternalMsg {
     CommitDetailsLoaded {
         repo_id: RepoId,
         commit_id: CommitId,
+        result: Result<CommitDetails, Error>,
+    },
+    /// A [`Msg::RevealCommit`] reference resolved (or failed to).
+    CommitRevealResolved {
+        repo_id: RepoId,
+        reference: CommitId,
         result: Result<CommitDetails, Error>,
     },
     RangeFilesLoaded {

@@ -1,7 +1,7 @@
 mod avatar;
 mod branch_ref_picker;
 mod button;
-mod commit_sha_hover_menu;
+mod commit_link_menu;
 mod containers;
 mod context_menu;
 mod diff_stat;
@@ -26,7 +26,7 @@ pub use avatar::{
 };
 pub use branch_ref_picker::{BranchRefPicker, BranchRefPickerItem};
 pub use button::{Button, ButtonStyle};
-pub use commit_sha_hover_menu::{CommitShaHoverMenu, CommitShaLink};
+pub use commit_link_menu::{CommitLinkMenu, LinkTarget, MessageLink};
 pub use containers::{ScrollContainer, empty_state, empty_state_message, split_columns_header};
 #[cfg(test)]
 pub use containers::{panel, pill};

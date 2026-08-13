@@ -2545,7 +2545,7 @@ fn clicking_a_badge_opens_its_menu_without_arming_a_selection(cx: &mut gpui::Tes
             assert!(
                 matches!(
                     popover,
-                    Some(PopoverKind::MarkdownLinkMenu { ref url })
+                    Some(PopoverKind::WebLinkMenu { ref url })
                         if url.as_ref() == "https://example.com/badge"
                 ),
                 "clicking a badge opens its link menu, got {popover:?}"
@@ -4243,13 +4243,13 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
 
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let link = this.main_pane.read(cx).markdown_preview_link_at(
+            let link = this.main_pane.read(cx).markdown_preview_link_span_at(
                 0,
                 DiffTextRegion::Inline,
                 on_link,
             );
             assert_eq!(
-                link.as_deref(),
+                link.as_ref().map(|(url, _)| url.as_ref()),
                 Some("https://example.com/docs"),
                 "the click position must resolve to the link destination"
             );
@@ -4258,10 +4258,38 @@ fn clicking_a_markdown_preview_link_opens_the_open_in_browser_menu(cx: &mut gpui
             assert!(
                 matches!(
                     popover,
-                    Some(PopoverKind::MarkdownLinkMenu { ref url })
+                    Some(PopoverKind::WebLinkMenu { ref url })
                         if url.as_ref() == "https://example.com/docs"
                 ),
                 "clicking a link should open its menu, got {popover:?}"
+            );
+
+            // The same menu is reachable from a commit message, where handing
+            // focus back to the diff panel on close would be wrong. Closing
+            // reads this flag, so a preview link has to set it.
+            assert!(
+                this.popover_host
+                    .read(cx)
+                    .popover_opened_from_diff_panel_for_tests(),
+                "a preview link is a diff-panel invoker, so its focus returns there"
+            );
+
+            // The menu hangs off the link's own box rather than the row that
+            // holds it, so it opens flush under the words it describes.
+            let anchor = this
+                .popover_host
+                .read(cx)
+                .popover_anchor_bounds_for_tests()
+                .expect("a preview link menu anchors on the link's box");
+            assert!(
+                anchor.contains(&on_link),
+                "the anchor must be the box the click landed in, got {anchor:?}"
+            );
+            assert!(
+                anchor.top() >= text_bounds.top()
+                    && anchor.bottom() <= text_bounds.bottom() + px(1.0),
+                "the anchor must be a line of the row, not the row's own edges; \
+                 anchor={anchor:?} row={text_bounds:?}"
             );
         });
     });
