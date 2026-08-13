@@ -101,7 +101,7 @@ const REPO_TAB_CONTENT_HEIGHT_PX: f32 = 18.0;
 const REPO_TAB_STATUS_SIZE_PX: f32 = components::REPOSITORY_BADGE_SIZE_PX;
 const REPO_TAB_LABEL_GAP_PX: f32 = 6.0;
 const REPO_TAB_CLOSE_FADE_WIDTH_PX: f32 = 16.0;
-const REPO_TAB_SIDE_PADDING_PX: f32 = 10.0;
+pub(in crate::view) const REPO_TAB_SIDE_PADDING_PX: f32 = 12.0;
 const REPO_TAB_HOVER_BOX_X_OVERHANG_PX: f32 = 4.0;
 const REPO_TAB_HOVER_BOX_Y_OVERHANG_PX: f32 = 3.0;
 const REPO_TAB_HOVER_BOX_RADIUS_PX: f32 = 4.0;
@@ -140,21 +140,22 @@ fn repo_tab_text_width(label: SharedString, font_size: Pixels, window: &mut Wind
         .width
 }
 
+/// Hover/pressed plate behind the tab's close action. Same danger tint the
+/// picker rows' remove button wears (`components::REMOVE_BUTTON_*`), except it
+/// is composited into an opaque fill: this button overlays repository text, so
+/// a translucent plate would let the label show through.
 fn repo_tab_close_button_fill(
     theme: AppTheme,
     background: gpui::Rgba,
     pressed: bool,
 ) -> gpui::Rgba {
-    let amount = match (theme.is_dark, pressed) {
-        (true, false) => 0.44,
-        (true, true) => 0.60,
-        (false, false) => 0.22,
-        (false, true) => 0.32,
+    let amount = if pressed {
+        components::REMOVE_BUTTON_PRESSED_ALPHA
+    } else {
+        components::REMOVE_BUTTON_HOVER_ALPHA
     };
     let mut fill =
-        crate::theme::composite_over(background, with_alpha(theme.colors.shadow, amount));
-    // The hover plate must fully cover repository text beneath the overlaid
-    // close action rather than depend on stacked alpha compositing.
+        crate::theme::composite_over(background, with_alpha(theme.colors.danger, amount));
     fill.a = 1.0;
     fill
 }
@@ -806,9 +807,9 @@ impl Render for RepoTabsBarView {
                 .hover(move |s| s.bg(close_hover_bg))
                 .active(move |s| s.bg(close_pressed_bg))
                 .child(svg_icon(
-                    "icons/repo_tab_close.svg",
+                    components::REMOVE_BUTTON_ICON,
                     theme.colors.danger,
-                    scaled_px(REPO_TAB_STATUS_SIZE_PX),
+                    scaled_px(components::REMOVE_BUTTON_ICON_SIZE_PX),
                 ))
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
                     cx.stop_propagation();
@@ -1263,7 +1264,7 @@ mod tests {
     }
 
     #[test]
-    fn repo_tab_close_hover_uses_an_opaque_darker_fill() {
+    fn repo_tab_close_hover_uses_an_opaque_danger_tint() {
         for theme in [
             crate::theme::AppTheme::gitcomet_dark(),
             crate::theme::AppTheme::gitcomet_light(),
@@ -1271,12 +1272,22 @@ mod tests {
             let background = theme.colors.sidebar_bg;
             let hover = repo_tab_close_button_fill(theme, background, false);
             let pressed = repo_tab_close_button_fill(theme, background, true);
-            let brightness = |color: gpui::Rgba| color.r + color.g + color.b;
+            let danger = theme.colors.danger;
+            let distance_to_danger = |color: gpui::Rgba| {
+                (color.r - danger.r).abs() + (color.g - danger.g).abs() + (color.b - danger.b).abs()
+            };
 
+            // Opaque, because the button overlays repository label text.
             assert_eq!(hover.a, 1.0, "hover background must be solid");
             assert_eq!(pressed.a, 1.0, "pressed background must be solid");
-            assert!(brightness(hover) < brightness(background));
-            assert!(brightness(pressed) < brightness(hover));
+            assert!(
+                distance_to_danger(hover) < distance_to_danger(background),
+                "hover plate must lean toward the danger colour, like the picker rows' remove button"
+            );
+            assert!(
+                distance_to_danger(pressed) < distance_to_danger(hover),
+                "pressed plate must lean further toward danger than hover"
+            );
         }
     }
 

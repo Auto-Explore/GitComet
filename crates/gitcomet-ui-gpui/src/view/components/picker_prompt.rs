@@ -1414,7 +1414,7 @@ fn remove_row_button<V: 'static>(
         .flex()
         .items_center()
         .justify_center()
-        .size(scaled_px(18.0))
+        .size(scaled_px(super::REMOVE_BUTTON_SIZE_PX))
         .rounded(px(theme.radii.row))
         .cursor(CursorStyle::PointingHand)
         .when(!always_visible, |button| {
@@ -1422,12 +1422,22 @@ fn remove_row_button<V: 'static>(
                 .invisible()
                 .group_hover(row_group, |style| style.visible())
         })
-        .hover(move |s| s.bg(with_alpha(theme.colors.danger, 0.18)))
-        .active(move |s| s.bg(with_alpha(theme.colors.danger, 0.26)))
+        .hover(move |s| {
+            s.bg(with_alpha(
+                theme.colors.danger,
+                super::REMOVE_BUTTON_HOVER_ALPHA,
+            ))
+        })
+        .active(move |s| {
+            s.bg(with_alpha(
+                theme.colors.danger,
+                super::REMOVE_BUTTON_PRESSED_ALPHA,
+            ))
+        })
         .child(crate::view::icons::svg_icon(
-            "icons/repo_tab_close.svg",
+            super::REMOVE_BUTTON_ICON,
             theme.colors.danger,
-            scaled_px(12.0),
+            scaled_px(super::REMOVE_BUTTON_ICON_SIZE_PX),
         ))
         .on_mouse_move(cx.listener(move |_this, event: &MouseMoveEvent, _w, cx| {
             let (Some(host), Some(tooltip)) = (host_for_move.as_ref(), tooltip_for_move.as_ref())
