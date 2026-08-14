@@ -230,8 +230,16 @@ pub struct WorktreeDirtySummary {
     pub added: usize,
     pub modified: usize,
     pub deleted: usize,
-    /// The changed files themselves, so the history row can show them without a
-    /// second scan. Kept split the way git reports them.
+    /// The changed files themselves, kept split the way git reports them.
+    ///
+    /// Only populated for the worktree whose row is selected. Every other
+    /// worktree carries counts alone: the lists are read by one pane, for one
+    /// worktree at a time, while an un-ignored `target/` or `node_modules/` in
+    /// *any* linked worktree would otherwise park tens of thousands of
+    /// `FileStatus` values in application state and re-compare them on every
+    /// scan. Empty lists next to non-zero counts mean "not loaded yet", not
+    /// "no files" -- the scan that carries them is requested when the row is
+    /// selected.
     pub staged: Vec<FileStatus>,
     pub unstaged: Vec<FileStatus>,
 }

@@ -1158,15 +1158,29 @@ impl DetailsPaneView {
         let theme = self.theme;
         let ui_scale = self.ui_scale();
 
-        let Some(summary) = self.selected_worktree_summary().cloned() else {
+        // Only the counts and the chip's three fields are needed here. Cloning the
+        // summary would copy both `FileStatus` vectors -- every changed *and*
+        // untracked file of the worktree -- on every repaint of this pane.
+        let Some((file_count, loaded_file_count, chip_label, worktree_path)) =
+            self.selected_worktree_summary().map(|summary| {
+                (
+                    // Counts, not `staged.len() + unstaged.len()`: the file lists
+                    // arrive with the scan the selection asked for, and the header
+                    // has to be right before then. Each changed file lands in
+                    // exactly one bucket, so the two agree once loaded.
+                    summary.added + summary.modified + summary.deleted,
+                    summary.staged.len() + summary.unstaged.len(),
+                    crate::view::rows::sidebar::worktree_origin_label(
+                        summary.branch.as_deref(),
+                        summary.detached,
+                        &summary.path,
+                    ),
+                    summary.path.clone(),
+                )
+            })
+        else {
             return div().into_any_element();
         };
-        let file_count = summary.staged.len() + summary.unstaged.len();
-        let chip_label = crate::view::rows::sidebar::worktree_origin_label(
-            summary.branch.as_deref(),
-            summary.detached,
-            &summary.path,
-        );
 
         let header = div()
             .flex()
@@ -1188,7 +1202,7 @@ impl DetailsPaneView {
             )
             .child(div().flex_1().min_w(px(0.0)))
             .child({
-                let open_path = summary.path.clone();
+                let open_path = worktree_path.clone();
                 let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
                 crate::view::rows::sidebar::worktree_origin_chip(
                     theme,
@@ -1207,9 +1221,15 @@ impl DetailsPaneView {
                 })
                 .gitcomet_tooltip(
                     theme,
-                    format!("Open this worktree in a tab\n{}", summary.path.display()).into(),
+                    format!("Open this worktree in a tab\n{}", worktree_path.display()).into(),
                 )
-                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                // A chip is a control of its own: a right or middle click must not
+                // open a repo tab, and a left click must not reach the row behind it.
+                .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    cx.stop_propagation();
                     this.store.dispatch(Msg::OpenRepo(open_path.clone()));
                     cx.notify();
                 }))
@@ -1236,6 +1256,16 @@ impl DetailsPaneView {
                 .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element()
+        } else if loaded_file_count == 0 {
+            // Counts without files means the scan carrying them is still running.
+            // Saying so beats an empty list that reads as "nothing changed" while
+            // the header above it counts the changes.
+            div()
+                .debug_selector(|| "worktree_files_loading".to_string())
+                .text_sm()
+                .text_color(theme.colors.foreground.secondary)
+                .child("Loading files…")
+                .into_any_element()
         } else {
             Self::vertical_scroll_frame(
                 theme,
@@ -1244,7 +1274,7 @@ impl DetailsPaneView {
                 &self.worktree_files_scroll,
                 uniform_list(
                     ("worktree_files_list", repo_id.0),
-                    file_count,
+                    loaded_file_count,
                     cx.processor(Self::render_worktree_file_rows),
                 ),
             )
@@ -1541,9 +1571,12 @@ impl DetailsPaneView {
 
         // A selected worktree row owns the pane outright: its files belong to a
         // different checkout, so none of the commit-detail views below apply.
-        let has_worktree_selection = self
-            .active_repo()
-            .is_some_and(|repo| repo.history_state.worktree_selection.is_some());
+        //
+        // Only while its scan entry is actually there, though. The reducer drops
+        // the selection when the worktree goes clean, but a scan that is still in
+        // flight (or that failed) leaves the selection pointing at nothing for a
+        // frame or two, and this view has nothing to render without it.
+        let has_worktree_selection = self.selected_worktree_summary().is_some();
         if let (Some(repo_id), true) = (active_repo_id, has_worktree_selection) {
             return self.worktree_uncommitted_view(repo_id, cx);
         }

@@ -734,6 +734,10 @@ pub(super) fn reduce(
 
     let effects = reduce_inner(repos, id_alloc, state, msg);
 
+    // Enforced here rather than at each of the four places a worktree selection
+    // can end; see the helper.
+    effects::retire_orphaned_worktree_diffs(state);
+
     if reconcile {
         reconcile_active_nav_history(state, push);
     }

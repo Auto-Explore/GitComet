@@ -115,6 +115,10 @@ pub enum Effect {
     LoadWorktreeDirty {
         repo_id: RepoId,
         workdir: PathBuf,
+        /// Worktree whose changed-file lists the scan should carry back; every
+        /// other worktree reports counts alone. `None` while no worktree row is
+        /// selected. See [`gitcomet_core::domain::WorktreeDirtySummary`].
+        files_for: Option<PathBuf>,
     },
     LoadRefMetadata {
         repo_id: RepoId,

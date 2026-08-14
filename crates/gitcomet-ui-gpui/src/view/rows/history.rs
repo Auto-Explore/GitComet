@@ -2726,7 +2726,6 @@ impl HistoryView {
     ) -> Vec<AnyElement> {
         let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
         let plan = this.ensure_history_list_plan();
-        let show_working_tree_summary_row = plan.show_working_tree_summary_row();
         let stash_ids = this.ensure_history_stash_ids_cache();
         // Cloned out of `this` so the row loop below can borrow it immutably
         // alongside the repo snapshot; it is an `Arc` bitset, so this is cheap.
@@ -2859,24 +2858,19 @@ impl HistoryView {
                 cache.base.graph_rows.get(visible_ix)?;
                 let base_row_vm = cache.base.row_vms.get(visible_ix)?;
                 let decoration_row_vm = cache.decorations.row_vms.get(visible_ix)?;
+                // A synthetic row above connects down into this commit, so this
+                // row draws the matching stub upwards even when its lane is born
+                // here. Same resolution the bands use, so the two never disagree
+                // about where the stub lands.
                 let connect_from_top_col =
-                    match list_ix.checked_sub(1).and_then(|above| plan.row_at(above)) {
-                        // A worktree band above connects its node down into this
-                        // commit, so this row draws the matching stub upwards even
-                        // when the lane is born here.
-                        Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) => {
-                            cache.base.graph_rows.get(visible_ix).map(|row| {
-                                let on_branch = worktree_dirty
-                                    .as_ref()
-                                    .and_then(|dirty| dirty.get(worktree_ix))
-                                    .is_some_and(|s| s.branch.is_some() && !s.detached);
-                                usize::from(
-                                    super::history_graph_paint::band_node_for(row, on_branch).col,
-                                )
-                            })
-                        }
-                        _ => (show_working_tree_summary_row && visible_ix == 0).then_some(0),
-                    };
+                    super::history_graph_paint::worktree_band_connect_from_top_col(
+                        &plan,
+                        cache.base.graph_rows.as_ref(),
+                        worktree_dirty
+                            .as_ref()
+                            .map_or(&[][..], |dirty| dirty.as_slice()),
+                        list_ix,
+                    );
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id)
                     || repo.history_state.multi_selection.is_multi()
                         && repo.history_state.multi_selection.contains(&commit.id);
@@ -3178,24 +3172,21 @@ fn worktree_uncommitted_history_row(
     // `None` when the node sits on a lane of its own already (a branch head's
     // fork), which needs only a straight connector down.
     let node_exit_col = (band_node.exit_col != band_node.col).then_some(band_node.exit_col);
-    let band = history_graph::GraphRow {
-        lanes_now: graph_row.lanes_now.clone(),
-        lanes_next: graph_row.lanes_now.clone(),
-        joins_in: Default::default(),
-        edges_out: Default::default(),
-        node_col: band_node.col,
-        node_color_ix: band_node.color_ix,
-        is_merge: false,
-    };
+    // Only the commit's lanes cross into the band; everything else about its row
+    // (`lanes_next`, `joins_in`, `edges_out`) belongs to the commit and is never
+    // painted here, so the band carries the lanes alone rather than a row-shaped
+    // copy of them.
+    let band_lanes = graph_row.lanes_now.clone();
     let graph = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, cx| {
             super::history_graph_paint::paint_history_graph_band(
                 theme,
-                &band,
+                &band_lanes,
                 connect_from_top_col,
                 selected_lane_color_ix,
                 super::history_graph_paint::BandNodePaint {
+                    col: band_node.col,
                     color: node_color,
                     exit_col: node_exit_col,
                 },
@@ -3295,7 +3286,10 @@ fn worktree_uncommitted_history_row(
         .cursor(CursorStyle::PointingHand)
         .hover(move |s| s.bg(theme.colors.interaction.hover_background))
         .active(move |s| s.bg(theme.colors.interaction.pressed_background))
-        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+        .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+            if !e.standard_click() {
+                return;
+            }
             this.store.dispatch(Msg::SelectWorktreeUncommitted {
                 repo_id,
                 path: select_path.clone(),

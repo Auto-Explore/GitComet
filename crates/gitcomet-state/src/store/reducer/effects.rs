@@ -4,8 +4,8 @@ use super::util::{
 };
 use crate::model::{
     AppNotificationKind, AppState, CommitMultiSelection, ConflictFileLoadMode, DiagnosticKind,
-    Loadable, RangeSelection, RepoId, RepoLoadsInFlight, RepoState, SidebarDataRequest,
-    SidebarMode,
+    ForeignDiffOrigin, Loadable, RangeSelection, RepoId, RepoLoadsInFlight, RepoState,
+    SidebarDataRequest, SidebarMode,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
 use gitcomet_core::conflict_session::{
@@ -548,14 +548,29 @@ pub(super) fn worktree_dirty_loaded(
             Err(e) => Loadable::Error(e.to_string()),
         };
         repo_state.set_worktree_dirty(worktree_dirty);
+        // A selected worktree row only exists while that worktree has changes.
+        // Once it goes clean -- committed, stashed, reverted -- or drops out of a
+        // failed scan, its row is gone, and a selection pointing at a row nothing
+        // renders leaves the details pane with nothing to show and no way back.
+        let selected_worktree_is_gone = repo_state
+            .history_state
+            .worktree_selection
+            .as_ref()
+            .is_some_and(|selected| match &repo_state.worktree_dirty {
+                Loadable::Ready(dirty) => !dirty.iter().any(|summary| &summary.path == selected),
+                _ => true,
+            });
+        if selected_worktree_is_gone {
+            repo_state.set_worktree_selection(None);
+        }
         if repo_state
             .loads_in_flight
             .finish(RepoLoadsInFlight::WORKTREE_DIRTY)
         {
-            effects.push(Effect::LoadWorktreeDirty {
-                repo_id,
-                workdir: repo_state.spec.workdir.clone(),
-            });
+            // Rebuilt rather than repeated: the selection may have moved while
+            // the finished scan was running, and the repeat should carry the
+            // file lists of whatever is selected now.
+            effects.push(worktree_dirty_effect(repo_state));
         }
     }
     effects
@@ -1078,9 +1093,58 @@ pub(super) fn select_worktree_uncommitted(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Whatever this displaces -- another worktree's open diff, say -- is retired
+    // by `retire_orphaned_worktree_diffs` once the reducer settles.
     repo_state.set_worktree_selection(Some(path));
     repo_state.set_commit_details(Loadable::NotLoaded);
-    Vec::new()
+
+    // Only the selected worktree's changed files are carried in state, so the row
+    // that was just selected needs a scan to fetch its own. The counts are already
+    // on screen and stay there while it runs.
+    request_worktree_dirty_effect(repo_state)
+        .into_iter()
+        .collect()
+}
+
+/// Retires an inline diff belonging to a linked worktree that is no longer the
+/// selected one.
+///
+/// The diff pane renders an inline foreign diff in preference to the diff target,
+/// so one whose worktree row is gone keeps another checkout's file -- and its
+/// origin chip -- on screen with no row left to deselect it. A worktree selection
+/// ends in more ways than it begins: switching worktrees, selecting any commit
+/// (`set_selected_commit` clears it as a side effect), clearing the selection, and
+/// a scan that no longer lists the worktree. Rather than remember all four, this
+/// runs once after every message and states the invariant directly.
+///
+/// Submodule-origin inline diffs are untouched: they never had a worktree row.
+pub(super) fn retire_orphaned_worktree_diffs(state: &mut AppState) {
+    for repo_state in &mut state.repos {
+        let selected = repo_state.history_state.worktree_selection.as_deref();
+        let orphaned = repo_state
+            .diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .is_some_and(|inline| {
+                matches!(inline.origin, ForeignDiffOrigin::Worktree { .. })
+                    && Some(inline.submodule_repo_path.as_path()) != selected
+            });
+        if !orphaned {
+            continue;
+        }
+
+        // The same set every other retire site clears, so no pane is left holding
+        // decoded bytes or text belonging to the file that just went away.
+        repo_state.diff_state.inline_submodule_diff = None;
+        repo_state.set_diff_target(None);
+        repo_state.diff_state.diff = Loadable::NotLoaded;
+        repo_state.diff_state.diff_file = Loadable::NotLoaded;
+        repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
+        repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
+        repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
+        super::actions_emit_effects::invalidate_loaded_blame(repo_state);
+        repo_state.bump_diff_state_rev();
+    }
 }
 
 pub(super) fn clear_commit_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
@@ -1433,10 +1497,7 @@ pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<
         .loads_in_flight
         .request(RepoLoadsInFlight::WORKTREE_DIRTY)
     {
-        vec![Effect::LoadWorktreeDirty {
-            repo_id,
-            workdir: repo_state.spec.workdir.clone(),
-        }]
+        vec![worktree_dirty_effect(repo_state)]
     } else {
         Vec::new()
     }
@@ -1462,10 +1523,20 @@ pub(super) fn request_worktree_dirty_effect(repo_state: &mut RepoState) -> Optio
     repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::WORKTREE_DIRTY)
-        .then(|| Effect::LoadWorktreeDirty {
-            repo_id: repo_state.id,
-            workdir: repo_state.spec.workdir.clone(),
-        })
+        .then(|| worktree_dirty_effect(repo_state))
+}
+
+/// The scan effect, aimed at whichever worktree row is selected.
+///
+/// Built in one place so every trigger -- watcher flush, window focus, selecting
+/// a row -- asks for the file lists of the worktree that is actually on screen,
+/// and for counts alone everywhere else.
+pub(super) fn worktree_dirty_effect(repo_state: &RepoState) -> Effect {
+    Effect::LoadWorktreeDirty {
+        repo_id: repo_state.id,
+        workdir: repo_state.spec.workdir.clone(),
+        files_for: repo_state.history_state.worktree_selection.clone(),
+    }
 }
 
 pub(super) fn load_ref_metadata(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

@@ -23,6 +23,13 @@ pub(super) struct HistoryCache {
 pub(super) struct HistoryBaseCache {
     pub(super) request: HistoryBaseCacheRequest,
     pub(super) visible_indices: HistoryVisibleIndices,
+    /// Visible index of the first row carrying each commit id.
+    ///
+    /// Built here, with the rest of the cache, because this is the one place the
+    /// work happens off the render path. Its readers -- the worktree row anchors
+    /// and the selected lane's colour -- each need a handful of lookups but are
+    /// called during layout, where a scan of a 50k-commit page is a scan too many.
+    pub(super) visible_ix_by_commit: Arc<rustc_hash::FxHashMap<CommitId, usize>>,
     pub(super) graph_rows: Arc<[history_graph::GraphRow]>,
     pub(super) max_lanes: usize,
     pub(super) row_vms: Vec<HistoryBaseRowVm>,

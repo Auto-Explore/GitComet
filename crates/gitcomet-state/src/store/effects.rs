@@ -1714,7 +1714,11 @@ pub(super) fn schedule_effect(
                 );
             }
         }
-        Effect::LoadWorktreeDirty { repo_id, workdir } => {
+        Effect::LoadWorktreeDirty {
+            repo_id,
+            workdir,
+            files_for,
+        } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
@@ -1725,6 +1729,7 @@ pub(super) fn schedule_effect(
                     msg_tx,
                     repo_id,
                     workdir,
+                    files_for,
                     cancellation,
                 );
             }

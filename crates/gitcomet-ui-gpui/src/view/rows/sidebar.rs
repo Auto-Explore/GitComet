@@ -2449,63 +2449,20 @@ impl DetailsPaneView {
         };
         let repo_id = repo.id;
         let worktree_dirty_rev = repo.worktree_dirty_rev;
-        let Some(summary) = this.selected_worktree_summary().cloned() else {
+        let Some(summary) = this.selected_worktree_summary() else {
             return Vec::new();
         };
-
-        // Staged first, then unstaged: the same order the working-tree pane uses.
-        let files: Vec<gitcomet_core::domain::CommitFileChange> = summary
-            .staged
-            .iter()
-            .map(|f| (f, DiffArea::Staged))
-            .chain(summary.unstaged.iter().map(|f| (f, DiffArea::Unstaged)))
-            .map(|(f, _)| gitcomet_core::domain::CommitFileChange {
-                path: f.path.clone(),
-                kind: f.kind,
-                is_submodule: false,
-                additions: None,
-                deletions: None,
-            })
-            .collect();
-        let areas: Vec<DiffArea> = std::iter::repeat_n(DiffArea::Staged, summary.staged.len())
-            .chain(std::iter::repeat_n(
-                DiffArea::Unstaged,
-                summary.unstaged.len(),
-            ))
-            .collect();
-
-        // Every file is an entry so the diff view can step between them with
-        // the same navigation submodule diffs get. Shared behind an `Arc` because
-        // every visible row's click handler captures the whole list, and the list
-        // is one entry per changed file.
-        let entries: Vec<gitcomet_state::model::InlineSubmoduleDiffEntry> = files
-            .iter()
-            .zip(areas.iter())
-            .map(
-                |(f, area)| gitcomet_state::model::InlineSubmoduleDiffEntry {
-                    path: f.path.clone(),
-                    kind: f.kind,
-                    target: DiffTarget::WorkingTree {
-                        path: f.path.clone(),
-                        area: *area,
-                    },
-                    section: match area {
-                        DiffArea::Staged => {
-                            gitcomet_state::model::InlineSubmoduleDiffSection::LiveStaged
-                        }
-                        _ => gitcomet_state::model::InlineSubmoduleDiffSection::LiveUnstaged,
-                    },
-                },
-            )
-            .collect();
-        let entries = Arc::new(entries);
+        // Derived once per scan, not per frame: this list is virtualized, but the
+        // inputs behind it are one entry per changed file.
+        let inputs = this.cached_worktree_file_inputs(repo_id, worktree_dirty_rev, summary);
+        let files = &inputs.files;
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let file_rows =
-            this.cached_worktree_file_rows(repo_id, worktree_dirty_rev, &summary.path, &files);
+            this.cached_worktree_file_rows(repo_id, worktree_dirty_rev, &summary.path, files);
         let selected_ix_now = repo
             .diff_state
             .inline_submodule_diff
@@ -2539,7 +2496,7 @@ impl DetailsPaneView {
                 let color = visuals.color(&theme);
                 let selected = selected_ix_now == Some(ix);
                 let tooltip = path_label.clone();
-                let entries_for_click = Arc::clone(&entries);
+                let inputs_for_click = Arc::clone(&inputs);
                 let worktree_path_for_click = worktree_path.clone();
                 let origin_for_click = origin.clone();
 
@@ -2591,7 +2548,7 @@ impl DetailsPaneView {
                             origin: origin_for_click.clone(),
                             submodule_repo_path: worktree_path_for_click.clone(),
                             parent_submodule_path: worktree_path_for_click.clone(),
-                            entries: entries_for_click.as_ref().clone(),
+                            entries: inputs_for_click.entries.clone(),
                             selected_ix: ix,
                         });
                         cx.notify();

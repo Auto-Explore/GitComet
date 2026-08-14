@@ -1880,16 +1880,19 @@ impl HistoryView {
 
         // The worktree row sits one line above the commit that located it, so
         // scroll to the row itself once the plan knows where it landed.
-        let commit_list_ix = decision.scroll_to_list_ix;
-        let scroll_to_list_ix = commit_list_ix.map(|list_ix| {
-            pending
+        // Two indices, bound together: the commit's own row, and the row to scroll
+        // to -- the worktree's, when the reveal was aimed at one, which sits one
+        // line above it.
+        let reveal_rows = decision.scroll_to_list_ix.map(|commit_list_ix| {
+            let scroll_to = pending
                 .worktree_path
                 .as_deref()
                 .and_then(|path| worktree_row_list_ix(plan, self.active_repo(), path))
-                .unwrap_or(list_ix)
+                .unwrap_or(commit_list_ix);
+            (commit_list_ix, scroll_to)
         });
 
-        if let Some(list_ix) = scroll_to_list_ix {
+        if let Some((commit_list_ix, list_ix)) = reveal_rows {
             if let Some((log_rev, stashes_rev, history_scope)) = cache_meta {
                 // The cache is keyed on the commit and read back as *its* row,
                 // so it takes the commit's own index -- not the worktree row we
@@ -1902,7 +1905,7 @@ impl HistoryView {
                     history_scope,
                     plan,
                     Some(pending.commit_id.clone()),
-                    commit_list_ix.unwrap_or(list_ix),
+                    commit_list_ix,
                 );
             }
             self.dismiss_history_refs_hover(cx);
@@ -2005,26 +2008,17 @@ impl HistoryView {
             HistoryLaneAnchor::Commit(head) => (head, None),
             HistoryLaneAnchor::Worktree { head, on_branch } => (head, Some(*on_branch)),
         };
-        let page = Self::display_log_page_for_repo(self.active_repo()?);
-        let color_ix = page.as_deref().and_then(|page| {
-            let row = cache
-                .base
-                .visible_indices
-                .iter()
-                .enumerate()
-                .find(|(_, commit_ix)| {
-                    page.commits
-                        .get(*commit_ix)
-                        .is_some_and(|commit| &commit.id == head)
-                })
-                .and_then(|(visible_ix, _)| cache.base.graph_rows.get(visible_ix))?;
-            Some(match on_branch {
+        let color_ix = cache
+            .base
+            .visible_ix_by_commit
+            .get(head)
+            .and_then(|visible_ix| cache.base.graph_rows.get(*visible_ix))
+            .map(|row| match on_branch {
                 Some(on_branch) => {
                     crate::view::rows::history_graph_paint::band_node_for(row, on_branch).color_ix
                 }
                 None => row.node_color_ix,
-            })
-        });
+            });
 
         self.history_selected_lane_color_cache = Some(HistorySelectedLaneColorCache {
             repo_id,
@@ -2082,27 +2076,16 @@ impl HistoryView {
             if dirty.is_empty() {
                 return Vec::new();
             }
-            let Some(page) = Self::display_log_page_for_repo(repo) else {
-                return Vec::new();
-            };
 
-            // One pass over the visible commits, shared by every worktree.
-            let mut visible_ix_by_commit: HashMap<&str, usize> = HashMap::default();
-            for (visible_ix, commit_ix) in cache.base.visible_indices.iter().enumerate() {
-                let Some(commit) = page.commits.get(commit_ix) else {
-                    continue;
-                };
-                visible_ix_by_commit
-                    .entry(commit.id.as_ref())
-                    .or_insert(visible_ix);
-            }
-
+            // The base cache already indexed the page by commit id, off the render
+            // path. Rebuilding that map here would walk every visible commit on
+            // every scan revision to answer one lookup per dirty worktree.
             dirty
                 .iter()
                 .enumerate()
                 .filter_map(|(worktree_ix, summary)| {
                     let head = summary.head.as_ref()?;
-                    let visible_ix = visible_ix_by_commit.get(head.as_ref()).copied()?;
+                    let visible_ix = cache.base.visible_ix_by_commit.get(head).copied()?;
                     Some(HistoryWorktreeRowAnchor {
                         visible_ix,
                         worktree_ix,
@@ -2593,9 +2576,22 @@ fn build_history_base_cache(
         }
     }
 
+    // One entry per visible commit, built here so its readers can look up an id
+    // during layout without walking the page.
+    let mut visible_ix_by_commit: rustc_hash::FxHashMap<CommitId, usize> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(visible_indices.len(), Default::default());
+    for (visible_ix, commit_ix) in visible_indices.iter().enumerate() {
+        if let Some(commit) = page.commits.get(commit_ix) {
+            visible_ix_by_commit
+                .entry(commit.id.clone())
+                .or_insert(visible_ix);
+        }
+    }
+
     HistoryBaseCache {
         request,
         visible_indices,
+        visible_ix_by_commit: Arc::new(visible_ix_by_commit),
         graph_rows,
         max_lanes,
         row_vms,
@@ -3114,6 +3110,56 @@ mod tests {
                 resume_token: None,
             }),
         }
+    }
+
+    /// The commit-id index the base cache carries agrees with the visible order it
+    /// was built from.
+    ///
+    /// Its readers -- the worktree row anchors and the selected lane's colour --
+    /// look commits up during layout, and both used to scan the page instead. A
+    /// map that disagrees with `visible_indices` would anchor rows on the wrong
+    /// commits, so this pins the two together.
+    #[test]
+    fn the_base_cache_indexes_every_visible_commit_by_id() {
+        let commits = vec![
+            commit("c0", &["c1"], "newest"),
+            commit("c1", &["c2"], "middle"),
+            commit("c2", &[], "oldest"),
+        ];
+        let page = log_page(commits, None);
+        let base = build_history_base_cache(
+            HistoryBaseCacheRequest {
+                repo_id: RepoId(1),
+                history_scope: LogScope::AllBranches,
+                log_fingerprint: 0,
+                head_branch_rev: 0,
+                detached_head_commit: None,
+                head_branch_target: None,
+                branches_rev: 0,
+                remote_branches_rev: 0,
+                stashes_rev: 0,
+            },
+            &page,
+            AppTheme::gitcomet_dark(),
+            None,
+            &[],
+            &[],
+            &[],
+        );
+
+        for (visible_ix, commit_ix) in base.visible_indices.iter().enumerate() {
+            let id = &page.commits[commit_ix].id;
+            assert_eq!(
+                base.visible_ix_by_commit.get(id).copied(),
+                Some(visible_ix),
+                "{id:?} should resolve to the row it renders at"
+            );
+        }
+        assert_eq!(base.visible_ix_by_commit.len(), base.visible_indices.len());
+        assert_eq!(
+            base.visible_ix_by_commit.get(&CommitId("absent".into())),
+            None
+        );
     }
 
     /// Branch attributed to each visible row, in row order.

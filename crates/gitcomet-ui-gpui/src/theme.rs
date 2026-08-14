@@ -6,7 +6,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub(crate) const DEFAULT_DARK_THEME_KEY: &str = "gitcomet_dark";
 pub(crate) const DEFAULT_LIGHT_THEME_KEY: &str = "gitcomet_light";
@@ -33,7 +33,11 @@ pub struct AppTheme {
     pub is_dark: bool,
     pub colors: Colors,
     pub syntax: SyntaxColors,
-    pub graph_lane_palette: GraphLanePalette,
+    /// Interned rather than inlined: the palette is 64 colours, and `AppTheme` is
+    /// `Copy` and captured by value into every per-row paint closure. Carrying the
+    /// array here made each of those closures a kilobyte heavier for data every
+    /// theme shares. See [`intern_lane_palette`].
+    pub graph_lane_palette: &'static GraphLanePalette,
     pub radii: Radii,
 }
 
@@ -941,10 +945,54 @@ impl From<ThemeFile> for AppTheme {
             is_dark,
             colors,
             syntax,
-            graph_lane_palette,
+            graph_lane_palette: intern_lane_palette(graph_lane_palette),
             radii,
         }
     }
+}
+
+static INTERNED_LANE_PALETTES: OnceLock<Mutex<Vec<&'static GraphLanePalette>>> = OnceLock::new();
+
+/// Hands out a `'static` reference to a lane palette, reusing one already
+/// interned when the colours match.
+///
+/// Themes are loaded a handful of times over a session -- at startup, and when
+/// the user picks another one -- while their palettes are copied into every
+/// per-row paint closure of every frame. Trading a one-time leak per *distinct*
+/// palette for a pointer-sized field in `AppTheme` is the right side of that
+/// exchange; reloading the same theme file interns nothing new.
+fn intern_lane_palette(palette: GraphLanePalette) -> &'static GraphLanePalette {
+    let interned = INTERNED_LANE_PALETTES.get_or_init(|| Mutex::new(Vec::new()));
+    let mut interned = interned
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if let Some(existing) = interned
+        .iter()
+        .find(|existing| lane_palettes_are_identical(existing, &palette))
+    {
+        return existing;
+    }
+    let leaked: &'static GraphLanePalette = Box::leak(Box::new(palette));
+    interned.push(leaked);
+    leaked
+}
+
+/// Compares two palettes bit for bit rather than by `PartialEq`.
+///
+/// A theme can put a non-finite value into a lane colour -- a JSON hue of `1e40`
+/// deserializes to infinity, and `rem_euclid` turns that into NaN -- and NaN is
+/// never equal to itself, so `PartialEq` would report every such palette as new
+/// and leak a fresh copy on every parse. Bit equality is also exactly the
+/// identity the interner wants: two palettes reuse one allocation only when they
+/// are byte-for-byte the same.
+fn lane_palettes_are_identical(a: &GraphLanePalette, b: &GraphLanePalette) -> bool {
+    a.as_slice().len() == b.as_slice().len()
+        && a.as_slice().iter().zip(b.as_slice()).all(|(a, b)| {
+            a.r.to_bits() == b.r.to_bits()
+                && a.g.to_bits() == b.g.to_bits()
+                && a.b.to_bits() == b.b.to_bits()
+                && a.a.to_bits() == b.a.to_bits()
+        })
 }
 
 pub(crate) fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
@@ -1157,8 +1205,8 @@ fn is_reserved_runtime_theme_path(path: &Path) -> bool {
 
 fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
     let mut options = BTreeMap::<String, ThemeOption>::new();
-    for spec in runtime_themes_with_dir(runtime_dir).into_values() {
-        options.insert(spec.option.key.clone(), spec.option);
+    for spec in runtime_themes_with_dir(runtime_dir).values() {
+        options.insert(spec.option.key.clone(), spec.option.clone());
     }
     for spec in embedded_theme_cache().values() {
         options.insert(spec.option.key.clone(), spec.option.clone());
@@ -1167,16 +1215,90 @@ fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
     options.into_values().collect()
 }
 
-fn runtime_themes() -> HashMap<String, RuntimeThemeSpec> {
+fn runtime_themes() -> Arc<HashMap<String, RuntimeThemeSpec>> {
     runtime_themes_with_dir(None)
 }
 
-fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> HashMap<String, RuntimeThemeSpec> {
+/// Custom themes from disk, re-parsed only when the directory has actually
+/// changed.
+///
+/// Reading and parsing every theme file is far too expensive to do per call: the
+/// settings theme list asks for it from inside a `uniform_list` processor, so an
+/// unmemoized load is a directory read plus a full parse per file *per frame*
+/// while that dropdown is open. Theme authors still expect an edit to show up
+/// without a restart, so the cache is validated against a cheap stat of the
+/// directory rather than held forever.
+fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<HashMap<String, RuntimeThemeSpec>> {
     let Some(dir) = resolved_runtime_themes_dir(runtime_dir) else {
-        return HashMap::default();
+        return Arc::new(HashMap::default());
     };
 
-    load_runtime_themes_from_dir(&dir)
+    let signature = runtime_themes_dir_signature(&dir);
+    let cache = RUNTIME_THEME_CACHE.get_or_init(|| Mutex::new(None));
+    {
+        let cached = cache
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(cached) = cached.as_ref()
+            && cached.dir == dir
+            && cached.signature == signature
+        {
+            return Arc::clone(&cached.themes);
+        }
+    }
+
+    let themes = Arc::new(load_runtime_themes_from_dir(&dir));
+    let mut cached = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *cached = Some(RuntimeThemeCache {
+        dir,
+        signature,
+        themes: Arc::clone(&themes),
+    });
+    themes
+}
+
+struct RuntimeThemeCache {
+    dir: PathBuf,
+    signature: u64,
+    themes: Arc<HashMap<String, RuntimeThemeSpec>>,
+}
+
+static RUNTIME_THEME_CACHE: OnceLock<Mutex<Option<RuntimeThemeCache>>> = OnceLock::new();
+
+/// Identity of the theme directory's contents: every `.json` file's name, size
+/// and modification time. Stat-only, so validating the cache costs a directory
+/// walk rather than a parse, and an edited or added theme still invalidates it.
+fn runtime_themes_dir_signature(dir: &Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let Ok(entries) = fs::read_dir(dir) else {
+        return 0;
+    };
+    let mut files: Vec<(PathBuf, u64, Option<std::time::SystemTime>)> = entries
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("json"))
+        .map(|path| {
+            let meta = fs::metadata(&path).ok();
+            let len = meta.as_ref().map(|meta| meta.len()).unwrap_or(0);
+            let modified = meta.as_ref().and_then(|meta| meta.modified().ok());
+            (path, len, modified)
+        })
+        .collect();
+    files.sort();
+
+    let mut hasher = rustc_hash::FxHasher::default();
+    for (path, len, modified) in files {
+        path.hash(&mut hasher);
+        len.hash(&mut hasher);
+        modified
+            .and_then(|modified| modified.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_nanos())
+            .hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>) -> Option<PathBuf> {
@@ -1376,9 +1498,22 @@ fn fill_missing_color_tokens(bundle: &mut serde_json::Value) {
     }
 }
 
-/// Copies every field of `base` that `target` does not define. Objects present on
-/// both sides recurse, so a file may define part of a group and inherit the rest.
-/// `skip` applies to the top level only.
+/// Whether a JSON object is one colour rather than a group of them.
+///
+/// [`ThemeColor`]'s object form is `{hex, alpha}` and needs both halves. Filling
+/// a half-written one from the bundled theme would rewrite a colour the author
+/// *did* write, at an opacity they never asked for and get no diagnostic about —
+/// so the fill stops here and the half-written colour stays the parse error it
+/// has always been. Groups never carry a `hex` key, which is what tells them
+/// apart.
+fn is_color_leaf(value: &serde_json::Value) -> bool {
+    value.get("hex").is_some()
+}
+
+/// Copies every field of `base` that `target` does not define. Groups present on
+/// both sides recurse, so a file may define part of a group and inherit the rest;
+/// individual colours are left exactly as the file wrote them. `skip` applies to
+/// the top level only.
 fn fill_missing_json_fields(
     base: &serde_json::Value,
     target: &mut serde_json::Value,
@@ -1392,7 +1527,10 @@ fn fill_missing_json_fields(
             continue;
         }
         match target.get_mut(key) {
-            Some(existing) => fill_missing_json_fields(base_value, existing, &[]),
+            Some(existing) if !is_color_leaf(base_value) && !is_color_leaf(existing) => {
+                fill_missing_json_fields(base_value, existing, &[])
+            }
+            Some(_) => {}
             None => {
                 target.insert(key.clone(), base_value.clone());
             }
@@ -1559,10 +1697,10 @@ mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
         GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, Rgba, THEME_SCHEMA_VERSION, ThemeColor,
-        available_themes, content_header_bg, derived_syntax_color, has_theme_key,
-        load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
-        runtime_themes_with_dir, test_theme_bundle_value, test_theme_json_with_syntax, theme_label,
-        with_alpha,
+        UNFILLED_COLOR_TOKENS, available_themes, content_header_bg, derived_syntax_color,
+        has_theme_key, load_theme_specs_from_json, merged_theme_options,
+        resolved_runtime_themes_dir, runtime_themes_with_dir, test_theme_bundle_value,
+        test_theme_json_with_syntax, theme_label, with_alpha,
     };
     use std::{fs, path::PathBuf};
     use tempfile::tempdir;
@@ -1773,6 +1911,138 @@ mod tests {
         );
     }
 
+    /// `AppTheme` is `Copy` and captured by value into every per-row paint
+    /// closure, so its size is paid per visible row per frame. The bound is
+    /// deliberately loose -- it is a tripwire for a field that brings a large
+    /// array along, not a budget to tune against.
+    #[test]
+    fn app_theme_stays_small_enough_to_copy_per_row() {
+        let size = std::mem::size_of::<AppTheme>();
+        assert!(
+            size <= 2048,
+            "AppTheme grew to {size} bytes; interning large fields (see \
+             `intern_lane_palette`) keeps per-row paint closures cheap"
+        );
+    }
+
+    /// Two themes built from the same palette share one interned copy, so
+    /// reloading a theme file does not leak another kilobyte each time.
+    #[test]
+    fn lane_palettes_are_interned_across_theme_loads() {
+        let first = AppTheme::from_key(DEFAULT_DARK_THEME_KEY).expect("bundled theme should load");
+        let reparsed = AppTheme::from_json_str(
+            &serde_json::to_string(&test_theme_bundle_value(DEFAULT_DARK_THEME_KEY))
+                .expect("fixture should serialize"),
+        )
+        .expect("fixture should parse");
+
+        assert!(
+            std::ptr::eq(first.graph_lane_palette, reparsed.graph_lane_palette),
+            "an identical palette must reuse the interned one"
+        );
+    }
+
+    /// The one exclusion in the token fill. A theme that names neither lane token
+    /// must keep the palette generated for its appearance -- filling these from
+    /// the bundled theme would repaint the graph of every custom theme in the
+    /// wild with gitcomet's own lane colours.
+    #[test]
+    fn omitting_both_lane_tokens_generates_a_palette_instead_of_inheriting_one() {
+        let bundled =
+            AppTheme::from_key(DEFAULT_DARK_THEME_KEY).expect("bundled theme should load");
+        let mut fixture = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);
+        let colors = fixture["themes"][0]["colors"]
+            .as_object_mut()
+            .expect("colors should be an object");
+        for token in UNFILLED_COLOR_TOKENS {
+            assert!(
+                colors.contains_key(*token),
+                "fixture should start with {token} so removing it means something"
+            );
+            colors.remove(*token);
+        }
+
+        let theme = AppTheme::from_json_str(
+            &serde_json::to_string(&fixture).expect("fixture should serialize"),
+        )
+        .expect("a theme without lane tokens should load");
+
+        assert_eq!(
+            theme.graph_lane_palette.as_slice(),
+            GraphLanePalette::generated(true).as_slice(),
+            "lane colours must be generated for the appearance, not inherited"
+        );
+        assert_ne!(
+            theme.graph_lane_palette.as_slice(),
+            bundled.graph_lane_palette.as_slice(),
+            "and specifically not the bundled theme's hand-picked lanes"
+        );
+    }
+
+    /// Interning must reuse an allocation only for palettes that are actually the
+    /// same: a looser comparison would collapse every theme onto one palette.
+    #[test]
+    fn different_lane_palettes_are_interned_separately() {
+        use serde_json::json;
+
+        let theme_with_hues = |hues: serde_json::Value| {
+            let mut fixture = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);
+            fixture["themes"][0]["colors"]["graph_lane_palette"] = serde_json::Value::Null;
+            fixture["themes"][0]["colors"]["graph_lane_hues"] = hues;
+            AppTheme::from_json_str(
+                &serde_json::to_string(&fixture).expect("fixture should serialize"),
+            )
+            .expect("fixture should parse")
+        };
+
+        let one = theme_with_hues(json!([0.1, 0.2]));
+        let other = theme_with_hues(json!([0.6, 0.8]));
+        assert_ne!(
+            one.graph_lane_palette.as_slice(),
+            other.graph_lane_palette.as_slice(),
+            "fixture must actually produce two different palettes"
+        );
+        assert!(
+            !std::ptr::eq(one.graph_lane_palette, other.graph_lane_palette),
+            "distinct palettes must not share an interned allocation"
+        );
+    }
+
+    /// A palette carrying NaN (an out-of-range hue reaches `rem_euclid` as
+    /// infinity) is never `PartialEq` to itself, so a `PartialEq`-based interner
+    /// would leak a fresh copy on every parse.
+    #[test]
+    fn a_palette_with_non_finite_channels_still_interns_once() {
+        use serde_json::json;
+
+        let parse_nan_theme = || {
+            let mut fixture = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);
+            fixture["themes"][0]["colors"]["graph_lane_palette"] = serde_json::Value::Null;
+            fixture["themes"][0]["colors"]["graph_lane_hues"] = json!([1e40]);
+            AppTheme::from_json_str(
+                &serde_json::to_string(&fixture).expect("fixture should serialize"),
+            )
+            .expect("fixture should parse")
+        };
+
+        let first = parse_nan_theme();
+        assert!(
+            first
+                .graph_lane_palette
+                .as_slice()
+                .iter()
+                .any(|color| color.r.is_nan() || color.g.is_nan() || color.b.is_nan()),
+            "fixture must actually produce a non-finite channel"
+        );
+        assert!(
+            std::ptr::eq(
+                first.graph_lane_palette,
+                parse_nan_theme().graph_lane_palette
+            ),
+            "re-parsing the same palette must reuse the interned copy, NaN or not"
+        );
+    }
+
     /// A theme file may leave tokens out; it may not misspell them. The first
     /// half is what keeps themes written against an older token set loading, the
     /// second is what stops a typo from quietly doing nothing.
@@ -1807,6 +2077,27 @@ mod tests {
                 "a token the file does define must survive the fill"
             );
         }
+
+        // A colour is filled or not filled whole. Half of one is still an error:
+        // inheriting the bundled `alpha` would render a colour the author *did*
+        // write at an opacity they never asked for, with nothing to show for it.
+        let mut half_color = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);
+        assert!(
+            half_color["themes"][0]["colors"]["interaction"]["focus_background"]
+                .get("alpha")
+                .is_some(),
+            "fixture token must use the {{hex, alpha}} form for this to mean anything"
+        );
+        half_color["themes"][0]["colors"]["interaction"]["focus_background"] =
+            json!({ "hex": "#5ac1feff" });
+        let half_error = AppTheme::from_json_str(
+            &serde_json::to_string(&half_color).expect("fixture should serialize"),
+        )
+        .expect_err("a colour missing its alpha must fail rather than inherit one");
+        assert!(
+            half_error.to_string().contains("ThemeColor"),
+            "unexpected error: {half_error}"
+        );
 
         // Identity is never filled in: a file that omits its key would otherwise
         // inherit the bundled theme's and collide with it in the picker.
@@ -2583,6 +2874,47 @@ mod tests {
                 .any(|theme| theme.key == DEFAULT_DARK_THEME_KEY)
         );
     }
+    /// The settings theme list asks for the runtime themes from inside a
+    /// `uniform_list` processor, so an unmemoized load re-reads and re-parses
+    /// every theme file per frame. The cache has to hold across calls -- and
+    /// still notice an edit, because theme authors expect a save to show up
+    /// without restarting.
+    #[test]
+    fn runtime_themes_are_reused_until_the_directory_changes() {
+        use serde_json::json;
+
+        let dir = tempdir().expect("temp dir should exist");
+        let write_theme = |label: &str| {
+            let mut custom = test_theme_entry(DEFAULT_DARK_THEME_KEY);
+            custom["key"] = json!("custom_theme");
+            custom["name"] = json!(label);
+            fs::write(
+                dir.path().join("custom_theme.json"),
+                test_theme_bundle_json(label, vec![custom]),
+            )
+            .expect("custom theme file should be written");
+        };
+
+        write_theme("First");
+        let first = runtime_themes_with_dir(Some(dir.path()));
+        let again = runtime_themes_with_dir(Some(dir.path()));
+        assert!(
+            std::sync::Arc::ptr_eq(&first, &again),
+            "an unchanged theme directory must not be re-read and re-parsed"
+        );
+        assert_eq!(first["custom_theme"].option.label, "First");
+
+        // Rewriting the file changes its size, so the stat signature moves even
+        // where the filesystem's mtime resolution is coarse.
+        write_theme("Second edit");
+        let reloaded = runtime_themes_with_dir(Some(dir.path()));
+        assert!(
+            !std::sync::Arc::ptr_eq(&first, &reloaded),
+            "an edited theme file must invalidate the cache"
+        );
+        assert_eq!(reloaded["custom_theme"].option.label, "Second edit");
+    }
+
     #[test]
     fn runtime_theme_dir_ignores_reserved_system_theme_filenames() {
         let dir = tempdir().expect("temp dir should exist");

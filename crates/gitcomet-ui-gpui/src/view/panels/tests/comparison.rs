@@ -307,6 +307,7 @@ mod worktree_uncommitted {
     }
 
     /// Draw the details pane with one dirty linked worktree, optionally selected.
+    /// Counts follow the file lists, the way a completed scan reports them.
     fn draw_worktree(
         cx: &mut gpui::TestAppContext,
         repo_id: RepoId,
@@ -314,12 +315,34 @@ mod worktree_uncommitted {
         unstaged: Vec<FileStatus>,
         selected: bool,
     ) -> &mut gpui::VisualTestContext {
+        let summary = WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/linked-worktree"),
+            head: Some(CommitId(sha(0).into())),
+            branch: Some("side".into()),
+            detached: false,
+            added: unstaged.len(),
+            modified: staged.len(),
+            deleted: 0,
+            staged,
+            unstaged,
+        };
+        draw_worktree_summary(cx, repo_id, summary, selected)
+    }
+
+    /// The same, for summaries the counts-and-files relationship does not hold
+    /// for -- a scan that reported counts but has not yet carried the files.
+    fn draw_worktree_summary(
+        cx: &mut gpui::TestAppContext,
+        repo_id: RepoId,
+        summary: WorktreeDirtySummary,
+        selected: bool,
+    ) -> &mut gpui::VisualTestContext {
         let (store, events) = AppStore::new(Arc::new(TestBackend));
         let (view, cx) = cx.add_window_view(|window, cx| {
             super::super::super::GitCometView::new(store, events, None, window, cx)
         });
 
-        let worktree_path = std::path::PathBuf::from("/tmp/linked-worktree");
+        let worktree_path = summary.path.clone();
         cx.update(|_window, app| {
             view.update(app, |this, cx| {
                 let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree"));
@@ -331,17 +354,7 @@ mod worktree_uncommitted {
                     next_cursor: None,
                 }));
                 repo.log_rev = 1;
-                repo.worktree_dirty = Loadable::Ready(Arc::new(vec![WorktreeDirtySummary {
-                    path: worktree_path.clone(),
-                    head: Some(CommitId(sha(0).into())),
-                    branch: Some("side".into()),
-                    detached: false,
-                    added: unstaged.len(),
-                    modified: staged.len(),
-                    deleted: 0,
-                    staged,
-                    unstaged,
-                }]));
+                repo.worktree_dirty = Loadable::Ready(Arc::new(vec![summary.clone()]));
                 if selected {
                     repo.history_state.worktree_selection = Some(worktree_path.clone());
                 }
@@ -426,6 +439,47 @@ mod worktree_uncommitted {
         assert!(
             cx.debug_bounds("worktree_uncommitted_body").is_none(),
             "the worktree view must not appear until its row is selected"
+        );
+    }
+
+    /// Only the selected worktree's file lists are carried in state, so between
+    /// selecting a row and its scan landing the summary has counts but no files.
+    /// That must read as "loading", not as an empty worktree -- the header right
+    /// above it is counting changes the list would be claiming do not exist.
+    #[gpui::test]
+    fn a_worktree_whose_files_have_not_arrived_reads_as_loading(cx: &mut gpui::TestAppContext) {
+        let cx = draw_worktree_summary(
+            cx,
+            RepoId(94),
+            WorktreeDirtySummary {
+                path: std::path::PathBuf::from("/tmp/linked-worktree"),
+                head: Some(CommitId(sha(0).into())),
+                branch: Some("side".into()),
+                detached: false,
+                added: 2,
+                modified: 1,
+                deleted: 0,
+                staged: Vec::new(),
+                unstaged: Vec::new(),
+            },
+            true,
+        );
+
+        assert!(
+            cx.debug_bounds("worktree_uncommitted_body").is_some(),
+            "the worktree view still owns the pane while its files load"
+        );
+        assert!(
+            cx.debug_bounds("worktree_files_loading").is_some(),
+            "counts without files must read as loading"
+        );
+        assert!(
+            cx.debug_bounds("worktree_files_empty").is_none(),
+            "a worktree with counts must never read as having no changes"
+        );
+        assert!(
+            cx.debug_bounds("worktree_file_94_0").is_none(),
+            "no rows until the files arrive"
         );
     }
 

@@ -3218,3 +3218,442 @@ fn global_nav_steps_into_and_out_of_edit_mode() {
         "Forward must step back into the editor"
     );
 }
+
+/// The inline foreign diff belongs to the worktree whose file list opened it.
+/// Selecting a different worktree's row must retire it, or the diff pane keeps
+/// showing the previous checkout's file — chip and all — beside a file list that
+/// has nothing highlighted.
+#[test]
+fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let worktree_a = PathBuf::from("/tmp/wt/a");
+    let worktree_b = PathBuf::from("/tmp/wt/b");
+    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.history_state.worktree_selection = Some(worktree_a.clone());
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Worktree {
+            branch: Some("side".to_string()),
+            detached: false,
+        },
+        submodule_repo_path: worktree_a.clone(),
+        parent_submodule_path: worktree_a.clone(),
+        entries: vec![crate::model::InlineSubmoduleDiffEntry {
+            path: PathBuf::from("src/lib.rs"),
+            kind: FileStatusKind::Modified,
+            target: inline_target.clone(),
+            section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
+        }],
+        selected_ix: 0,
+        target: inline_target.clone(),
+        rev: 1,
+        diff_rev: 1,
+        diff: Loadable::NotLoaded,
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+    let diff_state_rev_before = state.repos[0].diff_state.diff_state_rev;
+
+    // Re-selecting the same worktree changes nothing: its own diff stays open.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectWorktreeUncommitted {
+            repo_id: RepoId(1),
+            path: worktree_a.clone(),
+        },
+    );
+    assert!(
+        state.repos[0].diff_state.inline_submodule_diff.is_some(),
+        "re-selecting the same worktree must leave its open diff alone"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectWorktreeUncommitted {
+            repo_id: RepoId(1),
+            path: worktree_b.clone(),
+        },
+    );
+
+    assert!(
+        state.repos[0].diff_state.inline_submodule_diff.is_none(),
+        "the other worktree's inline diff must not survive the switch"
+    );
+    assert!(
+        state.repos[0].diff_state.diff_target.is_none(),
+        "and neither must the diff target it was rendering"
+    );
+    assert!(
+        state.repos[0].diff_state.diff_state_rev > diff_state_rev_before,
+        "the diff panes have to be told to repaint"
+    );
+    assert_eq!(
+        state.repos[0].history_state.worktree_selection.as_ref(),
+        Some(&worktree_b)
+    );
+}
+
+/// A worktree row exists only while that worktree is dirty. When the scan stops
+/// reporting it — committed, stashed, or a scan that failed outright — a
+/// selection pointing at the vanished row would leave the details pane rendering
+/// nothing at all, with no way back short of selecting a commit.
+#[test]
+fn a_selection_on_a_worktree_that_went_clean_is_dropped() {
+    use gitcomet_core::domain::WorktreeDirtySummary;
+
+    let dirty = |path: &str| WorktreeDirtySummary {
+        path: PathBuf::from(path),
+        head: Some(CommitId("tip".into())),
+        branch: Some("side".to_string()),
+        detached: false,
+        added: 1,
+        modified: 0,
+        deleted: 0,
+        staged: Vec::new(),
+        unstaged: Vec::new(),
+    };
+
+    for (label, result) in [
+        (
+            "a scan that no longer lists it",
+            Ok(vec![dirty("/tmp/wt/other")]),
+        ),
+        (
+            "a scan that failed",
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("scan failed".to_string()),
+            )),
+        ),
+    ] {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let id_alloc = AtomicU64::new(2);
+        let mut state = AppState::default();
+        let mut repo_state = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo_state.set_worktree_dirty(Loadable::Ready(vec![dirty("/tmp/wt/a")]));
+        repo_state.history_state.worktree_selection = Some(PathBuf::from("/tmp/wt/a"));
+        state.repos.push(repo_state);
+        state.active_repo = Some(RepoId(1));
+
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                repo_id: RepoId(1),
+                result,
+            }),
+        );
+
+        assert!(
+            state.repos[0].history_state.worktree_selection.is_none(),
+            "{label} must drop the selection it can no longer render"
+        );
+    }
+}
+
+/// The counterpart: a worktree that is still dirty keeps its selection, or every
+/// rescan would bounce the user out of the row they are reading.
+#[test]
+fn a_selection_on_a_still_dirty_worktree_survives_a_rescan() {
+    use gitcomet_core::domain::WorktreeDirtySummary;
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let selected = PathBuf::from("/tmp/wt/a");
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.history_state.worktree_selection = Some(selected.clone());
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![WorktreeDirtySummary {
+                path: selected.clone(),
+                head: Some(CommitId("tip".into())),
+                branch: None,
+                detached: true,
+                added: 0,
+                modified: 2,
+                deleted: 0,
+                staged: Vec::new(),
+                unstaged: Vec::new(),
+            }]),
+        }),
+    );
+
+    assert_eq!(
+        state.repos[0].history_state.worktree_selection.as_ref(),
+        Some(&selected)
+    );
+}
+
+/// A worktree selection ends in more ways than it begins, and every one of them
+/// leaves the worktree's inline diff without a row to deselect it. The invariant
+/// runs after each message, so all of these exits retire it.
+#[test]
+fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
+    use gitcomet_core::domain::WorktreeDirtySummary;
+
+    let worktree = PathBuf::from("/tmp/wt/a");
+    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let state_with_open_worktree_diff = || {
+        let mut state = AppState::default();
+        let mut repo_state = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        );
+        repo_state.history_state.worktree_selection = Some(worktree.clone());
+        repo_state.diff_state.inline_submodule_diff =
+            Some(crate::model::InlineSubmoduleDiffState {
+                origin: crate::model::ForeignDiffOrigin::Worktree {
+                    branch: Some("side".to_string()),
+                    detached: false,
+                },
+                submodule_repo_path: worktree.clone(),
+                parent_submodule_path: worktree.clone(),
+                entries: vec![crate::model::InlineSubmoduleDiffEntry {
+                    path: PathBuf::from("src/lib.rs"),
+                    kind: FileStatusKind::Modified,
+                    target: inline_target.clone(),
+                    section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
+                }],
+                selected_ix: 0,
+                target: inline_target.clone(),
+                rev: 1,
+                diff_rev: 1,
+                diff: Loadable::NotLoaded,
+                diff_file_rev: 1,
+                diff_file: Loadable::NotLoaded,
+                diff_file_image: Loadable::NotLoaded,
+            });
+        state.repos.push(repo_state);
+        state.active_repo = Some(RepoId(1));
+        state
+    };
+
+    let exits: Vec<(&str, Msg)> = vec![
+        (
+            "selecting a commit",
+            Msg::SelectCommit {
+                repo_id: RepoId(1),
+                commit_id: CommitId("tip".into()),
+            },
+        ),
+        (
+            "clearing the commit selection",
+            Msg::ClearCommitSelection { repo_id: RepoId(1) },
+        ),
+        (
+            "a scan that no longer lists the worktree",
+            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                repo_id: RepoId(1),
+                result: Ok(Vec::<WorktreeDirtySummary>::new()),
+            }),
+        ),
+        (
+            "switching to another worktree",
+            Msg::SelectWorktreeUncommitted {
+                repo_id: RepoId(1),
+                path: PathBuf::from("/tmp/wt/b"),
+            },
+        ),
+    ];
+
+    for (label, msg) in exits {
+        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let id_alloc = AtomicU64::new(2);
+        let mut state = state_with_open_worktree_diff();
+
+        reduce(&mut repos, &id_alloc, &mut state, msg);
+
+        assert!(
+            state.repos[0].diff_state.inline_submodule_diff.is_none(),
+            "{label} must retire the worktree's inline diff"
+        );
+    }
+
+    // The counterpart: a message that leaves the selection intact leaves the diff
+    // intact too, or every unrelated refresh would close the file being read.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = state_with_open_worktree_diff();
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectWorktreeUncommitted {
+            repo_id: RepoId(1),
+            path: worktree.clone(),
+        },
+    );
+    assert!(
+        state.repos[0].diff_state.inline_submodule_diff.is_some(),
+        "re-selecting the same worktree must keep its open diff"
+    );
+}
+
+/// A submodule inline diff has no worktree row behind it, so the worktree
+/// invariant must not touch it.
+#[test]
+fn a_submodule_inline_diff_survives_the_worktree_invariant() {
+    let submodule_path = PathBuf::from("/tmp/repo/vendor/submodule");
+    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Submodule,
+        submodule_repo_path: submodule_path.clone(),
+        parent_submodule_path: submodule_path.clone(),
+        entries: Vec::new(),
+        selected_ix: 0,
+        target: inline_target.clone(),
+        rev: 1,
+        diff_rev: 1,
+        diff: Loadable::NotLoaded,
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ClearCommitSelection { repo_id: RepoId(1) },
+    );
+
+    assert!(
+        state.repos[0].diff_state.inline_submodule_diff.is_some(),
+        "a submodule diff has no worktree selection and must be left alone"
+    );
+}
+
+/// Only the selected worktree's changed files live in state, so selecting a row
+/// has to ask for a scan that carries them — and that scan has to name the
+/// worktree that was just selected, not whichever one was selected before.
+#[test]
+fn selecting_a_worktree_requests_a_scan_for_its_own_files() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.open = Loadable::Ready(());
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let selected = PathBuf::from("/tmp/wt/a");
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectWorktreeUncommitted {
+            repo_id: RepoId(1),
+            path: selected.clone(),
+        },
+    );
+
+    let files_for = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadWorktreeDirty { files_for, .. } => Some(files_for.clone()),
+            _ => None,
+        })
+        .expect("selecting a worktree should request a scan");
+    assert_eq!(
+        files_for,
+        Some(selected),
+        "the scan must carry the files of the worktree just selected"
+    );
+}
+
+/// The scan is also triggered by the watcher and by window focus, and those
+/// carry whatever is selected at the time — including nothing.
+#[test]
+fn a_scan_with_no_worktree_selected_asks_for_counts_alone() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.open = Loadable::Ready(());
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::LoadWorktreeDirty { repo_id: RepoId(1) },
+    );
+
+    let files_for = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadWorktreeDirty { files_for, .. } => Some(files_for.clone()),
+            _ => None,
+        })
+        .expect("the refresh should request a scan");
+    assert_eq!(
+        files_for, None,
+        "with no row selected there is no file list worth carrying"
+    );
+}

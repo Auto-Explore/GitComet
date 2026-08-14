@@ -229,14 +229,20 @@ pub(super) fn paint_graph_fade(
     ));
 }
 
-/// The column the row directly above a worktree band draws its connector down
-/// from, or `None` when nothing above it connects.
+/// The column the row directly above draws its connector down from, or `None`
+/// when nothing above it connects.
+///
+/// Shared by the worktree bands and the commit rows: both draw the matching stub
+/// upwards, and both have to agree on the column or the two rows show a seam.
 ///
 /// Only the two synthetic row kinds connect downwards: the pinned working-tree
-/// row, which always sits on column 0, and another worktree band. Two bands can
-/// share an anchor commit without sharing a column — a detached worktree and one
-/// on a branch that has fallen behind resolve to different columns on the very
-/// same row (see [`band_node_for`]) — so the column has to come from the row
+/// row, which always sits on column 0, and a worktree band. A band's connector
+/// leaves on its node's `exit_col`, not the column the node is drawn on — when the
+/// node is pushed out to a free column it elbows back across before the row ends
+/// (see [`band_node_for`]) — and it is that landing column the row below must
+/// match. Two bands can also share an anchor commit without sharing a column, a
+/// detached worktree and one on a branch that has fallen behind resolving
+/// differently on the very same row, so the answer always comes from the row
 /// above's own summary, never from the row asking.
 pub(in crate::view) fn worktree_band_connect_from_top_col(
     plan: &crate::view::caches::HistoryListPlan,
@@ -255,7 +261,7 @@ pub(in crate::view) fn worktree_band_connect_from_top_col(
             let above_row = graph_rows.get(visible_ix)?;
             let above = worktree_dirty.get(worktree_ix)?;
             let on_branch = above.branch.is_some() && !above.detached;
-            Some(usize::from(band_node_for(above_row, on_branch).col))
+            Some(usize::from(band_node_for(above_row, on_branch).exit_col))
         }
         _ => None,
     }
@@ -285,10 +291,11 @@ pub(super) fn lane_wash_color(
     }
 }
 
-/// How a band's node is painted: its resolved colour, and where its connector
-/// leaves the band when the node sits on a column of its own.
+/// How a band's node is painted: the column it sits on, its resolved colour, and
+/// where its connector leaves the band when that column is one of its own.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct BandNodePaint {
+    pub(super) col: u16,
     pub(super) color: gpui::Rgba,
     pub(super) exit_col: Option<u16>,
 }
@@ -382,11 +389,11 @@ pub(super) struct BandLaneSegment {
 /// The one exception is the band's own column: our node connects down into the
 /// commit's node, so it always gets a bottom half even when the lane starts there.
 pub(super) fn band_lane_segments(
-    row: &history_graph::GraphRow,
+    lanes: &[history_graph::LanePaint],
+    node_col: usize,
     connect_from_top_col: Option<usize>,
 ) -> SmallVec<[BandLaneSegment; 8]> {
-    let node_col = usize::from(row.node_col);
-    row.lanes_now
+    lanes
         .iter()
         .enumerate()
         .filter_map(|(col, lane)| {
@@ -406,14 +413,16 @@ pub(super) fn band_lane_segments(
 }
 
 /// Paints a synthetic row that sits *between* two commits: lanes that flow past
-/// run straight through, with an uncommitted-changes node on the row's own
+/// run straight through, with an uncommitted-changes node on the band's own
 /// column connecting down into the commit below.
 ///
-/// `row` is expected to be a pass-through band (`lanes_next == lanes_now`), so
-/// there is nothing to elbow and no secondary-parent edges to draw.
+/// Takes the commit's `lanes` and the band's own `node_col` rather than a
+/// `GraphRow`: a band has nothing to elbow and no secondary-parent edges, so the
+/// rest of a row -- `lanes_next`, `joins_in`, `edges_out` -- would be a per-row,
+/// per-frame clone of data this never reads.
 pub(super) fn paint_history_graph_band(
     theme: AppTheme,
-    row: &history_graph::GraphRow,
+    lanes: &[history_graph::LanePaint],
     connect_from_top_col: Option<usize>,
     selected_lane_color_ix: Option<history_graph::LaneColorIx>,
     node: BandNodePaint,
@@ -424,7 +433,7 @@ pub(super) fn paint_history_graph_band(
 ) {
     use gpui::PathBuilder;
 
-    if row.lanes_now.is_empty() {
+    if lanes.is_empty() {
         return;
     }
 
@@ -452,7 +461,7 @@ pub(super) fn paint_history_graph_band(
         );
     }
 
-    for segment in band_lane_segments(row, connect_from_top_col) {
+    for segment in band_lane_segments(lanes, usize::from(node.col), connect_from_top_col) {
         let x = left + x_for_col(segment.col);
         let from_y = if segment.has_top { y_top } else { y_center };
         let to_y = if segment.has_bottom {
@@ -481,7 +490,7 @@ pub(super) fn paint_history_graph_band(
     if let Some(exit_col) = node.exit_col {
         paint_node_to_lane(
             left,
-            x_for_col(usize::from(row.node_col)),
+            x_for_col(usize::from(node.col)),
             x_for_col(usize::from(exit_col)),
             y_center,
             y_bottom,
@@ -494,7 +503,7 @@ pub(super) fn paint_history_graph_band(
 
     // Same nested-layer trick the commit nodes use: quads otherwise draw under
     // every path in the layer regardless of call order.
-    let node_x = left + x_for_col(usize::from(row.node_col));
+    let node_x = left + x_for_col(usize::from(node.col));
     let node_layer_half = scaled_px(10.0);
     let node_layer_bounds = Bounds::new(
         point(node_x - node_layer_half, y_center - node_layer_half),
@@ -729,7 +738,7 @@ mod band_tests {
     }
 
     fn segment(row: &GraphRow, connect: Option<usize>, col: usize) -> Option<BandLaneSegment> {
-        band_lane_segments(row, connect)
+        band_lane_segments(&row.lanes_now, usize::from(row.node_col), connect)
             .into_iter()
             .find(|segment| segment.col == col)
     }
@@ -878,17 +887,22 @@ mod band_tests {
         let plan = HistoryListPlan::new(false, vec![row_anchor(0, 0), row_anchor(0, 1)]);
         let rows = [row.clone()];
 
-        let detached_col = usize::from(band_node_for(&row, false).col);
-        let on_branch_col = usize::from(band_node_for(&row, true).col);
+        let detached = band_node_for(&row, false);
+        let on_branch = band_node_for(&row, true);
         assert_ne!(
-            detached_col, on_branch_col,
+            detached.exit_col, on_branch.exit_col,
             "fixture must actually put the two worktrees on different columns"
+        );
+        assert_ne!(
+            detached.col, detached.exit_col,
+            "and the detached node must be the pushed-out kind, so col != exit_col"
         );
 
         assert_eq!(
             worktree_band_connect_from_top_col(&plan, &rows, &dirty, 1),
-            Some(detached_col),
-            "the lower band follows the detached worktree drawn above it"
+            Some(usize::from(detached.exit_col)),
+            "the lower band meets the column the band above actually lands on, \
+             not the one its node is drawn on"
         );
         assert_eq!(
             worktree_band_connect_from_top_col(&plan, &rows, &dirty, 0),
