@@ -612,9 +612,19 @@ impl SidebarPaneView {
                         BranchSection::Local => ("Pinned Local Branches".into(), "local"),
                         BranchSection::Remote => ("Pinned Remote Branches".into(), "remote"),
                     };
+                    let row_group: SharedString =
+                        format!("pinned_section_row_{}_{}", repo_id.0, ix).into();
+                    let context_menu_invoker: SharedString =
+                        format!("pinned_section_menu_{}_{selector_suffix}", repo_id.0).into();
+                    let context_menu_active =
+                        this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+                    let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let menu_kind = PopoverKind::PinnedSectionMenu { repo_id, section };
+                    let menu_kind_for_right_click = menu_kind.clone();
                     div()
                         .id(("pinned_section", ix))
                         .debug_selector(move || format!("pinned_section_{selector_suffix}"))
+                        .group(row_group.clone())
                         .relative()
                         .h(scaled_px(24.0))
                         .w_full()
@@ -623,7 +633,10 @@ impl SidebarPaneView {
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
-                        .interactive_row(row_style, components::InteractiveRowState::Idle)
+                        .interactive_row(
+                            row_style,
+                            components::InteractiveRowState::default().open(context_menu_active),
+                        )
                         .when(top_border, |d| {
                             d.child(top_divider(theme.colors.stroke.subtle))
                         })
@@ -647,6 +660,31 @@ impl SidebarPaneView {
                             }
                             this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                         }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.activate_context_menu_invoker(
+                                    context_menu_invoker_for_right_click.clone(),
+                                    cx,
+                                );
+                                this.open_popover_at(
+                                    menu_kind_for_right_click.clone(),
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "pinned_section_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            menu_kind,
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::SectionHeader {
@@ -1691,6 +1729,8 @@ impl SidebarPaneView {
                 }
                 BranchSidebarRow::GroupHeader {
                     label,
+                    path,
+                    remote,
                     section,
                     depth,
                     collapsed,
@@ -1702,10 +1742,34 @@ impl SidebarPaneView {
                     };
                     let row_group: SharedString =
                         format!("branch_group_row_{}_{}", repo_id.0, ix).into();
-                    let row_state = components::InteractiveRowState::Idle;
+                    let section_key = match section {
+                        BranchSection::Local => "local",
+                        BranchSection::Remote => "remote",
+                    };
+                    let context_menu_invoker: SharedString = format!(
+                        "branch_group_menu_{}_{}_{}_{}",
+                        repo_id.0,
+                        section_key,
+                        remote.as_deref().unwrap_or_default(),
+                        path
+                    )
+                    .into();
+                    let context_menu_active =
+                        this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
+                    let context_menu_invoker_for_right_click = context_menu_invoker.clone();
+                    let menu_kind = PopoverKind::BranchGroupMenu {
+                        repo_id,
+                        section,
+                        remote: remote.as_ref().map(|remote| remote.to_string()),
+                        path: path.to_string(),
+                    };
+                    let menu_kind_for_right_click = menu_kind.clone();
+                    let row_state =
+                        components::InteractiveRowState::default().open(context_menu_active);
 
                     div()
                         .id(("branch_group", ix))
+                        .debug_selector(move || format!("branch_group_{ix}"))
                         .h(scaled_px(22.0))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
@@ -1750,6 +1814,31 @@ impl SidebarPaneView {
                             }
                             this.toggle_active_repo_collapse_key(collapse_key.clone(), cx);
                         }))
+                        .on_mouse_down(
+                            MouseButton::Right,
+                            cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                                cx.stop_propagation();
+                                this.activate_context_menu_invoker(
+                                    context_menu_invoker_for_right_click.clone(),
+                                    cx,
+                                );
+                                this.open_popover_at(
+                                    menu_kind_for_right_click.clone(),
+                                    e.position,
+                                    window,
+                                    cx,
+                                );
+                            }),
+                        )
+                        .child(menu_dots_accessory(
+                            ix,
+                            "branch_group_dots",
+                            row_group.clone(),
+                            context_menu_invoker.clone(),
+                            menu_kind,
+                            context_menu_active,
+                            cx,
+                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::Branch {

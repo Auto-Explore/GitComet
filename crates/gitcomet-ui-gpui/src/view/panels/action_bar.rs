@@ -776,6 +776,7 @@ impl Render for ActionBarView {
                             repo_id,
                             target,
                             source_selectable: true,
+                            name_prefix: String::new(),
                         },
                         bounds,
                         window,

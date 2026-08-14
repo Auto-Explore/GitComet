@@ -367,10 +367,6 @@ pub(super) fn model(
     }
 
     items.push(ContextMenuItem::Separator);
-    let copy_path_text = this
-        .resolve_workdir_path(repo_id, path)
-        .map(|p| path_text_for_copy(&p))
-        .unwrap_or_else(|_| path_text_for_copy(path));
     // The working-tree file is referenced by the current branch: a permalink
     // points at the last committed version, which is what reviewers can open.
     let file_permalink = this
@@ -418,15 +414,15 @@ pub(super) fn model(
             action: Box::new(ContextMenuAction::CopyText { text: permalink }),
         });
     }
-    items.push(ContextMenuItem::Entry {
-        label: "Copy path".into(),
-        icon: Some("icons/copy.svg".into()),
-        shortcut: Some(secondary_shortcut("Shift+C").into()),
-        disabled: false,
-        action: Box::new(ContextMenuAction::CopyText {
-            text: copy_path_text,
-        }),
-    });
+    // The diff panel's Ctrl+Shift+C has always copied the repo-relative path,
+    // so the label sits on the entry that matches it.
+    push_copy_path_entries(
+        &mut items,
+        this,
+        repo_id,
+        path,
+        Some(secondary_shortcut("Shift+C").into()),
+    );
 
     ContextMenuModel::new(items)
 }
@@ -576,19 +572,13 @@ fn submodule_status_model(
     }
 
     items.push(ContextMenuItem::Separator);
-    let copy_path_text = this
-        .resolve_workdir_path(repo_id, path)
-        .map(|p| path_text_for_copy(&p))
-        .unwrap_or_else(|_| path_text_for_copy(path));
-    items.push(ContextMenuItem::Entry {
-        label: "Copy path".into(),
-        icon: Some("icons/copy.svg".into()),
-        shortcut: Some(secondary_shortcut("Shift+C").into()),
-        disabled: false,
-        action: Box::new(ContextMenuAction::CopyText {
-            text: copy_path_text,
-        }),
-    });
+    push_copy_path_entries(
+        &mut items,
+        this,
+        repo_id,
+        path,
+        Some(secondary_shortcut("Shift+C").into()),
+    );
 
     ContextMenuModel::new(items)
 }

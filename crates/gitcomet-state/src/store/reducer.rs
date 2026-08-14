@@ -143,6 +143,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::RenameBranch { .. }
             | Msg::DeleteBranch { .. }
             | Msg::ForceDeleteBranch { .. }
+            | Msg::DeleteBranches { .. }
             | Msg::CloneRepo { .. }
             | Msg::ExportPatch { .. }
             | Msg::ApplyPatch { .. }
@@ -179,6 +180,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::SetUpstreamBranch { .. }
             | Msg::UnsetUpstreamBranch { .. }
             | Msg::DeleteRemoteBranch { .. }
+            | Msg::DeleteRemoteBranches { .. }
             | Msg::Reset { .. }
             | Msg::PrepareSquash { .. }
             | Msg::SquashCommits { .. }
@@ -384,6 +386,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
             remote,
             branch,
         },
+        RepoCommandKind::DeleteRemoteBranches { remote, branches } => Msg::DeleteRemoteBranches {
+            repo_id,
+            remote,
+            branches,
+        },
         RepoCommandKind::Reset { mode, target } => Msg::Reset {
             repo_id,
             target,
@@ -562,6 +569,7 @@ fn attach_git_auth_to_effects(mut effects: Vec<Effect>, auth: StagedGitAuth) -> 
         | Effect::ForcePushWithLease { auth: slot, .. }
         | Effect::PushSetUpstream { auth: slot, .. }
         | Effect::DeleteRemoteBranch { auth: slot, .. }
+        | Effect::DeleteRemoteBranches { auth: slot, .. }
         | Effect::PushTag { auth: slot, .. }
         | Effect::DeleteRemoteTag { auth: slot, .. }
         | Effect::RebaseContinue { auth: slot, .. } => {
@@ -1041,6 +1049,11 @@ fn reduce_inner(
         Msg::ToggleFileBrowserDir { repo_id, path } => {
             effects::toggle_file_browser_dir(state, repo_id, path)
         }
+        Msg::SetFileBrowserDirExpandedRecursive {
+            repo_id,
+            path,
+            expanded,
+        } => effects::set_file_browser_dir_expanded_recursive(state, repo_id, path, expanded),
         Msg::SetFileBrowserSearch { repo_id, query } => {
             effects::set_file_browser_search(state, repo_id, query)
         }
@@ -1188,6 +1201,17 @@ fn reduce_inner(
         Msg::ForceDeleteBranch { repo_id, name } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::force_delete_branch(repo_id, name)
+        }
+        Msg::DeleteBranches {
+            repo_id,
+            names,
+            force,
+        } => {
+            if names.is_empty() {
+                return Vec::new();
+            }
+            begin_local_action(state, repo_id);
+            actions_emit_effects::delete_branches(repo_id, names, force)
         }
         Msg::CloneRepo { url, dest } => repo_management::clone_repo(state, url, dest),
         Msg::AbortCloneRepo { dest } => repo_management::abort_clone_repo(state, dest),
@@ -1497,6 +1521,16 @@ fn reduce_inner(
             remote,
             branch,
         } => actions_emit_effects::delete_remote_branch(repos, state, repo_id, remote, branch),
+        Msg::DeleteRemoteBranches {
+            repo_id,
+            remote,
+            branches,
+        } => {
+            if branches.is_empty() {
+                return Vec::new();
+            }
+            actions_emit_effects::delete_remote_branches(repos, state, repo_id, remote, branches)
+        }
         Msg::Reset {
             repo_id,
             target,

@@ -77,6 +77,57 @@ pub(in crate::view) enum ContextMenuAction {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    /// Open or close one folder in the file explorer — the menu's counterpart
+    /// to clicking the row.
+    ToggleFileBrowserDir {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    /// Flip one sidebar collapse key — the branch tree's counterpart to
+    /// clicking a group or section header.
+    ToggleSidebarCollapseKey {
+        collapse_key: SharedString,
+    },
+    /// Drive one sidebar collapse key to an explicit state.
+    ///
+    /// For rows whose rendered state can diverge from the stored key — a live
+    /// branch filter force-expands the pinned sections — where a flip would
+    /// move the key the opposite way from what the entry's label promised.
+    SetSidebarCollapseKey {
+        collapse_key: SharedString,
+        collapsed: bool,
+    },
+    /// Open or close a branch group together with every group beneath it.
+    SetBranchGroupCollapsedRecursive {
+        section: BranchSection,
+        remote: Option<String>,
+        path: String,
+        collapsed: bool,
+    },
+    /// Drop every pin in one branch section.
+    UnpinAllBranches {
+        repo_id: RepoId,
+        section: BranchSection,
+    },
+    /// Resolve a branch group's members and open the delete confirmation.
+    ///
+    /// Carries the group rather than the resolved names: the menu model is
+    /// rebuilt on every repaint while it is open, and materialising a few
+    /// hundred branch names per frame to render one count is waste. The confirm
+    /// still freezes the list it is handed.
+    ConfirmDeleteBranchGroup {
+        repo_id: RepoId,
+        section: BranchSection,
+        remote: Option<String>,
+        path: String,
+        group_label: String,
+    },
+    /// Open or close a folder together with every directory beneath it.
+    SetFileBrowserDirExpandedRecursive {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        expanded: bool,
+    },
     /// Scroll the history to a commit referenced from somewhere else and
     /// show its details.
     RevealHistoryCommit {

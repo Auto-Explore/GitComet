@@ -1122,6 +1122,7 @@ fn summarize_command(
             RepoCommandKind::SetUpstreamBranch { .. } => "Set as tracking upstream",
             RepoCommandKind::UnsetUpstreamBranch { .. } => "Unlink upstream branch",
             RepoCommandKind::DeleteRemoteBranch { .. } => "Delete remote branch",
+            RepoCommandKind::DeleteRemoteBranches { .. } => "Delete remote branches",
             RepoCommandKind::PushTag { .. } => "Push tag",
             RepoCommandKind::DeleteRemoteTag { .. } => "Delete remote tag",
             RepoCommandKind::Reset { .. } => "Reset",
@@ -1298,6 +1299,10 @@ fn summarize_command(
         }
         RepoCommandKind::DeleteRemoteBranch { remote, branch } => {
             format!("Remote branch {remote}/{branch}: Deleted")
+        }
+        RepoCommandKind::DeleteRemoteBranches { remote, branches } => {
+            let noun = crate::name_summary::branch_noun(branches.len());
+            format!("{} remote {noun} on {remote}: Deleted", branches.len())
         }
         RepoCommandKind::PushTag { remote, name } => {
             if output.stderr.contains("Everything up-to-date") {
@@ -2137,6 +2142,13 @@ mod tests {
                 "Delete remote branch",
             ),
             (
+                RepoCommandKind::DeleteRemoteBranches {
+                    remote: "origin".into(),
+                    branches: vec!["feat/a".into(), "feat/b".into()],
+                },
+                "Delete remote branches",
+            ),
+            (
                 RepoCommandKind::PushTag {
                     remote: "origin".into(),
                     name: "v1".into(),
@@ -2777,5 +2789,36 @@ mod tests {
 
         clear_staged_git_auth_env();
         assert!(gitcomet_core::auth::take_staged_git_auth().is_none());
+    }
+}
+
+#[cfg(test)]
+mod delete_remote_branches_summary_tests {
+    use super::*;
+    use gitcomet_core::services::CommandOutput;
+
+    fn summary_for(branches: Vec<String>) -> String {
+        let (_message, summary) = super::summarize_command(
+            &RepoCommandKind::DeleteRemoteBranches {
+                remote: "origin".into(),
+                branches,
+            },
+            &CommandOutput::empty_success("git push --delete"),
+            true,
+            None,
+        );
+        summary
+    }
+
+    #[test]
+    fn summary_pluralises_on_the_branch_count() {
+        assert_eq!(
+            summary_for(vec!["feat/a".into()]),
+            "1 remote branch on origin: Deleted"
+        );
+        assert_eq!(
+            summary_for(vec!["feat/a".into(), "feat/b".into()]),
+            "2 remote branches on origin: Deleted"
+        );
     }
 }

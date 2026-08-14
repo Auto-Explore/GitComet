@@ -44,6 +44,7 @@ fn effect_git_auth(effect: &Effect) -> Option<&StagedGitAuth> {
         | Effect::ForcePushWithLease { auth, .. }
         | Effect::PushSetUpstream { auth, .. }
         | Effect::DeleteRemoteBranch { auth, .. }
+        | Effect::DeleteRemoteBranches { auth, .. }
         | Effect::PushTag { auth, .. }
         | Effect::DeleteRemoteTag { auth, .. } => auth.as_ref(),
         _ => None,
@@ -490,6 +491,55 @@ fn submit_auth_prompt_replays_repo_command_and_stages_trimmed_credentials() {
     ));
     assert!(state.auth_prompt.is_none());
     assert_eq!(state.repos[0].push_in_flight, 1);
+
+    let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
+    assert_eq!(staged.kind, GitAuthKind::UsernamePassword);
+    assert_eq!(staged.username.as_deref(), Some("alice"));
+    assert_eq!(staged.secret, "token-123");
+}
+
+/// The batch remote delete is one effect carrying many branches, so it needs its
+/// own auth slot filled on retry — a credential prompt answered here must not
+/// replay the delete unauthenticated.
+#[test]
+fn submit_auth_prompt_stages_credentials_for_a_batch_remote_branch_delete() {
+    let _lock = super::staged_auth_test_lock();
+    clear_staged_git_auth();
+
+    let repo_id = RepoId(1);
+    let (mut repos, mut state) = setup_open_repo(repo_id, "/tmp/repo");
+    let id_alloc = AtomicU64::new(1);
+    state.auth_prompt = Some(AuthPromptState {
+        kind: AuthPromptKind::UsernamePassword,
+        reason: "auth required".to_string(),
+        operation: AuthRetryOperation::RepoCommand {
+            repo_id,
+            command: RepoCommandKind::DeleteRemoteBranches {
+                remote: "origin".to_string(),
+                branches: vec!["feat/a".to_string(), "feat/b".to_string()],
+            },
+        },
+    });
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SubmitAuthPrompt {
+            username: Some("alice".to_string()),
+            secret: "token-123".to_string(),
+        },
+    );
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::DeleteRemoteBranches {
+            repo_id: RepoId(1),
+            remote,
+            branches,
+            ..
+        }] if remote == "origin" && branches.len() == 2
+    ));
 
     let staged = effect_git_auth(&effects[0]).expect("staged auth should be present");
     assert_eq!(staged.kind, GitAuthKind::UsernamePassword);

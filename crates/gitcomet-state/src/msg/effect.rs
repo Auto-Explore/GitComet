@@ -298,6 +298,11 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
     },
+    DeleteBranches {
+        repo_id: RepoId,
+        names: Vec<String>,
+        force: bool,
+    },
     CloneRepo {
         url: String,
         dest: PathBuf,
@@ -493,6 +498,12 @@ pub enum Effect {
         repo_id: RepoId,
         remote: String,
         branch: String,
+        auth: Option<StagedGitAuth>,
+    },
+    DeleteRemoteBranches {
+        repo_id: RepoId,
+        remote: String,
+        branches: Vec<String>,
         auth: Option<StagedGitAuth>,
     },
     Reset {

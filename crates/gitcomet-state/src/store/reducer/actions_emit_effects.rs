@@ -106,6 +106,14 @@ pub(super) fn force_delete_branch(repo_id: RepoId, name: String) -> Vec<Effect> 
     vec![Effect::ForceDeleteBranch { repo_id, name }]
 }
 
+pub(super) fn delete_branches(repo_id: RepoId, names: Vec<String>, force: bool) -> Vec<Effect> {
+    vec![Effect::DeleteBranches {
+        repo_id,
+        names,
+        force,
+    }]
+}
+
 pub(super) fn export_patch(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -482,6 +490,22 @@ pub(super) fn delete_remote_branch(
         repo_id,
         remote,
         branch,
+        auth: None,
+    }]
+}
+
+pub(super) fn delete_remote_branches(
+    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    remote: String,
+    branches: Vec<String>,
+) -> Vec<Effect> {
+    bump_in_flight(repos, state, repo_id, InFlightKind::Push);
+    vec![Effect::DeleteRemoteBranches {
+        repo_id,
+        remote,
+        branches,
         auth: None,
     }]
 }
@@ -1090,6 +1114,7 @@ pub(super) fn repo_command_finished(
         | RepoCommandKind::ForcePushWithLease { .. }
         | RepoCommandKind::PushSetUpstream { .. }
         | RepoCommandKind::DeleteRemoteBranch { .. }
+        | RepoCommandKind::DeleteRemoteBranches { .. }
         | RepoCommandKind::PushTag { .. }
         | RepoCommandKind::DeleteRemoteTag { .. } => {
             repo_state.push_in_flight = repo_state.push_in_flight.saturating_sub(1);

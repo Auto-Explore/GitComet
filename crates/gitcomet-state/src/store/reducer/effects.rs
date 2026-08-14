@@ -1630,18 +1630,129 @@ pub(super) fn reveal_file_browser_path(
     Vec::new()
 }
 
+/// Whether a query actually filters the file tree, and so force-expands every
+/// directory and ignores `expanded_dirs`.
+///
+/// The search input is multiline and stores what was typed verbatim, so a lone
+/// space is a non-empty query that filters nothing. Mirrors the view's
+/// `file_browser_search_is_active`.
+fn file_browser_query_filters(query: &str) -> bool {
+    query.lines().any(|line| !line.trim().is_empty())
+}
+
+fn file_browser_is_filtered(repo_state: &RepoState) -> bool {
+    file_browser_query_filters(&repo_state.file_browser.search_query)
+}
+
+#[cfg(test)]
+mod file_browser_filter_tests {
+    use super::file_browser_query_filters;
+
+    /// The same table the view asserts in
+    /// `file_browser_search_predicate_agrees_with_the_renderers_matchers`.
+    /// The predicate lives in both crates and cannot be shared, so the two
+    /// tables are what keep them from drifting: change one, change both.
+    ///
+    /// Calls the real predicate rather than restating it: a copy here would
+    /// stay green through exactly the drift it exists to catch.
+    #[test]
+    fn filtered_predicate_matches_the_views_table() {
+        for (query, expected) in [
+            ("", false),
+            (" ", false),
+            ("\n", false),
+            ("  \n \t ", false),
+            ("a", true),
+            (" a ", true),
+            ("a\nb", true),
+            ("\na", true),
+            ("#comment", true),
+        ] {
+            assert_eq!(
+                file_browser_query_filters(query),
+                expected,
+                "disagreement for {query:?}"
+            );
+        }
+    }
+}
+
 pub(super) fn toggle_file_browser_dir(
     state: &mut AppState,
     repo_id: RepoId,
     path: PathBuf,
 ) -> Vec<Effect> {
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        // A filtered tree renders every directory expanded and never reads
+        // `expanded_dirs`, so a toggle here would move nothing on screen and
+        // then silently reshape the tree the moment the search was cleared.
+        if file_browser_is_filtered(repo_state) {
+            return Vec::new();
+        }
         let path = Arc::new(path);
         if repo_state.file_browser.expanded_dirs.contains(&path) {
             repo_state.file_browser.expanded_dirs.remove(&path);
         } else {
             repo_state.file_browser.expanded_dirs.insert(path);
         }
+        repo_state.file_browser.bump_rev();
+    }
+    Vec::new()
+}
+
+/// Expand or collapse `path` and every directory under it.
+///
+/// The backend enumerates the whole tree in one pass, so every descendant is
+/// already in `entries` and this needs no loading. `starts_with` on the flat
+/// list also covers `path` itself, which is what makes "Expand all under here"
+/// open the folder it was invoked on.
+pub(super) fn set_file_browser_dir_expanded_recursive(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+    expanded: bool,
+) -> Vec<Effect> {
+    // `Path::starts_with("")` is true of every path, so an empty path would
+    // reach the whole tree and a collapse would wipe `expanded_dirs` outright.
+    // The branch-group sibling guards this the same way.
+    if path.as_os_str().is_empty() {
+        return Vec::new();
+    }
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // Frozen while a search filters the tree, for the same reason a single
+    // toggle is.
+    if file_browser_is_filtered(repo_state) {
+        return Vec::new();
+    }
+    let Loadable::Ready(entries) = &repo_state.file_browser.entries else {
+        return Vec::new();
+    };
+
+    // Cloning the Arc releases the borrow on `file_browser` so `expanded_dirs`
+    // can be written while the entry list is walked.
+    let entries = Arc::clone(entries);
+    let mut changed = false;
+    for entry in entries.iter() {
+        if entry.kind != gitcomet_core::domain::FileEntryKind::Directory
+            || !entry.path.starts_with(&path)
+        {
+            continue;
+        }
+        // Each entry already owns its path as an `Arc`, so expanding reuses it
+        // rather than allocating a second copy per directory.
+        changed |= if expanded {
+            repo_state
+                .file_browser
+                .expanded_dirs
+                .insert(Arc::clone(&entry.path))
+        } else {
+            repo_state.file_browser.expanded_dirs.remove(&entry.path)
+        };
+    }
+
+    if changed {
         repo_state.file_browser.bump_rev();
     }
     Vec::new()

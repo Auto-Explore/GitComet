@@ -871,6 +871,14 @@ impl GitRepository for GixRepo {
         self.delete_remote_branch_with_output_impl(remote, branch)
     }
 
+    fn delete_remote_branches_with_output(
+        &self,
+        remote: &str,
+        branches: &[String],
+    ) -> Result<CommandOutput> {
+        self.delete_remote_branches_with_output_impl(remote, branches)
+    }
+
     fn blame_file(&self, path: &Path, rev: Option<&str>) -> Result<Vec<BlameLine>> {
         let _scope = git_ops_trace::scope(GitOpTraceKind::Blame);
         self.blame_file_impl(path, rev)

@@ -84,6 +84,7 @@ pub(super) fn model(
                 repo_id,
                 target: name.clone(),
                 source_selectable: false,
+                name_prefix: String::new(),
             },
         }),
     });
