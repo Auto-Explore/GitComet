@@ -7,7 +7,7 @@ impl MainPaneView {
     fn foreign_worktree_diff_chip(
         &self,
         theme: AppTheme,
-        cx: &gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let inline = self.active_inline_submodule_diff()?;
         let gitcomet_state::model::ForeignDiffOrigin::Worktree { branch, detached } =
@@ -22,14 +22,17 @@ impl MainPaneView {
         );
         let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
         let open_path = inline.submodule_repo_path.clone();
+        // Scaled like the other two chips (the details pane's and the history
+        // row's): an unscaled chip stops matching the title row it sits in.
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
         Some(
             crate::view::rows::sidebar::worktree_origin_chip(
                 theme,
                 label,
-                px(10.0),
-                px(18.0),
-                px(220.0),
-                px(6.0),
+                ui_scale.px(10.0),
+                ui_scale.px(18.0),
+                ui_scale.px(220.0),
+                ui_scale.px(6.0),
             )
             .id("diff_title_worktree_origin")
             .cursor(CursorStyle::PointingHand)
@@ -45,7 +48,11 @@ impl MainPaneView {
                 )
                 .into(),
             )
-            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+            .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                if !e.standard_click() {
+                    return;
+                }
+                cx.stop_propagation();
                 this.store.dispatch(Msg::OpenRepo(open_path.clone()));
                 cx.notify();
             }))
@@ -53,7 +60,11 @@ impl MainPaneView {
         )
     }
 
-    pub(super) fn diff_panel_title(&self, theme: AppTheme, cx: &gpui::Context<Self>) -> AnyElement {
+    pub(super) fn diff_panel_title(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
         self.rendered_diff_target()
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t

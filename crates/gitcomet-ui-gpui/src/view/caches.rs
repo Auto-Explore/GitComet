@@ -310,7 +310,6 @@ impl HistoryListPlan {
     }
 }
 
-
 #[cfg(test)]
 mod history_list_plan_tests {
     use super::*;
@@ -357,7 +356,10 @@ mod history_list_plan_tests {
         let plan = HistoryListPlan::new(false, Vec::new());
         assert_eq!(plan.list_len(5), 5);
         assert_eq!(plan.list_ix_for_visible(3), 3);
-        assert_eq!(plan.row_at(3), Some(HistoryListRow::Commit { visible_ix: 3 }));
+        assert_eq!(
+            plan.row_at(3),
+            Some(HistoryListRow::Commit { visible_ix: 3 })
+        );
         assert_plan_round_trips(&plan, 5);
     }
 
@@ -374,7 +376,10 @@ mod history_list_plan_tests {
     fn a_worktree_row_sits_directly_above_its_head_commit() {
         let plan = HistoryListPlan::new(false, vec![anchor(2, 0)]);
         assert_eq!(plan.list_len(5), 6);
-        assert_eq!(plan.row_at(1), Some(HistoryListRow::Commit { visible_ix: 1 }));
+        assert_eq!(
+            plan.row_at(1),
+            Some(HistoryListRow::Commit { visible_ix: 1 })
+        );
         assert_eq!(
             plan.row_at(2),
             Some(HistoryListRow::WorktreeUncommitted {
@@ -382,7 +387,10 @@ mod history_list_plan_tests {
                 worktree_ix: 0,
             })
         );
-        assert_eq!(plan.row_at(3), Some(HistoryListRow::Commit { visible_ix: 2 }));
+        assert_eq!(
+            plan.row_at(3),
+            Some(HistoryListRow::Commit { visible_ix: 2 })
+        );
         assert_eq!(plan.list_ix_for_visible(2), 3);
         assert_plan_round_trips(&plan, 5);
     }
@@ -419,11 +427,26 @@ mod history_list_plan_tests {
         assert_plan_round_trips(&scrambled, 6);
     }
 
+    /// `row_at` is deliberately unbounded above: the plan never learns how many
+    /// commits are visible (`list_len` takes that as an argument), so an index
+    /// past the end still resolves to a commit row that is simply not there.
+    /// Every caller bounds the index itself before looking the commit up. Pinned
+    /// here so a caller that forgets is a bug in the caller, not a surprise from
+    /// a method that looks like it range-checks.
     #[test]
-    fn indices_past_the_end_have_no_row() {
+    fn row_at_leaves_the_upper_bound_to_its_callers() {
         let plan = HistoryListPlan::new(true, vec![anchor(0, 0)]);
         let len = plan.list_len(2);
-        assert!(plan.row_at(len).is_none() || plan.row_at(len - 1).is_some());
+        assert_eq!(
+            plan.row_at(len - 1),
+            Some(HistoryListRow::Commit { visible_ix: 1 }),
+            "the last in-range row is the last visible commit"
+        );
+        assert_eq!(
+            plan.row_at(len),
+            Some(HistoryListRow::Commit { visible_ix: 2 }),
+            "one past the end keeps counting commits instead of returning None"
+        );
         assert_plan_round_trips(&plan, 2);
     }
 }

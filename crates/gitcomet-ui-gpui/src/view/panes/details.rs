@@ -87,7 +87,8 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_files_path_alignment_group:
         components::PathTruncationAlignmentGroup,
     pub(in super::super) range_files_path_alignment_group: components::PathTruncationAlignmentGroup,
-    pub(in super::super) worktree_files_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) worktree_files_path_alignment_group:
+        components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -439,7 +440,8 @@ impl DetailsPaneView {
             staged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             commit_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             range_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
-            worktree_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            worktree_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(
+            ),
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -872,9 +874,6 @@ impl DetailsPaneView {
         cache.rows_for(&(repo_id, range_files_rev), files)
     }
 
-    /// Presentation rows for a linked worktree's changed files. Keyed on the
-    /// scan revision, so it rebuilds when the worktree is rescanned and is shared
-    /// across renders otherwise.
     /// The scan entry for the worktree row the history selection is on.
     pub(in super::super) fn selected_worktree_summary(
         &self,
@@ -887,6 +886,9 @@ impl DetailsPaneView {
         dirty.iter().find(|summary| &summary.path == path)
     }
 
+    /// Presentation rows for a linked worktree's changed files. Keyed on the
+    /// scan revision, so it rebuilds when the worktree is rescanned and is shared
+    /// across renders otherwise.
     pub(in super::super) fn cached_worktree_file_rows(
         &self,
         repo_id: RepoId,
@@ -899,6 +901,30 @@ impl DetailsPaneView {
             &(repo_id, worktree_dirty_rev, worktree_path.to_path_buf()),
             files,
         )
+    }
+
+    /// Path-truncation signature for a linked worktree's file rows.
+    ///
+    /// The scan revision bumps per repo-wide rescan, not per worktree, so the
+    /// worktree's own path has to be in here: two worktrees with the same file
+    /// count and the same visible range are otherwise indistinguishable, and the
+    /// second one would inherit the first one's measured alignment.
+    pub(in super::super) fn worktree_files_visible_signature(
+        &self,
+        repo_id: RepoId,
+        worktree_dirty_rev: u64,
+        worktree_path: &std::path::Path,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo_id,
+            worktree_dirty_rev,
+            worktree_path,
+            total_rows,
+            range.start,
+            range.end,
+        ))
     }
 
     pub(in super::super) fn range_files_visible_signature(

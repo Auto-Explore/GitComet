@@ -678,9 +678,18 @@ mod tests {
     #[test]
     fn kind_keys_are_stable_buckets() {
         assert_eq!(commit_file_kind_visuals(FileStatusKind::Added).kind_key, 0);
-        assert_eq!(commit_file_kind_visuals(FileStatusKind::Modified).kind_key, 1);
-        assert_eq!(commit_file_kind_visuals(FileStatusKind::Deleted).kind_key, 2);
-        assert_eq!(commit_file_kind_visuals(FileStatusKind::Renamed).kind_key, 3);
+        assert_eq!(
+            commit_file_kind_visuals(FileStatusKind::Modified).kind_key,
+            1
+        );
+        assert_eq!(
+            commit_file_kind_visuals(FileStatusKind::Deleted).kind_key,
+            2
+        );
+        assert_eq!(
+            commit_file_kind_visuals(FileStatusKind::Renamed).kind_key,
+            3
+        );
         assert_eq!(
             commit_file_kind_visuals(FileStatusKind::Untracked).kind_key,
             4

@@ -2,15 +2,16 @@ use crate::model::{AppState, ConflictFileLoadMode};
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
 use gitcomet_core::domain::{
-    DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus,
-    Worktree, WorktreeDirtySummary, count_file_statuses,
+    DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
+    WorktreeDirtySummary, count_file_statuses,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Instant;
 
@@ -953,6 +954,7 @@ pub(super) fn schedule_load_worktree_dirty(
         repo_id,
         msg_tx,
         move |repo, msg_tx| {
+            let own_workdir = canonicalize_or_original(own_workdir);
             let result = repo
                 .list_worktrees_cancellable(&cancellation)
                 .map(|worktrees| {
@@ -961,7 +963,7 @@ pub(super) fn schedule_load_worktree_dirty(
                         if cancellation.is_cancelled() {
                             break;
                         }
-                        if worktree.path == own_workdir {
+                        if is_own_worktree(&worktree.path, &own_workdir) {
                             continue;
                         }
                         let Ok(handle) = backend.open(&worktree.path) else {
@@ -992,6 +994,21 @@ pub(super) fn schedule_load_worktree_dirty(
             );
         },
     );
+}
+
+/// Whether `worktree_path` is the worktree this tab already has open — those
+/// changes belong in the pinned working-tree row, not in a linked-worktree one.
+///
+/// `own_workdir` is canonicalized: the spec's workdir goes through
+/// `canonicalize_path` when the repo is opened. Git reports the path it recorded
+/// verbatim, so the two can spell the same directory differently — `/tmp/x`
+/// against `/private/tmp/x` on macOS, or either side of a symlinked repo root on
+/// any platform. A raw comparison misses that, and this tab's own changes come
+/// back a second time as a duplicate row anchored on HEAD. The cheap equality is
+/// tried first so the common case costs no syscall.
+fn is_own_worktree(worktree_path: &Path, own_workdir: &Path) -> bool {
+    worktree_path == own_workdir
+        || canonicalize_or_original(worktree_path.to_path_buf()) == own_workdir
 }
 
 fn worktree_dirty_summary(worktree: Worktree, status: RepoStatus) -> WorktreeDirtySummary {
@@ -1994,7 +2011,10 @@ mod worktree_dirty_tests {
         };
 
         let summary = worktree_dirty_summary(worktree(), repo_status);
-        assert_eq!((summary.added, summary.modified, summary.deleted), (1, 1, 1));
+        assert_eq!(
+            (summary.added, summary.modified, summary.deleted),
+            (1, 1, 1)
+        );
         assert!(summary.is_dirty());
         // The rows list these files, so the scan has to hand them over rather
         // than reducing them to counts and dropping them.
@@ -2014,5 +2034,38 @@ mod worktree_dirty_tests {
         assert_eq!(summary.branch.as_deref(), Some("side"));
         assert!(!summary.detached);
         assert!(!summary.is_dirty(), "a clean tree must not be reported");
+    }
+
+    /// The scan's own workdir arrives canonicalized while git reports the path it
+    /// recorded, so the two spell the same directory differently whenever the repo
+    /// root is reached through a symlink. Missing that match scans this tab's own
+    /// worktree and renders its changes twice.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_repo_root_is_still_recognised_as_our_own_worktree() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).expect("create real worktree dir");
+        let linked = dir.path().join("linked");
+        std::os::unix::fs::symlink(&real, &linked).expect("symlink");
+
+        let own_workdir = canonicalize_or_original(linked.clone());
+        assert_ne!(
+            own_workdir, linked,
+            "fixture must actually produce two spellings of one directory"
+        );
+
+        assert!(
+            is_own_worktree(&linked, &own_workdir),
+            "the path git reports must still match our canonicalized workdir"
+        );
+        assert!(
+            is_own_worktree(&real, &own_workdir),
+            "and so must the resolved one"
+        );
+        assert!(
+            !is_own_worktree(&dir.path().join("other"), &own_workdir),
+            "a genuinely different worktree is still scanned"
+        );
     }
 }

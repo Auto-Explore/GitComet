@@ -502,25 +502,13 @@ pub(super) fn history_commit_row_canvas(
             //
             // `graph_bounds.right()` is exactly `summary_bounds.left()`, so the
             // gradient ends where the border begins.
-            if show_graph && show_graph_color_marker && graph_bounds.size.width > px(0.0) {
-                let fade_w = graph_bounds
-                    .size
-                    .width
-                    .min(scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX));
-                window.paint_quad(fill(
-                    Bounds::new(
-                        point(graph_bounds.right() - fade_w, graph_bounds.top()),
-                        size(fade_w, graph_bounds.size.height),
-                    ),
-                    gpui::linear_gradient(
-                        90.0,
-                        gpui::linear_color_stop(with_alpha(node_color, 0.0), 0.0),
-                        gpui::linear_color_stop(
-                            with_alpha(node_color, HISTORY_GRAPH_FADE_ALPHA),
-                            1.0,
-                        ),
-                    ),
-                ));
+            if show_graph && show_graph_color_marker {
+                super::history_graph_paint::paint_graph_fade(
+                    node_color,
+                    graph_bounds,
+                    scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+                    window,
+                );
             }
 
             if show_graph {

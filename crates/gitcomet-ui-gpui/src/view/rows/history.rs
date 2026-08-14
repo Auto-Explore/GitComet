@@ -2786,21 +2786,14 @@ impl HistoryView {
                     // Whatever sits directly above draws a connector down into
                     // this row; carry it through so the lane is not broken.
                     let connect_from_top_col =
-                        list_ix.checked_sub(1).and_then(|above| match plan.row_at(above) {
-                            Some(HistoryListRow::WorkingTreeSummary) => Some(0),
-                            // Two worktrees on one commit share an anchor, and so
-                            // the same node column.
-                            Some(HistoryListRow::WorktreeUncommitted { .. }) => {
-                                Some(usize::from(
-                                    super::history_graph_paint::band_node_for(
-                                        graph_row,
-                                        summary.branch.is_some() && !summary.detached,
-                                    )
-                                    .col,
-                                ))
-                            }
-                            _ => None,
-                        });
+                        super::history_graph_paint::worktree_band_connect_from_top_col(
+                            &plan,
+                            cache.base.graph_rows.as_ref(),
+                            worktree_dirty
+                                .as_ref()
+                                .map_or(&[][..], |dirty| dirty.as_slice()),
+                            list_ix,
+                        );
                     return Some(worktree_uncommitted_history_row(
                         theme,
                         ui_scale,
@@ -2866,28 +2859,24 @@ impl HistoryView {
                 cache.base.graph_rows.get(visible_ix)?;
                 let base_row_vm = cache.base.row_vms.get(visible_ix)?;
                 let decoration_row_vm = cache.decorations.row_vms.get(visible_ix)?;
-                let connect_from_top_col = match list_ix
-                    .checked_sub(1)
-                    .and_then(|above| plan.row_at(above))
-                {
-                    // A worktree band above connects its node down into this
-                    // commit, so this row draws the matching stub upwards even
-                    // when the lane is born here.
-                    Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) => cache
-                        .base
-                        .graph_rows
-                        .get(visible_ix)
-                        .map(|row| {
-                            let on_branch = worktree_dirty
-                                .as_ref()
-                                .and_then(|dirty| dirty.get(worktree_ix))
-                                .is_some_and(|s| s.branch.is_some() && !s.detached);
-                            usize::from(
-                                super::history_graph_paint::band_node_for(row, on_branch).col,
-                            )
-                        }),
-                    _ => (show_working_tree_summary_row && visible_ix == 0).then_some(0),
-                };
+                let connect_from_top_col =
+                    match list_ix.checked_sub(1).and_then(|above| plan.row_at(above)) {
+                        // A worktree band above connects its node down into this
+                        // commit, so this row draws the matching stub upwards even
+                        // when the lane is born here.
+                        Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) => {
+                            cache.base.graph_rows.get(visible_ix).map(|row| {
+                                let on_branch = worktree_dirty
+                                    .as_ref()
+                                    .and_then(|dirty| dirty.get(worktree_ix))
+                                    .is_some_and(|s| s.branch.is_some() && !s.detached);
+                                usize::from(
+                                    super::history_graph_paint::band_node_for(row, on_branch).col,
+                                )
+                            })
+                        }
+                        _ => (show_working_tree_summary_row && visible_ix == 0).then_some(0),
+                    };
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id)
                     || repo.history_state.multi_selection.is_multi()
                         && repo.history_state.multi_selection.contains(&commit.id);
@@ -2971,10 +2960,7 @@ fn history_worktree_node_color_ix(
 ///
 /// Absolutely positioned so the label keeps the same left offset it has on a
 /// commit row — a flow child would push the text over by the border's width.
-fn history_message_border(
-    ui_scale: ui_scale::UiScale,
-    color: gpui::Rgba,
-) -> impl IntoElement {
+fn history_message_border(ui_scale: ui_scale::UiScale, color: gpui::Rgba) -> impl IntoElement {
     let border_w = ui_scale.px(HISTORY_MESSAGE_BORDER_W_PX);
     let inset_y = ui_scale.px(HISTORY_MESSAGE_BORDER_INSET_Y_PX);
     div()
@@ -3286,7 +3272,14 @@ fn worktree_uncommitted_history_row(
             .text_color(palette.hover_text)
     })
     .gitcomet_tooltip(theme, badge_tooltip)
-    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+    // The badge is a control of its own: a right or middle click must not open
+    // the repo, and a left click on it must not also select the row underneath
+    // -- the row belongs to the repo we are navigating away from.
+    .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+        if !e.standard_click() {
+            return;
+        }
+        cx.stop_propagation();
         this.store.dispatch(Msg::OpenRepo(open_path.clone()));
         cx.notify();
     }));
@@ -3357,7 +3350,6 @@ fn worktree_uncommitted_history_row(
         row = row.bg(with_alpha(theme.colors.accent.foreground, 0.15));
     }
 
-    let _ = repo_id;
     row.into_any_element()
 }
 
@@ -3575,23 +3567,22 @@ mod tests {
         MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
         build_cached_diff_styled_text, history_message_text_left_px,
         history_scope_shows_graph_color_marker, history_worktree_node_color_ix,
-        markdown_preview_alert_title_label,
-        markdown_preview_expanded_slice_range, markdown_preview_image_source,
-        markdown_preview_inline_highlight, markdown_preview_no_picture_sizes,
-        markdown_preview_picture_skeleton, markdown_preview_row_background,
-        markdown_preview_row_height, markdown_preview_row_horizontal_padding,
-        markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
+        markdown_preview_alert_title_label, markdown_preview_expanded_slice_range,
+        markdown_preview_image_source, markdown_preview_inline_highlight,
+        markdown_preview_no_picture_sizes, markdown_preview_picture_skeleton,
+        markdown_preview_row_background, markdown_preview_row_height,
+        markdown_preview_row_horizontal_padding, markdown_preview_row_layout,
+        markdown_preview_row_marker, markdown_preview_row_styled_text,
         markdown_preview_row_typography, worktree_preview_apply_query_overlay,
     };
-    use crate::view::{
-        HISTORY_COL_HANDLE_PX, HISTORY_MESSAGE_BORDER_GAP_PX, HISTORY_MESSAGE_BORDER_W_PX,
-    };
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
-    use crate::view::history_graph;
     use crate::view::markdown_preview::MarkdownInlineSpan;
     use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
     use crate::view::rows::diff_text::DIFF_WRAP_TAB_EXPANDED_COLUMNS;
     use crate::view::{AppTheme, DateTimeFormat, Timezone, format_datetime, format_datetime_utc};
+    use crate::view::{
+        HISTORY_COL_HANDLE_PX, HISTORY_MESSAGE_BORDER_GAP_PX, HISTORY_MESSAGE_BORDER_W_PX,
+    };
     use gitcomet_core::domain::LogScope;
     use gpui::{FontWeight, SharedString, px};
     use std::sync::Arc;

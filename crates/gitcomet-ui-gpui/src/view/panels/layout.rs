@@ -1145,10 +1145,6 @@ impl DetailsPaneView {
             .into_any_element()
     }
 
-    /// The details-pane view shown while two points are being compared: the
-    /// selected commit cards, a "viewing diff between" subheader, and the list
-    /// of files that differ between them. The diff pane starts empty; clicking a
-    /// file loads that file's range diff in the main pane.
     /// The changed files of a linked worktree that is *not* this tab, shown when
     /// its history row is selected.
     ///
@@ -1300,6 +1296,10 @@ impl DetailsPaneView {
             .into_any_element()
     }
 
+    /// The details-pane view shown while two points are being compared: the
+    /// selected commit cards, a "viewing diff between" subheader, and the list
+    /// of files that differ between them. The diff pane starts empty; clicking a
+    /// file loads that file's range diff in the main pane.
     fn range_comparison_view(
         &mut self,
         repo_id: RepoId,

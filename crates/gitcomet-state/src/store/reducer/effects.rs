@@ -1445,6 +1445,16 @@ pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<
 /// Queues a rescan of the other worktrees' uncommitted changes, if one is not
 /// already running. Returns `None` when a scan is in flight, so callers can
 /// fire this from several triggers without stacking up repeated full scans.
+///
+/// The watcher-driven trigger fires on every git-state flush, and a full scan
+/// runs `status` on every other worktree, so what bounds the cost is worth
+/// spelling out: the monitor debounces raw events at 250ms with a 2s ceiling
+/// (`repo_monitor.rs`), and `request` admits at most one scan in flight plus one
+/// queued. A storm therefore costs one scan at a time, never a growing queue,
+/// and always ends with one trailing scan — dropping the queued repeat instead
+/// would be cheaper but could leave the counts stale after the last event.
+/// There is deliberately no time-based throttle here: this reducer has no clock,
+/// and the ones that do (window focus, `view/mod.rs`) ride their own.
 pub(super) fn request_worktree_dirty_effect(repo_state: &mut RepoState) -> Option<Effect> {
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return None;

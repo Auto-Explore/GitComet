@@ -1293,8 +1293,118 @@ fn collect_theme_specs(
     Ok(themes)
 }
 
+/// Tokens deliberately left out of [`fill_missing_color_tokens`]. Both are
+/// optional by design and already have a fallback of their own: omitting them
+/// generates a lane palette for the theme's appearance
+/// ([`GraphLanePalette::from_theme_colors`]). Filling them from the bundled theme
+/// instead would hand every such theme gitcomet's hand-picked lane colours and
+/// silently repaint its graph.
+const UNFILLED_COLOR_TOKENS: &[&str] = &["graph_lane_palette", "graph_lane_hues"];
+
+static BUNDLED_COLOR_TOKENS: OnceLock<HashMap<&'static str, serde_json::Value>> = OnceLock::new();
+
+/// The `colors` object of the bundled theme for `appearance`, as raw JSON.
+///
+/// Raw rather than parsed on purpose: it is merged into a theme file *before*
+/// that file is deserialized, so both sides have to be JSON.
+fn bundled_color_tokens(appearance: &str) -> Option<&'static serde_json::Value> {
+    let wanted = if appearance == "light" {
+        DEFAULT_LIGHT_THEME_KEY
+    } else {
+        DEFAULT_DARK_THEME_KEY
+    };
+    BUNDLED_COLOR_TOKENS
+        .get_or_init(|| {
+            let mut tokens = HashMap::default();
+            for file in EMBEDDED_THEME_FILES {
+                let Ok(bundle) = serde_json::from_str::<serde_json::Value>(file.json) else {
+                    continue;
+                };
+                let Some(themes) = bundle.get("themes").and_then(|themes| themes.as_array()) else {
+                    continue;
+                };
+                for theme in themes {
+                    let key = match theme.get("key").and_then(|key| key.as_str()) {
+                        Some(key) if key == DEFAULT_DARK_THEME_KEY => DEFAULT_DARK_THEME_KEY,
+                        Some(key) if key == DEFAULT_LIGHT_THEME_KEY => DEFAULT_LIGHT_THEME_KEY,
+                        _ => continue,
+                    };
+                    if let Some(colors) = theme.get("colors") {
+                        tokens.insert(key, colors.clone());
+                    }
+                }
+            }
+            tokens
+        })
+        .get(wanted)
+}
+
+/// Fills tokens a theme file leaves out with the bundled theme of the same
+/// appearance, so a file written against an older token set keeps loading after
+/// new tokens are added — the alternative is that every custom theme in the wild
+/// breaks at once, and a broken theme is dropped from the picker with nothing
+/// said in-app.
+///
+/// Only `colors` is filled. `key`, `name` and `appearance` identify the theme and
+/// must come from the file itself, or a half-written file would take the bundled
+/// theme's identity and collide with it in the picker. Unknown tokens are still
+/// rejected: filling in what is missing must not make a typo silently do nothing.
+fn fill_missing_color_tokens(bundle: &mut serde_json::Value) {
+    let Some(themes) = bundle
+        .get_mut("themes")
+        .and_then(|themes| themes.as_array_mut())
+    else {
+        return;
+    };
+
+    for theme in themes {
+        let appearance = theme
+            .get("appearance")
+            .and_then(|appearance| appearance.as_str())
+            .unwrap_or("dark")
+            .to_string();
+        let Some(base) = bundled_color_tokens(&appearance) else {
+            continue;
+        };
+        let Some(entry) = theme.as_object_mut() else {
+            continue;
+        };
+        let colors = entry
+            .entry("colors")
+            .or_insert_with(|| serde_json::Value::Object(serde_json::Map::new()));
+        fill_missing_json_fields(base, colors, UNFILLED_COLOR_TOKENS);
+    }
+}
+
+/// Copies every field of `base` that `target` does not define. Objects present on
+/// both sides recurse, so a file may define part of a group and inherit the rest.
+/// `skip` applies to the top level only.
+fn fill_missing_json_fields(
+    base: &serde_json::Value,
+    target: &mut serde_json::Value,
+    skip: &[&str],
+) {
+    let (Some(base), Some(target)) = (base.as_object(), target.as_object_mut()) else {
+        return;
+    };
+    for (key, base_value) in base {
+        if skip.contains(&key.as_str()) {
+            continue;
+        }
+        match target.get_mut(key) {
+            Some(existing) => fill_missing_json_fields(base_value, existing, &[]),
+            None => {
+                target.insert(key.clone(), base_value.clone());
+            }
+        }
+    }
+}
+
 fn parse_theme_bundle(json: &str) -> Result<ThemeBundleFile, ThemeParseError> {
-    let bundle: ThemeBundleFile = serde_json::from_str(json).map_err(ThemeParseError::Parse)?;
+    let mut value: serde_json::Value =
+        serde_json::from_str(json).map_err(ThemeParseError::Parse)?;
+    fill_missing_color_tokens(&mut value);
+    let bundle: ThemeBundleFile = serde_json::from_value(value).map_err(ThemeParseError::Parse)?;
     if bundle.schema_version != THEME_SCHEMA_VERSION {
         return Err(ThemeParseError::Invalid(format!(
             "unsupported theme schema version {}; expected {}",
@@ -1663,22 +1773,55 @@ mod tests {
         );
     }
 
+    /// A theme file may leave tokens out; it may not misspell them. The first
+    /// half is what keeps themes written against an older token set loading, the
+    /// second is what stops a typo from quietly doing nothing.
     #[test]
-    fn semantic_groups_are_strictly_validated() {
+    fn missing_semantic_tokens_fall_back_and_unknown_ones_are_rejected() {
         use serde_json::json;
 
-        let mut missing = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);
-        missing["themes"][0]["colors"]["surface"]
+        for (base_key, appearance) in [
+            (DEFAULT_DARK_THEME_KEY, "dark"),
+            (DEFAULT_LIGHT_THEME_KEY, "light"),
+        ] {
+            let bundled = AppTheme::from_key(base_key).expect("bundled theme should load");
+            let mut missing = test_theme_bundle_value(base_key);
+            missing["themes"][0]["colors"]["surface"]
+                .as_object_mut()
+                .expect("surface should be an object")
+                .remove("input");
+            // Not the bundled palette: a token filled from the wrong appearance
+            // would still parse, so the fixture has to differ somewhere visible.
+            missing["themes"][0]["colors"]["surface"]["canvas"] = json!("#123456ff");
+            let filled = AppTheme::from_json_str(
+                &serde_json::to_string(&missing).expect("fixture should serialize"),
+            )
+            .expect("a theme that omits a token should load");
+            assert_eq!(
+                filled.colors.surface.input, bundled.colors.surface.input,
+                "omitted token should come from the bundled {appearance} theme"
+            );
+            assert_eq!(
+                filled.colors.surface.canvas,
+                gpui::rgba(0x123456ff),
+                "a token the file does define must survive the fill"
+            );
+        }
+
+        // Identity is never filled in: a file that omits its key would otherwise
+        // inherit the bundled theme's and collide with it in the picker.
+        let mut no_key = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);
+        no_key["themes"][0]
             .as_object_mut()
-            .expect("surface should be an object")
-            .remove("input");
-        let missing_error = AppTheme::from_json_str(
-            &serde_json::to_string(&missing).expect("fixture should serialize"),
+            .expect("theme entry should be an object")
+            .remove("key");
+        let key_error = AppTheme::from_json_str(
+            &serde_json::to_string(&no_key).expect("fixture should serialize"),
         )
-        .expect_err("missing required semantic token must fail");
+        .expect_err("a theme without a key must fail");
         assert!(
-            missing_error.to_string().contains("missing field `input`"),
-            "unexpected error: {missing_error}"
+            key_error.to_string().contains("missing field `key`"),
+            "unexpected error: {key_error}"
         );
 
         let mut unknown = test_theme_bundle_value(DEFAULT_DARK_THEME_KEY);

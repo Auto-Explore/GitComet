@@ -167,11 +167,8 @@ pub(in crate::view) fn worktree_origin_label(
     detached: bool,
     path: &std::path::Path,
 ) -> SharedString {
-    let branch = worktree_branch_badge_label(
-        branch.map(SharedString::new).as_ref(),
-        detached,
-        None,
-    );
+    let branch =
+        worktree_branch_badge_label(branch.map(SharedString::new).as_ref(), detached, None);
     let folder = path
         .file_name()
         .map(|name| name.to_string_lossy().into_owned());
@@ -2478,7 +2475,9 @@ impl DetailsPaneView {
             .collect();
 
         // Every file is an entry so the diff view can step between them with
-        // the same navigation submodule diffs get.
+        // the same navigation submodule diffs get. Shared behind an `Arc` because
+        // every visible row's click handler captures the whole list, and the list
+        // is one entry per changed file.
         let entries: Vec<gitcomet_state::model::InlineSubmoduleDiffEntry> = files
             .iter()
             .zip(areas.iter())
@@ -2499,6 +2498,7 @@ impl DetailsPaneView {
                 },
             )
             .collect();
+        let entries = Arc::new(entries);
 
         let theme = this.theme;
         let ui_scale_percent = this.ui_scale_percent;
@@ -2512,9 +2512,10 @@ impl DetailsPaneView {
             .as_ref()
             .filter(|inline| inline.submodule_repo_path == summary.path)
             .map(|inline| inline.selected_ix);
-        let visible_signature = this.range_files_visible_signature(
+        let visible_signature = this.worktree_files_visible_signature(
             repo_id,
             worktree_dirty_rev,
+            &summary.path,
             &range,
             files.len(),
         );
@@ -2538,7 +2539,7 @@ impl DetailsPaneView {
                 let color = visuals.color(&theme);
                 let selected = selected_ix_now == Some(ix);
                 let tooltip = path_label.clone();
-                let entries_for_click = entries.clone();
+                let entries_for_click = Arc::clone(&entries);
                 let worktree_path_for_click = worktree_path.clone();
                 let origin_for_click = origin.clone();
 
@@ -2590,7 +2591,7 @@ impl DetailsPaneView {
                             origin: origin_for_click.clone(),
                             submodule_repo_path: worktree_path_for_click.clone(),
                             parent_submodule_path: worktree_path_for_click.clone(),
-                            entries: entries_for_click.clone(),
+                            entries: entries_for_click.as_ref().clone(),
                             selected_ix: ix,
                         });
                         cx.notify();
@@ -2908,6 +2909,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn worktree_branch_badge_label_prefers_open_repo_head_branch() {
         let listed: SharedString = "feature/listed".into();
         let mut open_repo = RepoState::new_opening(

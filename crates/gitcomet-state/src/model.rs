@@ -1089,7 +1089,6 @@ pub struct RepoState {
     pub pull_in_flight: u32,
     pub push_in_flight: u32,
     pub worktrees_in_flight: u32,
-    pub worktree_dirty_in_flight: u32,
     pub local_actions_in_flight: u32,
     pub commit_in_flight: u32,
 
@@ -1212,7 +1211,6 @@ impl RepoState {
             pull_in_flight: 0,
             push_in_flight: 0,
             worktrees_in_flight: 0,
-            worktree_dirty_in_flight: 0,
             local_actions_in_flight: 0,
             commit_in_flight: 0,
             open: Loadable::Loading,

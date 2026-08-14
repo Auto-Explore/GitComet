@@ -51,7 +51,11 @@ impl LanePaint {
     };
 
     #[inline]
-    pub(in crate::view) const fn lane(color_ix: LaneColorIx, incoming: bool, from_node: bool) -> Self {
+    pub(in crate::view) const fn lane(
+        color_ix: LaneColorIx,
+        incoming: bool,
+        from_node: bool,
+    ) -> Self {
         let mut flags = Self::ACTIVE;
         if incoming {
             flags |= Self::INCOMING;

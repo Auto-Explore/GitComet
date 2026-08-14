@@ -203,8 +203,11 @@ The bundle root supports:
 
 ## Colors Schema
 
-Theme schema v2 uses semantic groups. Every group and field below is required
-unless marked optional:
+Theme schema v2 uses semantic groups. Define every group and field below: a token
+your file leaves out falls back to the bundled theme matching your `appearance`
+(`gitcomet_dark` or `gitcomet_light`), which keeps older theme files loading when
+new tokens are added but means the omitted token is not yours to control. A token
+you misspell is still an error — the file is rejected rather than half-applied.
 
 - `surface`: `canvas`, `chrome`, `panel`, `raised`, `input`
 - `foreground`: `primary`, `secondary`, `disabled`, `placeholder`, `emphasis`
@@ -242,9 +245,13 @@ Most color fields accept either:
 
 Use `graph_lane_palette` for an explicit list of colors, or `graph_lane_hues` for a list of hue values that GitComet turns into graph lane colors automatically.
 
-Only syntax colors, graph lanes, and the documented radius extensions have
-fallbacks. Semantic UI colors are required so components never have to infer a
-status, editor, selection, or control color from an unrelated token.
+Syntax colors, graph lanes, and the documented radius extensions have fallbacks of
+their own — omitting `graph_lane_palette` and `graph_lane_hues` generates lane
+colors for your `appearance` rather than copying the bundled theme's. Every other
+semantic UI color falls back to the bundled theme for your `appearance`. Spell
+them all out anyway: a component never infers a status, editor, selection, or
+control color from an unrelated token, so an omitted one is a bundled color
+sitting in your theme, not a shade of it.
 
 ## Syntax Schema
 

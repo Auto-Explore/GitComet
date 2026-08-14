@@ -889,7 +889,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
     }));
     repo_state.diff_state.inline_submodule_diff_rev = 1;
     repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
-            origin: crate::model::ForeignDiffOrigin::Submodule,
+        origin: crate::model::ForeignDiffOrigin::Submodule,
         submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
         parent_submodule_path: parent_path.clone(),
         entries: vec![crate::model::InlineSubmoduleDiffEntry {

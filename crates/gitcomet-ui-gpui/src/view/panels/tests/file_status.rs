@@ -4625,3 +4625,40 @@ fn stage_selected_label_shrinks_when_the_details_pane_is_narrow(cx: &mut gpui::T
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// The worktree scan revision bumps per repo-wide rescan, not per worktree, so
+/// two worktrees with the same file count and the same visible range would share
+/// a path-truncation signature if the path were left out of it — and the second
+/// one would render with the first one's measured alignment.
+#[gpui::test]
+fn worktree_file_alignment_signatures_differ_per_worktree(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let repo_id = gitcomet_state::model::RepoId(4);
+        let signature = |path: &str| {
+            pane.worktree_files_visible_signature(
+                repo_id,
+                7,
+                std::path::Path::new(path),
+                &(0..5),
+                5,
+            )
+        };
+
+        assert_ne!(
+            signature("/wt/a"),
+            signature("/wt/b"),
+            "two worktrees scanned at the same revision must not share a signature"
+        );
+        assert_eq!(
+            signature("/wt/a"),
+            signature("/wt/a"),
+            "the same worktree keeps its alignment across renders"
+        );
+    });
+}

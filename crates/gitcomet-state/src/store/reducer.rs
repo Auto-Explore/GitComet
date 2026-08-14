@@ -2548,7 +2548,7 @@ mod nav_history_tests {
         dispatch(
             &mut state,
             Msg::OpenInlineSubmoduleDiff {
-            origin: crate::model::ForeignDiffOrigin::Submodule,
+                origin: crate::model::ForeignDiffOrigin::Submodule,
                 repo_id,
                 submodule_repo_path: std::path::PathBuf::from("/tmp/repo/vendor/first"),
                 parent_submodule_path: std::path::PathBuf::from("vendor/first"),

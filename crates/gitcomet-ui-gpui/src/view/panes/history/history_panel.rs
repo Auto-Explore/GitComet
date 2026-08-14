@@ -312,10 +312,12 @@ impl HistoryView {
         if let Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) =
             plan.row_at(next_list_ix)
         {
-            let path = self.active_repo().and_then(|repo| match &repo.worktree_dirty {
-                Loadable::Ready(dirty) => dirty.get(worktree_ix).map(|s| s.path.clone()),
-                _ => None,
-            });
+            let path = self
+                .active_repo()
+                .and_then(|repo| match &repo.worktree_dirty {
+                    Loadable::Ready(dirty) => dirty.get(worktree_ix).map(|s| s.path.clone()),
+                    _ => None,
+                });
             let Some(path) = path else {
                 return false;
             };

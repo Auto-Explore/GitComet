@@ -58,7 +58,7 @@ index 1111111..2222222 100644
             });
             repo.diff_state.inline_submodule_diff =
                 Some(gitcomet_state::model::InlineSubmoduleDiffState {
-            origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
+                    origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
                     submodule_repo_path: submodule_workdir.clone(),
                     parent_submodule_path: PathBuf::from("vendor/submodule"),
                     entries: vec![gitcomet_state::model::InlineSubmoduleDiffEntry {

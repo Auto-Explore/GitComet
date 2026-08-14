@@ -229,6 +229,38 @@ pub(super) fn paint_graph_fade(
     ));
 }
 
+/// The column the row directly above a worktree band draws its connector down
+/// from, or `None` when nothing above it connects.
+///
+/// Only the two synthetic row kinds connect downwards: the pinned working-tree
+/// row, which always sits on column 0, and another worktree band. Two bands can
+/// share an anchor commit without sharing a column — a detached worktree and one
+/// on a branch that has fallen behind resolve to different columns on the very
+/// same row (see [`band_node_for`]) — so the column has to come from the row
+/// above's own summary, never from the row asking.
+pub(in crate::view) fn worktree_band_connect_from_top_col(
+    plan: &crate::view::caches::HistoryListPlan,
+    graph_rows: &[history_graph::GraphRow],
+    worktree_dirty: &[gitcomet_core::domain::WorktreeDirtySummary],
+    list_ix: usize,
+) -> Option<usize> {
+    use crate::view::caches::HistoryListRow;
+
+    match plan.row_at(list_ix.checked_sub(1)?) {
+        Some(HistoryListRow::WorkingTreeSummary) => Some(0),
+        Some(HistoryListRow::WorktreeUncommitted {
+            visible_ix,
+            worktree_ix,
+        }) => {
+            let above_row = graph_rows.get(visible_ix)?;
+            let above = worktree_dirty.get(worktree_ix)?;
+            let on_branch = above.branch.is_some() && !above.detached;
+            Some(usize::from(band_node_for(above_row, on_branch).col))
+        }
+        _ => None,
+    }
+}
+
 /// A lane's colour, washed out unless it is the lane the selection sits on.
 ///
 /// The wash is a property of the *lane*: a lane keeps its colour index for its
@@ -412,13 +444,22 @@ pub(super) fn paint_history_graph_band(
     // The same wash the commit rows carry into their message border, painted
     // before the lanes so the strokes stay crisp on top of it.
     if show_graph_color_marker {
-        paint_graph_fade(node.color, bounds, scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX), window);
+        paint_graph_fade(
+            node.color,
+            bounds,
+            scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+            window,
+        );
     }
 
     for segment in band_lane_segments(row, connect_from_top_col) {
         let x = left + x_for_col(segment.col);
         let from_y = if segment.has_top { y_top } else { y_center };
-        let to_y = if segment.has_bottom { y_bottom } else { y_center };
+        let to_y = if segment.has_bottom {
+            y_bottom
+        } else {
+            y_center
+        };
         let mut path = PathBuilder::stroke(stroke_width);
         path.move_to(point(x, from_y));
         path.line_to(point(x, to_y));
@@ -427,7 +468,10 @@ pub(super) fn paint_history_graph_band(
             // descendant lane's colour above the node, and the commit below
             // paints its matching stub the same way -- including its wash, or the
             // seam between the two rows reappears.
-            window.paint_path(p, lane_wash_color(theme, segment.color_ix, selected_lane_color_ix));
+            window.paint_path(
+                p,
+                lane_wash_color(theme, segment.color_ix, selected_lane_color_ix),
+            );
         }
     }
 
@@ -650,7 +694,16 @@ pub(super) fn paint_ring_icon_node(
 #[cfg(test)]
 mod band_tests {
     use super::*;
+    use crate::view::caches::{HistoryListPlan, HistoryWorktreeRowAnchor};
     use crate::view::history_graph::{GraphRow, LanePaint};
+    use gitcomet_core::domain::WorktreeDirtySummary;
+
+    fn row_anchor(visible_ix: usize, worktree_ix: usize) -> HistoryWorktreeRowAnchor {
+        HistoryWorktreeRowAnchor {
+            visible_ix,
+            worktree_ix,
+        }
+    }
 
     /// A band takes the `lanes_now` of the commit it sits above.
     fn band(lanes: &[LanePaint], node_col: u16) -> GraphRow {
@@ -734,7 +787,10 @@ mod band_tests {
         row.joins_in = [edge(1, 0, 7)].into_iter().collect();
 
         let node = band_node_for(&row, false);
-        assert_ne!(node.col, 1, "the fork lane belongs to the branch, not to us");
+        assert_ne!(
+            node.col, 1,
+            "the fork lane belongs to the branch, not to us"
+        );
         assert_eq!(
             node.color_ix, row.node_color_ix,
             "it takes the colour of the commit it sits on"
@@ -792,6 +848,82 @@ mod band_tests {
         let node = band_node_for(&row, true);
         assert_eq!(node.col, 1);
         assert_eq!(node.exit_col, node.col, "a straight connector, no elbow");
+    }
+
+    fn worktree(branch: Option<&str>, detached: bool) -> WorktreeDirtySummary {
+        WorktreeDirtySummary {
+            path: std::path::PathBuf::from("/tmp/worktree"),
+            head: None,
+            branch: branch.map(str::to_string),
+            detached,
+            added: 1,
+            modified: 0,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: Vec::new(),
+        }
+    }
+
+    /// Two dirty worktrees on one commit stack into two bands above it. They
+    /// share the anchor row but not necessarily the column, so the lower band's
+    /// connector has to be read off the *upper* band's own worktree.
+    #[test]
+    fn a_stacked_band_connects_from_the_band_above_not_from_itself() {
+        let mut row = band(&[incoming(1), born(7)], 0);
+        row.joins_in = [edge(1, 0, 7)].into_iter().collect();
+
+        // Detached above, on a behind branch below: `band_node_for` puts them on
+        // different columns for the same row.
+        let dirty = [worktree(None, true), worktree(Some("behind"), false)];
+        let plan = HistoryListPlan::new(false, vec![row_anchor(0, 0), row_anchor(0, 1)]);
+        let rows = [row.clone()];
+
+        let detached_col = usize::from(band_node_for(&row, false).col);
+        let on_branch_col = usize::from(band_node_for(&row, true).col);
+        assert_ne!(
+            detached_col, on_branch_col,
+            "fixture must actually put the two worktrees on different columns"
+        );
+
+        assert_eq!(
+            worktree_band_connect_from_top_col(&plan, &rows, &dirty, 1),
+            Some(detached_col),
+            "the lower band follows the detached worktree drawn above it"
+        );
+        assert_eq!(
+            worktree_band_connect_from_top_col(&plan, &rows, &dirty, 0),
+            None,
+            "the top band has nothing above it"
+        );
+    }
+
+    /// The pinned working-tree row always draws its connector straight down
+    /// column 0, whatever the band below resolves to.
+    #[test]
+    fn a_band_under_the_working_tree_row_connects_from_column_zero() {
+        let row = band(&[incoming(1), born(7)], 0);
+        let dirty = [worktree(Some("behind"), false)];
+        let plan = HistoryListPlan::new(true, vec![row_anchor(0, 0)]);
+
+        assert_eq!(
+            worktree_band_connect_from_top_col(&plan, &[row], &dirty, 1),
+            Some(0)
+        );
+    }
+
+    /// A commit row above draws nothing down into the band: the band sits on top
+    /// of its own commit, and the commit above it is a separate lane run.
+    #[test]
+    fn a_band_under_a_commit_row_has_no_connector() {
+        let row = band(&[incoming(1), born(7)], 0);
+        let dirty = [worktree(Some("behind"), false)];
+        // One anchor on the *second* visible commit, so a commit row sits above it.
+        let plan = HistoryListPlan::new(false, vec![row_anchor(1, 0)]);
+
+        assert_eq!(
+            worktree_band_connect_from_top_col(&plan, &[row.clone(), row], &dirty, 1),
+            None
+        );
     }
 
     /// The wash is a property of the lane, not of the row: the painter routes
