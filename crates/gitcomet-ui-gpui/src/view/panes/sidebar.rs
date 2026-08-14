@@ -2362,6 +2362,36 @@ impl SidebarPaneView {
         });
     }
 
+    /// Focus a worktree in the log: its uncommitted-changes row when it has
+    /// changes, otherwise the commit its HEAD points at.
+    ///
+    /// HEAD comes from the worktree listing rather than the dirty scan, because
+    /// the scan skips this tab's own worktree and omits clean ones entirely. The
+    /// listing is loaded by the time a row in it can be clicked.
+    pub(in super::super) fn reveal_worktree_in_history(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        is_current: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let head = self.active_repo().and_then(|repo| match &repo.worktrees {
+            Loadable::Ready(worktrees) => worktrees
+                .iter()
+                .find(|worktree| worktree.path == path)
+                .and_then(|worktree| worktree.head.clone()),
+            _ => None,
+        });
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.main_pane.update(cx, |pane, cx| {
+                    pane.reveal_history_worktree(repo_id, path, is_current, head, cx);
+                });
+            });
+        });
+    }
+
     pub(in super::super) fn reveal_branch_commit_in_history(
         &mut self,
         repo_id: RepoId,

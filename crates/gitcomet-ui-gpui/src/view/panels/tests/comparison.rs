@@ -290,3 +290,152 @@ fn an_empty_comparison_reads_as_empty(cx: &mut gpui::TestAppContext) {
     assert!(cx.debug_bounds("range_files_error").is_none());
     assert!(cx.debug_bounds("range_files_label_count").is_some());
 }
+
+/// A selected worktree row shows *that* worktree's changed files, not this
+/// tab's. Everything below the header belongs to a different checkout, so the
+/// view has to take the pane over rather than sit alongside a commit's details.
+mod worktree_uncommitted {
+    use super::*;
+    use gitcomet_core::domain::{FileStatus, WorktreeDirtySummary};
+
+    fn file(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: std::path::PathBuf::from(path),
+            kind,
+            conflict: None,
+        }
+    }
+
+    /// Draw the details pane with one dirty linked worktree, optionally selected.
+    fn draw_worktree(
+        cx: &mut gpui::TestAppContext,
+        repo_id: RepoId,
+        staged: Vec<FileStatus>,
+        unstaged: Vec<FileStatus>,
+        selected: bool,
+    ) -> &mut gpui::VisualTestContext {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            super::super::super::GitCometView::new(store, events, None, window, cx)
+        });
+
+        let worktree_path = std::path::PathBuf::from("/tmp/linked-worktree");
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, Path::new("/tmp/repo-worktree"));
+                repo.open = Loadable::Ready(());
+                repo.head_branch = Loadable::Ready("main".into());
+                repo.status = Loadable::Ready(gitcomet_core::domain::RepoStatus::default().into());
+                repo.log = Loadable::Ready(Arc::new(gitcomet_core::domain::LogPage {
+                    commits: (0..2).map(log_commit).collect(),
+                    next_cursor: None,
+                }));
+                repo.log_rev = 1;
+                repo.worktree_dirty = Loadable::Ready(Arc::new(vec![WorktreeDirtySummary {
+                    path: worktree_path.clone(),
+                    head: Some(CommitId(sha(0).into())),
+                    branch: Some("side".into()),
+                    detached: false,
+                    added: unstaged.len(),
+                    modified: staged.len(),
+                    deleted: 0,
+                    staged,
+                    unstaged,
+                }]));
+                if selected {
+                    repo.history_state.worktree_selection = Some(worktree_path.clone());
+                }
+
+                let next_state = app_state_with_repo(repo, repo_id);
+                this.store
+                    .replace_snapshot_for_test(Arc::clone(&next_state));
+                push_test_state(this, next_state, cx);
+            });
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        cx
+    }
+
+    #[gpui::test]
+    fn a_selected_worktree_row_takes_over_the_details_pane(cx: &mut gpui::TestAppContext) {
+        let cx = draw_worktree(
+            cx,
+            RepoId(90),
+            vec![file("gone.txt", FileStatusKind::Deleted)],
+            vec![file("edited.rs", FileStatusKind::Modified)],
+            true,
+        );
+
+        assert!(
+            cx.debug_bounds("worktree_uncommitted_body").is_some(),
+            "a selected worktree row should render its own view"
+        );
+        assert!(
+            cx.debug_bounds("worktree_file_90_0").is_some(),
+            "the worktree's first changed file should render"
+        );
+        assert!(
+            cx.debug_bounds("worktree_file_90_1").is_some(),
+            "both staged and unstaged files belong in the list"
+        );
+        assert!(
+            cx.debug_bounds("worktree_files_empty").is_none(),
+            "a worktree with changes must not read as empty"
+        );
+        assert!(
+            cx.debug_bounds("worktree_uncommitted_open").is_some(),
+            "the panel should offer to open the worktree it is showing"
+        );
+    }
+
+    /// Untracked files are the common case in a worktree list and the one the
+    /// shared commit-file table did not expect, so they get their own row here.
+    #[gpui::test]
+    fn untracked_files_get_rows_like_any_other(cx: &mut gpui::TestAppContext) {
+        let cx = draw_worktree(
+            cx,
+            RepoId(93),
+            Vec::new(),
+            vec![
+                file("new_one.rs", FileStatusKind::Untracked),
+                file("new_two.rs", FileStatusKind::Untracked),
+            ],
+            true,
+        );
+
+        assert!(cx.debug_bounds("worktree_file_93_0").is_some());
+        assert!(cx.debug_bounds("worktree_file_93_1").is_some());
+        assert!(cx.debug_bounds("worktree_files_empty").is_none());
+    }
+
+    /// Without a selection the pane stays on this tab's own content, however
+    /// dirty the other worktrees are.
+    #[gpui::test]
+    fn an_unselected_worktree_leaves_the_pane_alone(cx: &mut gpui::TestAppContext) {
+        let cx = draw_worktree(
+            cx,
+            RepoId(91),
+            Vec::new(),
+            vec![file("edited.rs", FileStatusKind::Modified)],
+            false,
+        );
+
+        assert!(
+            cx.debug_bounds("worktree_uncommitted_body").is_none(),
+            "the worktree view must not appear until its row is selected"
+        );
+    }
+
+    /// A worktree that reports no files still renders as itself rather than
+    /// falling through to the commit views.
+    #[gpui::test]
+    fn a_worktree_with_no_files_reads_as_empty(cx: &mut gpui::TestAppContext) {
+        let cx = draw_worktree(cx, RepoId(92), Vec::new(), Vec::new(), true);
+
+        assert!(cx.debug_bounds("worktree_uncommitted_body").is_some());
+        assert!(cx.debug_bounds("worktree_files_empty").is_some());
+    }
+}

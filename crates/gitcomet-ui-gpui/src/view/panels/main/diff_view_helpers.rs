@@ -1,6 +1,58 @@
 use super::*;
 
 impl MainPaneView {
+    /// The worktree chip for the diff currently on screen, when that diff comes
+    /// from a linked worktree rather than this tab. `None` for everything else,
+    /// including submodule diffs, which the file list already labels.
+    fn foreign_worktree_diff_chip(
+        &self,
+        theme: AppTheme,
+        cx: &gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        let inline = self.active_inline_submodule_diff()?;
+        let gitcomet_state::model::ForeignDiffOrigin::Worktree { branch, detached } =
+            &inline.origin
+        else {
+            return None;
+        };
+        let label = crate::view::rows::sidebar::worktree_origin_label(
+            branch.as_deref(),
+            *detached,
+            &inline.submodule_repo_path,
+        );
+        let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+        let open_path = inline.submodule_repo_path.clone();
+        Some(
+            crate::view::rows::sidebar::worktree_origin_chip(
+                theme,
+                label,
+                px(10.0),
+                px(18.0),
+                px(220.0),
+                px(6.0),
+            )
+            .id("diff_title_worktree_origin")
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| {
+                s.border_color(palette.hover_border)
+                    .text_color(palette.hover_text)
+            })
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "Open this worktree in a tab\n{}",
+                    inline.submodule_repo_path.display()
+                )
+                .into(),
+            )
+            .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                cx.notify();
+            }))
+            .into_any_element(),
+        )
+    }
+
     pub(super) fn diff_panel_title(&self, theme: AppTheme, cx: &gpui::Context<Self>) -> AnyElement {
         self.rendered_diff_target()
             .map(|t| {
@@ -95,6 +147,9 @@ impl MainPaneView {
                                     .render(cx),
                             ),
                     )
+                    // These contents belong to another checkout, and the path
+                    // alone gives no hint of that.
+                    .children(self.foreign_worktree_diff_chip(theme, cx))
                     .into_any_element()
             })
             .unwrap_or_else(|| {

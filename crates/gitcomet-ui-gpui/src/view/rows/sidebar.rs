@@ -5,7 +5,7 @@ use gitcomet_core::domain::LogScope;
 use gitcomet_core::domain::SubmoduleStatus;
 use std::num::NonZeroU32;
 
-const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
+pub(in crate::view) const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
 const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
@@ -43,16 +43,16 @@ fn branch_workspace_badge_path(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct WorktreeBadgePalette {
-    bg: gpui::Rgba,
+pub(in crate::view) struct WorktreeBadgePalette {
+    pub(in crate::view) bg: gpui::Rgba,
     active_bg: gpui::Rgba,
-    border: gpui::Rgba,
-    hover_border: gpui::Rgba,
+    pub(in crate::view) border: gpui::Rgba,
+    pub(in crate::view) hover_border: gpui::Rgba,
     open_border: gpui::Rgba,
     open_hover_border: gpui::Rgba,
     active_border: gpui::Rgba,
-    text: gpui::Rgba,
-    hover_text: gpui::Rgba,
+    pub(in crate::view) text: gpui::Rgba,
+    pub(in crate::view) hover_text: gpui::Rgba,
     open_text: gpui::Rgba,
     active_text: gpui::Rgba,
 }
@@ -68,7 +68,7 @@ struct WorktreeBadgeColors {
 /// Shared chip palette for the sidebar badges (workspace/worktree/upstream),
 /// matching the history table's ref chips: an elevated pill with a quiet
 /// border at rest, accent-tinted when the badge refers to an open workspace.
-fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgePalette {
+pub(in crate::view) fn worktree_badge_palette(theme: AppTheme) -> WorktreeBadgePalette {
     WorktreeBadgePalette {
         bg: theme.colors.surface.raised,
         active_bg: with_alpha(
@@ -132,7 +132,7 @@ fn worktree_badge_colors(
     }
 }
 
-fn worktree_branch_badge_label(
+pub(super) fn worktree_branch_badge_label(
     branch: Option<&SharedString>,
     detached: bool,
     open_repo: Option<&RepoState>,
@@ -154,6 +154,71 @@ fn worktree_branch_badge_label(
     branch
         .cloned()
         .or_else(|| detached.then(|| "(detached)".into()))
+}
+
+/// `"{branch} · {folder}"` — the branch says what is checked out, the folder says
+/// which worktree it is checked out in, and only the pair is unambiguous when
+/// several worktrees sit on related branches.
+///
+/// Falls back to the folder alone when there is no branch to name, and to the
+/// branch alone when the path has no final component.
+pub(in crate::view) fn worktree_origin_label(
+    branch: Option<&str>,
+    detached: bool,
+    path: &std::path::Path,
+) -> SharedString {
+    let branch = worktree_branch_badge_label(
+        branch.map(SharedString::new).as_ref(),
+        detached,
+        None,
+    );
+    let folder = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned());
+    match (branch, folder) {
+        (Some(branch), Some(folder)) => SharedString::new(format!("{branch} · {folder}")),
+        (Some(branch), None) => branch,
+        (None, Some(folder)) => SharedString::new(folder),
+        (None, None) => "worktree".into(),
+    }
+}
+
+/// The chip that marks content as belonging to another worktree. Shown on the
+/// history row, and again in the details and diff headers so it is never unclear
+/// whose changes are on screen.
+///
+/// Deliberately style-only: callers add the id, cursor, hover and click when the
+/// chip is an affordance rather than a label.
+pub(in crate::view) fn worktree_origin_chip(
+    theme: AppTheme,
+    label: SharedString,
+    icon_size: Pixels,
+    height: Pixels,
+    max_width: Pixels,
+    pad_x: Pixels,
+) -> gpui::Div {
+    let palette = worktree_badge_palette(theme);
+    div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .flex_shrink_0()
+        .max_w(max_width)
+        .px(pad_x)
+        .h(height)
+        .rounded(px(theme.radii.control))
+        .border_1()
+        .border_color(palette.border)
+        .bg(palette.bg)
+        .child(svg_icon(WORKTREE_ICON_PATH, palette.text, icon_size))
+        .child(
+            div()
+                .text_xs()
+                .text_color(palette.text)
+                .line_clamp(1)
+                .whitespace_nowrap()
+                .child(label),
+        )
 }
 
 /// Render a sidebar label, bold-accent highlighting the first case-insensitive
@@ -1165,10 +1230,23 @@ impl SidebarPaneView {
                                 }),
                         )
                         .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
-                            if !e.standard_click() || e.click_count() < 2 {
+                            if !e.standard_click() {
                                 return;
                             }
-                            this.store.dispatch(Msg::OpenRepo(path_for_open.clone()));
+                            if e.click_count() >= 2 {
+                                this.store.dispatch(Msg::OpenRepo(path_for_open.clone()));
+                                cx.notify();
+                                return;
+                            }
+                            // Single click mirrors a branch row: scroll the log
+                            // to this worktree and select its row, without
+                            // leaving the tab.
+                            this.reveal_worktree_in_history(
+                                repo_id,
+                                path_for_open.clone(),
+                                is_active,
+                                cx,
+                            );
                             cx.notify();
                         }))
                         .on_mouse_down(
@@ -2358,6 +2436,179 @@ impl DetailsPaneView {
     /// [`Self::render_commit_file_rows`] but sources the file list from
     /// `history_state.range_files` and builds `DiffTarget::CommitRange` targets,
     /// so clicking a file loads its diff through the normal diff pipeline.
+    /// Changed files of a linked worktree that is not this tab.
+    ///
+    /// Clicking one opens it through the inline foreign-diff machinery — the
+    /// same path submodule diffs take — so the diff renders here rather than
+    /// forcing a tab switch.
+    pub(in super::super) fn render_worktree_file_rows(
+        this: &mut Self,
+        range: Range<usize>,
+        _window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> Vec<AnyElement> {
+        let Some(repo) = this.active_repo() else {
+            return Vec::new();
+        };
+        let repo_id = repo.id;
+        let worktree_dirty_rev = repo.worktree_dirty_rev;
+        let Some(summary) = this.selected_worktree_summary().cloned() else {
+            return Vec::new();
+        };
+
+        // Staged first, then unstaged: the same order the working-tree pane uses.
+        let files: Vec<gitcomet_core::domain::CommitFileChange> = summary
+            .staged
+            .iter()
+            .map(|f| (f, DiffArea::Staged))
+            .chain(summary.unstaged.iter().map(|f| (f, DiffArea::Unstaged)))
+            .map(|(f, _)| gitcomet_core::domain::CommitFileChange {
+                path: f.path.clone(),
+                kind: f.kind,
+                is_submodule: false,
+                additions: None,
+                deletions: None,
+            })
+            .collect();
+        let areas: Vec<DiffArea> = std::iter::repeat_n(DiffArea::Staged, summary.staged.len())
+            .chain(std::iter::repeat_n(
+                DiffArea::Unstaged,
+                summary.unstaged.len(),
+            ))
+            .collect();
+
+        // Every file is an entry so the diff view can step between them with
+        // the same navigation submodule diffs get.
+        let entries: Vec<gitcomet_state::model::InlineSubmoduleDiffEntry> = files
+            .iter()
+            .zip(areas.iter())
+            .map(
+                |(f, area)| gitcomet_state::model::InlineSubmoduleDiffEntry {
+                    path: f.path.clone(),
+                    kind: f.kind,
+                    target: DiffTarget::WorkingTree {
+                        path: f.path.clone(),
+                        area: *area,
+                    },
+                    section: match area {
+                        DiffArea::Staged => {
+                            gitcomet_state::model::InlineSubmoduleDiffSection::LiveStaged
+                        }
+                        _ => gitcomet_state::model::InlineSubmoduleDiffSection::LiveUnstaged,
+                    },
+                },
+            )
+            .collect();
+
+        let theme = this.theme;
+        let ui_scale_percent = this.ui_scale_percent;
+        let scaled_px =
+            |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
+        let file_rows =
+            this.cached_worktree_file_rows(repo_id, worktree_dirty_rev, &summary.path, &files);
+        let selected_ix_now = repo
+            .diff_state
+            .inline_submodule_diff
+            .as_ref()
+            .filter(|inline| inline.submodule_repo_path == summary.path)
+            .map(|inline| inline.selected_ix);
+        let visible_signature = this.range_files_visible_signature(
+            repo_id,
+            worktree_dirty_rev,
+            &range,
+            files.len(),
+        );
+        let path_alignment_group = this
+            .worktree_files_path_alignment_group
+            .visible_rows(visible_signature);
+        let worktree_path = summary.path.clone();
+        let origin = gitcomet_state::model::ForeignDiffOrigin::Worktree {
+            branch: summary.branch.clone(),
+            detached: summary.detached,
+        };
+
+        range
+            .filter_map(|ix| {
+                files
+                    .get(ix)
+                    .zip(file_rows.get(ix))
+                    .map(|(f, row)| (ix, f.clone(), row.label.clone(), row.visuals))
+            })
+            .map(|(ix, _f, path_label, visuals)| {
+                let color = visuals.color(&theme);
+                let selected = selected_ix_now == Some(ix);
+                let tooltip = path_label.clone();
+                let entries_for_click = entries.clone();
+                let worktree_path_for_click = worktree_path.clone();
+                let origin_for_click = origin.clone();
+
+                let mut row = div()
+                    .id(("worktree_file", ix))
+                    .debug_selector(move || format!("worktree_file_{}_{}", repo_id.0, ix))
+                    .h(scaled_px(24.0))
+                    .flex()
+                    .items_center()
+                    .gap(scaled_px(8.0))
+                    .px(scaled_px(8.0))
+                    .w_full()
+                    .rounded(px(theme.radii.row))
+                    .cursor(CursorStyle::PointingHand)
+                    .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+                    .child(
+                        div()
+                            .w(scaled_px(16.0))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(svg_icon(visuals.icon, color, scaled_px(14.0))),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .line_height(scaled_px(18.0))
+                            .line_clamp(1)
+                            .whitespace_nowrap()
+                            .child(
+                                components::TruncatedText::aligned_path(
+                                    path_label,
+                                    path_alignment_group.clone(),
+                                )
+                                .text_sm()
+                                .render(cx),
+                            ),
+                    )
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
+                        if !e.standard_click() {
+                            return;
+                        }
+                        this.focus_diff_panel(window, cx);
+                        this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
+                            repo_id,
+                            origin: origin_for_click.clone(),
+                            submodule_repo_path: worktree_path_for_click.clone(),
+                            parent_submodule_path: worktree_path_for_click.clone(),
+                            entries: entries_for_click.clone(),
+                            selected_ix: ix,
+                        });
+                        cx.notify();
+                    }))
+                    .gitcomet_tooltip(theme, tooltip.clone());
+
+                if selected {
+                    row = row.bg(with_alpha(
+                        theme.colors.accent.foreground,
+                        if theme.is_dark { 0.16 } else { 0.10 },
+                    ));
+                }
+
+                row.into_any_element()
+            })
+            .collect()
+    }
+
     pub(in super::super) fn render_range_file_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -2628,6 +2879,35 @@ mod tests {
     }
 
     #[test]
+    fn worktree_origin_label_pairs_branch_with_folder() {
+        assert_eq!(
+            worktree_origin_label(Some("dev"), false, std::path::Path::new("/home/u/GitComet")),
+            "dev · GitComet"
+        );
+    }
+
+    #[test]
+    fn worktree_origin_label_names_a_detached_worktree_by_its_folder() {
+        assert_eq!(
+            worktree_origin_label(None, true, std::path::Path::new("/home/u/GitComet2")),
+            "(detached) · GitComet2"
+        );
+    }
+
+    #[test]
+    fn worktree_origin_label_falls_back_when_one_half_is_missing() {
+        // No branch and no detached marker: the folder alone identifies it.
+        assert_eq!(
+            worktree_origin_label(None, false, std::path::Path::new("/home/u/GitComet3")),
+            "GitComet3"
+        );
+        // A root path has no final component to name.
+        assert_eq!(
+            worktree_origin_label(Some("main"), false, std::path::Path::new("/")),
+            "main"
+        );
+    }
+
     fn worktree_branch_badge_label_prefers_open_repo_head_branch() {
         let listed: SharedString = "feature/listed".into();
         let mut open_repo = RepoState::new_opening(

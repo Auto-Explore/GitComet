@@ -15,14 +15,22 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
         ToastKind::Warning => theme.colors.status.warning,
         ToastKind::Error => theme.colors.status.danger,
     };
-    let (accent, bg, border) = if theme.is_dark {
+    // The status colour lives in the accent stripe and the border; the panel
+    // itself stays a neutral elevated surface. A status-tinted background reads
+    // as a coloured card rather than as a notification, and on the light theme
+    // `status.warning.background` is a distinctly orange one. Matches
+    // `render_progress_shell`, which is the same shell with a bar in it.
+    let bg = with_alpha(
+        theme.colors.surface.raised,
+        if theme.is_dark { 0.96 } else { 0.98 },
+    );
+    let (accent, border) = if theme.is_dark {
         (
             with_alpha(status.foreground, 0.85),
-            with_alpha(theme.colors.surface.raised, 0.96),
             with_alpha(status.foreground, 0.55),
         )
     } else {
-        (status.foreground, status.background, status.border)
+        (status.foreground, status.border)
     };
 
     div()

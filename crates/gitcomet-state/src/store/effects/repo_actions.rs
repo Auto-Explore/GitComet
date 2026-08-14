@@ -98,6 +98,7 @@ fn send_load_worktrees_on_success(
 ) {
     if result.is_ok() {
         send_or_log(msg_tx, Msg::LoadWorktrees { repo_id });
+        send_or_log(msg_tx, Msg::LoadWorktreeDirty { repo_id });
     }
 }
 
@@ -243,6 +244,7 @@ pub(super) fn schedule_create_branch_and_checkout(
         }
         if result.is_ok() {
             send_or_log(&msg_tx, Msg::LoadWorktrees { repo_id });
+            send_or_log(&msg_tx, Msg::LoadWorktreeDirty { repo_id });
         }
         send_or_log(
             &msg_tx,

@@ -313,6 +313,23 @@ const HISTORY_MESSAGE_BORDER_W_PX: f32 = 3.0;
 /// Vertical inset of that border, so consecutive rows read as separate borders
 /// rather than as one continuous stripe down the list.
 const HISTORY_MESSAGE_BORDER_INSET_Y_PX: f32 = 3.0;
+/// Gap between that border and the message text.
+const HISTORY_MESSAGE_BORDER_GAP_PX: f32 = 6.0;
+
+/// Left offset of the message text inside its cell, in design px.
+///
+/// With the lane border shown the text clears the border by a fixed gap rather
+/// than using the cell's own padding — the border would otherwise sit almost
+/// against the text. Shared by the commit rows, which paint their text on a
+/// canvas, and the two uncommitted-changes rows, which lay theirs out as
+/// elements, so the three cannot drift apart.
+const fn history_message_text_left_px(show_graph_color_marker: bool) -> f32 {
+    if show_graph_color_marker {
+        HISTORY_MESSAGE_BORDER_W_PX + HISTORY_MESSAGE_BORDER_GAP_PX
+    } else {
+        HISTORY_COL_HANDLE_PX / 2.0
+    }
+}
 
 const PANE_RESIZE_HANDLE_PX: f32 = 8.0;
 const PANE_COLLAPSED_PX: f32 = 34.0;
@@ -1663,6 +1680,13 @@ impl GitCometView {
             if let Some(msg) =
                 repo_activation_msg(&this.state, &mut this.last_repo_activation_dispatch_at, now)
             {
+                // Other worktrees have no watcher of their own — the repo
+                // monitor only flushes for the active repo — so coming back to
+                // the window is the moment their uncommitted-change counts get
+                // reconciled. Rides the same throttle as the activation refresh.
+                if let Some(repo_id) = this.state.active_repo {
+                    this.store.dispatch(Msg::LoadWorktreeDirty { repo_id });
+                }
                 this.store.dispatch(msg);
             }
         });
@@ -3700,10 +3724,14 @@ impl Render for GitCometView {
                     .relative()
                     .px_2()
                     .py_1()
+                    // Light's `status.*.background` is a saturated cream that
+                    // reads as a coloured card rather than a notification. The
+                    // status colour stays in the border; the panel is neutral,
+                    // like the toasts and the progress shell.
                     .bg(if theme.is_dark {
                         with_alpha(theme.colors.status.warning.foreground, 0.13)
                     } else {
-                        theme.colors.status.warning.background
+                        theme.colors.surface.raised
                     })
                     .border_1()
                     .border_color(if theme.is_dark {
@@ -3916,7 +3944,7 @@ impl Render for GitCometView {
                     .bg(if theme.is_dark {
                         with_alpha(theme.colors.status.danger.foreground, 0.15)
                     } else {
-                        theme.colors.status.danger.background
+                        theme.colors.surface.raised
                     })
                     .border_1()
                     .border_color(if theme.is_dark {

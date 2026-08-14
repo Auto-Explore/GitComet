@@ -549,6 +549,7 @@ fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
         &id_alloc,
         &mut state,
         Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
             parent_submodule_path: PathBuf::from("vendor/submodule"),
@@ -610,6 +611,7 @@ fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
         &id_alloc,
         &mut state,
         Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
             parent_submodule_path: PathBuf::from("vendor/submodule"),
@@ -674,6 +676,7 @@ fn stale_inline_submodule_file_load_is_ignored() {
         &id_alloc,
         &mut state,
         Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
             parent_submodule_path: PathBuf::from("vendor/submodule"),
@@ -747,6 +750,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
         &id_alloc,
         &mut state,
         Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/first"),
             parent_submodule_path: PathBuf::from("vendor/first"),
@@ -779,6 +783,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
         &id_alloc,
         &mut state,
         Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             repo_id: RepoId(1),
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/second"),
             parent_submodule_path: PathBuf::from("vendor/second"),
@@ -884,6 +889,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
     }));
     repo_state.diff_state.inline_submodule_diff_rev = 1;
     repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
         submodule_repo_path: PathBuf::from("/tmp/repo/vendor/submodule"),
         parent_submodule_path: parent_path.clone(),
         entries: vec![crate::model::InlineSubmoduleDiffEntry {

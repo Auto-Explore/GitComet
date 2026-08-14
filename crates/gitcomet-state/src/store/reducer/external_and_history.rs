@@ -134,6 +134,9 @@ pub(super) fn repo_externally_changed(
         {
             effects.push(Effect::LoadRemoteBranches { repo_id });
         }
+        if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
+            effects.push(effect);
+        }
         effects
     } else {
         let mut effects = Vec::new();

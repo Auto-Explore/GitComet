@@ -352,7 +352,7 @@ pub(super) fn history_commit_row_canvas(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
-    related_to_selection: Option<bool>,
+    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
     lane_branch_name: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
@@ -483,13 +483,16 @@ pub(super) fn history_commit_row_canvas(
                 size((summary_right - x).max(px(0.0)), bounds.size.height),
             );
 
-            // Rows unrelated to the selection mute their lane colour too: a
-            // full-strength border and fade on a dimmed row read as louder than
-            // the history they are supposed to sit behind.
-            let node_color = selection_related_lane_color(
+            // Everything coloured from this row's lane -- the node, the
+            // message border, the fade wash and the hover badge -- washes with
+            // that lane, so a row never shows two different strengths of the
+            // same colour.
+            let related_to_selection =
+                selected_lane_color_ix.map(|selected| selected == graph_row.node_color_ix);
+            let node_color = super::history_graph_paint::lane_wash_color(
                 theme,
-                history_graph::lane_color(theme, graph_row.node_color_ix),
-                related_to_selection,
+                graph_row.node_color_ix,
+                selected_lane_color_ix,
             );
 
             // A lane-coloured wash across the right of the graph column, fading
@@ -532,8 +535,10 @@ pub(super) fn history_commit_row_canvas(
                                 graph_row,
                                 connect_from_top_col,
                                 is_stash_node,
+                                selected_lane_color_ix,
                                 graph_bounds,
                                 window,
+                                cx,
                             );
                         });
                     },
@@ -789,7 +794,8 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            let mut summary_text_left = summary_bounds.left() + cell_pad_x;
+            let mut summary_text_left =
+                summary_bounds.left() + scaled_px(history_message_text_left_px(false));
             if show_graph_color_marker {
                 // A lane-coloured border down the left edge of the message cell,
                 // where the graph column's fade lands. Inset vertically so
@@ -808,7 +814,8 @@ pub(super) fn history_commit_row_canvas(
                     )
                     .corner_radii(border_w * 0.5),
                 );
-                summary_text_left = summary_bounds.left() + border_w + scaled_px(6.0);
+                summary_text_left =
+                    summary_bounds.left() + scaled_px(history_message_text_left_px(true));
             }
 
             let summary_text_bounds = Bounds::new(

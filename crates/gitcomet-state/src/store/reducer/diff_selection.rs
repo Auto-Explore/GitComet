@@ -632,6 +632,7 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
 pub(super) fn open_inline_submodule_diff(
     state: &mut AppState,
     repo_id: RepoId,
+    origin: crate::model::ForeignDiffOrigin,
     submodule_repo_path: std::path::PathBuf,
     parent_submodule_path: std::path::PathBuf,
     entries: Vec<InlineSubmoduleDiffEntry>,
@@ -648,6 +649,7 @@ pub(super) fn open_inline_submodule_diff(
     let load_plan = inline_submodule_selected_diff_load_plan(&target);
     let rev = next_inline_submodule_diff_rev(repo_state);
     repo_state.diff_state.inline_submodule_diff = Some(InlineSubmoduleDiffState {
+        origin,
         submodule_repo_path,
         parent_submodule_path,
         entries,

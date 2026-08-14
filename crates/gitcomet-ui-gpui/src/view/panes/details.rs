@@ -42,6 +42,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_files_scroll: UniformListScrollHandle,
     pub(in super::super) commit_multi_scroll: UniformListScrollHandle,
     pub(in super::super) range_files_scroll: UniformListScrollHandle,
+    pub(in super::super) worktree_files_scroll: UniformListScrollHandle,
     pub(in super::super) commit_message_scroll: ScrollHandle,
     pub(in super::super) commit_scroll: ScrollHandle,
 
@@ -73,12 +74,20 @@ pub(in super::super) struct DetailsPaneView {
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     range_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    /// Keyed by the worktree as well as the scan revision: `rows_for` returns
+    /// cached rows on a key match alone, and `worktree_dirty_rev` bumps per
+    /// repo-wide scan, so without the path a different worktree would be served
+    /// the previous one's rows.
+    worktree_file_rows: std::cell::RefCell<
+        crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64, std::path::PathBuf)>,
+    >,
     pub(in super::super) untracked_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) unstaged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) staged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) commit_files_path_alignment_group:
         components::PathTruncationAlignmentGroup,
     pub(in super::super) range_files_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) worktree_files_path_alignment_group: components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -201,6 +210,8 @@ impl DetailsPaneView {
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
+            repo.history_state.worktree_selection_rev.hash(&mut hasher);
+            repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.recent_commit_messages_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
@@ -390,6 +401,7 @@ impl DetailsPaneView {
             commit_files_scroll: UniformListScrollHandle::default(),
             commit_multi_scroll: UniformListScrollHandle::default(),
             range_files_scroll: UniformListScrollHandle::default(),
+            worktree_files_scroll: UniformListScrollHandle::default(),
             commit_message_scroll,
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
@@ -419,11 +431,15 @@ impl DetailsPaneView {
             range_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            worktree_file_rows: std::cell::RefCell::new(
+                crate::view::rows::CommitFileRowPresentationCache::default(),
+            ),
             untracked_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             unstaged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             staged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             commit_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             range_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            worktree_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -854,6 +870,35 @@ impl DetailsPaneView {
     ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
         let mut cache = self.range_file_rows.borrow_mut();
         cache.rows_for(&(repo_id, range_files_rev), files)
+    }
+
+    /// Presentation rows for a linked worktree's changed files. Keyed on the
+    /// scan revision, so it rebuilds when the worktree is rescanned and is shared
+    /// across renders otherwise.
+    /// The scan entry for the worktree row the history selection is on.
+    pub(in super::super) fn selected_worktree_summary(
+        &self,
+    ) -> Option<&gitcomet_core::domain::WorktreeDirtySummary> {
+        let repo = self.active_repo()?;
+        let path = repo.history_state.worktree_selection.as_ref()?;
+        let Loadable::Ready(dirty) = &repo.worktree_dirty else {
+            return None;
+        };
+        dirty.iter().find(|summary| &summary.path == path)
+    }
+
+    pub(in super::super) fn cached_worktree_file_rows(
+        &self,
+        repo_id: RepoId,
+        worktree_dirty_rev: u64,
+        worktree_path: &std::path::Path,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
+        let mut cache = self.worktree_file_rows.borrow_mut();
+        cache.rows_for(
+            &(repo_id, worktree_dirty_rev, worktree_path.to_path_buf()),
+            files,
+        )
     }
 
     pub(in super::super) fn range_files_visible_signature(

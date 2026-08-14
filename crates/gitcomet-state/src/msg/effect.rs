@@ -112,6 +112,10 @@ pub enum Effect {
     LoadWorktrees {
         repo_id: RepoId,
     },
+    LoadWorktreeDirty {
+        repo_id: RepoId,
+        workdir: PathBuf,
+    },
     LoadRefMetadata {
         repo_id: RepoId,
     },

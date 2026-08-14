@@ -1149,6 +1149,157 @@ impl DetailsPaneView {
     /// selected commit cards, a "viewing diff between" subheader, and the list
     /// of files that differ between them. The diff pane starts empty; clicking a
     /// file loads that file's range diff in the main pane.
+    /// The changed files of a linked worktree that is *not* this tab, shown when
+    /// its history row is selected.
+    ///
+    /// The worktree chip is the header rather than decoration: everything below
+    /// belongs to another checkout, and nothing else on screen says so.
+    fn worktree_uncommitted_view(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+
+        let Some(summary) = self.selected_worktree_summary().cloned() else {
+            return div().into_any_element();
+        };
+        let file_count = summary.staged.len() + summary.unstaged.len();
+        let chip_label = crate::view::rows::sidebar::worktree_origin_label(
+            summary.branch.as_deref(),
+            summary.detached,
+            &summary.path,
+        );
+
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(components::control_height_md(ui_scale))
+            .px_2()
+            .bg(theme.colors.surface.raised)
+            .border_b_1()
+            .border_color(theme.colors.stroke.default)
+            .child(
+                div()
+                    .flex_none()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    // Not "Uncommitted changes": that is the current repo's
+                    // own row, and these are somebody else's.
+                    .child(SharedString::from("Worktree changes")),
+            )
+            .child(div().flex_1().min_w(px(0.0)))
+            .child({
+                let open_path = summary.path.clone();
+                let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+                crate::view::rows::sidebar::worktree_origin_chip(
+                    theme,
+                    chip_label,
+                    ui_scale.px(10.0),
+                    ui_scale.px(18.0),
+                    ui_scale.px(220.0),
+                    ui_scale.px(6.0),
+                )
+                .id("worktree_uncommitted_origin")
+                .debug_selector(|| "worktree_uncommitted_open".to_string())
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |s| {
+                    s.border_color(palette.hover_border)
+                        .text_color(palette.hover_text)
+                })
+                .gitcomet_tooltip(
+                    theme,
+                    format!("Open this worktree in a tab\n{}", summary.path.display()).into(),
+                )
+                .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+                    this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                    cx.notify();
+                }))
+            })
+            .child(
+                components::Button::new("worktree_uncommitted_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.foreground.secondary,
+                        px(12.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                        this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                        cx.notify();
+                    })
+                    .gitcomet_tooltip(theme, "Close".into()),
+            );
+
+        let files_body: AnyElement = if file_count == 0 {
+            div()
+                .debug_selector(|| "worktree_files_empty".to_string())
+                .text_sm()
+                .text_color(theme.colors.foreground.secondary)
+                .child("No files.")
+                .into_any_element()
+        } else {
+            Self::vertical_scroll_frame(
+                theme,
+                ("worktree_files_container", repo_id.0),
+                ("worktree_files_scrollbar", repo_id.0),
+                &self.worktree_files_scroll,
+                uniform_list(
+                    ("worktree_files_list", repo_id.0),
+                    file_count,
+                    cx.processor(Self::render_worktree_file_rows),
+                ),
+            )
+            .into_any_element()
+        };
+
+        div()
+            .id("worktree_uncommitted_container")
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .child(header)
+            .child(
+                div()
+                    .id("worktree_uncommitted_body")
+                    .debug_selector(|| "worktree_uncommitted_body".to_string())
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .p_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.colors.foreground.secondary)
+                            .line_clamp(1)
+                            .child(SharedString::from(format!("{file_count} changed"))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .flex_1()
+                            .h_full()
+                            .min_h(ui_scale.px(RANGE_FILES_SECTION_MIN_HEIGHT_PX))
+                            .border_t_1()
+                            .border_color(theme.colors.stroke.subtle)
+                            .pt_2()
+                            .child(files_body),
+                    ),
+            )
+            .into_any_element()
+    }
+
     fn range_comparison_view(
         &mut self,
         repo_id: RepoId,
@@ -1387,6 +1538,15 @@ impl DetailsPaneView {
         let selected_id = self
             .active_repo()
             .and_then(|repo| repo.history_state.selected_commit.clone());
+
+        // A selected worktree row owns the pane outright: its files belong to a
+        // different checkout, so none of the commit-detail views below apply.
+        let has_worktree_selection = self
+            .active_repo()
+            .is_some_and(|repo| repo.history_state.worktree_selection.is_some());
+        if let (Some(repo_id), true) = (active_repo_id, has_worktree_selection) {
+            return self.worktree_uncommitted_view(repo_id, cx);
+        }
 
         // An active two-point comparison takes precedence over both the single
         // and multi commit-detail views: show the range's changed files.

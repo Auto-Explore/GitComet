@@ -111,6 +111,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
+            | Msg::LoadWorktreeDirty { .. }
             | Msg::LoadRefMetadata { .. }
             | Msg::LoadSubmodules { .. }
             | Msg::LoadSubmodule { .. }
@@ -969,6 +970,7 @@ fn reduce_inner(
         Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
+            origin,
             submodule_repo_path,
             parent_submodule_path,
             entries,
@@ -976,6 +978,7 @@ fn reduce_inner(
         } => diff_selection::open_inline_submodule_diff(
             state,
             repo_id,
+            origin,
             submodule_repo_path,
             parent_submodule_path,
             entries,
@@ -1019,6 +1022,10 @@ fn reduce_inner(
             source,
         } => effects::load_blame(state, repo_id, path, source),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
+        Msg::LoadWorktreeDirty { repo_id } => effects::load_worktree_dirty(state, repo_id),
+        Msg::SelectWorktreeUncommitted { repo_id, path } => {
+            effects::select_worktree_uncommitted(state, repo_id, path)
+        }
         Msg::LoadRefMetadata { repo_id } => effects::load_ref_metadata(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
         Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
@@ -1933,6 +1940,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
             effects::worktrees_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }) => {
+            effects::worktree_dirty_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded { repo_id, result }) => {
             effects::ref_metadata_loaded(state, repo_id, result)
         }
@@ -2502,6 +2512,7 @@ mod nav_history_tests {
             repo_id: RepoId(1),
         }));
         assert!(is_view_navigation(&Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             repo_id: RepoId(1),
             submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
             parent_submodule_path: std::path::PathBuf::from("sub"),
@@ -2537,6 +2548,7 @@ mod nav_history_tests {
         dispatch(
             &mut state,
             Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
                 repo_id,
                 submodule_repo_path: std::path::PathBuf::from("/tmp/repo/vendor/first"),
                 parent_submodule_path: std::path::PathBuf::from("vendor/first"),

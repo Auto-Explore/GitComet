@@ -825,6 +825,7 @@ fn selected_submodule_command_reloads_selected_summary() {
             area: DiffArea::Unstaged,
         };
         repo.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             submodule_repo_path: PathBuf::from("/tmp/repo/vendor/lib"),
             parent_submodule_path: command_path.to_path_buf(),
             entries: vec![crate::model::InlineSubmoduleDiffEntry {

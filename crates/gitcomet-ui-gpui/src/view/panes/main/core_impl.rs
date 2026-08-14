@@ -1163,6 +1163,19 @@ impl MainPaneView {
         cx.notify();
     }
 
+    pub(in crate::view) fn reveal_history_worktree(
+        &mut self,
+        repo_id: RepoId,
+        worktree_path: std::path::PathBuf,
+        is_current: bool,
+        head: Option<CommitId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.history_view.update(cx, |view, cx| {
+            view.reveal_worktree(repo_id, worktree_path, is_current, head, cx);
+        });
+    }
+
     pub(in crate::view) fn reveal_history_branch_commit(
         &mut self,
         repo_id: RepoId,

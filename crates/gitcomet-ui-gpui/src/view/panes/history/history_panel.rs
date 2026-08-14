@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::HistoryView;
+use crate::view::caches::HistoryListRow;
 
 impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -29,17 +30,14 @@ impl HistoryView {
         self.ensure_history_cache(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
-        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
-        // Scheduled here rather than from the row builder: the walk goes to a
-        // background task, and the row builder runs during layout.
-        self.ensure_history_related_commits_cache(show_working_tree_summary_row, cx);
+        let plan = self.ensure_history_list_plan();
         let repo = self.active_repo();
         let commits_count = self
             .history_cache
             .as_ref()
             .map(|cache| cache.base.visible_indices.len())
             .unwrap_or(0);
-        let count = commits_count + usize::from(show_working_tree_summary_row);
+        let count = plan.list_len(commits_count);
         let scan_progress = repo.and_then(|r| r.history_state.log_scan_progress);
 
         let bg = theme.colors.surface.canvas;
@@ -149,6 +147,7 @@ impl HistoryView {
                     && match key {
                         "up" => this.history_select_adjacent_commit(-1, cx),
                         "down" => this.history_select_adjacent_commit(1, cx),
+                        "enter" => this.history_open_selected_worktree(cx),
                         _ => false,
                     };
 
@@ -204,6 +203,23 @@ impl HistoryView {
             )
     }
 
+    /// Enter on a worktree row opens that worktree, matching what clicking its
+    /// badge does. Returns `false` for every other selection so the key keeps
+    /// falling through to whatever else handles it.
+    pub(in crate::view) fn history_open_selected_worktree(
+        &mut self,
+        _cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(path) = self
+            .active_repo()
+            .and_then(|repo| repo.history_state.worktree_selection.clone())
+        else {
+            return false;
+        };
+        self.store.dispatch(Msg::OpenRepo(path));
+        true
+    }
+
     pub(in crate::view) fn history_select_adjacent_commit(
         &mut self,
         direction: i8,
@@ -213,7 +229,8 @@ impl HistoryView {
             return false;
         };
 
-        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        let plan = self.ensure_history_list_plan();
+        let show_working_tree_summary_row = plan.show_working_tree_summary_row();
         let offset = usize::from(show_working_tree_summary_row);
 
         let (selected_commit, page, log_rev, stashes_rev, history_scope) = match self.active_repo()
@@ -247,7 +264,12 @@ impl HistoryView {
             return false;
         }
 
-        let list_len = total_commits + offset;
+        let list_len = plan.list_len(total_commits);
+
+        // Read before the cache is borrowed mutably below.
+        let selected_worktree = self
+            .active_repo()
+            .and_then(|repo| repo.history_state.worktree_selection.clone());
 
         let current_list_ix = super::resolve_history_selected_list_index(
             &mut self.history_selected_list_index_cache,
@@ -255,11 +277,19 @@ impl HistoryView {
             log_rev,
             stashes_rev,
             history_scope,
-            show_working_tree_summary_row,
-            selected_commit.as_ref(),
+            &plan,
+            super::HistorySelectionRef {
+                commit: selected_commit.as_ref(),
+                worktree_selected: selected_worktree.is_some(),
+            },
             &cache.base.visible_indices,
             &page.commits,
         );
+
+        let current_list_ix = selected_worktree
+            .as_deref()
+            .and_then(|path| super::worktree_row_list_ix(&plan, self.active_repo(), path))
+            .or(current_list_ix);
 
         let next_list_ix = match (current_list_ix, direction.is_negative()) {
             (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
@@ -279,6 +309,23 @@ impl HistoryView {
             return true;
         }
 
+        if let Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) =
+            plan.row_at(next_list_ix)
+        {
+            let path = self.active_repo().and_then(|repo| match &repo.worktree_dirty {
+                Loadable::Ready(dirty) => dirty.get(worktree_ix).map(|s| s.path.clone()),
+                _ => None,
+            });
+            let Some(path) = path else {
+                return false;
+            };
+            self.store
+                .dispatch(Msg::SelectWorktreeUncommitted { repo_id, path });
+            self.dismiss_history_refs_hover(_cx);
+            self.history_scroll
+                .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
+            return true;
+        }
         if show_working_tree_summary_row && next_list_ix == 0 {
             self.store.dispatch(Msg::ClearCommitSelection { repo_id });
             self.store.dispatch(Msg::ClearDiffSelection { repo_id });
@@ -288,7 +335,7 @@ impl HistoryView {
                 log_rev,
                 stashes_rev,
                 history_scope,
-                show_working_tree_summary_row,
+                &plan,
                 None,
                 0,
             );
@@ -298,7 +345,9 @@ impl HistoryView {
             return true;
         }
 
-        let visible_ix = next_list_ix.saturating_sub(offset);
+        let Some(HistoryListRow::Commit { visible_ix }) = plan.row_at(next_list_ix) else {
+            return false;
+        };
         let Some(commit_ix) = cache.base.visible_indices.get(visible_ix) else {
             return false;
         };
@@ -316,7 +365,7 @@ impl HistoryView {
             log_rev,
             stashes_rev,
             history_scope,
-            show_working_tree_summary_row,
+            &plan,
             Some(commit.id.clone()),
             next_list_ix,
         );

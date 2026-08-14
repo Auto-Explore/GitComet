@@ -421,7 +421,7 @@ fn paint_blame_icon(
 
 /// Paint `path` as a square icon of `glyph` size, centered in `cell` and clamped
 /// so it never spills out of it.
-fn paint_centered_svg_icon(
+pub(super) fn paint_centered_svg_icon(
     path: &'static str,
     cell: Bounds<Pixels>,
     glyph: Pixels,

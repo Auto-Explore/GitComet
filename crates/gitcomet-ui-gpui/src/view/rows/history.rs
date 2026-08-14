@@ -2,8 +2,8 @@ use super::diff_canvas;
 use super::diff_text::*;
 use super::history_canvas;
 use super::*;
+use crate::view::caches::HistoryListRow;
 
-use crate::view::caches::related_commit_contains;
 use crate::view::markdown_preview::{
     MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineImage, MarkdownInlineStyle,
     MarkdownPreviewDocument, MarkdownPreviewRow, MarkdownPreviewRowKind, MarkdownPreviewVisualRow,
@@ -2724,18 +2724,24 @@ impl HistoryView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
-        let (show_working_tree_summary_row, worktree_counts) =
-            this.ensure_history_worktree_summary_cache();
+        let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
+        let plan = this.ensure_history_list_plan();
+        let show_working_tree_summary_row = plan.show_working_tree_summary_row();
         let stash_ids = this.ensure_history_stash_ids_cache();
         // Cloned out of `this` so the row loop below can borrow it immutably
         // alongside the repo snapshot; it is an `Arc` bitset, so this is cheap.
         // The cache behind it is scheduled from the panel's own render, never
         // built here -- this runs during layout.
-        let related_commits = this.history_related_commits_bits();
+        // One lane keeps full colour; the rest wash out. Resolved once here rather
+        // than per row -- it is a scan of the page behind a memo.
+        let selected_lane_color_ix =
+            this.history_selected_lane_color_ix(plan.show_working_tree_summary_row());
 
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
+        let show_graph_color_marker =
+            history_scope_shows_graph_color_marker(repo.history_state.history_scope);
 
         let theme = this.theme;
         let col_branch = this.history_col_branch;
@@ -2757,27 +2763,75 @@ impl HistoryView {
             .history_cache
             .as_ref()
             .filter(|cache| cache.base.request.repo_id == repo.id);
-        let worktree_node_color =
-            history_worktree_node_color(theme, cache.map(|cache| cache.base.graph_rows.as_ref()));
+        let worktree_node_color_ix =
+            history_worktree_node_color_ix(cache.map(|cache| cache.base.graph_rows.as_ref()));
 
+        let worktree_dirty = match &repo.worktree_dirty {
+            Loadable::Ready(dirty) => Some(Arc::clone(dirty)),
+            _ => None,
+        };
         range
             .filter_map(|list_ix| {
-                if show_working_tree_summary_row && list_ix == 0 {
-                    let selected = repo.history_state.selected_commit.is_none();
-                    // Uncommitted changes sit on top of the first commit and the
-                    // row draws a connector down to it, so it follows that
-                    // commit's state -- otherwise the lane visibly breaks at the
-                    // top of a highlighted chain.
-                    let related_to_selection = related_commits.as_ref().map(|bits| {
-                        // Selected: this row *is* the anchor, so it is related
-                        // whatever sits below it.
-                        selected
-                            || cache
-                                .and_then(|cache| cache.base.visible_indices.first())
-                                .is_some_and(|first_commit_ix| {
-                                    related_commit_contains(bits, first_commit_ix)
-                                })
-                    });
+                let row = plan.row_at(list_ix)?;
+                if let HistoryListRow::WorktreeUncommitted {
+                    visible_ix,
+                    worktree_ix,
+                } = row
+                {
+                    let cache = cache?;
+                    let summary = worktree_dirty.as_ref()?.get(worktree_ix)?;
+                    // The row shows the lanes of the commit it sits on top of,
+                    // so it needs that row's paint data.
+                    let graph_row = cache.base.graph_rows.get(visible_ix)?;
+                    // Whatever sits directly above draws a connector down into
+                    // this row; carry it through so the lane is not broken.
+                    let connect_from_top_col =
+                        list_ix.checked_sub(1).and_then(|above| match plan.row_at(above) {
+                            Some(HistoryListRow::WorkingTreeSummary) => Some(0),
+                            // Two worktrees on one commit share an anchor, and so
+                            // the same node column.
+                            Some(HistoryListRow::WorktreeUncommitted { .. }) => {
+                                Some(usize::from(
+                                    super::history_graph_paint::band_node_for(
+                                        graph_row,
+                                        summary.branch.is_some() && !summary.detached,
+                                    )
+                                    .col,
+                                ))
+                            }
+                            _ => None,
+                        });
+                    return Some(worktree_uncommitted_history_row(
+                        theme,
+                        ui_scale,
+                        col_branch,
+                        col_graph,
+                        col_author,
+                        col_date,
+                        col_sha,
+                        show_graph,
+                        show_author,
+                        show_date,
+                        show_sha,
+                        graph_row,
+                        connect_from_top_col,
+                        selected_lane_color_ix,
+                        show_graph_color_marker,
+                        repo.id,
+                        list_ix,
+                        repo.history_state.worktree_selection.as_deref()
+                            == Some(summary.path.as_path()),
+                        (summary.added, summary.modified, summary.deleted),
+                        summary,
+                        cx,
+                    ));
+                }
+
+                if matches!(row, HistoryListRow::WorkingTreeSummary) {
+                    // A selected worktree row also leaves `selected_commit`
+                    // empty, and only one row may read as selected.
+                    let selected = repo.history_state.selected_commit.is_none()
+                        && repo.history_state.worktree_selection.is_none();
                     return Some(working_tree_summary_history_row(
                         theme,
                         ui_scale,
@@ -2790,8 +2844,9 @@ impl HistoryView {
                         show_author,
                         show_date,
                         show_sha,
-                        worktree_node_color,
-                        related_to_selection,
+                        worktree_node_color_ix,
+                        selected_lane_color_ix,
+                        show_graph_color_marker,
                         repo.id,
                         selected,
                         worktree_counts,
@@ -2799,8 +2854,9 @@ impl HistoryView {
                     ));
                 }
 
-                let offset = usize::from(show_working_tree_summary_row);
-                let visible_ix = list_ix.checked_sub(offset)?;
+                let HistoryListRow::Commit { visible_ix } = row else {
+                    return None;
+                };
 
                 let page = page.as_deref()?;
                 let cache = cache?;
@@ -2810,23 +2866,36 @@ impl HistoryView {
                 cache.base.graph_rows.get(visible_ix)?;
                 let base_row_vm = cache.base.row_vms.get(visible_ix)?;
                 let decoration_row_vm = cache.decorations.row_vms.get(visible_ix)?;
-                let connect_from_top_col =
-                    (show_working_tree_summary_row && visible_ix == 0).then_some(0);
+                let connect_from_top_col = match list_ix
+                    .checked_sub(1)
+                    .and_then(|above| plan.row_at(above))
+                {
+                    // A worktree band above connects its node down into this
+                    // commit, so this row draws the matching stub upwards even
+                    // when the lane is born here.
+                    Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) => cache
+                        .base
+                        .graph_rows
+                        .get(visible_ix)
+                        .map(|row| {
+                            let on_branch = worktree_dirty
+                                .as_ref()
+                                .and_then(|dirty| dirty.get(worktree_ix))
+                                .is_some_and(|s| s.branch.is_some() && !s.detached);
+                            usize::from(
+                                super::history_graph_paint::band_node_for(row, on_branch).col,
+                            )
+                        }),
+                    _ => (show_working_tree_summary_row && visible_ix == 0).then_some(0),
+                };
                 let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id)
                     || repo.history_state.multi_selection.is_multi()
                         && repo.history_state.multi_selection.contains(&commit.id);
                 let selected_branch = this.selected_branch_for_history_row(repo.id, selected);
-                let show_graph_color_marker =
-                    history_scope_shows_graph_color_marker(repo.history_state.history_scope);
                 let is_stash_node = base_row_vm.is_stash
                     || stash_ids
                         .as_ref()
                         .is_some_and(|ids| ids.contains(&commit.id));
-                // `None` when nothing is selected: every row then renders at
-                // full strength rather than every row being dimmed.
-                let related_to_selection = related_commits
-                    .as_ref()
-                    .map(|bits| related_commit_contains(bits, commit_ix));
                 let when = base_row_vm.when.resolve(display_key);
                 let short_sha = base_row_vm.short_sha.resolve();
 
@@ -2857,7 +2926,7 @@ impl HistoryView {
                     Arc::clone(&decoration_row_vm.tag_names),
                     Arc::clone(&decoration_row_vm.ref_items),
                     selected_branch,
-                    related_to_selection,
+                    selected_lane_color_ix,
                     lane_branch_name,
                     base_row_vm.author.clone(),
                     base_row_vm.summary.clone(),
@@ -2875,11 +2944,15 @@ impl HistoryView {
 }
 
 const HISTORY_ROW_HEIGHT_PX: f32 = 28.0;
+/// Widest a worktree row's badge may grow before its branch label truncates.
+/// Matches the sidebar's branch-row worktree pill.
+const HISTORY_WORKTREE_BADGE_MAX_W_PX: f32 = 200.0;
+/// Matches the history table's ref chips so the badge sits on the same rhythm.
+const HISTORY_WORKTREE_BADGE_HEIGHT_PX: f32 = 18.0;
 
-fn history_worktree_node_color(
-    theme: AppTheme,
+fn history_worktree_node_color_ix(
     graph_rows: Option<&[history_graph::GraphRow]>,
-) -> gpui::Rgba {
+) -> history_graph::LaneColorIx {
     graph_rows
         .and_then(|rows| rows.first())
         .and_then(|row| {
@@ -2888,9 +2961,30 @@ fn history_worktree_node_color(
             row.lanes_now
                 .first()
                 .filter(|lane| lane.is_active())
-                .map(|lane| history_graph::lane_color(theme, lane.color_ix))
+                .map(|lane| lane.color_ix)
         })
-        .unwrap_or_else(|| history_graph::lane_color(theme, 0))
+        .unwrap_or(0)
+}
+
+/// The lane-coloured border down the left edge of a message cell, matching the
+/// one the commit rows paint on their canvas.
+///
+/// Absolutely positioned so the label keeps the same left offset it has on a
+/// commit row — a flow child would push the text over by the border's width.
+fn history_message_border(
+    ui_scale: ui_scale::UiScale,
+    color: gpui::Rgba,
+) -> impl IntoElement {
+    let border_w = ui_scale.px(HISTORY_MESSAGE_BORDER_W_PX);
+    let inset_y = ui_scale.px(HISTORY_MESSAGE_BORDER_INSET_Y_PX);
+    div()
+        .absolute()
+        .left_0()
+        .top(inset_y)
+        .bottom(inset_y)
+        .w(border_w)
+        .rounded(border_w * 0.5)
+        .bg(color)
 }
 
 fn history_row_height(ui_scale: ui_scale::UiScale) -> Pixels {
@@ -2924,9 +3018,9 @@ fn history_table_row(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
-    // `Some(true)` when a commit is selected and this row is related to it;
-    // `None` when nothing is selected.
-    related_to_selection: Option<bool>,
+    // Colour index of the lane the selection sits on; every other lane washes
+    // out. A property of the lane, not of this row.
+    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
     // Branch this commit belongs to, shown as a faded badge while the row is
     // hovered. Inherited down the lane, so unlabelled commits have one too.
     lane_branch_name: Option<SharedString>,
@@ -2966,7 +3060,7 @@ fn history_table_row(
         tag_names,
         ref_items,
         selected_branch,
-        related_to_selection,
+        selected_lane_color_ix,
         lane_branch_name,
         author,
         summary,
@@ -3046,6 +3140,227 @@ fn history_table_row(
     row.into_any_element()
 }
 
+/// One linked worktree's uncommitted changes, rendered directly above the commit
+/// that worktree has checked out.
+///
+/// Unlike the working-tree summary row this one is not pinned to the top of the
+/// list, so it paints the full lane band of the commit below it rather than a
+/// single connector stub: the lanes have to run through it uninterrupted.
+#[allow(clippy::too_many_arguments)]
+fn worktree_uncommitted_history_row(
+    theme: AppTheme,
+    ui_scale: ui_scale::UiScale,
+    col_branch: Pixels,
+    col_graph: Pixels,
+    col_author: Pixels,
+    col_date: Pixels,
+    col_sha: Pixels,
+    show_graph: bool,
+    show_author: bool,
+    show_date: bool,
+    show_sha: bool,
+    graph_row: &history_graph::GraphRow,
+    connect_from_top_col: Option<usize>,
+    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    show_graph_color_marker: bool,
+    repo_id: RepoId,
+    list_ix: usize,
+    selected: bool,
+    counts: (usize, usize, usize),
+    summary: &gitcomet_core::domain::WorktreeDirtySummary,
+    cx: &mut gpui::Context<HistoryView>,
+) -> AnyElement {
+    let scaled_px = |value| ui_scale.px(value);
+    let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
+    let band_node = super::history_graph_paint::band_node_for(
+        graph_row,
+        summary.branch.is_some() && !summary.detached,
+    );
+    // The node washes with its lane, like every other node in the graph -- the
+    // text beside it still follows the row's relation to the selection.
+    let node_color = super::history_graph_paint::lane_wash_color(
+        theme,
+        band_node.color_ix,
+        selected_lane_color_ix,
+    );
+    // Everything on the row washes with the lane it sits on, text included.
+    let on_selected_lane = selected_lane_color_ix.map(|selected| selected == band_node.color_ix);
+    let label_color = history_canvas::selection_related_summary_color(theme, on_selected_lane);
+
+    // A pass-through band: whatever entered the commit below from above runs
+    // straight through this row, so inserting it leaves the graph unbroken.
+    // `None` when the node sits on a lane of its own already (a branch head's
+    // fork), which needs only a straight connector down.
+    let node_exit_col = (band_node.exit_col != band_node.col).then_some(band_node.exit_col);
+    let band = history_graph::GraphRow {
+        lanes_now: graph_row.lanes_now.clone(),
+        lanes_next: graph_row.lanes_now.clone(),
+        joins_in: Default::default(),
+        edges_out: Default::default(),
+        node_col: band_node.col,
+        node_color_ix: band_node.color_ix,
+        is_merge: false,
+    };
+    let graph = gpui::canvas(
+        |_, _, _| (),
+        move |bounds, _, window, cx| {
+            super::history_graph_paint::paint_history_graph_band(
+                theme,
+                &band,
+                connect_from_top_col,
+                selected_lane_color_ix,
+                super::history_graph_paint::BandNodePaint {
+                    color: node_color,
+                    exit_col: node_exit_col,
+                },
+                show_graph_color_marker,
+                bounds,
+                window,
+                cx,
+            );
+        },
+    )
+    .w_full()
+    .h_full();
+
+    let icon_count = |icon_path: &'static str, color: gpui::Rgba, count: usize| {
+        div()
+            .flex()
+            .items_center()
+            .gap_1()
+            .child(svg_icon(icon_path, color, scaled_px(12.0)))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(theme.colors.foreground.secondary)
+                    .child(count.to_string()),
+            )
+            .into_any_element()
+    };
+    let (added, modified, deleted) = counts;
+    let mut parts: Vec<AnyElement> = Vec::with_capacity(3);
+    if modified > 0 {
+        parts.push(icon_count(
+            "icons/pencil.svg",
+            theme.colors.status.warning.foreground,
+            modified,
+        ));
+    }
+    if added > 0 {
+        parts.push(icon_count(
+            "icons/plus.svg",
+            theme.colors.status.success.foreground,
+            added,
+        ));
+    }
+    if deleted > 0 {
+        parts.push(icon_count(
+            "icons/minus.svg",
+            theme.colors.status.danger.foreground,
+            deleted,
+        ));
+    }
+
+    let palette = super::sidebar::worktree_badge_palette(theme);
+    let badge_label = super::sidebar::worktree_origin_label(
+        summary.branch.as_deref(),
+        summary.detached,
+        &summary.path,
+    );
+    let open_path = summary.path.clone();
+    let badge_tooltip: SharedString =
+        format!("Open this worktree\n{}", summary.path.display()).into();
+
+    let badge = super::sidebar::worktree_origin_chip(
+        theme,
+        badge_label,
+        scaled_px(9.0),
+        scaled_px(HISTORY_WORKTREE_BADGE_HEIGHT_PX),
+        scaled_px(HISTORY_WORKTREE_BADGE_MAX_W_PX),
+        scaled_px(6.0),
+    )
+    .id(("history_worktree_badge", list_ix))
+    .cursor(CursorStyle::PointingHand)
+    .hover(move |s| {
+        s.border_color(palette.hover_border)
+            .text_color(palette.hover_text)
+    })
+    .gitcomet_tooltip(theme, badge_tooltip)
+    .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+        this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+        cx.notify();
+    }));
+
+    let select_path = summary.path.clone();
+    let mut row = div()
+        .id(("history_worktree_uncommitted", list_ix))
+        .h(history_row_height(ui_scale))
+        .flex()
+        .w_full()
+        .items_center()
+        .px_2()
+        .cursor(CursorStyle::PointingHand)
+        .hover(move |s| s.bg(theme.colors.interaction.hover_background))
+        .active(move |s| s.bg(theme.colors.interaction.pressed_background))
+        .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
+            this.store.dispatch(Msg::SelectWorktreeUncommitted {
+                repo_id,
+                path: select_path.clone(),
+            });
+            cx.notify();
+        }))
+        .child(
+            div()
+                .w(col_branch)
+                .text_xs()
+                .line_clamp(1)
+                .whitespace_nowrap()
+                .child(div()),
+        )
+        .when(show_graph, |row| {
+            row.child(div().w(col_graph).h_full().overflow_hidden().child(graph))
+        })
+        .child({
+            let mut summary = div()
+                .relative()
+                .flex_1()
+                .min_w(px(0.0))
+                .flex()
+                .items_center()
+                .gap_2()
+                // Same offset the commit rows put their text at, so the message
+                // column reads as one column down the whole list.
+                .pl(ui_scale.px(history_message_text_left_px(show_graph_color_marker)))
+                .pr(cell_pad_x)
+                .when(show_graph_color_marker, |cell| {
+                    cell.child(history_message_border(ui_scale, node_color))
+                });
+            summary = summary.child(
+                div()
+                    .flex_shrink_0()
+                    .text_sm()
+                    .text_color(label_color)
+                    .line_clamp(1)
+                    .whitespace_nowrap()
+                    .child("Worktree changes"),
+            );
+            if !parts.is_empty() {
+                summary = summary.child(div().flex().items_center().gap_2().children(parts));
+            }
+            summary.child(div().flex_1().min_w(px(0.0))).child(badge)
+        })
+        .when(show_author, |row| row.child(div().w(col_author)))
+        .when(show_date, |row| row.child(div().w(col_date)))
+        .when(show_sha, |row| row.child(div().w(col_sha)));
+
+    if selected {
+        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.15));
+    }
+
+    let _ = repo_id;
+    row.into_any_element()
+}
+
 #[allow(clippy::too_many_arguments)]
 fn working_tree_summary_history_row(
     theme: AppTheme,
@@ -3059,10 +3374,9 @@ fn working_tree_summary_history_row(
     show_author: bool,
     show_date: bool,
     show_sha: bool,
-    node_color: gpui::Rgba,
-    // `Some(false)` when a commit is selected and the history below this row is
-    // not part of its chain; `None` when nothing is selected.
-    related_to_selection: Option<bool>,
+    node_color_ix: history_graph::LaneColorIx,
+    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    show_graph_color_marker: bool,
     repo_id: RepoId,
     selected: bool,
     counts: (usize, usize, usize),
@@ -3070,11 +3384,12 @@ fn working_tree_summary_history_row(
 ) -> AnyElement {
     let scaled_px = |value| ui_scale.px(value);
     let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
-    // Same treatment the commit rows get, so the connector and its label recede
-    // or light up together with the history it joins.
+    // The connector washes with its lane, like every other node in the graph;
+    // the label still follows the row's relation to the selection.
     let node_color =
-        history_canvas::selection_related_lane_color(theme, node_color, related_to_selection);
-    let label_color = history_canvas::selection_related_summary_color(theme, related_to_selection);
+        super::history_graph_paint::lane_wash_color(theme, node_color_ix, selected_lane_color_ix);
+    let on_selected_lane = selected_lane_color_ix.map(|selected| selected == node_color_ix);
+    let label_color = history_canvas::selection_related_summary_color(theme, on_selected_lane);
     let icon_count = |icon_path: &'static str, color: gpui::Rgba, count: usize| {
         div()
             .flex()
@@ -3114,18 +3429,15 @@ fn working_tree_summary_history_row(
         ));
     }
 
-    // History rows render on the content card, so the hollow node core
-    // matches the card surface rather than the window canvas.
-    let node_fill = theme.colors.surface.canvas;
+    // The history list's own surface, so the node's middle hides the lane
+    // running through its column.
+    let node_background = theme.colors.surface.canvas;
     let circle = gpui::canvas(
         |_, _, _| (),
-        move |bounds, _, window, _cx| {
-            use gpui::{PathBuilder, fill, point, size};
+        move |bounds, _, window, cx| {
+            use gpui::{PathBuilder, point};
             let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
             let scaled_px = |value| px(value * design_scale_factor);
-            let r = scaled_px(3.0);
-            let border = scaled_px(1.0);
-            let outer = r + border;
             let margin_x = scaled_px(HISTORY_GRAPH_MARGIN_X_PX);
             let col_gap = scaled_px(HISTORY_GRAPH_COL_GAP_PX);
             let node_x = margin_x + col_gap * 0.0;
@@ -3143,22 +3455,23 @@ fn working_tree_summary_history_row(
                 window.paint_path(p, node_color);
             }
 
-            window.paint_quad(
-                fill(
-                    gpui::Bounds::new(
-                        point(center.x - outer, center.y - outer),
-                        size(outer * 2.0, outer * 2.0),
-                    ),
+            if show_graph_color_marker {
+                super::history_graph_paint::paint_graph_fade(
                     node_color,
-                )
-                .corner_radii(outer.min(scaled_px(2.0))),
-            );
-            window.paint_quad(
-                fill(
-                    gpui::Bounds::new(point(center.x - r, center.y - r), size(r * 2.0, r * 2.0)),
-                    node_fill,
-                )
-                .corner_radii(r.min(scaled_px(2.0))),
+                    bounds,
+                    scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+                    window,
+                );
+            }
+
+            super::history_graph_paint::paint_ring_icon_node(
+                center.x,
+                center.y,
+                icons::UNCOMMITTED_NODE_ICON_PATH,
+                node_color,
+                node_background,
+                window,
+                cx,
             );
         },
     )
@@ -3198,12 +3511,19 @@ fn working_tree_summary_history_row(
         })
         .child({
             let mut summary = div()
+                .relative()
                 .flex_1()
                 .min_w(px(0.0))
                 .flex()
                 .items_center()
                 .gap_2()
-                .px(cell_pad_x);
+                // Same offset the commit rows put their text at, so the message
+                // column reads as one column down the whole list.
+                .pl(ui_scale.px(history_message_text_left_px(show_graph_color_marker)))
+                .pr(cell_pad_x)
+                .when(show_graph_color_marker, |cell| {
+                    cell.child(history_message_border(ui_scale, node_color))
+                });
             summary = summary.child(
                 div()
                     .flex_1()
@@ -3253,14 +3573,18 @@ mod tests {
     use super::{
         MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource,
         MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
-        build_cached_diff_styled_text, history_scope_shows_graph_color_marker,
-        history_worktree_node_color, markdown_preview_alert_title_label,
+        build_cached_diff_styled_text, history_message_text_left_px,
+        history_scope_shows_graph_color_marker, history_worktree_node_color_ix,
+        markdown_preview_alert_title_label,
         markdown_preview_expanded_slice_range, markdown_preview_image_source,
         markdown_preview_inline_highlight, markdown_preview_no_picture_sizes,
         markdown_preview_picture_skeleton, markdown_preview_row_background,
         markdown_preview_row_height, markdown_preview_row_horizontal_padding,
         markdown_preview_row_layout, markdown_preview_row_marker, markdown_preview_row_styled_text,
         markdown_preview_row_typography, worktree_preview_apply_query_overlay,
+    };
+    use crate::view::{
+        HISTORY_COL_HANDLE_PX, HISTORY_MESSAGE_BORDER_GAP_PX, HISTORY_MESSAGE_BORDER_W_PX,
     };
     use crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY;
     use crate::view::history_graph;
@@ -3352,14 +3676,38 @@ mod tests {
         assert_eq!(regex_ranges, vec![0..6, 7..13]);
     }
 
+    /// The working-tree row borrows the lane colour *index* of the first commit
+    /// so its connector can be washed like any other lane, rather than taking a
+    /// resolved colour it could no longer compare against the selection.
+    /// The commit rows paint their text on a canvas and the two
+    /// uncommitted-changes rows lay theirs out as elements, so the offset they
+    /// agree on has to come from one place — otherwise the message column steps
+    /// sideways at every synthetic row.
     #[test]
-    fn history_worktree_node_color_falls_back_to_primary_lane_color() {
-        let theme = AppTheme::gitcomet_dark();
-
+    fn the_message_text_clears_the_lane_border_by_a_fixed_gap() {
         assert_eq!(
-            history_worktree_node_color(theme, None),
-            history_graph::lane_color(theme, 0)
+            history_message_text_left_px(true),
+            HISTORY_MESSAGE_BORDER_W_PX + HISTORY_MESSAGE_BORDER_GAP_PX
         );
+        assert!(
+            history_message_text_left_px(true) > HISTORY_MESSAGE_BORDER_W_PX,
+            "text that starts inside the border reads as touching it"
+        );
+    }
+
+    /// Without the border there is nothing to clear, so the cell's own padding
+    /// applies and the text does not jump left when the marker is off.
+    #[test]
+    fn the_message_text_falls_back_to_the_cell_padding_without_a_border() {
+        assert_eq!(
+            history_message_text_left_px(false),
+            HISTORY_COL_HANDLE_PX / 2.0
+        );
+    }
+
+    #[test]
+    fn history_worktree_node_color_falls_back_to_the_primary_lane() {
+        assert_eq!(history_worktree_node_color_ix(None), 0);
     }
 
     #[test]

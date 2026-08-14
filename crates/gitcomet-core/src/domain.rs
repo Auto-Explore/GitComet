@@ -213,6 +213,35 @@ pub struct Worktree {
     pub detached: bool,
 }
 
+/// Uncommitted-change counts for one linked worktree, gathered by opening a
+/// throwaway handle at its path. Counts follow the same rules as the history
+/// pane's working-tree row: staged and unstaged are summed, so a file that is
+/// both staged and dirty counts twice.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WorktreeDirtySummary {
+    pub path: PathBuf,
+    /// Commit this worktree has checked out. Carried here rather than looked up
+    /// in the repo's worktree list, because that list is loaded lazily (only
+    /// when the sidebar's Worktrees section is opened) and the history rows must
+    /// not depend on the sidebar having been expanded.
+    pub head: Option<CommitId>,
+    pub branch: Option<String>,
+    pub detached: bool,
+    pub added: usize,
+    pub modified: usize,
+    pub deleted: usize,
+    /// The changed files themselves, so the history row can show them without a
+    /// second scan. Kept split the way git reports them.
+    pub staged: Vec<FileStatus>,
+    pub unstaged: Vec<FileStatus>,
+}
+
+impl WorktreeDirtySummary {
+    pub fn is_dirty(&self) -> bool {
+        self.added > 0 || self.modified > 0 || self.deleted > 0
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SubmoduleStatus {
     UpToDate,
@@ -340,6 +369,29 @@ pub enum FileStatusKind {
     Deleted,
     Renamed,
     Conflicted,
+}
+
+/// Bucket a status list into `(added, modified, deleted)` the way the history
+/// pane's uncommitted-changes rows report it.
+///
+/// Shared so the working-tree row and the per-worktree scan can never drift
+/// apart. Callers that want a combined figure sum the staged and unstaged
+/// results, which double-counts a file that is both staged and dirty in the
+/// worktree — that is the long-standing behaviour of the working-tree row.
+pub fn count_file_statuses(entries: &[FileStatus]) -> (usize, usize, usize) {
+    let mut added = 0usize;
+    let mut modified = 0usize;
+    let mut deleted = 0usize;
+    for entry in entries {
+        match entry.kind {
+            FileStatusKind::Untracked | FileStatusKind::Added => added += 1,
+            FileStatusKind::Deleted => deleted += 1,
+            FileStatusKind::Modified | FileStatusKind::Renamed | FileStatusKind::Conflicted => {
+                modified += 1
+            }
+        }
+    }
+    (added, modified, deleted)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
@@ -1179,5 +1231,65 @@ index 0000000..1111111 100644
         let reflog_clone = reflog.clone();
         assert!(Arc::ptr_eq(&reflog.message, &reflog_clone.message));
         assert!(Arc::ptr_eq(&reflog.selector, &reflog_clone.selector));
+    }
+}
+
+#[cfg(test)]
+mod file_status_count_tests {
+    use super::*;
+
+    fn status(kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from("a.txt"),
+            kind,
+            conflict: None,
+        }
+    }
+
+    #[test]
+    fn counts_bucket_untracked_and_added_together() {
+        let entries = [
+            status(FileStatusKind::Untracked),
+            status(FileStatusKind::Added),
+        ];
+        assert_eq!(count_file_statuses(&entries), (2, 0, 0));
+    }
+
+    #[test]
+    fn counts_bucket_renamed_and_conflicted_as_modified() {
+        let entries = [
+            status(FileStatusKind::Modified),
+            status(FileStatusKind::Renamed),
+            status(FileStatusKind::Conflicted),
+        ];
+        assert_eq!(count_file_statuses(&entries), (0, 3, 0));
+    }
+
+    #[test]
+    fn counts_are_zero_for_an_empty_status_list() {
+        assert_eq!(count_file_statuses(&[]), (0, 0, 0));
+    }
+
+    #[test]
+    fn a_summary_is_dirty_only_when_some_bucket_is_non_zero() {
+        let clean = WorktreeDirtySummary {
+            path: PathBuf::from("/tmp/wt"),
+            head: None,
+            branch: None,
+            detached: false,
+            added: 0,
+            modified: 0,
+            deleted: 0,
+            staged: Vec::new(),
+            unstaged: Vec::new(),
+        };
+        assert!(!clean.is_dirty());
+        assert!(
+            WorktreeDirtySummary {
+                deleted: 1,
+                ..clean
+            }
+            .is_dirty()
+        );
     }
 }

@@ -275,6 +275,7 @@ pub enum Msg {
     },
     OpenInlineSubmoduleDiff {
         repo_id: RepoId,
+        origin: crate::model::ForeignDiffOrigin,
         submodule_repo_path: PathBuf,
         parent_submodule_path: PathBuf,
         entries: Vec<crate::model::InlineSubmoduleDiffEntry>,
@@ -331,6 +332,18 @@ pub enum Msg {
     },
     LoadWorktrees {
         repo_id: RepoId,
+    },
+    /// Uncommitted-change counts for the other linked worktrees. Opens a
+    /// throwaway handle per worktree path, so it is scheduled deliberately
+    /// rather than on every refresh.
+    LoadWorktreeDirty {
+        repo_id: RepoId,
+    },
+    /// Select the history row for a linked worktree's uncommitted changes, so
+    /// the details pane shows that worktree's files instead of a commit.
+    SelectWorktreeUncommitted {
+        repo_id: RepoId,
+        path: PathBuf,
     },
     /// On-demand load of tip-commit author/date/summary for every ref. Only
     /// requested by pickers that render it.
@@ -1078,6 +1091,10 @@ pub enum InternalMsg {
     WorktreesLoaded {
         repo_id: RepoId,
         result: Result<Vec<Worktree>, Error>,
+    },
+    WorktreeDirtyLoaded {
+        repo_id: RepoId,
+        result: Result<Vec<WorktreeDirtySummary>, Error>,
     },
     RefMetadataLoaded {
         repo_id: RepoId,

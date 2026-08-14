@@ -1975,6 +1975,7 @@ impl MainPaneView {
                                                 let selected_ix = inline_selected_ix.unwrap_or(0);
                                                 this.store.dispatch(Msg::OpenInlineSubmoduleDiff {
                                                     repo_id,
+                                                    origin: gitcomet_state::model::ForeignDiffOrigin::Submodule,
                                                     submodule_repo_path: repo_path_for_click
                                                         .clone(),
                                                     parent_submodule_path: summary_path_for_inline

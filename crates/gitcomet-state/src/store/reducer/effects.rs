@@ -16,6 +16,7 @@ use gitcomet_core::domain::{
     Branch, CommitDetails, CommitFileChange, CommitId, EMPTY_TREE_ID, FileEntry, FileSource,
     FileStatusKind, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
     RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    WorktreeDirtySummary,
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
@@ -532,6 +533,34 @@ pub(super) fn worktrees_loaded(
     effects
 }
 
+pub(super) fn worktree_dirty_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<Vec<WorktreeDirtySummary>, Error>,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
+        let worktree_dirty = match result {
+            Ok(v) => Loadable::Ready(v),
+            // A worktree that cannot be opened (removed, on an unmounted
+            // volume) is a routine condition, not something worth a diagnostic
+            // banner -- the scan simply reports nothing for it.
+            Err(e) => Loadable::Error(e.to_string()),
+        };
+        repo_state.set_worktree_dirty(worktree_dirty);
+        if repo_state
+            .loads_in_flight
+            .finish(RepoLoadsInFlight::WORKTREE_DIRTY)
+        {
+            effects.push(Effect::LoadWorktreeDirty {
+                repo_id,
+                workdir: repo_state.spec.workdir.clone(),
+            });
+        }
+    }
+    effects
+}
+
 pub(super) fn ref_metadata_loaded(
     state: &mut AppState,
     repo_id: RepoId,
@@ -1041,6 +1070,19 @@ pub(super) fn select_commit_and_load_details(
     vec![Effect::LoadCommitDetails { repo_id, commit_id }]
 }
 
+pub(super) fn select_worktree_uncommitted(
+    state: &mut AppState,
+    repo_id: RepoId,
+    path: PathBuf,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    repo_state.set_worktree_selection(Some(path));
+    repo_state.set_commit_details(Loadable::NotLoaded);
+    Vec::new()
+}
+
 pub(super) fn clear_commit_selection(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -1375,6 +1417,45 @@ pub(super) fn load_worktrees(state: &mut AppState, repo_id: RepoId) -> Vec<Effec
     } else {
         Vec::new()
     }
+}
+
+pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    // Unlike the other loaders this one does not flip to `Loading`: the counts
+    // stay on screen while a rescan runs, so a window-focus refresh does not
+    // blank the rows it is about to redraw identically.
+    if repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_DIRTY)
+    {
+        vec![Effect::LoadWorktreeDirty {
+            repo_id,
+            workdir: repo_state.spec.workdir.clone(),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
+/// Queues a rescan of the other worktrees' uncommitted changes, if one is not
+/// already running. Returns `None` when a scan is in flight, so callers can
+/// fire this from several triggers without stacking up repeated full scans.
+pub(super) fn request_worktree_dirty_effect(repo_state: &mut RepoState) -> Option<Effect> {
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return None;
+    }
+    repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::WORKTREE_DIRTY)
+        .then(|| Effect::LoadWorktreeDirty {
+            repo_id: repo_state.id,
+            workdir: repo_state.spec.workdir.clone(),
+        })
 }
 
 pub(super) fn load_ref_metadata(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {

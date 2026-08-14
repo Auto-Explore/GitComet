@@ -1,7 +1,10 @@
 use crate::model::{AppState, ConflictFileLoadMode};
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
-use gitcomet_core::domain::{DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope};
+use gitcomet_core::domain::{
+    DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus,
+    Worktree, WorktreeDirtySummary, count_file_statuses,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
@@ -922,6 +925,89 @@ pub(super) fn schedule_load_worktrees(
             );
         },
     );
+}
+
+/// Scans every *other* linked worktree for uncommitted changes.
+///
+/// The worktree list is re-read inside the task rather than passed in from
+/// state: this way the scan can never disagree with the paths it walks, and it
+/// has no ordering dependency on `LoadWorktrees` having landed first. One `git
+/// worktree list` is negligible next to the per-worktree status scans that
+/// follow.
+///
+/// A worktree that cannot be opened or stat'd is skipped rather than failing the
+/// whole scan — removed directories and unmounted volumes are routine.
+pub(super) fn schedule_load_worktree_dirty(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    own_workdir: PathBuf,
+    cancellation: CancellationToken,
+) {
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-worktree-dirty",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let result = repo
+                .list_worktrees_cancellable(&cancellation)
+                .map(|worktrees| {
+                    let mut summaries = Vec::new();
+                    for worktree in worktrees {
+                        if cancellation.is_cancelled() {
+                            break;
+                        }
+                        if worktree.path == own_workdir {
+                            continue;
+                        }
+                        let Ok(handle) = backend.open(&worktree.path) else {
+                            continue;
+                        };
+                        let Ok(status) = handle.status_cancellable(&cancellation) else {
+                            continue;
+                        };
+                        let summary = worktree_dirty_summary(worktree, status);
+                        if summary.is_dirty() {
+                            summaries.push(summary);
+                        }
+                    }
+                    summaries
+                });
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+fn worktree_dirty_summary(worktree: Worktree, status: RepoStatus) -> WorktreeDirtySummary {
+    let (added, modified, deleted) = count_file_statuses(&status.unstaged);
+    let (staged_added, staged_modified, staged_deleted) = count_file_statuses(&status.staged);
+    WorktreeDirtySummary {
+        path: worktree.path,
+        head: worktree.head,
+        branch: worktree.branch,
+        detached: worktree.detached,
+        added: added + staged_added,
+        modified: modified + staged_modified,
+        deleted: deleted + staged_deleted,
+        staged: status.staged,
+        unstaged: status.unstaged,
+    }
 }
 
 pub(super) fn schedule_load_ref_metadata(
@@ -1873,4 +1959,60 @@ pub(super) fn schedule_load_interactive_rebase_setup(
             );
         },
     );
+}
+
+#[cfg(test)]
+mod worktree_dirty_tests {
+    use super::*;
+    use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
+
+    fn status(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from(path),
+            kind,
+            conflict: None,
+        }
+    }
+
+    fn worktree() -> Worktree {
+        Worktree {
+            path: PathBuf::from("/wt/side"),
+            head: Some(CommitId("abc123".into())),
+            branch: Some("side".into()),
+            detached: false,
+        }
+    }
+
+    #[test]
+    fn a_summary_sums_staged_and_unstaged_into_the_three_buckets() {
+        let repo_status = RepoStatus {
+            staged: vec![status("gone.txt", FileStatusKind::Deleted)],
+            unstaged: vec![
+                status("edited.txt", FileStatusKind::Modified),
+                status("new.txt", FileStatusKind::Untracked),
+            ],
+        };
+
+        let summary = worktree_dirty_summary(worktree(), repo_status);
+        assert_eq!((summary.added, summary.modified, summary.deleted), (1, 1, 1));
+        assert!(summary.is_dirty());
+        // The rows list these files, so the scan has to hand them over rather
+        // than reducing them to counts and dropping them.
+        assert_eq!(summary.unstaged.len(), 2);
+        assert_eq!(summary.staged.len(), 1);
+        assert_eq!(summary.staged[0].path, PathBuf::from("gone.txt"));
+    }
+
+    /// The row is anchored by HEAD and labelled by branch, so the scan has to
+    /// carry both through; the repo's own worktree list is loaded lazily and
+    /// cannot be relied on.
+    #[test]
+    fn a_summary_carries_the_worktrees_identity() {
+        let summary = worktree_dirty_summary(worktree(), RepoStatus::default());
+        assert_eq!(summary.path, PathBuf::from("/wt/side"));
+        assert_eq!(summary.head.as_ref().map(|id| id.as_ref()), Some("abc123"));
+        assert_eq!(summary.branch.as_deref(), Some("side"));
+        assert!(!summary.detached);
+        assert!(!summary.is_dirty(), "a clean tree must not be reported");
+    }
 }

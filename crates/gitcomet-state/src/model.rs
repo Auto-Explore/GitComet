@@ -121,6 +121,7 @@ impl RepoLoadsInFlight {
     pub const WORKTREES: u32 = 1 << 14;
     pub const SUBMODULES: u32 = 1 << 15;
     pub const REF_METADATA: u32 = 1 << 16;
+    pub const WORKTREE_DIRTY: u32 = 1 << 17;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -783,6 +784,11 @@ pub struct HistoryState {
     /// active. The per-file and whole-range diffs render through the normal
     /// `DiffState` pipeline via a `DiffTarget::CommitRange`.
     pub range_selection: Option<RangeSelection>,
+    /// Path of the linked worktree whose uncommitted changes the history row
+    /// selection is on, if any. A third kind of selection alongside a commit and
+    /// a range; the details pane branches on it.
+    pub worktree_selection: Option<PathBuf>,
+    pub worktree_selection_rev: u64,
     pub range_files: Loadable<Shared<Vec<CommitFileChange>>>,
     pub range_files_rev: u64,
     /// Monotonic id of the newest issued range-file load. A reply carrying an
@@ -830,6 +836,8 @@ impl Default for HistoryState {
             commit_details_rev: 0,
             multi_selection: CommitMultiSelection::default(),
             range_selection: None,
+            worktree_selection: None,
+            worktree_selection_rev: 0,
             range_files: Loadable::NotLoaded,
             range_files_rev: 0,
             range_files_request: 0,
@@ -977,8 +985,21 @@ pub struct InlineSubmoduleDiffEntry {
     pub section: InlineSubmoduleDiffSection,
 }
 
+/// Which foreign repository the inline diff is showing, and therefore how the
+/// UI labels it. The machinery is the same either way: a throwaway handle opened
+/// at `submodule_repo_path`, with its files and diffs parked on the active repo.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ForeignDiffOrigin {
+    Submodule,
+    Worktree {
+        branch: Option<String>,
+        detached: bool,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub struct InlineSubmoduleDiffState {
+    pub origin: ForeignDiffOrigin,
     pub submodule_repo_path: PathBuf,
     pub parent_submodule_path: PathBuf,
     pub entries: Vec<InlineSubmoduleDiffEntry>,
@@ -1068,6 +1089,7 @@ pub struct RepoState {
     pub pull_in_flight: u32,
     pub push_in_flight: u32,
     pub worktrees_in_flight: u32,
+    pub worktree_dirty_in_flight: u32,
     pub local_actions_in_flight: u32,
     pub commit_in_flight: u32,
 
@@ -1119,6 +1141,11 @@ pub struct RepoState {
     pub merge_message_rev: u64,
     pub worktrees: Loadable<Arc<Vec<Worktree>>>,
     pub worktrees_rev: u64,
+    /// Uncommitted-change counts for the *other* linked worktrees, so the
+    /// history pane can show work left behind in a worktree that is not the one
+    /// being viewed. Only worktrees with changes are kept.
+    pub worktree_dirty: Loadable<Arc<Vec<WorktreeDirtySummary>>>,
+    pub worktree_dirty_rev: u64,
     /// Tip-commit author/date/summary per short refname, loaded on demand by
     /// pickers that display it. Invalidated whenever the branch or
     /// remote-branch lists change, so it never outlives the refs it describes.
@@ -1185,6 +1212,7 @@ impl RepoState {
             pull_in_flight: 0,
             push_in_flight: 0,
             worktrees_in_flight: 0,
+            worktree_dirty_in_flight: 0,
             local_actions_in_flight: 0,
             commit_in_flight: 0,
             open: Loadable::Loading,
@@ -1229,6 +1257,8 @@ impl RepoState {
             merge_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,
+            worktree_dirty: Loadable::NotLoaded,
+            worktree_dirty_rev: 0,
             ref_metadata: Loadable::NotLoaded,
             ref_metadata_rev: 0,
             submodules: Loadable::NotLoaded,
@@ -1366,6 +1396,18 @@ impl RepoState {
         self.worktrees = worktrees;
         self.worktrees_rev = self.worktrees_rev.wrapping_add(1);
         self.bump_branch_sidebar_rev();
+    }
+
+    pub(crate) fn set_worktree_dirty(
+        &mut self,
+        worktree_dirty: Loadable<Vec<WorktreeDirtySummary>>,
+    ) {
+        let worktree_dirty = loadable_into_arc(worktree_dirty);
+        if self.worktree_dirty == worktree_dirty {
+            return;
+        }
+        self.worktree_dirty = worktree_dirty;
+        self.worktree_dirty_rev = self.worktree_dirty_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_ref_metadata(
@@ -1718,7 +1760,30 @@ impl RepoState {
         self.history_state.reveal_target = v;
     }
 
+    /// Selecting a worktree row takes the details pane over, so the commit
+    /// selection lets go first. Passing `None` simply clears it, which is what
+    /// selecting a commit or the working-tree row ends up doing.
+    pub(crate) fn set_worktree_selection(&mut self, path: Option<PathBuf>) {
+        if self.history_state.worktree_selection == path {
+            return;
+        }
+        if path.is_some() {
+            // Clears `worktree_selection` as a side effect, hence the assignment
+            // afterwards rather than before.
+            self.set_selected_commit(None);
+        }
+        self.history_state.worktree_selection = path;
+        self.history_state.worktree_selection_rev =
+            self.history_state.worktree_selection_rev.wrapping_add(1);
+    }
+
     pub(crate) fn set_selected_commit(&mut self, v: Option<CommitId>) {
+        // Moving the commit selection at all -- including clearing it for the
+        // working-tree row -- means the worktree row is no longer what is shown.
+        if self.history_state.worktree_selection.take().is_some() {
+            self.history_state.worktree_selection_rev =
+                self.history_state.worktree_selection_rev.wrapping_add(1);
+        }
         // Selecting anything other than the commit a reveal is walking toward
         // means the user moved on, and the reveal's exemption from page
         // reconciliation retires with it.
