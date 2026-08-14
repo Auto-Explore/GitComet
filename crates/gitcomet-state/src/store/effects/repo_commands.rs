@@ -903,6 +903,34 @@ pub(super) fn schedule_delete_remote_branch(
     );
 }
 
+pub(super) fn schedule_delete_remote_branches(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    remote: String,
+    branches: Vec<String>,
+    auth: Option<StagedGitAuth>,
+) {
+    let command_remote = remote.clone();
+    let command_branches = branches.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::DeleteRemoteBranches {
+            remote: command_remote,
+            branches: command_branches,
+        },
+        move |repo| {
+            run_with_git_auth(auth, || {
+                repo.delete_remote_branches_with_output(&remote, &branches)
+            })
+        },
+    );
+}
+
 pub(super) fn schedule_reset(
     executor: &TaskExecutor,
     repos: &RepoMap,

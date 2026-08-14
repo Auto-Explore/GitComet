@@ -4388,6 +4388,74 @@ fn file_explorer_pins_and_marks_files_with_unsaved_editor_buffers(cx: &mut gpui:
     );
 }
 
+/// Folder rows carried no context-menu invoker at all until this menu existed,
+/// so the right-click handler had nothing to light up and was simply never
+/// attached. This drives the real row to catch a regression back to that.
+#[gpui::test]
+fn right_clicking_a_folder_row_opens_the_folder_context_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Files;
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![
+        FileEntry {
+            name: "src".to_string(),
+            path: Arc::new(PathBuf::from("src")),
+            kind: FileEntryKind::Directory,
+            depth: 0,
+        },
+        FileEntry {
+            name: "a.rs".to_string(),
+            path: Arc::new(PathBuf::from("a.rs")),
+            kind: FileEntryKind::File,
+            depth: 0,
+        },
+    ]));
+    state.repos[0].file_browser.bump_rev();
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    let folder_row = cx
+        .debug_bounds("file_browser_row_0")
+        .expect("the folder is the first tree row");
+    let center = folder_row.center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    test_support::redraw(cx);
+
+    assert!(
+        cx.debug_bounds("app_popover").is_some(),
+        "right-clicking a folder must open a context menu"
+    );
+    // A folder-only entry: proof this is the folder menu rather than the file
+    // menu firing on the wrong row.
+    assert!(
+        cx.debug_bounds("context_menu_expand_all_under_here")
+            .is_some(),
+        "expected the folder menu's recursive expand entry"
+    );
+    assert!(
+        cx.debug_bounds("context_menu_copy_absolute_path").is_some(),
+        "expected the folder menu's copy entries"
+    );
+    // The folder row is the only row that pairs a state-mutating `on_click`
+    // with a right-button handler, so opening the menu must not also toggle it
+    // — otherwise every right-click would collapse the folder under the menu.
+    assert!(
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .all(|repo| repo.file_browser.expanded_dirs.is_empty()),
+        "right-clicking a folder must not toggle it"
+    );
+}
+
 /// Clicking a file the editor is holding unsaved text for must land back in the
 /// editor, not in the read-only view -- which would show the copy on disk and
 /// look like the edits were lost.
@@ -4557,5 +4625,72 @@ fn sidebar_worktree_badges_share_one_right_edge_near_the_pane_edge(cx: &mut gpui
     assert!(
         trailing_gap <= px(30.0),
         "worktree badges should sit close to the pane's right edge, got {trailing_gap:?}"
+    );
+}
+
+/// Branch group rows carried no context-menu invoker and no right-click handler
+/// at all until this menu existed. This drives the real row to catch a
+/// regression back to that.
+#[gpui::test]
+fn right_clicking_a_branch_group_row_opens_the_group_context_menu(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    let mut state = view_state_with_active_ready_repo(RepoId(1));
+    state.sidebar_mode = gitcomet_state::model::SidebarMode::Branches;
+    let branch = |name: &str| gitcomet_core::domain::Branch {
+        name: name.to_string(),
+        target: gitcomet_core::domain::CommitId("aaaaaaaaaaaa".into()),
+        upstream: None,
+        divergence: None,
+    };
+    state.repos[0].head_branch = Loadable::Ready("main".to_string());
+    state.repos[0].branches = Loadable::Ready(Arc::new(vec![
+        branch("main"),
+        branch("feat/a"),
+        branch("feat/b"),
+    ]));
+    state.repos[0].branches_rev = 1;
+    store.replace_snapshot_for_test(Arc::new(state));
+    sync_view_snapshot(cx, &view);
+
+    let group_row = cx
+        .debug_bounds("branch_group_0")
+        .or_else(|| cx.debug_bounds("branch_group_1"))
+        .or_else(|| cx.debug_bounds("branch_group_2"))
+        .expect("the feat/ group renders a row");
+    let center = group_row.center();
+    cx.simulate_mouse_move(center, None, gpui::Modifiers::default());
+    cx.simulate_mouse_down(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    cx.simulate_mouse_up(center, gpui::MouseButton::Right, gpui::Modifiers::default());
+    test_support::redraw(cx);
+
+    assert!(
+        cx.debug_bounds("app_popover").is_some(),
+        "right-clicking a branch group must open a context menu"
+    );
+    // A group-only entry: proof this is the group menu rather than the section
+    // or branch menu firing on the wrong row.
+    assert!(
+        cx.debug_bounds("context_menu_expand_all_under_here")
+            .is_some(),
+        "expected the group menu's recursive expand entry"
+    );
+
+    // The group row pairs a collapse-toggling `on_click` with the new
+    // right-button handler, so opening the menu must not also collapse the
+    // group under it.
+    let collapsed_after = cx.update(|_window, app| {
+        view.read(app)
+            .sidebar_pane
+            .read(app)
+            .collapsed_items_for_test()
+    });
+    assert!(
+        collapsed_after.is_empty(),
+        "right-clicking a branch group must not toggle it, got {collapsed_after:?}"
     );
 }

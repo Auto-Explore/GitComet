@@ -386,6 +386,7 @@ impl SidebarPaneView {
                     this.branch_filter_query = text;
                     this.branches_scroll
                         .scroll_to_item(0, gpui::ScrollStrategy::Top);
+                    this.sync_popover_branch_filter(cx);
                     cx.notify();
                 }
             });
@@ -558,6 +559,46 @@ impl SidebarPaneView {
         path_display::cached_path_display(&mut cache, path)
     }
 
+    #[cfg(test)]
+    pub(in crate::view) fn collapsed_items_for_test(&self) -> BTreeSet<String> {
+        self.sidebar_collapsed_items_by_repo
+            .values()
+            .flat_map(|items| items.iter().cloned())
+            .collect()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn pinned_branches_for_test(&self) -> BTreeSet<String> {
+        self.sidebar_pinned_branches_by_repo
+            .values()
+            .flat_map(|items| items.iter().cloned())
+            .collect()
+    }
+
+    /// Set the pane's mirror of the filter text directly. The real path writes
+    /// it from the filter input's subscription, which a headless test has no
+    /// way to drive.
+    #[cfg(test)]
+    pub(in crate::view) fn set_branch_filter_query_for_test(&mut self, query: &str) {
+        self.branch_filter_query = query.to_string();
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+    }
+
+    /// Seed the collapse set for the active repo. The real path restores it from
+    /// the saved session, which the test harness constructs without.
+    #[cfg(test)]
+    pub(in crate::view) fn set_collapsed_keys_for_test(&mut self, keys: &[&str]) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let repo_path = repo.spec.workdir.clone();
+        self.sidebar_collapsed_items_by_repo.insert(
+            repo_path,
+            keys.iter().map(|key| (*key).to_string()).collect(),
+        );
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+    }
+
     pub(in super::super) fn saved_sidebar_collapsed_items(
         &self,
     ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
@@ -608,6 +649,77 @@ impl SidebarPaneView {
         cx.notify();
     }
 
+    /// Drop the pins the section is actually showing, leaving the other
+    /// section's pins alone.
+    ///
+    /// Scoped to the rendered rows, not every key in the section: the menu
+    /// labels itself with `PopoverHost::pinned_branch_count`, which skips a
+    /// pin the branch filter excludes and one whose branch is gone. Retaining
+    /// by section alone would delete pins the user cannot see under a count
+    /// that never mentioned them.
+    pub(in super::super) fn unpin_all_branches(
+        &mut self,
+        repo_id: RepoId,
+        section: BranchSection,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return;
+        };
+        let repo_path = repo.spec.workdir.clone();
+        let filter = self.branch_filter_query.as_str();
+        let Some(items) = self.sidebar_pinned_branches_by_repo.get_mut(&repo_path) else {
+            return;
+        };
+
+        let before = items.len();
+        items.retain(|key| !branch_sidebar::pinned_branch_renders(repo, key, section, filter));
+        if items.len() == before {
+            return;
+        }
+        if items.is_empty() {
+            self.sidebar_pinned_branches_by_repo.remove(&repo_path);
+        }
+
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        self.schedule_ui_settings_persist(cx);
+        self.sync_popover_pinned_branches(cx);
+        cx.notify();
+    }
+
+    /// Mirror the branch filter into the popover host.
+    ///
+    /// The branch tree is filtered before the group tree is built, so a group
+    /// row shows only its matching members. Menus acting on "the branches in
+    /// this group" have to see the same filter, or they act on branches that
+    /// are not on screen.
+    fn sync_popover_branch_filter(&self, cx: &mut gpui::Context<Self>) {
+        let query = self.branch_filter_query.clone();
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.popover_host.update(cx, |host, cx| {
+                    host.set_branch_filter_query(query, cx);
+                });
+            });
+        });
+    }
+
+    /// Mirror the collapse set into the popover host so the branch group menu
+    /// can label its Expand/Collapse entry. Deferred for the same reason as
+    /// [`Self::sync_popover_pinned_branches`].
+    fn sync_popover_collapsed_items(&self, cx: &mut gpui::Context<Self>) {
+        let collapsed = self.sidebar_collapsed_items_by_repo.clone();
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.popover_host.update(cx, |host, cx| {
+                    host.set_collapsed_items(collapsed, cx);
+                });
+            });
+        });
+    }
+
     /// Mirror the pinned set into the popover host so the branch context menu
     /// can label its pin entry. Deferred because this runs inside the sidebar
     /// pane's own update, and the toggle itself may have been dispatched from
@@ -635,6 +747,31 @@ impl SidebarPaneView {
         collapse_key: SharedString,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.apply_active_repo_collapse_key(collapse_key, None, cx);
+    }
+
+    /// Drive a collapse key to an explicit state instead of flipping it.
+    ///
+    /// The pinned sections render force-expanded while a branch filter is live,
+    /// no matter what the stored key says, so a menu labelling itself from the
+    /// rendered state has to send the state it means — a flip would move the
+    /// key the opposite way from the label the user clicked.
+    pub(in super::super) fn set_active_repo_collapse_key(
+        &mut self,
+        collapse_key: SharedString,
+        collapsed: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_active_repo_collapse_key(collapse_key, Some(collapsed), cx);
+    }
+
+    /// Shared body of the two above: `None` flips the key, `Some` drives it.
+    fn apply_active_repo_collapse_key(
+        &mut self,
+        collapse_key: SharedString,
+        target: Option<bool>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(repo) = self.active_repo() else {
             return;
         };
@@ -653,7 +790,10 @@ impl SidebarPaneView {
             .sidebar_collapsed_items_by_repo
             .entry(repo_path.clone())
             .or_default();
-        branch_sidebar::toggle_collapse_state(items, collapse_key);
+        match target {
+            Some(collapsed) => branch_sidebar::set_collapse_state(items, collapse_key, collapsed),
+            None => branch_sidebar::toggle_collapse_state(items, collapse_key),
+        }
         if items.is_empty() {
             self.sidebar_collapsed_items_by_repo.remove(&repo_path);
         }
@@ -664,9 +804,86 @@ impl SidebarPaneView {
 
         self.sidebar_presentation_cache = SidebarPresentationCache::default();
         self.schedule_ui_settings_persist(cx);
+        self.sync_popover_collapsed_items(cx);
         if should_load_submodules_on_expand && expanded_now {
             self.store.dispatch(Msg::LoadSubmodules { repo_id });
         }
+        self.dispatch_sidebar_data_request_if_needed(cx);
+        cx.notify();
+    }
+
+    /// Collapse or expand a branch group together with every group beneath it.
+    ///
+    /// Branch collapse state is view-owned rather than a store message, so this
+    /// is the recursive sibling of [`Self::toggle_active_repo_collapse_key`]
+    /// rather than a `Msg`.
+    pub(in super::super) fn set_branch_group_collapsed_recursive(
+        &mut self,
+        section: BranchSection,
+        remote: Option<String>,
+        path: String,
+        collapsed: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let path = path.trim();
+        if path.is_empty() {
+            return;
+        }
+
+        let group_paths = match section {
+            BranchSection::Local => {
+                let names = match &repo.branches {
+                    Loadable::Ready(branches) => branches,
+                    _ => return,
+                };
+                branch_sidebar::group_paths_at_or_below(
+                    path,
+                    names.iter().map(|branch| branch.name.as_str()),
+                )
+            }
+            BranchSection::Remote => {
+                let Some(remote) = remote.as_deref() else {
+                    return;
+                };
+                let names = match &repo.remote_branches {
+                    Loadable::Ready(branches) => branches,
+                    _ => return,
+                };
+                branch_sidebar::group_paths_at_or_below(
+                    path,
+                    names
+                        .iter()
+                        .filter(|candidate| candidate.remote == remote)
+                        .map(|branch| branch.name.as_str()),
+                )
+            }
+        };
+
+        let repo_path = repo.spec.workdir.clone();
+        let items = self
+            .sidebar_collapsed_items_by_repo
+            .entry(repo_path.clone())
+            .or_default();
+        for group_path in &group_paths {
+            let key = match section {
+                BranchSection::Local => branch_sidebar::local_group_storage_key(group_path),
+                BranchSection::Remote => branch_sidebar::remote_group_storage_key(
+                    remote.as_deref().unwrap_or_default(),
+                    group_path,
+                ),
+            };
+            branch_sidebar::set_collapse_state(items, &key, collapsed);
+        }
+        if items.is_empty() {
+            self.sidebar_collapsed_items_by_repo.remove(&repo_path);
+        }
+
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+        self.schedule_ui_settings_persist(cx);
+        self.sync_popover_collapsed_items(cx);
         self.dispatch_sidebar_data_request_if_needed(cx);
         cx.notify();
     }
@@ -1548,6 +1765,7 @@ impl SidebarPaneView {
             input.set_text("", cx);
         });
         self.branch_filter_query.clear();
+        self.sync_popover_branch_filter(cx);
         cx.notify();
     }
 
@@ -2072,6 +2290,14 @@ impl SidebarPaneView {
                 _ => None,
             })
             .unwrap_or(&[]);
+        // A filtered tree renders every directory expanded and never reads
+        // `expanded_dirs`, so the reducer refuses the toggle. Drop the row's
+        // chevron and its click with it — a control that cannot move is worse
+        // than none, and the folder menu greys its Expand/Collapse entries for
+        // exactly the same reason. Asked of the query rather than the matchers
+        // so this tracks what the reducer will actually honour.
+        let expansion_frozen =
+            repo.is_some_and(|repo| file_browser_search_is_active(&repo.file_browser.search_query));
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             super::super::icons::svg_icon(path, color, scaled_px(size_px))
@@ -2199,11 +2425,15 @@ impl SidebarPaneView {
                 let element = {
                     let left_pad = scaled_px(6.0 + INDENT_STEP_PX * depth as f32);
                     let store = Arc::clone(&store);
-                    let menu_invoker = (!is_directory)
-                        .then(|| SharedString::from(format!("file_browser_file_{ix}")));
-                    let context_menu_active = menu_invoker.as_ref().is_some_and(|invoker| {
-                        this.active_context_menu_invoker.as_ref() == Some(invoker)
+                    // Files and folders get separate invoker names so the two
+                    // menus can never light up each other's row.
+                    let menu_invoker = SharedString::from(if is_directory {
+                        format!("file_browser_folder_{ix}")
+                    } else {
+                        format!("file_browser_file_{ix}")
                     });
+                    let context_menu_active =
+                        this.active_context_menu_invoker.as_ref() == Some(&menu_invoker);
                     let is_open_file = !is_directory
                         && open_path
                             .as_ref()
@@ -2232,22 +2462,40 @@ impl SidebarPaneView {
 
                     if is_directory {
                         let path = (*entry.path).clone();
-                        row_div = row_div.on_click(cx.listener(
-                            move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                                store.dispatch(Msg::ToggleFileBrowserDir {
-                                    repo_id,
-                                    path: path.clone(),
-                                });
-                            },
-                        ));
+                        let menu_path = path.clone();
+                        row_div = row_div
+                            .when(!expansion_frozen, |row| {
+                                row.on_click(cx.listener(
+                                    move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                        store.dispatch(Msg::ToggleFileBrowserDir {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                    },
+                                ))
+                            })
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
+                                    cx.stop_propagation();
+                                    this.activate_context_menu_invoker(menu_invoker.clone(), cx);
+                                    this.open_popover_at(
+                                        PopoverKind::FileBrowserFolderMenu {
+                                            repo_id,
+                                            path: menu_path.clone(),
+                                        },
+                                        e.position,
+                                        window,
+                                        cx,
+                                    );
+                                }),
+                            );
                     } else {
                         let path = (*entry.path).clone();
                         let menu_path = path.clone();
                         let source = repo
                             .map(|r| r.file_browser.source.clone())
                             .unwrap_or(gitcomet_core::domain::FileSource::WorkingDirectory);
-                        let menu_invoker =
-                            menu_invoker.expect("file rows have a context-menu invoker");
                         row_div = row_div
                             .on_click(cx.listener(
                                 move |_this, _e: &gpui::ClickEvent, _window, _cx| {
@@ -2288,7 +2536,7 @@ impl SidebarPaneView {
                     }
 
                     row_div
-                        .child(chevron_slot(is_directory, is_expanded))
+                        .child(chevron_slot(is_directory && !expansion_frozen, is_expanded))
                         .child(icon_slot(file_or_folder_icon_path(entry, is_expanded)))
                         .child({
                             let highlight_ranges =
@@ -2576,12 +2824,24 @@ fn active_workspace_badges_fingerprint(state: &AppState) -> (usize, u64) {
 /// multiline query (via the newline button / Shift+Enter) filters by any of
 /// several patterns at once.
 fn file_search_matchers(query: &str, options: DiffSearchOptions) -> Vec<DiffSearchMatcher> {
-    query
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
+    file_search_query_lines(query)
         .map(|line| DiffSearchMatcher::new(line, options))
         .collect()
+}
+
+fn file_search_query_lines(query: &str) -> impl Iterator<Item = &str> {
+    query.lines().map(str::trim).filter(|line| !line.is_empty())
+}
+
+/// Whether `query` actually filters the file tree.
+///
+/// Not the same as "non-empty": the search input is multiline and stores what
+/// was typed verbatim, so a lone space or newline is a query that yields no
+/// matchers and leaves the tree unfiltered. Anything deciding behaviour on
+/// "is the tree filtered right now" has to ask this rather than the raw string,
+/// or it disagrees with what is on screen.
+pub(in crate::view) fn file_browser_search_is_active(query: &str) -> bool {
+    file_search_query_lines(query).next().is_some()
 }
 
 fn file_search_matches(matchers: &[DiffSearchMatcher], haystack: &str) -> bool {
@@ -2810,6 +3070,23 @@ mod file_search_tests {
 mod tests {
     use super::*;
     use std::path::PathBuf;
+
+    /// Three copies of "is the tree filtered" exist: this one, the reducer's
+    /// `file_browser_is_filtered`, and the renderer's `file_search_matchers`.
+    /// They have to agree or the reducer freezes toggles the tree still honours.
+    #[test]
+    fn file_browser_search_predicate_agrees_with_the_renderers_matchers() {
+        let options = DiffSearchOptions::default();
+        for query in [
+            "", " ", "\n", "  \n \t ", "a", " a ", "a\nb", "\na", "#comment",
+        ] {
+            assert_eq!(
+                file_browser_search_is_active(query),
+                !file_search_matchers(query, options).is_empty(),
+                "predicates disagree for {query:?}"
+            );
+        }
+    }
 
     fn repo_state(id: RepoId, path: &str) -> RepoState {
         RepoState::new_opening(

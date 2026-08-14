@@ -185,8 +185,12 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::StatusFileMenu { repo_id, .. }
         | PopoverKind::BranchMenu { repo_id, .. }
         | PopoverKind::BranchSectionMenu { repo_id, .. }
+        | PopoverKind::BranchGroupMenu { repo_id, .. }
+        | PopoverKind::PinnedSectionMenu { repo_id, .. }
+        | PopoverKind::DeleteBranchesConfirm { repo_id, .. }
         | PopoverKind::CommitFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
+        | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
         | PopoverKind::BrowseHistoryMenu { repo_id }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
@@ -209,6 +213,11 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
+        // The group menu's branch count and the pinned menu's "Unpin all (N)"
+        // both read the live branch lists, so a refresh landing while the menu
+        // is up has to repaint it rather than leave a stale count.
+        | PopoverKind::BranchGroupMenu { .. }
+        | PopoverKind::PinnedSectionMenu { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::PushSetUpstreamPrompt { .. } => {
             repo.head_branch_rev.hash(hasher);
@@ -219,6 +228,14 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             // summary on their detail line, so metadata landing while the picker
             // is open has to repaint it — the rows change height, not just text.
             repo.ref_metadata_rev.hash(hasher);
+        }
+
+        // Its toggle label reads `expanded_dirs` and its disabled state reads
+        // `search_query`. "Locate file in explorer" is a global action that
+        // rewrites both without any click on the tree, so the menu has to
+        // repaint when it lands rather than keep a label that is now a lie.
+        PopoverKind::FileBrowserFolderMenu { .. } => {
+            repo.file_browser.file_browser_rev.hash(hasher);
         }
 
         PopoverKind::Repo {
@@ -351,6 +368,9 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
+        // Its member list is resolved when it opens and carried on the kind, so
+        // it must not change under the user mid-confirmation.
+        | PopoverKind::DeleteBranchesConfirm { .. }
         | PopoverKind::CommitMenu { .. }
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
@@ -409,11 +429,13 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id,
             target,
             source_selectable,
+            name_prefix,
         } => {
             66u8.hash(hasher);
             repo_id.hash(hasher);
             target.hash(hasher);
             source_selectable.hash(hasher);
+            name_prefix.hash(hasher);
         }
         PopoverKind::RenameBranchPrompt {
             repo_id,
@@ -715,6 +737,42 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             62u8.hash(hasher);
             repo_id.hash(hasher);
             path.hash(hasher);
+        }
+        PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
+            99u8.hash(hasher);
+            repo_id.hash(hasher);
+            path.hash(hasher);
+        }
+        PopoverKind::BranchGroupMenu {
+            repo_id,
+            section,
+            remote,
+            path,
+        } => {
+            100u8.hash(hasher);
+            repo_id.hash(hasher);
+            (*section as u8).hash(hasher);
+            remote.hash(hasher);
+            path.hash(hasher);
+        }
+        PopoverKind::PinnedSectionMenu { repo_id, section } => {
+            101u8.hash(hasher);
+            repo_id.hash(hasher);
+            (*section as u8).hash(hasher);
+        }
+        PopoverKind::DeleteBranchesConfirm {
+            repo_id,
+            section,
+            remote,
+            group_label,
+            names,
+        } => {
+            102u8.hash(hasher);
+            repo_id.hash(hasher);
+            (*section as u8).hash(hasher);
+            remote.hash(hasher);
+            group_label.hash(hasher);
+            names.hash(hasher);
         }
         PopoverKind::BrowseHistoryMenu { repo_id } => {
             63u8.hash(hasher);

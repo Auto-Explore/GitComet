@@ -956,6 +956,24 @@ pub trait GitRepository: Send + Sync {
         )))
     }
 
+    /// Delete several branches on one remote.
+    ///
+    /// A batch method rather than a caller-side loop because deleting is a push:
+    /// one invocation carrying every ref is a single network round trip, where
+    /// the loop pays one per branch. The default keeps that loop so backends
+    /// that only implement the single-branch call stay correct.
+    fn delete_remote_branches_with_output(
+        &self,
+        remote: &str,
+        branches: &[String],
+    ) -> Result<CommandOutput> {
+        let mut last = CommandOutput::empty_success("git push --delete");
+        for branch in branches {
+            last = self.delete_remote_branch_with_output(remote, branch)?;
+        }
+        Ok(last)
+    }
+
     fn commit_amend_with_output(&self, message: &str) -> Result<CommandOutput> {
         self.commit_amend(message)?;
         Ok(CommandOutput::empty_success("git commit --amend"))

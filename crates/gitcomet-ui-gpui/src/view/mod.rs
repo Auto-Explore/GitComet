@@ -816,6 +816,7 @@ impl GitCometView {
                             repo_id,
                             target,
                             source_selectable: true,
+                            name_prefix: String::new(),
                         },
                         window,
                         cx,
@@ -1610,6 +1611,7 @@ impl GitCometView {
                 details_pane.clone(),
                 sidebar_pane.clone(),
                 ui_session.repo_sidebar_pinned_branches.clone(),
+                ui_session.repo_sidebar_collapsed_items.clone(),
                 window,
                 cx,
             )

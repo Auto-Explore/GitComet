@@ -30,6 +30,7 @@ pub enum RepoActionKind {
     RenameBranch,
     DeleteBranch,
     ForceDeleteBranch,
+    DeleteBranches,
     StagePath,
     StagePaths,
     UnstagePath,
@@ -357,6 +358,14 @@ pub enum Msg {
         repo_id: RepoId,
         path: PathBuf,
     },
+    /// Expand or collapse `path` in the file explorer together with every
+    /// directory beneath it. The whole tree is enumerated up front, so the
+    /// descendants are already known without loading anything.
+    SetFileBrowserDirExpandedRecursive {
+        repo_id: RepoId,
+        path: PathBuf,
+        expanded: bool,
+    },
     SetFileBrowserSearch {
         repo_id: RepoId,
         query: String,
@@ -509,6 +518,17 @@ pub enum Msg {
     ForceDeleteBranch {
         repo_id: RepoId,
         name: String,
+    },
+    /// Delete every named local branch in one action.
+    ///
+    /// `force` picks `-D` over `-d` for the whole batch: a folder of finished
+    /// feature branches is exactly the case where an unforced delete fails on
+    /// every one of them, so the choice is made once up front rather than
+    /// escalated per branch.
+    DeleteBranches {
+        repo_id: RepoId,
+        names: Vec<String>,
+        force: bool,
     },
     CloneRepo {
         url: String,
@@ -692,6 +712,13 @@ pub enum Msg {
         repo_id: RepoId,
         remote: String,
         branch: String,
+    },
+    /// Delete several branches on one remote. Kept to a single remote so it
+    /// stays one `git push --delete` rather than a round trip per branch.
+    DeleteRemoteBranches {
+        repo_id: RepoId,
+        remote: String,
+        branches: Vec<String>,
     },
     Reset {
         repo_id: RepoId,
