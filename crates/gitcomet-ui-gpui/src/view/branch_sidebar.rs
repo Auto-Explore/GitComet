@@ -52,6 +52,51 @@ pub(super) fn branch_pin_storage_key(section: BranchSection, name: &str) -> Stri
     key
 }
 
+/// Which section a stored pin key belongs to, for callers that act on a whole
+/// section and do not care which branch each key names.
+pub(super) fn branch_pin_key_section(key: &str) -> Option<BranchSection> {
+    parse_branch_pin_key(key).map(|(section, _)| section)
+}
+
+/// Whether a stored pin key would render a row in `section`.
+///
+/// The row builder drops a pin whose branch no longer exists and one the branch
+/// filter excludes, so anything reporting "how many are pinned" has to ask the
+/// same question or it disagrees with what is on screen.
+pub(super) fn pinned_branch_renders(
+    repo: &RepoState,
+    key: &str,
+    section: BranchSection,
+    raw_filter: &str,
+) -> bool {
+    let Some((key_section, name)) = parse_branch_pin_key(key) else {
+        return false;
+    };
+    if key_section != section {
+        return false;
+    }
+    if !branch_matches_raw_filter(name, raw_filter) {
+        return false;
+    }
+
+    match section {
+        BranchSection::Local => matches!(
+            &repo.branches,
+            Loadable::Ready(branches) if branches.iter().any(|branch| branch.name == name)
+        ),
+        BranchSection::Remote => {
+            let Loadable::Ready(branches) = &repo.remote_branches else {
+                return false;
+            };
+            name.split_once('/').is_some_and(|(remote, branch_name)| {
+                branches
+                    .iter()
+                    .any(|branch| branch.remote == remote && branch.name == branch_name)
+            })
+        }
+    }
+}
+
 /// Parse a stored pin key back into its section and branch name. Unknown
 /// prefixes yield `None` so stale keys are ignored rather than mis-rendered.
 fn parse_branch_pin_key(key: &str) -> Option<(BranchSection, &str)> {
@@ -137,6 +182,15 @@ pub(super) enum BranchSidebarRow {
     },
     GroupHeader {
         label: SharedString,
+        /// The group's full slash path with no trailing separator (`feat`,
+        /// `feat/sub`), which `label` alone cannot give: it is only the last
+        /// segment. Everything acting on the group's members needs the whole
+        /// path to match branch names against.
+        path: SharedString,
+        /// The owning remote for a `Remote` group, `None` for a local one. Also
+        /// absent from `label`, and needed to tell `origin/feat` apart from
+        /// `upstream/feat`.
+        remote: Option<SharedString>,
         section: BranchSection,
         depth: BranchSidebarDepth,
         collapsed: bool,
@@ -694,6 +748,63 @@ pub(super) fn is_collapsed(collapsed_items: &BTreeSet<String>, collapse_key: &st
     }
 
     collapsed_items.contains(collapse_key)
+}
+
+/// Every group path at or below `path`, derived from the branch names in the
+/// section — `path` itself, plus one entry per intermediate directory of each
+/// member branch.
+///
+/// Membership is tested against `"{path}/"`, never the bare `path`, so a
+/// sibling group whose name merely starts with the same characters
+/// (`features/` against `feat/`) is not swept in.
+///
+/// The trailing segment of a branch name is the branch, not a group, so it is
+/// dropped: `feat/a/b` under `feat` contributes `feat` and `feat/a`.
+pub(super) fn group_paths_at_or_below<'a>(
+    path: &str,
+    branch_names: impl Iterator<Item = &'a str>,
+) -> BTreeSet<String> {
+    let mut out = BTreeSet::new();
+    // Always present, so the invoked group toggles even when its membership
+    // cannot be resolved.
+    out.insert(path.to_string());
+    if path.is_empty() {
+        return out;
+    }
+
+    let needle = format!("{path}/");
+    for name in branch_names {
+        let Some(rest) = name.strip_prefix(needle.as_str()) else {
+            continue;
+        };
+        let mut accumulated = path.to_string();
+        let mut segments: Vec<&str> = rest.split('/').collect();
+        segments.pop();
+        for segment in segments {
+            accumulated.push('/');
+            accumulated.push_str(segment);
+            out.insert(accumulated.clone());
+        }
+    }
+    out
+}
+
+/// Drive a collapse key to an explicit state, rather than flipping it.
+///
+/// Routes through the same `expanded:` inversion `toggle_collapse_state` uses:
+/// sections that default to collapsed store the *expanded* key instead, so a
+/// naive insert/remove would set the wrong one. Group and pinned keys are not
+/// in that set today, but going through here keeps them correct if they ever
+/// join it.
+pub(super) fn set_collapse_state(
+    collapsed_items: &mut BTreeSet<String>,
+    collapse_key: &str,
+    collapsed: bool,
+) {
+    if is_collapsed(collapsed_items, collapse_key) == collapsed {
+        return;
+    }
+    toggle_collapse_state(collapsed_items, collapse_key);
 }
 
 pub(super) fn toggle_collapse_state(collapsed_items: &mut BTreeSet<String>, collapse_key: &str) {
@@ -1506,6 +1617,8 @@ fn push_remote_linear_chain_rows(
         group_label.push('/');
         out.push(BranchSidebarRow::GroupHeader {
             label: group_label.into(),
+            path: group_path_prefix.as_str().into(),
+            remote: Some(remote.into()),
             section: BranchSection::Remote,
             depth: branch_sidebar_depth(depth),
             collapsed: group_collapsed,
@@ -1593,6 +1706,8 @@ fn push_slash_tree_child_rows(
     group_label.push('/');
     out.push(BranchSidebarRow::GroupHeader {
         label: group_label.into(),
+        path: group_path_prefix.as_str().into(),
+        remote: remote_name.map(SharedString::from),
         section,
         depth: branch_sidebar_depth(depth),
         collapsed: group_collapsed,
@@ -1648,6 +1763,20 @@ fn matches_branch_filter(name: &str, filter: &str) -> bool {
         return true;
     }
     name.to_ascii_lowercase().contains(filter)
+}
+
+/// [`matches_branch_filter`] for callers holding a raw, un-normalised query.
+///
+/// The row builder lowercases and trims once up front; menus acting on the same
+/// rows get here instead of repeating that normalisation and drifting from it.
+pub(super) fn branch_matches_raw_filter(name: &str, filter: &str) -> bool {
+    matches_branch_filter(name, &filter.trim().to_ascii_lowercase())
+}
+
+/// [`matches_remote_branch_filter`] for a raw query, matching against the full
+/// `remote/name` form the tree filters on.
+pub(super) fn remote_branch_matches_raw_filter(remote: &str, branch: &str, filter: &str) -> bool {
+    matches_remote_branch_filter(remote, branch, &filter.trim().to_ascii_lowercase())
 }
 
 /// Matches a remote branch against the filter using its full `remote/name` form,
@@ -1798,6 +1927,80 @@ fn push_branch_sidebar_branch_row(
 
 #[cfg(test)]
 mod tests {
+
+    /// A group's descendants come from the member branch names, and the
+    /// trailing segment of each name is the branch, not a group.
+    #[test]
+    fn group_paths_collects_the_group_and_every_directory_under_it() {
+        let names = ["feat/a", "feat/b/c", "feat/b/d/e", "main"];
+        let paths = group_paths_at_or_below("feat", names.into_iter());
+
+        let expected: BTreeSet<String> = ["feat", "feat/b", "feat/b/d"]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect();
+        assert_eq!(paths, expected);
+    }
+
+    /// `starts_with` on the bare prefix would sweep `features/` into `feat/`.
+    #[test]
+    fn group_paths_ignores_a_sibling_sharing_a_name_prefix() {
+        let paths = group_paths_at_or_below("feat", ["features/x", "feat/a"].into_iter());
+        assert_eq!(
+            paths,
+            ["feat".to_string()].into_iter().collect::<BTreeSet<_>>()
+        );
+    }
+
+    /// The invoked group is always present, so its own row toggles even when
+    /// the branch list cannot be read.
+    #[test]
+    fn group_paths_always_includes_the_invoked_group() {
+        let paths = group_paths_at_or_below("feat", std::iter::empty());
+        assert!(paths.contains("feat"));
+    }
+
+    #[test]
+    fn set_collapse_state_drives_a_group_key_both_ways() {
+        let mut items = BTreeSet::new();
+        let key = local_group_storage_key("feat");
+
+        set_collapse_state(&mut items, &key, true);
+        assert!(is_collapsed(&items, &key));
+        // Idempotent: setting the state it already has must not flip it.
+        set_collapse_state(&mut items, &key, true);
+        assert!(is_collapsed(&items, &key));
+
+        set_collapse_state(&mut items, &key, false);
+        assert!(!is_collapsed(&items, &key));
+    }
+
+    /// Sections that default to collapsed store the inverted `expanded:` key, so
+    /// a naive insert/remove would write the wrong one.
+    #[test]
+    fn set_collapse_state_respects_the_inverted_storage_of_default_collapsed_sections() {
+        let mut items = BTreeSet::new();
+        let key = submodules_section_storage_key();
+        assert!(
+            is_collapsed(&items, key),
+            "precondition: collapsed by default"
+        );
+
+        set_collapse_state(&mut items, key, false);
+        assert!(!is_collapsed(&items, key));
+
+        set_collapse_state(&mut items, key, true);
+        assert!(is_collapsed(&items, key));
+    }
+
+    #[test]
+    fn branch_pin_key_section_round_trips_both_sections() {
+        for section in [BranchSection::Local, BranchSection::Remote] {
+            let key = branch_pin_storage_key(section, "feat/a");
+            assert_eq!(branch_pin_key_section(&key), Some(section));
+        }
+        assert_eq!(branch_pin_key_section("garbage"), None);
+    }
     use super::*;
     use gitcomet_core::domain::{
         Branch, CommitId, FileStatus, FileStatusKind, Remote, RemoteBranch, RepoSpec, RepoStatus,

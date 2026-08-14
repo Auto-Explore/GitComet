@@ -758,7 +758,7 @@ fn repo_picker_row_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestAppC
                 ("Pin repository", false),
                 ("Activate", true),
                 ("Open repository location", false),
-                ("Copy path", false),
+                ("Copy absolute path", false),
                 ("Close repository", false),
             ]
         );
@@ -772,7 +772,7 @@ fn repo_picker_row_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestAppC
                 ("Pin repository", false),
                 ("Open repository", false),
                 ("Open repository location", false),
-                ("Copy path", false),
+                ("Copy absolute path", false),
                 ("Remove from recently closed", false),
             ]
         );
@@ -1130,7 +1130,7 @@ fn repo_picker_row_action_says_so_when_the_repository_is_gone(cx: &mut gpui::Tes
         assert!(
             labels
                 .iter()
-                .all(|(label, _)| label != "Pin repository" && label != "Copy path"),
+                .all(|(label, _)| label != "Pin repository" && label != "Copy absolute path"),
             "a row with no path must not offer the entries that need one, got {labels:?}"
         );
     });

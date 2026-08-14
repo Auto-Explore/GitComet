@@ -4310,6 +4310,13 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         target: String,
         source_selectable: bool,
+        /// Text the name field opens with, so "create a branch in this group"
+        /// can hand over `feat/` and leave the user typing only the leaf.
+        ///
+        /// Carried on the kind rather than kept beside it on the host because
+        /// two prompts differing only by prefix are different popovers; sharing
+        /// a value would make them compare equal.
+        name_prefix: String,
     },
     RenameBranchPrompt {
         repo_id: RepoId,
@@ -4522,12 +4529,40 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         section: BranchSection,
     },
+    /// Menu for a `/`-prefix group row in the branch tree (`feat/`).
+    BranchGroupMenu {
+        repo_id: RepoId,
+        section: BranchSection,
+        /// The owning remote for a remote group; `None` for a local one.
+        remote: Option<String>,
+        /// Full slash path with no trailing separator (`feat`, `feat/sub`).
+        path: String,
+    },
+    /// Menu for the "Pinned Local/Remote Branches" header row.
+    PinnedSectionMenu {
+        repo_id: RepoId,
+        section: BranchSection,
+    },
+    /// Confirms deleting every branch in a group. Carries the resolved member
+    /// list so the dialog names what it is about to remove, rather than
+    /// re-deriving it and risking a different answer than the menu showed.
+    DeleteBranchesConfirm {
+        repo_id: RepoId,
+        section: BranchSection,
+        remote: Option<String>,
+        group_label: String,
+        names: Vec<String>,
+    },
     CommitFileMenu {
         repo_id: RepoId,
         commit_id: CommitId,
         path: std::path::PathBuf,
     },
     FileBrowserFileMenu {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    FileBrowserFolderMenu {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },

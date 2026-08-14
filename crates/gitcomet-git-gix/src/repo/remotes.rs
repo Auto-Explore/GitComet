@@ -1022,6 +1022,78 @@ impl GixRepo {
         Ok(output)
     }
 
+    /// Delete several branches on `remote` with one `git push --delete`.
+    ///
+    /// `git push --delete` accepts any number of refspecs, so the whole batch
+    /// costs a single network round trip instead of one per branch.
+    pub(super) fn delete_remote_branches_with_output_impl(
+        &self,
+        remote: &str,
+        branches: &[String],
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(remote, "remote name")?;
+        for branch in branches {
+            validate_ref_like_arg(branch, "branch name")?;
+        }
+        if branches.is_empty() {
+            return Ok(CommandOutput::empty_success("git push --delete"));
+        }
+
+        let label = format!("git push --delete {remote} {}", branches.join(" "));
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("push").arg("--delete").arg("--").arg(remote);
+        for branch in branches {
+            cmd.arg(branch);
+        }
+
+        match run_git_with_output(cmd, &label) {
+            Ok(output) => {
+                for branch in branches {
+                    let refname = format!("refs/remotes/{remote}/{branch}");
+                    self.best_effort_delete_reference(&refname);
+                }
+                Ok(output)
+            }
+            // How much a failed batch deleted depends on why it failed: a
+            // refspec naming a ref the remote does not have is rejected before
+            // anything is pushed, while a per-ref hook rejection lets the other
+            // deletes through. The output does not say which, so ask the remote
+            // instead of guessing — guessing either way is wrong, and pruning
+            // blindly would erase rows for branches that still exist.
+            Err(batch_error) => {
+                self.prune_missing_remote_tracking_refs(remote, branches);
+                Err(batch_error)
+            }
+        }
+    }
+
+    /// Drop the local remote-tracking ref for each of `branches` that no longer
+    /// exists on `remote`.
+    ///
+    /// Best-effort throughout: a failure here only leaves a stale row until the
+    /// next fetch, so it must never turn a partial success into an error.
+    fn prune_missing_remote_tracking_refs(&self, remote: &str, branches: &[String]) {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("ls-remote").arg("--heads").arg("--").arg(remote);
+        for branch in branches {
+            cmd.arg(format!("refs/heads/{branch}"));
+        }
+        let Ok(output) = run_git_with_output(cmd, "git ls-remote --heads") else {
+            return;
+        };
+
+        for branch in branches {
+            let refname = format!("refs/heads/{branch}");
+            let still_on_remote = output.stdout.lines().any(|line| {
+                line.split_once('\t')
+                    .is_some_and(|(_, name)| name.trim() == refname)
+            });
+            if !still_on_remote {
+                self.best_effort_delete_reference(&format!("refs/remotes/{remote}/{branch}"));
+            }
+        }
+    }
+
     pub(super) fn prune_merged_branches_with_output_impl(&self) -> Result<CommandOutput> {
         let fetch_output = self.fetch_all_with_output_impl(true)?;
 

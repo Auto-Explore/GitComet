@@ -13,6 +13,7 @@ mod commit_prompt;
 pub(in super::super) mod context_menu;
 mod create_branch_from_ref_prompt;
 mod create_tag_prompt;
+mod delete_branches_confirm;
 mod delete_remote_branch_confirm;
 mod discard_changes_confirm;
 mod file_history;
@@ -185,6 +186,13 @@ pub(in super::super) struct PopoverHost {
     /// be read at that point.
     pinned_branches_by_repo:
         std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+    /// Mirror of the sidebar's collapse set, kept here for the same reason as
+    /// [`Self::pinned_branches_by_repo`]: the branch group menu is built while
+    /// the sidebar pane's update borrow is already held.
+    collapsed_items_by_repo:
+        std::collections::BTreeMap<std::path::PathBuf, std::collections::BTreeSet<String>>,
+    /// Mirror of the sidebar's branch filter, for the same reason.
+    branch_filter_query: String,
 
     popover: Option<PopoverKind>,
     popover_anchor: Option<PopoverAnchor>,
@@ -487,6 +495,9 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             }
             | PopoverKind::CommitFileMenu { .. }
             | PopoverKind::FileBrowserFileMenu { .. }
+            | PopoverKind::FileBrowserFolderMenu { .. }
+            | PopoverKind::BranchGroupMenu { .. }
+            | PopoverKind::PinnedSectionMenu { .. }
             | PopoverKind::BrowseHistoryMenu { .. }
     )
 }
@@ -501,6 +512,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
+            | PopoverKind::DeleteBranchesConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
             | PopoverKind::DiscardChangesConfirm { .. }
             | PopoverKind::AddToGitignorePrompt { .. }
@@ -699,6 +711,18 @@ impl ConfirmDialog {
     }
 }
 
+/// Whether the create/rename prompt's name field holds something worth
+/// submitting.
+///
+/// Not just "non-empty": the prompt can open pre-filled with a group prefix
+/// (`feat/`), and git rejects a ref ending in `/`. Without this the Create
+/// button would be live the instant that prompt opens, and pressing it would
+/// produce an error toast instead of the prompt simply declining.
+pub(super) fn is_submittable_branch_name(name: &str) -> bool {
+    let name = name.trim();
+    !name.is_empty() && !name.ends_with('/')
+}
+
 pub(super) fn popover_title(title: impl Into<SharedString>) -> gpui::Div {
     let title: SharedString = title.into();
     div()
@@ -827,6 +851,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::ForcePushConfirm { .. }
         | PopoverKind::ForceDeleteBranchConfirm { .. }
+        | PopoverKind::DeleteBranchesConfirm { .. }
         | PopoverKind::DiscardChangesConfirm { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::PushSetUpstreamPrompt { .. } => Some(DIALOG_320_WIDTH),
@@ -927,6 +952,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         }
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
+        | PopoverKind::FileBrowserFolderMenu { .. }
+        | PopoverKind::BranchGroupMenu { .. }
+        | PopoverKind::PinnedSectionMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
@@ -1090,6 +1118,10 @@ impl PopoverHost {
         details_pane: Entity<DetailsPaneView>,
         sidebar_pane: Entity<SidebarPaneView>,
         pinned_branches_by_repo: std::collections::BTreeMap<
+            std::path::PathBuf,
+            std::collections::BTreeSet<String>,
+        >,
+        collapsed_items_by_repo: std::collections::BTreeMap<
             std::path::PathBuf,
             std::collections::BTreeSet<String>,
         >,
@@ -1657,6 +1689,8 @@ impl PopoverHost {
             details_pane,
             sidebar_pane,
             pinned_branches_by_repo,
+            collapsed_items_by_repo,
+            branch_filter_query: String::new(),
             popover: None,
             popover_anchor: None,
             cherry_pick_mainline: None,
@@ -2237,7 +2271,7 @@ impl PopoverHost {
         let name = self
             .create_tag_input
             .read_with(cx, |input, _| input.text().trim().to_string());
-        if name.is_empty() {
+        if !is_submittable_branch_name(&name) {
             return;
         }
 
@@ -2474,7 +2508,7 @@ impl PopoverHost {
         self.create_branch_prompt_repo_and_target().is_some()
             && self
                 .create_branch_input
-                .read_with(cx, |input, _| !input.text().trim().is_empty())
+                .read_with(cx, |input, _| is_submittable_branch_name(input.text()))
     }
 
     fn create_branch_prompt_repo_and_target(&self) -> Option<(RepoId, String)> {
@@ -3041,6 +3075,7 @@ impl PopoverHost {
                 PopoverKind::CreateBranchFromRefPrompt {
                     source_selectable,
                     target,
+                    name_prefix,
                     ..
                 } => {
                     let theme = self.theme;
@@ -3054,10 +3089,11 @@ impl PopoverHost {
                             });
                         }
                     }
+                    let name_prefix = name_prefix.clone();
                     self.create_branch_input.update(cx, |input, cx| {
                         input.clear_transient_key_presses();
                         input.set_theme(theme, cx);
-                        input.set_text("", cx);
+                        input.set_text(name_prefix, cx);
                         cx.notify();
                     });
                     let focus = self
@@ -3471,6 +3507,92 @@ impl PopoverHost {
         cx.notify();
     }
 
+    pub(in super::super) fn set_branch_filter_query(
+        &mut self,
+        query: String,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.branch_filter_query == query {
+            return;
+        }
+        self.branch_filter_query = query;
+        cx.notify();
+    }
+
+    /// The active branch filter, or `None` when it matches everything.
+    ///
+    /// Mirrors `matches_branch_filter`, which treats a blank query as "no
+    /// filter" — so a lone space must not read as a filter that hides
+    /// everything.
+    pub(in super::super) fn active_branch_filter(&self) -> Option<&str> {
+        let query = self.branch_filter_query.trim();
+        (!query.is_empty()).then_some(query)
+    }
+
+    pub(in super::super) fn set_collapsed_items(
+        &mut self,
+        collapsed: std::collections::BTreeMap<
+            std::path::PathBuf,
+            std::collections::BTreeSet<String>,
+        >,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.collapsed_items_by_repo == collapsed {
+            return;
+        }
+        self.collapsed_items_by_repo = collapsed;
+        cx.notify();
+    }
+
+    /// Whether a sidebar collapse key is currently collapsed, going through
+    /// `branch_sidebar::is_collapsed` so default-collapsed sections and the
+    /// inverted `expanded:` storage are read the same way the tree reads them.
+    pub(in super::super) fn sidebar_collapse_key_is_collapsed(
+        &self,
+        repo_id: RepoId,
+        collapse_key: &str,
+    ) -> bool {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return false;
+        };
+        match self.collapsed_items_by_repo.get(&repo.spec.workdir) {
+            Some(items) => crate::view::branch_sidebar::is_collapsed(items, collapse_key),
+            None => crate::view::branch_sidebar::is_collapsed(
+                &std::collections::BTreeSet::new(),
+                collapse_key,
+            ),
+        }
+    }
+
+    /// How many pinned branches the section is actually showing, for the pinned
+    /// header's "Unpin all (N)".
+    ///
+    /// Counting raw pin keys would overcount: the row builder skips a pin whose
+    /// branch no longer exists, and skips one filtered out by the branch
+    /// filter, so "Unpin all (3)" could sit above a single row.
+    pub(in super::super) fn pinned_branch_count(
+        &self,
+        repo_id: RepoId,
+        section: BranchSection,
+    ) -> usize {
+        let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
+            return 0;
+        };
+        let filter = self.active_branch_filter().unwrap_or_default();
+        self.pinned_branches_by_repo
+            .get(&repo.spec.workdir)
+            .map_or(0, |items| {
+                items
+                    .iter()
+                    .filter(|key| {
+                        crate::view::branch_sidebar::pinned_branch_renders(
+                            repo, key, section, filter,
+                        )
+                    })
+                    .count()
+            })
+    }
+
     pub(in super::super) fn is_branch_pinned(
         &self,
         repo_id: RepoId,
@@ -3854,6 +3976,8 @@ impl PopoverHost {
                 repo_id,
                 target,
                 source_selectable,
+                // Consumed when the popover opens, seeding the name input.
+                name_prefix: _,
             } => create_branch_from_ref_prompt::panel(
                 self,
                 repo_id,
@@ -4215,6 +4339,41 @@ impl PopoverHost {
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 self.context_menu_view(PopoverKind::FileBrowserFileMenu { repo_id, path }, cx)
             }
+            PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
+                self.context_menu_view(PopoverKind::FileBrowserFolderMenu { repo_id, path }, cx)
+            }
+            PopoverKind::BranchGroupMenu {
+                repo_id,
+                section,
+                remote,
+                path,
+            } => self.context_menu_view(
+                PopoverKind::BranchGroupMenu {
+                    repo_id,
+                    section,
+                    remote,
+                    path,
+                },
+                cx,
+            ),
+            PopoverKind::PinnedSectionMenu { repo_id, section } => {
+                self.context_menu_view(PopoverKind::PinnedSectionMenu { repo_id, section }, cx)
+            }
+            PopoverKind::DeleteBranchesConfirm {
+                repo_id,
+                section,
+                remote,
+                group_label,
+                names,
+            } => delete_branches_confirm::panel(
+                self,
+                repo_id,
+                section,
+                remote,
+                group_label,
+                names,
+                cx,
+            ),
             PopoverKind::BrowseHistoryMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::BrowseHistoryMenu { repo_id }, cx)
             }

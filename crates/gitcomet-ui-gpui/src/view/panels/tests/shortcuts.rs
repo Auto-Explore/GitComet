@@ -3028,6 +3028,7 @@ fn create_branch_popover_text_input_f4_navigates_diff_without_closing_popover(
                         repo_id: RepoId(1),
                         target: "HEAD".to_string(),
                         source_selectable: false,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -3113,6 +3114,7 @@ fn create_branch_popover_text_input_f1_navigates_previous_diff_without_closing_p
                         repo_id: RepoId(1),
                         target: "HEAD".to_string(),
                         source_selectable: false,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -6420,6 +6422,7 @@ fn prompt_popovers_grow_wider_with_ui_zoom(cx: &mut gpui::TestAppContext) {
             repo_id: RepoId(1),
             target: "HEAD".to_string(),
             source_selectable: false,
+            name_prefix: String::new(),
         },
     );
     draw_and_drain_test_window(cx);

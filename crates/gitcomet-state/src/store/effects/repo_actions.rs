@@ -292,6 +292,91 @@ pub(super) fn schedule_delete_branch(
     );
 }
 
+/// Delete a batch of local branches in one action.
+///
+/// Loops the existing single-branch backend calls rather than adding a batch
+/// trait method: local deletes touch only refs, so there is no round trip to
+/// save, and looping keeps every backend working unchanged.
+///
+/// A partial failure is the normal case, not an exception — some branches in a
+/// group are merged and some are not — so every name is attempted and the
+/// failures are summarised into one error rather than aborting on the first.
+pub(super) fn schedule_delete_branches(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    names: Vec<String>,
+    force: bool,
+) {
+    schedule_repo_action_with_hook(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        move |repo| {
+            let total = names.len();
+            let mut failed: Vec<String> = Vec::new();
+            let mut first_error: Option<String> = None;
+            for name in &names {
+                let result = if force {
+                    repo.delete_branch_force(name)
+                } else {
+                    repo.delete_branch(name)
+                };
+                if let Err(err) = result {
+                    failed.push(name.clone());
+                    first_error.get_or_insert_with(|| err.to_string());
+                }
+            }
+
+            if failed.is_empty() {
+                return Ok(());
+            }
+            Err(Error::new(gitcomet_core::error::ErrorKind::Backend(
+                delete_branches_failure_message(total, &failed, force, first_error.as_deref()),
+            )))
+        },
+        // Refresh even on a partial failure: the branches that did get deleted
+        // are gone, and leaving them in the sidebar would be a lie.
+        |msg_tx, repo_id, _result| send_or_log(msg_tx, Msg::RefreshBranches { repo_id }),
+        repo_action_finished(RepoActionKind::DeleteBranches),
+    );
+}
+
+/// Summarises which branches survived a batch delete, and why.
+///
+/// Carries git's own first error: "not fully merged" is the common cause but
+/// not the only one — a branch checked out in a linked worktree fails too, and
+/// pointing that user at Force delete would send them round the same loop.
+fn delete_branches_failure_message(
+    total: usize,
+    failed: &[String],
+    force: bool,
+    first_error: Option<&str>,
+) -> String {
+    let deleted = total - failed.len();
+    let mut message = format!("Deleted {deleted} of {total} branches. Failed: ");
+    const LISTED: usize = 5;
+    for (ix, name) in failed.iter().take(LISTED).enumerate() {
+        if ix > 0 {
+            message.push_str(", ");
+        }
+        message.push_str(name);
+    }
+    if failed.len() > LISTED {
+        let rest = failed.len() - LISTED;
+        message.push_str(&format!(", and {rest} more"));
+    }
+    if let Some(error) = first_error.map(str::trim).filter(|error| !error.is_empty()) {
+        message.push_str(&format!(". {error}"));
+    }
+    if !force {
+        message.push_str(". Branches that are not fully merged need Force delete.");
+    }
+    message
+}
+
 pub(super) fn schedule_force_delete_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -570,4 +655,66 @@ pub(super) fn schedule_drop_stash(
         },
         repo_action_finished(RepoActionKind::DropStash),
     );
+}
+
+#[cfg(test)]
+mod delete_branches_tests {
+    use super::delete_branches_failure_message;
+
+    #[test]
+    fn failure_message_reports_how_many_survived_and_names_them() {
+        let failed = vec!["feat/a".to_string(), "feat/b".to_string()];
+        let message = delete_branches_failure_message(5, &failed, false, None);
+
+        assert!(message.starts_with("Deleted 3 of 5 branches. Failed: feat/a, feat/b"));
+        // The unforced attempt has to point at the remedy, since a group of
+        // finished feature branches fails exactly this way.
+        assert!(message.contains("need Force delete"));
+    }
+
+    /// Force already failed, so repeating the Force hint would send the user
+    /// round the same loop.
+    #[test]
+    fn failure_message_omits_the_force_hint_when_force_was_already_used() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(2, &failed, true, None);
+
+        assert!(!message.contains("Force delete"));
+    }
+
+    /// "Not fully merged" is the common cause but not the only one — a branch
+    /// checked out in a linked worktree fails too, and the hint alone would
+    /// point at the wrong remedy.
+    #[test]
+    fn failure_message_carries_gits_own_first_error() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(
+            1,
+            &failed,
+            true,
+            Some("branch is checked out at /tmp/wt"),
+        );
+
+        assert!(message.contains("branch is checked out at /tmp/wt"));
+    }
+
+    #[test]
+    fn failure_message_truncates_a_long_failure_list() {
+        let failed: Vec<String> = (0..9).map(|ix| format!("feat/{ix}")).collect();
+        let message = delete_branches_failure_message(9, &failed, true, None);
+
+        assert!(message.contains("feat/4"), "the first five are named");
+        assert!(!message.contains("feat/5"), "the rest are summarised");
+        assert!(message.contains("and 4 more"));
+    }
+
+    /// A blank error string must not leave a dangling ". ." in the message.
+    #[test]
+    fn failure_message_ignores_a_blank_error() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(1, &failed, true, Some("   "));
+
+        assert!(!message.contains(". ."));
+        assert!(message.ends_with("feat/a"));
+    }
 }

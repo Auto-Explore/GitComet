@@ -2547,8 +2547,8 @@ fn commit_details_added_file_copy_path_works_after_left_clicking_menu_entry(
     });
 
     let copy_bounds = cx
-        .debug_bounds("context_menu_copy_path")
-        .expect("expected Copy path context menu row");
+        .debug_bounds("context_menu_copy_absolute_path")
+        .expect("expected Copy absolute path context menu row");
     let copy_center = copy_bounds.center();
     cx.simulate_mouse_move(copy_center, None, gpui::Modifiers::default());
     cx.simulate_mouse_down(

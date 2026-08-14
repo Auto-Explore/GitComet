@@ -1,6 +1,7 @@
 use super::*;
 
 mod branch;
+mod branch_group;
 mod branch_section;
 mod browse_history;
 mod change_tracking_settings;
@@ -16,8 +17,10 @@ mod diff_content_mode_settings;
 mod diff_editor;
 mod diff_hunk;
 mod file_browser_file;
+mod file_browser_folder;
 mod history_branch_filter;
 mod mergetool_settings;
+mod pinned_section;
 mod previous_commit_messages;
 mod pull;
 mod push;
@@ -69,6 +72,44 @@ pub(super) fn path_text_for_copy(path: &std::path::Path) -> String {
     normalize_platform_path(path.to_path_buf())
         .display()
         .to_string()
+}
+
+/// The `Copy absolute path` / `Copy relative path` pair every file-ish menu
+/// ends with, for a repo-relative `path`.
+///
+/// Built in one place so the labels, icons and mnemonic cannot drift apart
+/// between menus: the mnemonic is matched on the key alone, so `c` has to mean
+/// the same thing in whichever menu is open.
+pub(super) fn push_copy_path_entries(
+    items: &mut Vec<ContextMenuItem>,
+    host: &PopoverHost,
+    repo_id: RepoId,
+    path: &std::path::Path,
+    relative_shortcut: Option<SharedString>,
+) {
+    // Offered only when the workdir join actually resolves. Falling back to the
+    // repo-relative text would put identical content behind two entries whose
+    // labels promise different things.
+    if let Ok(absolute) = host.resolve_workdir_path(repo_id, path) {
+        items.push(ContextMenuItem::Entry {
+            label: "Copy absolute path".into(),
+            icon: Some("icons/copy.svg".into()),
+            shortcut: None,
+            disabled: false,
+            action: Box::new(ContextMenuAction::CopyText {
+                text: path_text_for_copy(&absolute),
+            }),
+        });
+    }
+    items.push(ContextMenuItem::Entry {
+        label: "Copy relative path".into(),
+        icon: Some("icons/copy.svg".into()),
+        shortcut: relative_shortcut,
+        disabled: false,
+        action: Box::new(ContextMenuAction::CopyText {
+            text: path_text_for_copy(path),
+        }),
+    });
 }
 
 fn active_branch_tracking_upstream_name(host: &PopoverHost) -> Option<String> {
@@ -411,6 +452,24 @@ impl PopoverHost {
             PopoverKind::FileBrowserFileMenu { repo_id, path } => {
                 Some(file_browser_file::model(self, *repo_id, path, cx))
             }
+            PopoverKind::FileBrowserFolderMenu { repo_id, path } => {
+                Some(file_browser_folder::model(self, *repo_id, path))
+            }
+            PopoverKind::BranchGroupMenu {
+                repo_id,
+                section,
+                remote,
+                path,
+            } => Some(branch_group::model(
+                self,
+                *repo_id,
+                *section,
+                remote.as_deref(),
+                path,
+            )),
+            PopoverKind::PinnedSectionMenu { repo_id, section } => {
+                Some(pinned_section::model(self, *repo_id, *section))
+            }
             PopoverKind::BrowseHistoryMenu { repo_id } => {
                 Some(browse_history::model(self, *repo_id))
             }
@@ -588,6 +647,79 @@ impl PopoverHost {
             }
             ContextMenuAction::ResetBrowseToLive { repo_id } => {
                 self.store.dispatch(Msg::ResetBrowseToLive { repo_id });
+            }
+            ContextMenuAction::ToggleFileBrowserDir { repo_id, path } => {
+                self.store
+                    .dispatch(Msg::ToggleFileBrowserDir { repo_id, path });
+            }
+            // The branch tree's collapse state is view-owned rather than a
+            // store message, so these three go through the sidebar pane.
+            ContextMenuAction::ToggleSidebarCollapseKey { collapse_key } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.toggle_active_repo_collapse_key(collapse_key, cx);
+                });
+            }
+            ContextMenuAction::SetBranchGroupCollapsedRecursive {
+                section,
+                remote,
+                path,
+                collapsed,
+            } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.set_branch_group_collapsed_recursive(section, remote, path, collapsed, cx);
+                });
+            }
+            ContextMenuAction::UnpinAllBranches { repo_id, section } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.unpin_all_branches(repo_id, section, cx);
+                });
+            }
+            ContextMenuAction::ConfirmDeleteBranchGroup {
+                repo_id,
+                section,
+                remote,
+                path,
+                group_label,
+            } => {
+                let names = branch_group::deletable_branches(
+                    self,
+                    repo_id,
+                    section,
+                    remote.as_deref(),
+                    &path,
+                );
+                // The entry is disabled at zero, so this only fires if the group
+                // emptied between the last repaint and the click.
+                if names.is_empty() {
+                    self.close_popover(cx);
+                    return;
+                }
+                let anchor = self.popover_anchor_point();
+                self.open_popover_at(
+                    PopoverKind::DeleteBranchesConfirm {
+                        repo_id,
+                        section,
+                        remote,
+                        group_label,
+                        names,
+                    },
+                    anchor,
+                    window,
+                    cx,
+                );
+                return;
+            }
+            ContextMenuAction::SetFileBrowserDirExpandedRecursive {
+                repo_id,
+                path,
+                expanded,
+            } => {
+                self.store
+                    .dispatch(Msg::SetFileBrowserDirExpandedRecursive {
+                        repo_id,
+                        path,
+                        expanded,
+                    });
             }
             ContextMenuAction::SelectConflictDiff { repo_id, path } => {
                 self.store

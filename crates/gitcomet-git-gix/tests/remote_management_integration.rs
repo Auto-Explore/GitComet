@@ -472,6 +472,174 @@ fn delete_remote_branch_with_output_deletes_remote_and_tracking_ref() {
 }
 
 #[test]
+fn delete_remote_branches_with_output_deletes_every_branch_in_one_push() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+
+    run_git(&remote_repo, &["init", "--bare"]);
+    init_repo_with_user(&work_repo);
+
+    let remote_str = git_remote_url(&remote_repo);
+    run_git(&work_repo, &["remote", "add", "origin", &remote_str]);
+
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
+
+    // The initial branch name depends on the host git config, so read it back
+    // rather than assuming `main`.
+    let base = run_git_capture(&work_repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .trim()
+        .to_string();
+    for branch in ["feat/a", "feat/b", "keep"] {
+        run_git(&work_repo, &["checkout", "-b", branch, &base]);
+        run_git(&work_repo, &["push", "-u", "origin", branch]);
+    }
+    run_git(&work_repo, &["checkout", &base]);
+    run_git(&work_repo, &["fetch", "--all"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    let output = opened
+        .delete_remote_branches_with_output("origin", &["feat/a".to_string(), "feat/b".to_string()])
+        .expect("delete remote branches");
+    assert_eq!(output.exit_code, Some(0));
+
+    for branch in ["feat/a", "feat/b"] {
+        let remote_head = run_git_capture(&work_repo, &["ls-remote", "--heads", "origin", branch]);
+        assert!(
+            remote_head.trim().is_empty(),
+            "expected {branch} to be deleted from origin"
+        );
+        let tracking = run_git_status(
+            &work_repo,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                &format!("refs/remotes/origin/{branch}"),
+            ],
+        );
+        assert!(
+            !tracking.success(),
+            "expected the local tracking ref for {branch} to be removed"
+        );
+    }
+
+    // A branch outside the batch is untouched, both on the remote and locally.
+    assert!(
+        !run_git_capture(&work_repo, &["ls-remote", "--heads", "origin", "keep"])
+            .trim()
+            .is_empty(),
+        "expected `keep` to survive the batch delete"
+    );
+    assert!(
+        run_git_status(
+            &work_repo,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/remotes/origin/keep"
+            ],
+        )
+        .success(),
+        "expected the tracking ref for `keep` to survive"
+    );
+}
+
+/// A failed batch must not prune the tracking refs of branches that are still on
+/// the remote.
+///
+/// For a missing refspec git rejects the whole push and deletes nothing, so
+/// blanket-pruning on failure — the obvious shortcut — would erase the sidebar
+/// rows for branches that very much still exist.
+#[test]
+fn delete_remote_branches_keeps_tracking_refs_when_the_batch_deletes_nothing() {
+    let _guard = remote_management_test_lock();
+    if !require_git_local_push_for_remote_management_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().expect("create tempdir");
+    let root = dir.path();
+
+    let remote_repo = root.join("remote.git");
+    let work_repo = root.join("work");
+    fs::create_dir_all(&remote_repo).expect("create remote repo dir");
+    fs::create_dir_all(&work_repo).expect("create work repo dir");
+
+    run_git(&remote_repo, &["init", "--bare"]);
+    init_repo_with_user(&work_repo);
+
+    let remote_str = git_remote_url(&remote_repo);
+    run_git(&work_repo, &["remote", "add", "origin", &remote_str]);
+
+    fs::write(work_repo.join("file.txt"), "base\n").expect("write base file");
+    run_git(&work_repo, &["add", "file.txt"]);
+    run_git(
+        &work_repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "base"],
+    );
+    run_git(&work_repo, &["push", "-u", "origin", "HEAD"]);
+
+    let base = run_git_capture(&work_repo, &["rev-parse", "--abbrev-ref", "HEAD"])
+        .trim()
+        .to_string();
+    run_git(&work_repo, &["checkout", "-b", "feat/a", &base]);
+    run_git(&work_repo, &["push", "-u", "origin", "feat/a"]);
+    run_git(&work_repo, &["checkout", &base]);
+    run_git(&work_repo, &["fetch", "--all"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(&work_repo).expect("open work repo");
+    // `feat/gone` never existed on the remote, so the push exits non-zero.
+    let result = opened.delete_remote_branches_with_output(
+        "origin",
+        &["feat/a".to_string(), "feat/gone".to_string()],
+    );
+    assert!(
+        result.is_err(),
+        "a missing refspec must surface as an error"
+    );
+
+    // git refuses the whole push when a refspec names a ref the remote does not
+    // have, so `feat/a` survives...
+    assert!(
+        !run_git_capture(&work_repo, &["ls-remote", "--heads", "origin", "feat/a"])
+            .trim()
+            .is_empty(),
+        "expected feat/a to survive a rejected batch"
+    );
+    // ...and its tracking ref must survive with it.
+    assert!(
+        run_git_status(
+            &work_repo,
+            &[
+                "show-ref",
+                "--verify",
+                "--quiet",
+                "refs/remotes/origin/feat/a",
+            ],
+        )
+        .success(),
+        "a failed batch must not prune a branch that is still on the remote"
+    );
+}
+
+#[test]
 fn prune_merged_branches_with_output_reports_noop_when_nothing_to_prune() {
     let _guard = remote_management_test_lock();
     if !require_git_local_push_for_remote_management_tests() {

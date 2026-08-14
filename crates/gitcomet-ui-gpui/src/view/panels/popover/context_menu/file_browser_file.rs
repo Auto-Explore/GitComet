@@ -18,11 +18,6 @@ pub(super) fn model(
         .map(|repo| repo.file_browser.source.clone())
         .unwrap_or_default();
 
-    let copy_path_text = this
-        .resolve_workdir_path(repo_id, path)
-        .map(|p| path_text_for_copy(&p))
-        .unwrap_or_else(|_| path_text_for_copy(path));
-
     let mut items = vec![ContextMenuItem::Header(
         path.file_name()
             .and_then(|p| p.to_str().map(ToOwned::to_owned))
@@ -179,15 +174,7 @@ pub(super) fn model(
     }
 
     items.push(ContextMenuItem::Separator);
-    items.push(ContextMenuItem::Entry {
-        label: "Copy path".into(),
-        icon: Some("icons/copy.svg".into()),
-        shortcut: None,
-        disabled: false,
-        action: Box::new(ContextMenuAction::CopyText {
-            text: copy_path_text,
-        }),
-    });
+    push_copy_path_entries(&mut items, this, repo_id, path, None);
 
     ContextMenuModel::new(items)
 }

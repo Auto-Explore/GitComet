@@ -749,6 +749,9 @@ fn send_unavailable_git_effect_result(
         Effect::ForceDeleteBranch { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::ForceDeleteBranch, runtime, &send)
         }
+        Effect::DeleteBranches { repo_id, .. } => {
+            send_repo_action_unavailable(repo_id, RepoActionKind::DeleteBranches, runtime, &send)
+        }
         Effect::StagePath { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::StagePath, runtime, &send)
         }
@@ -1084,6 +1087,18 @@ fn send_unavailable_git_effect_result(
             crate::msg::InternalMsg::RepoCommandFinished {
                 repo_id,
                 command: RepoCommandKind::DeleteRemoteBranch { remote, branch },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::DeleteRemoteBranches {
+            repo_id,
+            remote,
+            branches,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::DeleteRemoteBranches { remote, branches },
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
@@ -2109,6 +2124,13 @@ pub(super) fn schedule_effect(
         Effect::ForceDeleteBranch { repo_id, name } => {
             repo_actions::schedule_force_delete_branch(executor, repos, msg_tx, repo_id, name);
         }
+        Effect::DeleteBranches {
+            repo_id,
+            names,
+            force,
+        } => {
+            repo_actions::schedule_delete_branches(executor, repos, msg_tx, repo_id, names, force);
+        }
         Effect::CloneRepo { url, dest, auth } => {
             clone::schedule_clone_repo(executor, msg_tx, url, dest, auth)
         }
@@ -2364,6 +2386,14 @@ pub(super) fn schedule_effect(
             auth,
         } => repo_commands::schedule_delete_remote_branch(
             executor, repos, msg_tx, repo_id, remote, branch, auth,
+        ),
+        Effect::DeleteRemoteBranches {
+            repo_id,
+            remote,
+            branches,
+            auth,
+        } => repo_commands::schedule_delete_remote_branches(
+            executor, repos, msg_tx, repo_id, remote, branches, auth,
         ),
         Effect::Reset {
             repo_id,

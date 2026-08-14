@@ -6,6 +6,7 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, PullMode};
 use gitcomet_state::model::Loadable;
 use gitcomet_state::msg::{Msg, StoreEvent};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -324,6 +325,7 @@ fn create_branch_popover_escape_cancels(cx: &mut gpui::TestAppContext) {
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -397,6 +399,7 @@ fn create_branch_source_picker_selects_items_on_mouse_down(cx: &mut gpui::TestAp
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: true,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -462,6 +465,7 @@ fn create_branch_source_picker_enter_selects_and_focuses_name(cx: &mut gpui::Tes
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: true,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -699,6 +703,7 @@ fn create_branch_popover_renders_shortcut_hints_and_separators(cx: &mut gpui::Te
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -741,6 +746,7 @@ fn create_branch_from_ref_popover_tabs_to_checkout_and_wraps(cx: &mut gpui::Test
                         repo_id: RepoId(1),
                         target: "main".to_string(),
                         source_selectable: false,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -859,6 +865,7 @@ fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext)
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -941,6 +948,7 @@ fn create_branch_popover_enter_with_empty_input_does_not_close_or_create(
                         repo_id,
                         target: "HEAD".to_string(),
                         source_selectable: false,
+                        name_prefix: String::new(),
                     },
                     gpui::point(gpui::px(120.0), gpui::px(72.0)),
                     window,
@@ -1781,4 +1789,820 @@ mod checkout_picker {
             });
         });
     }
+}
+
+fn branch_group_entry_labels(model: &ContextMenuModel) -> Vec<String> {
+    model
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            ContextMenuItem::Entry { label, .. } => Some(label.to_string()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn branch_group_entry(model: &ContextMenuModel, starts_with: &str) -> (String, bool) {
+    model
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } if label.starts_with(starts_with) => Some((label.to_string(), *disabled)),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected an entry starting with `{starts_with}`, got {:?}",
+                branch_group_entry_labels(model)
+            )
+        })
+}
+
+/// Builds a repo whose branch list is `main`, `feat/a`, `feat/b/c` and
+/// `features/x`, plus `origin/feat/a`, then returns the group menu's model.
+fn branch_group_menu_model(
+    cx: &mut gpui::TestAppContext,
+    section: BranchSection,
+    remote: Option<&str>,
+    path: &str,
+    configure: impl FnOnce(&mut RepoState),
+) -> ContextMenuModel {
+    branch_group_menu_model_filtered(cx, section, remote, path, "", configure)
+}
+
+fn branch_group_menu_model_filtered(
+    cx: &mut gpui::TestAppContext,
+    section: BranchSection,
+    remote: Option<&str>,
+    path: &str,
+    filter: &str,
+    configure: impl FnOnce(&mut RepoState),
+) -> ContextMenuModel {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(81);
+    let branch = |name: &str| Branch {
+        name: name.to_string(),
+        target: CommitId("aaaaaaaaaaaa".into()),
+        upstream: None,
+        divergence: None,
+    };
+    let remote_branch = |remote: &str, name: &str| gitcomet_core::domain::RemoteBranch {
+        remote: remote.to_string(),
+        name: name.to_string(),
+        target: CommitId("aaaaaaaaaaaa".into()),
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: std::env::temp_dir().join(format!(
+                        "gitcomet_ui_test_{}_branch_group_menu",
+                        std::process::id()
+                    )),
+                },
+            );
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![
+                branch("main"),
+                branch("feat/a"),
+                branch("feat/b/c"),
+                branch("features/x"),
+            ]));
+            repo.remote_branches = Loadable::Ready(Arc::new(vec![
+                remote_branch("origin", "feat/a"),
+                remote_branch("origin", "features/x"),
+                remote_branch("upstream", "feat/z"),
+            ]));
+            configure(&mut repo);
+
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            this.popover_host.update(cx, |host, cx| {
+                host.set_branch_filter_query(filter.to_string(), cx);
+            });
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(
+                    &PopoverKind::BranchGroupMenu {
+                        repo_id,
+                        section,
+                        remote: remote.map(ToOwned::to_owned),
+                        path: path.to_string(),
+                    },
+                    cx,
+                )
+            })
+        })
+        .expect("expected a branch group context menu model")
+    })
+}
+
+/// Activates the group menu's delete entry and returns the member list the
+/// confirmation was opened with.
+///
+/// Goes through the executor rather than reading the entry's payload: the names
+/// are resolved when the entry fires, so the payload no longer carries them.
+fn branch_group_delete_confirm_names(
+    cx: &mut gpui::TestAppContext,
+    section: BranchSection,
+    remote: Option<&str>,
+    path: &str,
+    filter: &str,
+) -> Vec<String> {
+    branch_group_delete_confirm_names_with_head(cx, section, remote, path, filter, "main")
+}
+
+fn branch_group_delete_confirm_names_with_head(
+    cx: &mut gpui::TestAppContext,
+    section: BranchSection,
+    remote: Option<&str>,
+    path: &str,
+    filter: &str,
+    head: &str,
+) -> Vec<String> {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(85);
+    let branch = |name: &str| Branch {
+        name: name.to_string(),
+        target: CommitId("aaaaaaaaaaaa".into()),
+        upstream: None,
+        divergence: None,
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: std::env::temp_dir().join(format!(
+                        "gitcomet_ui_test_{}_group_delete_confirm",
+                        std::process::id()
+                    )),
+                },
+            );
+            repo.head_branch = Loadable::Ready(head.to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![
+                branch("main"),
+                branch("feat/a"),
+                branch("feat/b/c"),
+                branch("features/x"),
+            ]));
+            repo.remote_branches =
+                Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "feat/a".to_string(),
+                    target: CommitId("aaaaaaaaaaaa".into()),
+                }]));
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            this.popover_host.update(cx, |host, cx| {
+                host.set_branch_filter_query(filter.to_string(), cx);
+            });
+            cx.notify();
+        });
+    });
+
+    let host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let action = cx.update(|_window, app| {
+        host.update(app, |host, cx| {
+            let model = host
+                .context_menu_model(
+                    &PopoverKind::BranchGroupMenu {
+                        repo_id,
+                        section,
+                        remote: remote.map(ToOwned::to_owned),
+                        path: path.to_string(),
+                    },
+                    cx,
+                )
+                .expect("expected a branch group context menu model");
+            model
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    ContextMenuItem::Entry { label, action, .. } if label.starts_with("Delete") => {
+                        Some((**action).clone())
+                    }
+                    _ => None,
+                })
+                .expect("expected a delete entry")
+        })
+    });
+
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            host.context_menu_activate_action(action.clone(), window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(
+        |_window, app| match host.read(app).popover_kind_for_tests() {
+            Some(PopoverKind::DeleteBranchesConfirm { names, .. }) => names,
+            other => panic!("expected a delete confirmation, got {other:?}"),
+        },
+    )
+}
+
+#[gpui::test]
+fn branch_group_menu_offers_tree_create_and_delete(cx: &mut gpui::TestAppContext) {
+    let model = branch_group_menu_model(cx, BranchSection::Local, None, "feat", |_repo| {});
+    let labels = branch_group_entry_labels(&model);
+
+    // Expanded by default, so the toggle offers to close it.
+    assert!(labels.iter().any(|label| label == "Collapse"));
+    assert!(labels.iter().any(|label| label == "Expand all under here"));
+    assert!(
+        labels
+            .iter()
+            .any(|label| label == "Collapse all under here")
+    );
+    assert_eq!(
+        branch_group_entry(&model, "Create branch").0,
+        "Create branch in feat/…"
+    );
+    // `features/x` shares a name prefix but is a different folder, so the group
+    // holds exactly `feat/a` and `feat/b/c`.
+    assert_eq!(
+        branch_group_entry(&model, "Delete").0,
+        "Delete 2 branches in feat/…"
+    );
+}
+
+/// `feat` must not swallow `features`: membership is tested against `feat/`,
+/// not the bare prefix.
+#[gpui::test]
+fn branch_group_menu_does_not_count_a_sibling_with_the_same_name_prefix(
+    cx: &mut gpui::TestAppContext,
+) {
+    let model = branch_group_menu_model(cx, BranchSection::Local, None, "features", |_repo| {});
+    assert_eq!(
+        branch_group_entry(&model, "Delete").0,
+        "Delete 1 branch in features/…"
+    );
+}
+
+/// The checked-out branch cannot be deleted, so counting it would promise
+/// something the delete cannot do.
+#[gpui::test]
+fn branch_group_menu_excludes_the_current_branch_from_the_delete_count(
+    cx: &mut gpui::TestAppContext,
+) {
+    let model = branch_group_menu_model(cx, BranchSection::Local, None, "feat", |repo| {
+        repo.head_branch = Loadable::Ready("feat/a".to_string());
+    });
+    assert_eq!(
+        branch_group_entry(&model, "Delete").0,
+        "Delete 1 branch in feat/…"
+    );
+}
+
+#[gpui::test]
+fn branch_group_menu_disables_delete_when_nothing_is_deletable(cx: &mut gpui::TestAppContext) {
+    let model = branch_group_menu_model(cx, BranchSection::Local, None, "feat", |repo| {
+        repo.branches = Loadable::Ready(Arc::new(vec![Branch {
+            name: "feat/only".to_string(),
+            target: CommitId("aaaaaaaaaaaa".into()),
+            upstream: None,
+            divergence: None,
+        }]));
+        repo.head_branch = Loadable::Ready("feat/only".to_string());
+    });
+    assert!(branch_group_entry(&model, "Delete").1);
+}
+
+/// A remote group holds remote-tracking refs, which cannot be created locally,
+/// and its delete has to say it acts on the remote.
+#[gpui::test]
+fn branch_group_menu_for_a_remote_drops_create_and_targets_the_remote(
+    cx: &mut gpui::TestAppContext,
+) {
+    let model = branch_group_menu_model(cx, BranchSection::Remote, Some("origin"), "feat", |_r| {});
+    let labels = branch_group_entry_labels(&model);
+
+    assert!(
+        !labels
+            .iter()
+            .any(|label| label.starts_with("Create branch"))
+    );
+    // `upstream/feat/z` lives under a different remote and must not be counted,
+    // and the label names the group so it cannot read as remote-wide.
+    assert_eq!(
+        branch_group_entry(&model, "Delete").0,
+        "Delete 1 branch in origin/feat/…"
+    );
+}
+
+#[gpui::test]
+fn branch_group_menu_delete_opens_a_confirm_carrying_the_members(cx: &mut gpui::TestAppContext) {
+    let names = branch_group_delete_confirm_names(cx, BranchSection::Local, None, "feat", "");
+    assert_eq!(names, vec!["feat/a".to_string(), "feat/b/c".to_string()]);
+}
+
+#[gpui::test]
+fn branch_group_menu_create_entry_seeds_the_group_prefix(cx: &mut gpui::TestAppContext) {
+    let model = branch_group_menu_model(cx, BranchSection::Local, None, "feat", |_repo| {});
+
+    let action = model
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.starts_with("Create branch") => {
+                Some((**action).clone())
+            }
+            _ => None,
+        })
+        .expect("expected a create entry");
+
+    match action {
+        ContextMenuAction::OpenPopover {
+            kind:
+                PopoverKind::CreateBranchFromRefPrompt {
+                    name_prefix,
+                    target,
+                    ..
+                },
+        } => {
+            assert_eq!(name_prefix, "feat/");
+            assert_eq!(
+                target, "main",
+                "a new branch forks from the checked-out one"
+            );
+        }
+        _ => panic!("expected the create entry to open the create-branch prompt"),
+    }
+}
+
+/// Builds the pinned-header menu for `section` with `pins` already pinned.
+fn pinned_section_menu_model(
+    cx: &mut gpui::TestAppContext,
+    section: BranchSection,
+    pins: &[(BranchSection, &str)],
+) -> ContextMenuModel {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(82);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_pinned_section_menu",
+        std::process::id()
+    ));
+    let pinned_keys: std::collections::BTreeSet<String> = pins
+        .iter()
+        .map(|(section, name)| crate::view::branch_sidebar::branch_pin_storage_key(*section, name))
+        .collect();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("main".to_string());
+            // The count mirrors the rendered rows, and the row builder drops a
+            // pin whose branch is gone — so the pinned branches have to exist.
+            repo.branches = Loadable::Ready(Arc::new(
+                ["feat/a", "feat/b"]
+                    .into_iter()
+                    .map(|name| Branch {
+                        name: name.to_string(),
+                        target: CommitId("aaaaaaaaaaaa".into()),
+                        upstream: None,
+                        divergence: None,
+                    })
+                    .collect(),
+            ));
+            repo.remote_branches =
+                Loadable::Ready(Arc::new(vec![gitcomet_core::domain::RemoteBranch {
+                    remote: "origin".to_string(),
+                    name: "feat/c".to_string(),
+                    target: CommitId("aaaaaaaaaaaa".into()),
+                }]));
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            this.popover_host.update(cx, |host, cx| {
+                host.set_pinned_branches(
+                    [(workdir.clone(), pinned_keys.clone())]
+                        .into_iter()
+                        .collect(),
+                    cx,
+                );
+            });
+            cx.notify();
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(&PopoverKind::PinnedSectionMenu { repo_id, section }, cx)
+            })
+        })
+        .expect("expected a pinned section context menu model")
+    })
+}
+
+#[gpui::test]
+fn pinned_section_menu_counts_only_its_own_section(cx: &mut gpui::TestAppContext) {
+    let model = pinned_section_menu_model(
+        cx,
+        BranchSection::Local,
+        &[
+            (BranchSection::Local, "feat/a"),
+            (BranchSection::Local, "feat/b"),
+            // A remote pin must not inflate the local section's count.
+            (BranchSection::Remote, "origin/feat/c"),
+        ],
+    );
+
+    assert_eq!(branch_group_entry(&model, "Unpin all").0, "Unpin all (2)");
+    assert!(!branch_group_entry(&model, "Unpin all").1);
+}
+
+#[gpui::test]
+fn pinned_section_menu_disables_unpin_all_when_nothing_is_pinned(cx: &mut gpui::TestAppContext) {
+    let model = pinned_section_menu_model(cx, BranchSection::Local, &[]);
+
+    assert_eq!(branch_group_entry(&model, "Unpin all").0, "Unpin all (0)");
+    assert!(branch_group_entry(&model, "Unpin all").1);
+    // The collapse toggle stays live regardless of pins.
+    assert!(!branch_group_entry(&model, "Collapse").1);
+}
+
+/// Drives a context-menu action through the real host → sidebar-pane path and
+/// hands back the sidebar's collapse and pin sets afterwards.
+fn activate_sidebar_action(
+    cx: &mut gpui::TestAppContext,
+    pins: &[(BranchSection, &str)],
+    action: ContextMenuAction,
+) -> (BTreeSet<String>, BTreeSet<String>) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(83);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_sidebar_action",
+        std::process::id()
+    ));
+    let branch = |name: &str| Branch {
+        name: name.to_string(),
+        target: CommitId("aaaaaaaaaaaa".into()),
+        upstream: None,
+        divergence: None,
+    };
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.branches = Loadable::Ready(Arc::new(vec![
+                branch("main"),
+                branch("feat/a"),
+                branch("feat/b/c"),
+                branch("features/x"),
+            ]));
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    // Both the pin toggle and the menu action reach back into the root view to
+    // schedule a settings persist, so they must not run nested inside a
+    // `view.update` — that is the root→pane→root re-entrancy panic, and it is a
+    // property of this test harness, not of the click path in the app.
+    let (host, pane) = cx.update(|_window, app| {
+        let this = view.read(app);
+        (this.popover_host.clone(), this.sidebar_pane.clone())
+    });
+    cx.update(|_window, app| {
+        pane.update(app, |pane, cx| {
+            for (section, name) in pins {
+                pane.toggle_pinned_branch(repo_id, *section, name, cx);
+            }
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|window, app| {
+        host.update(app, |host, cx| {
+            host.context_menu_activate_action(action.clone(), window, cx);
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).sidebar_pane.read(app);
+        (
+            pane.collapsed_items_for_test(),
+            pane.pinned_branches_for_test(),
+        )
+    })
+}
+
+/// Collapsing recursively has to reach the nested `feat/b` group and stop at the
+/// `features/` sibling, through the real action path rather than the helper.
+#[gpui::test]
+fn recursive_collapse_action_reaches_nested_groups_only(cx: &mut gpui::TestAppContext) {
+    let (collapsed, _pins) = activate_sidebar_action(
+        cx,
+        &[],
+        ContextMenuAction::SetBranchGroupCollapsedRecursive {
+            section: BranchSection::Local,
+            remote: None,
+            path: "feat".to_string(),
+            collapsed: true,
+        },
+    );
+
+    assert!(collapsed.contains("group:local:feat"));
+    assert!(collapsed.contains("group:local:feat/b"));
+    assert!(
+        !collapsed.contains("group:local:features"),
+        "a sibling sharing a name prefix must be left alone, got {collapsed:?}"
+    );
+}
+
+#[gpui::test]
+fn recursive_expand_action_clears_the_same_keys(cx: &mut gpui::TestAppContext) {
+    let (collapsed, _pins) = activate_sidebar_action(
+        cx,
+        &[],
+        ContextMenuAction::SetBranchGroupCollapsedRecursive {
+            section: BranchSection::Local,
+            remote: None,
+            path: "feat".to_string(),
+            collapsed: false,
+        },
+    );
+
+    // Expanding from the default (expanded) state is a no-op, so nothing may be
+    // written — a stray key here would persist junk into the session file.
+    assert!(!collapsed.contains("group:local:feat"), "got {collapsed:?}");
+}
+
+#[gpui::test]
+fn unpin_all_action_clears_only_its_own_section(cx: &mut gpui::TestAppContext) {
+    let (_collapsed, pins) = activate_sidebar_action(
+        cx,
+        &[
+            (BranchSection::Local, "feat/a"),
+            (BranchSection::Local, "feat/b/c"),
+            (BranchSection::Remote, "origin/feat/a"),
+        ],
+        ContextMenuAction::UnpinAllBranches {
+            repo_id: RepoId(83),
+            section: BranchSection::Local,
+        },
+    );
+
+    assert_eq!(
+        pins,
+        ["remote:origin/feat/a".to_string()]
+            .into_iter()
+            .collect::<BTreeSet<_>>(),
+        "the remote section's pins must survive"
+    );
+}
+
+/// The tree filters branch names before building the group tree, so a filtered
+/// `feat/` row lists only its matches. A menu counting the whole group would
+/// offer to delete branches that are not on screen.
+#[gpui::test]
+fn branch_group_menu_scopes_to_the_branch_filter(cx: &mut gpui::TestAppContext) {
+    let model =
+        branch_group_menu_model_filtered(cx, BranchSection::Local, None, "feat", "b/c", |_r| {});
+
+    assert_eq!(
+        branch_group_entry(&model, "Delete").0,
+        "Delete 1 branch matching in feat/…",
+        "the label has to say the set is narrowed, not imply the whole group"
+    );
+
+    let names = branch_group_delete_confirm_names(cx, BranchSection::Local, None, "feat", "b/c");
+    assert_eq!(
+        names,
+        vec!["feat/b/c".to_string()],
+        "the confirm must carry only what the filtered row shows"
+    );
+}
+
+/// A blank query is not a filter — `matches_branch_filter` treats it as
+/// matching everything, so the menu must not narrow to nothing.
+#[gpui::test]
+fn branch_group_menu_treats_a_blank_filter_as_no_filter(cx: &mut gpui::TestAppContext) {
+    let model =
+        branch_group_menu_model_filtered(cx, BranchSection::Local, None, "feat", "   ", |_r| {});
+
+    assert_eq!(
+        branch_group_entry(&model, "Delete").0,
+        "Delete 2 branches in feat/…"
+    );
+}
+
+/// The pinned section force-expands under a live filter, so reading the stored
+/// collapse key alone would offer "Expand" on a visibly open section.
+#[gpui::test]
+fn pinned_section_menu_reports_expanded_while_a_filter_is_live(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(84);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_pinned_filter",
+        std::process::id()
+    ));
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: workdir.clone(),
+                },
+            );
+            let state = Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(repo_id),
+                ..Default::default()
+            });
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            this.popover_host.update(cx, |host, cx| {
+                // Persisted as collapsed…
+                host.set_collapsed_items(
+                    [(
+                        workdir.clone(),
+                        ["section:pinned/local".to_string()].into_iter().collect(),
+                    )]
+                    .into_iter()
+                    .collect(),
+                    cx,
+                );
+                // …but a filter is live, so the row renders expanded.
+                host.set_branch_filter_query("feat".to_string(), cx);
+            });
+            cx.notify();
+        });
+    });
+
+    let model = cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.context_menu_model(
+                    &PopoverKind::PinnedSectionMenu {
+                        repo_id,
+                        section: BranchSection::Local,
+                    },
+                    cx,
+                )
+            })
+        })
+        .expect("expected a pinned section context menu model")
+    });
+
+    let labels = branch_group_entry_labels(&model);
+    assert!(
+        labels.iter().any(|label| label == "Collapse"),
+        "a force-expanded section must offer to collapse, got {labels:?}"
+    );
+}
+
+/// The row builder drops a pin whose branch is gone, so counting raw keys would
+/// put "Unpin all (3)" above a single row.
+#[gpui::test]
+fn pinned_section_menu_ignores_pins_for_branches_that_no_longer_exist(
+    cx: &mut gpui::TestAppContext,
+) {
+    let model = pinned_section_menu_model(
+        cx,
+        BranchSection::Local,
+        &[
+            (BranchSection::Local, "feat/a"),
+            // Pinned once, then deleted — the repo's branch list has no such
+            // branch, so no row renders for it.
+            (BranchSection::Local, "feat/deleted"),
+        ],
+    );
+
+    assert_eq!(branch_group_entry(&model, "Unpin all").0, "Unpin all (1)");
+}
+
+/// The create prompt can open pre-filled with a group prefix, and git rejects a
+/// ref ending in `/`. Guarding only on "non-empty" would light the Create button
+/// the instant that prompt opens and turn Enter into an error toast.
+#[test]
+fn a_bare_group_prefix_is_not_a_submittable_branch_name() {
+    use crate::view::panels::popover::is_submittable_branch_name;
+
+    assert!(!is_submittable_branch_name(""));
+    assert!(!is_submittable_branch_name("   "));
+    assert!(!is_submittable_branch_name("feat/"));
+    assert!(!is_submittable_branch_name("  feat/  "));
+    assert!(!is_submittable_branch_name("feat/sub/"));
+
+    assert!(is_submittable_branch_name("feat/login"));
+    assert!(is_submittable_branch_name("  feat/login  "));
+    assert!(is_submittable_branch_name("main"));
+}
+
+/// Remote members are resolved without their remote prefix, which is the form
+/// `git push --delete` takes.
+#[gpui::test]
+fn branch_group_delete_resolves_remote_members_without_the_remote_prefix(
+    cx: &mut gpui::TestAppContext,
+) {
+    let names =
+        branch_group_delete_confirm_names(cx, BranchSection::Remote, Some("origin"), "feat", "");
+    assert_eq!(names, vec!["feat/a".to_string()]);
+}
+
+/// The current branch is excluded when the entry fires, not just when the label
+/// is rendered — otherwise the count would be honest and the delete would not.
+#[gpui::test]
+fn branch_group_delete_excludes_the_current_branch_at_resolution_time(
+    cx: &mut gpui::TestAppContext,
+) {
+    let names = branch_group_delete_confirm_names_with_head(
+        cx,
+        BranchSection::Local,
+        None,
+        "feat",
+        "",
+        "feat/a",
+    );
+
+    assert_eq!(
+        names,
+        vec!["feat/b/c".to_string()],
+        "the checked-out branch must not reach the confirm"
+    );
+}
+
+/// A remote group is not constrained by the local HEAD: a remote-tracking ref
+/// with the same name as the checked-out branch is still deletable.
+#[gpui::test]
+fn branch_group_delete_keeps_a_remote_member_matching_the_current_branch(
+    cx: &mut gpui::TestAppContext,
+) {
+    let names = branch_group_delete_confirm_names_with_head(
+        cx,
+        BranchSection::Remote,
+        Some("origin"),
+        "feat",
+        "",
+        "feat/a",
+    );
+
+    assert_eq!(names, vec!["feat/a".to_string()]);
 }

@@ -80,7 +80,11 @@ pub(super) fn model(host: &PopoverHost, entry: &repo_picker::RepoPickerEntry) ->
             });
         }
         items.push(ContextMenuItem::Entry {
-            label: "Copy path".into(),
+            // A repository has only its workdir, so there is no relative
+            // counterpart to pair this with — but it is named the same way as
+            // the file menus' entry so the app has one vocabulary for the
+            // action.
+            label: "Copy absolute path".into(),
             icon: Some("icons/copy.svg".into()),
             shortcut: None,
             disabled: false,
