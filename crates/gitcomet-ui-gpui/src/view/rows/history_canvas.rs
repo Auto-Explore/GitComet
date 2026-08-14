@@ -352,7 +352,7 @@ pub(super) fn history_commit_row_canvas(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
-    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    selected_lane: Option<super::history_graph_paint::SelectedLane>,
     lane_branch_name: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
@@ -487,12 +487,13 @@ pub(super) fn history_commit_row_canvas(
             // message border, the fade wash and the hover badge -- washes with
             // that lane, so a row never shows two different strengths of the
             // same colour.
-            let related_to_selection =
-                selected_lane_color_ix.map(|selected| selected == graph_row.node_color_ix);
+            let related_to_selection = selected_lane
+                .map(|selected| selected.covers(theme, graph_row_ix, graph_row.node_color_ix));
             let node_color = super::history_graph_paint::lane_wash_color(
                 theme,
                 graph_row.node_color_ix,
-                selected_lane_color_ix,
+                graph_row_ix,
+                selected_lane,
             );
 
             // A lane-coloured wash across the right of the graph column, fading
@@ -521,9 +522,10 @@ pub(super) fn history_commit_row_canvas(
                             super::history_graph_paint::paint_history_graph(
                                 theme,
                                 graph_row,
+                                graph_row_ix,
                                 connect_from_top_col,
                                 is_stash_node,
-                                selected_lane_color_ix,
+                                selected_lane,
                                 graph_bounds,
                                 window,
                                 cx,

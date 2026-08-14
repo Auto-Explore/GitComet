@@ -970,15 +970,23 @@ pub(super) fn schedule_load_worktree_dirty(
                             continue;
                         }
                         scanned.push(worktree.path.clone());
-                        let Some(handle) = worktree_scan_handle(&*backend, repo_id, &worktree.path)
-                        else {
+                        let Some(handle) = worktree_scan_handle(
+                            worktree_scan_handles(),
+                            &*backend,
+                            repo_id,
+                            &worktree.path,
+                        ) else {
                             continue;
                         };
                         let Ok(status) = handle.status_cancellable(&cancellation) else {
                             // A handle that cannot report status is not worth
                             // keeping: the worktree may have been removed or
                             // replaced underneath it.
-                            forget_worktree_scan_handle(repo_id, &worktree.path);
+                            forget_worktree_scan_handle(
+                                worktree_scan_handles(),
+                                repo_id,
+                                &worktree.path,
+                            );
                             continue;
                         };
                         // Only the selected worktree's files are carried back;
@@ -992,7 +1000,7 @@ pub(super) fn schedule_load_worktree_dirty(
                     // A cancelled scan saw only part of the list, so its `scanned`
                     // set would prune handles that are still live.
                     if !cancellation.is_cancelled() {
-                        retain_worktree_scan_handles(repo_id, &scanned);
+                        retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &scanned);
                     }
                     summaries
                 });
@@ -1022,11 +1030,9 @@ pub(super) fn schedule_load_worktree_dirty(
 /// that fails is dropped ([`forget_worktree_scan_handle`]) and reopened next time.
 ///
 /// Keyed by repo as well as path: entries are pruned against the worktree list of
-/// the scan that owns them ([`retain_worktree_scan_handles`]), and one repo's scan
-/// must not evict another's. Over the limit the *least recently used* entry goes,
-/// one at a time — clearing the map wholesale would make a repo with more
-/// worktrees than the limit reopen nearly all of them on every scan, which is the
-/// case this cache exists for.
+/// the scan that owns them ([`retain_worktree_scan_handles`]), dropped outright
+/// when the repo's tab closes ([`release_worktree_scan_handles`]), and one repo's
+/// scan must not evict another's.
 static WORKTREE_SCAN_HANDLES: OnceLock<Mutex<WorktreeScanHandles>> = OnceLock::new();
 
 /// Handles held open across scans. Each one keeps file descriptors and mapped
@@ -1037,7 +1043,7 @@ const WORKTREE_SCAN_HANDLE_LIMIT: usize = 16;
 #[derive(Default)]
 struct WorktreeScanHandles {
     entries: HashMap<(RepoId, PathBuf), WorktreeScanHandle>,
-    /// Ticks once per lookup; the entry holding the lowest tick is the coldest.
+    /// Ticks once per lookup; the entry holding the highest tick is the hottest.
     clock: u64,
 }
 
@@ -1046,47 +1052,88 @@ struct WorktreeScanHandle {
     last_used: u64,
 }
 
+impl WorktreeScanHandles {
+    fn tick(&mut self) -> u64 {
+        self.clock = self.clock.wrapping_add(1);
+        self.clock
+    }
+
+    /// Frees a slot for a new entry belonging to `repo_id`.
+    ///
+    /// The *most* recently used of that repo's own entries goes, not the coldest.
+    /// A scan walks `list_worktrees` in order and every scan walks the same list,
+    /// so the access pattern is a cycle -- LRU's textbook worst case. Under LRU a
+    /// repo with more worktrees than the limit evicts precisely the entry its next
+    /// scan reaches first, every time, and reopens all of them on every pass: the
+    /// same behaviour clearing the map wholesale had, which is the case this cache
+    /// exists for. Giving up the entry the scan has just finished with instead
+    /// leaves a stable prefix of the repo's worktrees cached and confines the
+    /// reopens to the tail.
+    ///
+    /// A repo with nothing cached yet has nothing of its own to give up, so it
+    /// takes the globally coldest entry -- there LRU is right, because another
+    /// repo's oldest handle really is the least likely to be wanted next.
+    fn evict_one_for(&mut self, repo_id: RepoId) -> bool {
+        let victim = self
+            .entries
+            .iter()
+            .filter(|((entry_repo, _), _)| *entry_repo == repo_id)
+            .max_by_key(|(_, entry)| entry.last_used)
+            .map(|(key, _)| key.clone())
+            .or_else(|| {
+                self.entries
+                    .iter()
+                    .min_by_key(|(_, entry)| entry.last_used)
+                    .map(|(key, _)| key.clone())
+            });
+        match victim {
+            Some(victim) => {
+                self.entries.remove(&victim);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 fn worktree_scan_handles() -> &'static Mutex<WorktreeScanHandles> {
     WORKTREE_SCAN_HANDLES.get_or_init(|| Mutex::new(WorktreeScanHandles::default()))
 }
 
+fn lock_worktree_scan_handles(
+    handles: &Mutex<WorktreeScanHandles>,
+) -> std::sync::MutexGuard<'_, WorktreeScanHandles> {
+    handles
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The map is threaded in rather than reached for through the static so tests can
+/// drive an instance of their own. Sharing the process-wide one made the handle
+/// tests evict each other's entries whenever cargo ran them in parallel.
 fn worktree_scan_handle(
+    handles: &Mutex<WorktreeScanHandles>,
     backend: &dyn GitBackend,
     repo_id: RepoId,
     path: &Path,
 ) -> Option<Arc<dyn GitRepository>> {
     let key = (repo_id, path.to_path_buf());
     {
-        let mut handles = worktree_scan_handles()
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        handles.clock = handles.clock.wrapping_add(1);
-        let now = handles.clock;
+        let mut handles = lock_worktree_scan_handles(handles);
+        let now = handles.tick();
         if let Some(entry) = handles.entries.get_mut(&key) {
             entry.last_used = now;
             return Some(Arc::clone(&entry.handle));
         }
     }
 
+    // Opened outside the lock: this is the several-millisecond discovery-and-
+    // config-parse the cache exists to avoid, and holding the map across it would
+    // stall every other repo's scan behind it.
     let handle = backend.open(path).ok()?;
-    let mut handles = worktree_scan_handles()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    while handles.entries.len() >= WORKTREE_SCAN_HANDLE_LIMIT {
-        let coldest = handles
-            .entries
-            .iter()
-            .min_by_key(|(_, entry)| entry.last_used)
-            .map(|(key, _)| key.clone());
-        match coldest {
-            Some(coldest) => {
-                handles.entries.remove(&coldest);
-            }
-            None => break,
-        }
-    }
-    handles.clock = handles.clock.wrapping_add(1);
-    let last_used = handles.clock;
+    let mut handles = lock_worktree_scan_handles(handles);
+    while handles.entries.len() >= WORKTREE_SCAN_HANDLE_LIMIT && handles.evict_one_for(repo_id) {}
+    let last_used = handles.tick();
     handles.entries.insert(
         key,
         WorktreeScanHandle {
@@ -1101,21 +1148,32 @@ fn worktree_scan_handle(
 /// that have been pruned, removed, or unmounted since the last scan. Called with
 /// the paths the scan actually saw, so a repo never accumulates handles for
 /// worktrees that no longer exist.
-fn retain_worktree_scan_handles(repo_id: RepoId, seen: &[PathBuf]) {
-    let mut handles = worktree_scan_handles()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
-    handles
+fn retain_worktree_scan_handles(
+    handles: &Mutex<WorktreeScanHandles>,
+    repo_id: RepoId,
+    seen: &[PathBuf],
+) {
+    lock_worktree_scan_handles(handles)
         .entries
         .retain(|(entry_repo, path), _| *entry_repo != repo_id || seen.contains(path));
 }
 
-fn forget_worktree_scan_handle(repo_id: RepoId, path: &Path) {
-    worktree_scan_handles()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+fn forget_worktree_scan_handle(handles: &Mutex<WorktreeScanHandles>, repo_id: RepoId, path: &Path) {
+    lock_worktree_scan_handles(handles)
         .entries
         .remove(&(repo_id, path.to_path_buf()));
+}
+
+/// Drops every handle a repo holds, for when the repo itself goes away.
+///
+/// Nothing else can: the per-scan prune only runs from that repo's own scan, so a
+/// closed tab's handles -- file descriptors and mapped index data, one set per
+/// linked worktree -- would otherwise sit there for the life of the process,
+/// released only if unrelated repos happened to push the map to its limit.
+pub(in crate::store) fn release_worktree_scan_handles(repo_id: RepoId) {
+    lock_worktree_scan_handles(worktree_scan_handles())
+        .entries
+        .retain(|(entry_repo, _), _| *entry_repo != repo_id);
 }
 
 /// Whether `worktree_path` is the worktree this tab already has open — those
@@ -2223,97 +2281,192 @@ mod worktree_scan_handle_tests {
         }
     }
 
+    impl CountingBackend {
+        fn new() -> Self {
+            Self {
+                opens: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn opens(&self) -> usize {
+            self.opens.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    /// A map of this test's own. These used to share the process-wide static, and
+    /// the over-the-limit test below evicts sixteen entries as it runs — under
+    /// cargo's parallel harness it was evicting the *other* tests' entries, and
+    /// they failed on an open count one higher than they asked for.
+    fn handles() -> Mutex<WorktreeScanHandles> {
+        Mutex::new(WorktreeScanHandles::default())
+    }
+
     /// Opening a repository is discovery plus config parsing, and the scan runs on
     /// every git-state flush. A repo with more worktrees than the cache holds must
     /// still keep its hottest ones: clearing the map wholesale at the limit made
     /// exactly that case reopen nearly everything every scan.
     #[test]
     fn a_repo_over_the_handle_limit_keeps_its_hottest_worktrees() {
-        let backend = CountingBackend {
-            opens: std::sync::atomic::AtomicUsize::new(0),
-        };
+        let handles = handles();
+        let backend = CountingBackend::new();
         let repo_id = RepoId(4_001);
         let hot = PathBuf::from("/wt/hot-4001");
         let paths: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
             .map(|ix| PathBuf::from(format!("/wt/cold-4001-{ix}")))
             .collect();
 
-        // The hot worktree is touched before and after every cold one, so it is
-        // never the coldest entry and must survive the evictions.
-        worktree_scan_handle(&backend, repo_id, &hot).expect("stub backend opens");
+        // The hot worktree is touched before and after every cold one. Eviction
+        // takes the entry the scan has just finished with, which is always the
+        // cold one -- touching `hot` again immediately afterwards makes it the
+        // most recent, but by then the slot has already been taken.
+        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
         for path in &paths {
-            worktree_scan_handle(&backend, repo_id, path).expect("stub backend opens");
-            worktree_scan_handle(&backend, repo_id, &hot).expect("stub backend opens");
+            worktree_scan_handle(&handles, &backend, repo_id, path).expect("stub backend opens");
+            worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
         }
 
-        let opens_before = backend.opens.load(std::sync::atomic::Ordering::Relaxed);
-        worktree_scan_handle(&backend, repo_id, &hot).expect("stub backend opens");
+        let opens_before = backend.opens();
+        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
         assert_eq!(
-            backend.opens.load(std::sync::atomic::Ordering::Relaxed),
+            backend.opens(),
             opens_before,
             "the repeatedly used worktree must still be cached"
         );
+    }
 
-        retain_worktree_scan_handles(repo_id, &[]);
+    /// The access pattern this cache actually sees: every scan walks
+    /// `list_worktrees` in the same order, so a repo with more worktrees than the
+    /// limit revisits them cyclically. That is LRU's worst case — it evicts
+    /// precisely the entry the next scan reaches first, and every handle is
+    /// reopened on every pass, which is the behaviour the cache exists to prevent.
+    #[test]
+    fn repeated_scans_of_an_oversized_repo_do_not_reopen_everything() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let repo_id = RepoId(4_005);
+        let worktrees: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
+            .map(|ix| PathBuf::from(format!("/wt/seq-4005-{ix}")))
+            .collect();
+
+        let scan = || {
+            let before = backend.opens();
+            for path in &worktrees {
+                worktree_scan_handle(&handles, &backend, repo_id, path)
+                    .expect("stub backend opens");
+            }
+            backend.opens() - before
+        };
+
+        assert_eq!(
+            scan(),
+            worktrees.len(),
+            "the first scan has nothing cached and opens every worktree"
+        );
+
+        let second = scan();
+        let third = scan();
+        // Under LRU both of these were `worktrees.len()` -- a complete miss on
+        // every worktree, on every scan, forever.
+        assert!(
+            second < worktrees.len() && third < worktrees.len(),
+            "a cyclic rescan must keep hitting the cache, got {second} then {third} \
+             reopens of {} worktrees",
+            worktrees.len()
+        );
+        assert!(
+            third <= worktrees.len() - WORKTREE_SCAN_HANDLE_LIMIT + 1,
+            "all but the tail past the limit should stay cached, got {third} reopens"
+        );
     }
 
     /// Handles are pruned against the worktree list the scan actually walked, so a
     /// removed worktree does not keep a repository open for the process lifetime.
     #[test]
     fn a_scan_drops_handles_for_worktrees_it_no_longer_lists() {
-        let backend = CountingBackend {
-            opens: std::sync::atomic::AtomicUsize::new(0),
-        };
+        let handles = handles();
+        let backend = CountingBackend::new();
         let repo_id = RepoId(4_002);
         let kept = PathBuf::from("/wt/kept-4002");
         let removed = PathBuf::from("/wt/removed-4002");
 
-        worktree_scan_handle(&backend, repo_id, &kept).expect("stub backend opens");
-        worktree_scan_handle(&backend, repo_id, &removed).expect("stub backend opens");
-        assert_eq!(backend.opens.load(std::sync::atomic::Ordering::Relaxed), 2);
+        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
+        assert_eq!(backend.opens(), 2);
 
-        retain_worktree_scan_handles(repo_id, std::slice::from_ref(&kept));
+        retain_worktree_scan_handles(&handles, repo_id, std::slice::from_ref(&kept));
 
-        worktree_scan_handle(&backend, repo_id, &kept).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
         assert_eq!(
-            backend.opens.load(std::sync::atomic::Ordering::Relaxed),
+            backend.opens(),
             2,
             "the worktree still in the list keeps its handle"
         );
-        worktree_scan_handle(&backend, repo_id, &removed).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
         assert_eq!(
-            backend.opens.load(std::sync::atomic::Ordering::Relaxed),
+            backend.opens(),
             3,
             "the worktree dropped from the list must have been released"
         );
-
-        retain_worktree_scan_handles(repo_id, &[]);
     }
 
     /// One repo's scan must not evict another's handles: the map is process-wide.
     #[test]
     fn pruning_one_repos_handles_leaves_another_repos_alone() {
-        let backend = CountingBackend {
-            opens: std::sync::atomic::AtomicUsize::new(0),
-        };
+        let handles = handles();
+        let backend = CountingBackend::new();
         let mine = RepoId(4_003);
         let theirs = RepoId(4_004);
         let path = PathBuf::from("/wt/shared-4003");
 
-        worktree_scan_handle(&backend, mine, &path).expect("stub backend opens");
-        worktree_scan_handle(&backend, theirs, &path).expect("stub backend opens");
-        assert_eq!(backend.opens.load(std::sync::atomic::Ordering::Relaxed), 2);
+        worktree_scan_handle(&handles, &backend, mine, &path).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
+        assert_eq!(backend.opens(), 2);
 
-        retain_worktree_scan_handles(mine, &[]);
+        retain_worktree_scan_handles(&handles, mine, &[]);
 
-        worktree_scan_handle(&backend, theirs, &path).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
         assert_eq!(
-            backend.opens.load(std::sync::atomic::Ordering::Relaxed),
+            backend.opens(),
             2,
             "the other repo's handle must survive this repo's prune"
         );
+    }
 
-        retain_worktree_scan_handles(theirs, &[]);
+    /// Closing a repo is the only thing that can release its handles: the per-scan
+    /// prune runs from that repo's own scan, and a closed repo never scans again.
+    /// Without this the handles sat there for the life of the process.
+    #[test]
+    fn closing_a_repo_releases_every_handle_it_held() {
+        let backend = CountingBackend::new();
+        let closed = RepoId(4_006);
+        let other = RepoId(4_007);
+        let paths = [
+            PathBuf::from("/wt/closing-4006-a"),
+            PathBuf::from("/wt/closing-4006-b"),
+        ];
+
+        // The release hook reaches the static directly -- it is called from the
+        // reducer, which has no map to hand it -- so this one test uses it, and
+        // cleans up after itself by releasing both repos.
+        let shared = worktree_scan_handles();
+        for path in &paths {
+            worktree_scan_handle(shared, &backend, closed, path).expect("stub backend opens");
+        }
+        worktree_scan_handle(shared, &backend, other, &paths[0]).expect("stub backend opens");
+
+        release_worktree_scan_handles(closed);
+
+        let held = |repo_id: RepoId| {
+            lock_worktree_scan_handles(shared)
+                .entries
+                .keys()
+                .filter(|(entry_repo, _)| *entry_repo == repo_id)
+                .count()
+        };
+        assert_eq!(held(closed), 0, "the closed repo must hold nothing");
+        assert_eq!(held(other), 1, "and must not have taken anyone else's");
+
+        release_worktree_scan_handles(other);
     }
 }
 

@@ -5,13 +5,16 @@ use smallvec::SmallVec;
 pub(super) fn paint_history_graph(
     theme: AppTheme,
     row: &history_graph::GraphRow,
+    // This row's index into `graph_rows`, so a lane can be told from an
+    // unrelated one elsewhere on the page that recycled its colour.
+    row_ix: usize,
     connect_from_top_col: Option<usize>,
     is_stash_node: bool,
-    // Colour index of the lane the selected commit sits on. Every colour the
-    // graph draws goes through `lane`, so that one lane stays saturated along its
-    // whole run and every other lane recedes along its whole run -- a property of
-    // the lane, not of which rows happen to connect to the selection.
-    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    // The lane the selected commit sits on. Every colour the graph draws goes
+    // through `lane`, so that one lane stays saturated along its whole run and
+    // every other lane recedes along its whole run -- a property of the lane, not
+    // of which rows happen to connect to the selection.
+    selected_lane: Option<SelectedLane>,
     bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -22,7 +25,7 @@ pub(super) fn paint_history_graph(
         return;
     }
 
-    let lane = |color_ix| lane_wash_color(theme, color_ix, selected_lane_color_ix);
+    let lane = |color_ix| lane_wash_color(theme, color_ix, row_ix, selected_lane);
 
     let design_scale_factor = ui_scale::design_scale_factor_from_window(window);
     let scaled_px = |value| px(value * design_scale_factor);
@@ -267,24 +270,130 @@ pub(in crate::view) fn worktree_band_connect_from_top_col(
     }
 }
 
-/// A lane's colour, washed out unless it is the lane the selection sits on.
+/// The lane the selection sits on: the one lane that keeps full colour.
 ///
-/// The wash is a property of the *lane*: a lane keeps its colour index for its
-/// whole lifetime and `pick_lane_color_ix` avoids collisions between lanes that
-/// are alive at the same time, so the index identifies a lane across every row it
-/// spans. That is what keeps a washed lane washed from top to bottom instead of
-/// flickering wherever it happens to touch the selected chain.
+/// A colour index alone does not identify a lane. `pick_lane_color_ix` only
+/// avoids collisions between lanes that are alive *at the same time*, and it
+/// recycles freely after that, so a lane that ended near the top of the page and
+/// one born near the bottom routinely share an index. Matching on the index alone
+/// lit both, and the highlight read as two disjoint chains with washed-out rows
+/// between them. The row span pins it to the one lane: a lane's lifetime is a
+/// contiguous run of rows, so the span plus the colour is unambiguous — no other
+/// live lane can hold that colour anywhere inside it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct SelectedLane {
+    pub(in crate::view) color_ix: history_graph::LaneColorIx,
+    /// First visible row the lane occupies in `lanes_now`.
+    first_row: usize,
+    /// Last such row, inclusive.
+    last_row: usize,
+}
+
+impl SelectedLane {
+    /// Whether the lane drawn in `color_ix` on visible row `row_ix` is this one.
+    pub(in crate::view) fn covers(
+        self,
+        theme: AppTheme,
+        row_ix: usize,
+        color_ix: history_graph::LaneColorIx,
+    ) -> bool {
+        // Resolved colours, not indices. `GraphLanePalette::color_at` wraps at the
+        // palette's real length, so a theme supplying fewer colours than
+        // `GRAPH_LANE_PALETTE_SIZE` maps distinct indices onto one RGB. Two lanes
+        // the user cannot tell apart must not be drawn at two strengths on the
+        // same row; washing them together is the only reading that holds up.
+        if history_graph::lane_color(theme, color_ix)
+            != history_graph::lane_color(theme, self.color_ix)
+        {
+            return false;
+        }
+        // `row_ix + 1 >= first_row` rather than `row_ix >= first_row - 1`, which
+        // underflows at the top of the page. The slack row is the lane's birth
+        // row: it draws the lane's lower half out of `lanes_next` one row above
+        // the first row that carries it in `lanes_now`.
+        row_ix + 1 >= self.first_row && row_ix <= self.last_row
+    }
+}
+
+/// The lane `color_ix` occupies on `row`, whether it is carried into the row or
+/// starts at its node. Live lanes hold distinct colours, so this is exact.
+fn lane_col_for_color(
+    row: &history_graph::GraphRow,
+    color_ix: history_graph::LaneColorIx,
+) -> Option<usize> {
+    let matching = |lanes: &[history_graph::LanePaint]| {
+        lanes
+            .iter()
+            .position(|lane| lane.is_active() && lane.color_ix == color_ix)
+    };
+    matching(&row.lanes_now).or_else(|| matching(&row.lanes_next))
+}
+
+/// Resolves the lane drawn in `color_ix` at `anchor_row` to its full row span.
 ///
-/// `None` -- nothing selected -- leaves every lane at full strength.
+/// Walks outwards while the lane's column keeps carrying its colour. A lane holds
+/// one column for its whole life and a new lane may not reuse a colour that ended
+/// on the row above it (`ended_colors` in `compute_graph`), so the run this finds
+/// starts and stops exactly where the lane does.
+pub(in crate::view) fn selected_lane_at(
+    graph_rows: &[history_graph::GraphRow],
+    anchor_row: usize,
+    color_ix: history_graph::LaneColorIx,
+) -> Option<SelectedLane> {
+    let col = lane_col_for_color(graph_rows.get(anchor_row)?, color_ix)?;
+    let occupies = |row_ix: usize| {
+        graph_rows
+            .get(row_ix)
+            .and_then(|row| row.lanes_now.get(col))
+            .is_some_and(|lane| lane.is_active() && lane.color_ix == color_ix)
+    };
+
+    // A lane that starts at this row's node is only in `lanes_next` here; the
+    // first row carrying it is the next one down.
+    let start = if occupies(anchor_row) {
+        anchor_row
+    } else {
+        anchor_row + 1
+    };
+    if !occupies(start) {
+        // Nothing below carries it -- the lane ends here, or the page does.
+        return Some(SelectedLane {
+            color_ix,
+            first_row: anchor_row,
+            last_row: anchor_row,
+        });
+    }
+
+    let mut first_row = start;
+    while first_row > 0 && occupies(first_row - 1) {
+        first_row -= 1;
+    }
+    let mut last_row = start;
+    while occupies(last_row + 1) {
+        last_row += 1;
+    }
+    Some(SelectedLane {
+        color_ix,
+        first_row,
+        last_row,
+    })
+}
+
+/// A lane's colour on row `row_ix`, washed out unless it is the selected lane.
+///
+/// The wash is a property of the *lane*, so a washed lane stays washed from top
+/// to bottom rather than flickering wherever it happens to touch the selected
+/// chain. `None` -- nothing selected -- leaves every lane at full strength.
 pub(super) fn lane_wash_color(
     theme: AppTheme,
     color_ix: history_graph::LaneColorIx,
-    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    row_ix: usize,
+    selected: Option<SelectedLane>,
 ) -> gpui::Rgba {
     let full = history_graph::lane_color(theme, color_ix);
-    match selected_lane_color_ix {
+    match selected {
         // The same mix the unrelated-row dimming uses, so the two read alike.
-        Some(selected) if selected != color_ix => {
+        Some(selected) if !selected.covers(theme, row_ix, color_ix) => {
             history_canvas::selection_related_lane_color(theme, full, Some(false))
         }
         _ => full,
@@ -420,11 +529,14 @@ pub(super) fn band_lane_segments(
 /// `GraphRow`: a band has nothing to elbow and no secondary-parent edges, so the
 /// rest of a row -- `lanes_next`, `joins_in`, `edges_out` -- would be a per-row,
 /// per-frame clone of data this never reads.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint_history_graph_band(
     theme: AppTheme,
     lanes: &[history_graph::LanePaint],
+    // Index of the commit row *below* the band, whose lanes it draws.
+    row_ix: usize,
     connect_from_top_col: Option<usize>,
-    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    selected_lane: Option<SelectedLane>,
     node: BandNodePaint,
     show_graph_color_marker: bool,
     bounds: Bounds<Pixels>,
@@ -479,10 +591,21 @@ pub(super) fn paint_history_graph_band(
             // seam between the two rows reappears.
             window.paint_path(
                 p,
-                lane_wash_color(theme, segment.color_ix, selected_lane_color_ix),
+                lane_wash_color(theme, segment.color_ix, row_ix, selected_lane),
             );
         }
     }
+
+    // A pushed-out node sits one column past the last lane. The auto width budgets
+    // exactly that column's worth of trailing margin, but it is clamped at
+    // `HISTORY_COL_GRAPH_MAX_PX` and the user can drag the column narrower still
+    // (`history_col_graph_auto == false`), and the graph cell is `overflow_hidden`
+    // -- past the edge the node and its connector are not clipped so much as
+    // deleted, leaving a band of bare lanes with nothing marking the changes.
+    // Holding it at the last position that fits keeps it on screen. It can only
+    // be pulled back onto a lane's column when the column is already too narrow
+    // to draw that lane either, so nothing legible is lost.
+    let node_x_offset = band_node_x_offset(node.col, margin_x, col_gap, bounds.size.width);
 
     // The node sits on a column no lane runs through, so it reaches the commit
     // below by leaving horizontally and turning down -- the same shape a branch
@@ -490,7 +613,7 @@ pub(super) fn paint_history_graph_band(
     if let Some(exit_col) = node.exit_col {
         paint_node_to_lane(
             left,
-            x_for_col(usize::from(node.col)),
+            node_x_offset,
             x_for_col(usize::from(exit_col)),
             y_center,
             y_bottom,
@@ -503,7 +626,7 @@ pub(super) fn paint_history_graph_band(
 
     // Same nested-layer trick the commit nodes use: quads otherwise draw under
     // every path in the layer regardless of call order.
-    let node_x = left + x_for_col(usize::from(node.col));
+    let node_x = left + node_x_offset;
     let node_layer_half = scaled_px(10.0);
     let node_layer_bounds = Bounds::new(
         point(node_x - node_layer_half, y_center - node_layer_half),
@@ -520,6 +643,19 @@ pub(super) fn paint_history_graph_band(
             cx,
         );
     });
+}
+
+/// Where a band's node is drawn, in pixels from the graph cell's left edge.
+///
+/// Its natural place is `margin_x + col_gap * col`, which for the pushed-out case
+/// (`col == lanes.len()`) lands exactly on the trailing margin the auto width
+/// budgets for it. That budget is only honoured while the auto width applies and
+/// stays under its clamp, so the offset is held inside the cell here rather than
+/// trusted -- a node past the edge is invisible, and the cell clips rather than
+/// overflows.
+fn band_node_x_offset(col: u16, margin_x: Pixels, col_gap: Pixels, width: Pixels) -> Pixels {
+    let natural = margin_x + col_gap * (f32::from(col));
+    natural.min((width - margin_x).max(margin_x))
 }
 
 /// Control-point ratio for approximating a circular quarter-arc with a cubic
@@ -940,6 +1076,16 @@ mod band_tests {
         );
     }
 
+    /// A lane spanning every row of a short page, for wash tests that are about
+    /// the colour rather than the span.
+    fn whole_page_lane(color_ix: history_graph::LaneColorIx) -> SelectedLane {
+        SelectedLane {
+            color_ix,
+            first_row: 0,
+            last_row: usize::MAX,
+        }
+    }
+
     /// The wash is a property of the lane, not of the row: the painter routes
     /// every stroke and node fill through this, so a regression here either
     /// un-washes the whole graph or washes the selected lane along with the rest.
@@ -950,17 +1096,17 @@ mod band_tests {
         let other = 5u8;
 
         assert_eq!(
-            lane_wash_color(theme, other, None),
+            lane_wash_color(theme, other, 0, None),
             history_graph::lane_color(theme, other),
             "with nothing selected every lane stays at full strength"
         );
         assert_eq!(
-            lane_wash_color(theme, selected, Some(selected)),
+            lane_wash_color(theme, selected, 0, Some(whole_page_lane(selected))),
             history_graph::lane_color(theme, selected),
             "the selected commit's own lane is never washed"
         );
 
-        let washed = lane_wash_color(theme, other, Some(selected));
+        let washed = lane_wash_color(theme, other, 0, Some(whole_page_lane(selected)));
         assert_ne!(
             washed,
             history_graph::lane_color(theme, other),
@@ -990,12 +1136,118 @@ mod band_tests {
         let row = band(&[incoming(7)], 0);
 
         assert_eq!(
-            lane_wash_color(theme, row.node_color_ix, Some(row.node_color_ix)),
+            lane_wash_color(
+                theme,
+                row.node_color_ix,
+                0,
+                Some(whole_page_lane(row.node_color_ix))
+            ),
             history_graph::lane_color(theme, row.node_color_ix)
         );
         assert_ne!(
-            lane_wash_color(theme, row.node_color_ix, Some(row.node_color_ix + 1)),
+            lane_wash_color(
+                theme,
+                row.node_color_ix,
+                0,
+                Some(whole_page_lane(row.node_color_ix + 1))
+            ),
             history_graph::lane_color(theme, row.node_color_ix)
+        );
+    }
+
+    /// The colour index is not a lane id. `pick_lane_color_ix` only avoids
+    /// collisions between lanes alive at the same time and recycles freely after
+    /// that, so a lane that ended near the top of a page and one born near the
+    /// bottom routinely share an index. Matching on the index alone lit both, and
+    /// the highlight read as two disjoint chains.
+    #[test]
+    fn a_lane_that_recycled_the_selected_colour_still_washes() {
+        let theme = AppTheme::gitcomet_dark();
+        let color_ix = 4u8;
+        let selected = SelectedLane {
+            color_ix,
+            first_row: 10,
+            last_row: 20,
+        };
+
+        for row_ix in [9usize, 10, 15, 20] {
+            assert_eq!(
+                lane_wash_color(theme, color_ix, row_ix, Some(selected)),
+                history_graph::lane_color(theme, color_ix),
+                "row {row_ix} is inside the selected lane's run (plus its birth row)"
+            );
+        }
+        for row_ix in [0usize, 8, 21, 400] {
+            assert_ne!(
+                lane_wash_color(theme, color_ix, row_ix, Some(selected)),
+                history_graph::lane_color(theme, color_ix),
+                "row {row_ix} is a different lane that happens to share the colour"
+            );
+        }
+    }
+
+    /// `GraphLanePalette::color_at` wraps at the palette's real length, so a theme
+    /// supplying fewer colours than `GRAPH_LANE_PALETTE_SIZE` maps distinct lane
+    /// indices onto one RGB. Washing one and not the other put the same hue on the
+    /// same row at two strengths, which reads as a rendering fault rather than a
+    /// highlight.
+    #[test]
+    fn lanes_a_short_palette_paints_alike_wash_alike() {
+        let red = gpui::rgba(0xff0000ff);
+        let blue = gpui::rgba(0x0000ffff);
+        let mut theme = AppTheme::gitcomet_dark();
+        theme.graph_lane_palette = crate::theme::GraphLanePalette::leaked_for_test(&[red, blue]);
+
+        // Index 2 wraps back onto index 0's colour.
+        assert_eq!(
+            history_graph::lane_color(theme, 0),
+            history_graph::lane_color(theme, 2),
+            "fixture must actually produce a collision"
+        );
+
+        let selected = SelectedLane {
+            color_ix: 0,
+            first_row: 0,
+            last_row: 10,
+        };
+        assert_eq!(
+            lane_wash_color(theme, 2, 5, Some(selected)),
+            history_graph::lane_color(theme, 2),
+            "a lane the theme paints identically to the selected one must not be \
+             drawn at a second strength"
+        );
+        assert_ne!(
+            lane_wash_color(theme, 1, 5, Some(selected)),
+            history_graph::lane_color(theme, 1),
+            "a lane the theme really does paint differently still washes"
+        );
+    }
+
+    /// A lane's lifetime is a contiguous run of rows at one column, so the span
+    /// is found by walking outwards from the anchor. Two same-coloured lanes with
+    /// a gap between them must resolve to the one the anchor is on.
+    #[test]
+    fn a_lanes_span_stops_where_the_lane_does() {
+        let color_ix = 6u8;
+        let rows = vec![
+            band(&[incoming(color_ix)], 0),
+            band(&[incoming(color_ix)], 0),
+            // The lane ends; the column is a hole for one row.
+            band(&[history_graph::LanePaint::HOLE], 0),
+            // A different lane recycles the colour further down.
+            band(&[incoming(color_ix)], 0),
+        ];
+
+        let top = selected_lane_at(&rows, 0, color_ix).expect("the anchor is on a lane");
+        assert_eq!((top.first_row, top.last_row), (0, 1));
+        let bottom = selected_lane_at(&rows, 3, color_ix).expect("the anchor is on a lane");
+        assert_eq!((bottom.first_row, bottom.last_row), (3, 3));
+
+        let theme = AppTheme::gitcomet_dark();
+        assert_ne!(
+            lane_wash_color(theme, color_ix, 3, Some(top)),
+            history_graph::lane_color(theme, color_ix),
+            "selecting the top lane must not light the recycled one below"
         );
     }
 
@@ -1077,6 +1329,47 @@ mod tests {
     /// half-row.
     const COL_GAP: f32 = HISTORY_GRAPH_COL_GAP_PX;
     const HALF_ROW: f32 = 14.0;
+
+    /// The auto width is `MARGIN_X * 2 + COL_GAP * max_lanes`, and a pushed-out
+    /// node sits on column `max_lanes` -- exactly on the trailing margin. This
+    /// pins that arithmetic: if either constant moves, the node starts landing
+    /// outside the cell on every busiest row.
+    #[test]
+    fn a_pushed_out_node_fits_the_auto_sized_graph_column() {
+        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        for max_lanes in 1u16..14 {
+            let width = margin * 2.0 + gap * f32::from(max_lanes);
+            assert_eq!(
+                band_node_x_offset(max_lanes, margin, gap, width),
+                margin + gap * f32::from(max_lanes),
+                "auto width for {max_lanes} lanes must leave the node its column"
+            );
+        }
+    }
+
+    /// Past the auto width's clamp -- or after the user drags the column narrower
+    /// -- the node's natural column is outside a cell that clips rather than
+    /// overflows, so it would not be drawn at all. It has to come back inside.
+    #[test]
+    fn a_pushed_out_node_stays_inside_a_column_too_narrow_for_it() {
+        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        let clamped_width = px(crate::view::HISTORY_COL_GRAPH_MAX_PX);
+
+        // 20 lanes wants x = 330 in a column the clamp holds at 240.
+        let offset = band_node_x_offset(20, margin, gap, clamped_width);
+        assert!(
+            offset < clamped_width,
+            "the node must stay inside the clipped cell, got {offset:?}"
+        );
+        assert_eq!(offset, clamped_width - margin);
+
+        // A column dragged narrower than one margin still yields a drawable
+        // offset rather than a negative one.
+        let offset = band_node_x_offset(3, margin, gap, px(4.0));
+        assert!(offset >= px(0.0), "got {offset:?}");
+    }
 
     #[test]
     fn elbow_radius_fits_a_one_column_jog_at_normal_scale() {

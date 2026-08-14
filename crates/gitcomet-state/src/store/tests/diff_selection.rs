@@ -3298,16 +3298,93 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
         "the other worktree's inline diff must not survive the switch"
     );
     assert!(
-        state.repos[0].diff_state.diff_target.is_none(),
-        "and neither must the diff target it was rendering"
-    );
-    assert!(
         state.repos[0].diff_state.diff_state_rev > diff_state_rev_before,
         "the diff panes have to be told to repaint"
     );
     assert_eq!(
         state.repos[0].history_state.worktree_selection.as_ref(),
         Some(&worktree_b)
+    );
+}
+
+/// Retiring a worktree's inline diff must not take the commit diff behind it
+/// with it. Opening an inline foreign diff never sets `diff_target` — the target
+/// still names whatever commit file was selected before — and the pane renders
+/// the inline diff only *in preference* to it. Clearing the target on the way
+/// out therefore deletes state the inline diff never owned, and the pane goes
+/// blank instead of falling back to the commit, which is exactly what closing the
+/// diff by hand (`CloseInlineSubmoduleDiff`) does.
+#[test]
+fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let mut state = AppState::default();
+    let worktree = PathBuf::from("/tmp/wt/a");
+    let commit_target = gitcomet_core::domain::DiffTarget::Commit {
+        commit_id: CommitId("c0".into()),
+        path: Some(PathBuf::from("src/main.rs")),
+    };
+    let inline_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: PathBuf::from("src/lib.rs"),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    // The commit file the user opened first, still selected underneath.
+    repo_state.set_diff_target(Some(commit_target.clone()));
+    repo_state.history_state.selected_commit = Some(CommitId("c0".into()));
+    // Then a worktree row, and a file inside it.
+    repo_state.history_state.worktree_selection = Some(worktree.clone());
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Worktree {
+            branch: Some("side".to_string()),
+            detached: false,
+        },
+        submodule_repo_path: worktree.clone(),
+        parent_submodule_path: worktree.clone(),
+        entries: vec![crate::model::InlineSubmoduleDiffEntry {
+            path: PathBuf::from("src/lib.rs"),
+            kind: FileStatusKind::Modified,
+            target: inline_target.clone(),
+            section: crate::model::InlineSubmoduleDiffSection::LiveUnstaged,
+        }],
+        selected_ix: 0,
+        target: inline_target,
+        rev: 1,
+        diff_rev: 1,
+        diff: Loadable::NotLoaded,
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    // Selecting a commit clears the worktree selection as a side effect, which is
+    // what orphans the inline diff.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectCommit {
+            repo_id: RepoId(1),
+            commit_id: CommitId("c1".into()),
+        },
+    );
+
+    assert!(
+        state.repos[0].diff_state.inline_submodule_diff.is_none(),
+        "the orphaned worktree diff still has to be retired"
+    );
+    assert_eq!(
+        state.repos[0].diff_state.diff_target.as_ref(),
+        Some(&commit_target),
+        "the commit file selected behind it must survive so the pane can fall back to it"
     );
 }
 

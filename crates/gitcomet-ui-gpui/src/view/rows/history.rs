@@ -2727,14 +2727,9 @@ impl HistoryView {
         let (_, worktree_counts) = this.ensure_history_worktree_summary_cache();
         let plan = this.ensure_history_list_plan();
         let stash_ids = this.ensure_history_stash_ids_cache();
-        // Cloned out of `this` so the row loop below can borrow it immutably
-        // alongside the repo snapshot; it is an `Arc` bitset, so this is cheap.
-        // The cache behind it is scheduled from the panel's own render, never
-        // built here -- this runs during layout.
         // One lane keeps full colour; the rest wash out. Resolved once here rather
         // than per row -- it is a scan of the page behind a memo.
-        let selected_lane_color_ix =
-            this.history_selected_lane_color_ix(plan.show_working_tree_summary_row());
+        let selected_lane = this.history_selected_lane(plan.show_working_tree_summary_row());
 
         let Some(repo) = this.active_repo() else {
             return Vec::new();
@@ -2806,8 +2801,9 @@ impl HistoryView {
                         show_date,
                         show_sha,
                         graph_row,
+                        visible_ix,
                         connect_from_top_col,
-                        selected_lane_color_ix,
+                        selected_lane,
                         show_graph_color_marker,
                         repo.id,
                         list_ix,
@@ -2837,7 +2833,7 @@ impl HistoryView {
                         show_date,
                         show_sha,
                         worktree_node_color_ix,
-                        selected_lane_color_ix,
+                        selected_lane,
                         show_graph_color_marker,
                         repo.id,
                         selected,
@@ -2909,7 +2905,7 @@ impl HistoryView {
                     Arc::clone(&decoration_row_vm.tag_names),
                     Arc::clone(&decoration_row_vm.ref_items),
                     selected_branch,
-                    selected_lane_color_ix,
+                    selected_lane,
                     lane_branch_name,
                     base_row_vm.author.clone(),
                     base_row_vm.summary.clone(),
@@ -3000,7 +2996,7 @@ fn history_table_row(
     selected_branch: Option<SelectedHistoryBranch>,
     // Colour index of the lane the selection sits on; every other lane washes
     // out. A property of the lane, not of this row.
-    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    selected_lane: Option<super::history_graph_paint::SelectedLane>,
     // Branch this commit belongs to, shown as a faded badge while the row is
     // hovered. Inherited down the lane, so unlabelled commits have one too.
     lane_branch_name: Option<SharedString>,
@@ -3040,7 +3036,7 @@ fn history_table_row(
         tag_names,
         ref_items,
         selected_branch,
-        selected_lane_color_ix,
+        selected_lane,
         lane_branch_name,
         author,
         summary,
@@ -3140,8 +3136,10 @@ fn worktree_uncommitted_history_row(
     show_date: bool,
     show_sha: bool,
     graph_row: &history_graph::GraphRow,
+    // Index of the commit row the band sits on top of, whose lanes it draws.
+    visible_ix: usize,
     connect_from_top_col: Option<usize>,
-    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    selected_lane: Option<super::history_graph_paint::SelectedLane>,
     show_graph_color_marker: bool,
     repo_id: RepoId,
     list_ix: usize,
@@ -3161,10 +3159,12 @@ fn worktree_uncommitted_history_row(
     let node_color = super::history_graph_paint::lane_wash_color(
         theme,
         band_node.color_ix,
-        selected_lane_color_ix,
+        visible_ix,
+        selected_lane,
     );
     // Everything on the row washes with the lane it sits on, text included.
-    let on_selected_lane = selected_lane_color_ix.map(|selected| selected == band_node.color_ix);
+    let on_selected_lane =
+        selected_lane.map(|selected| selected.covers(theme, visible_ix, band_node.color_ix));
     let label_color = history_canvas::selection_related_summary_color(theme, on_selected_lane);
 
     // A pass-through band: whatever entered the commit below from above runs
@@ -3183,8 +3183,9 @@ fn worktree_uncommitted_history_row(
             super::history_graph_paint::paint_history_graph_band(
                 theme,
                 &band_lanes,
+                visible_ix,
                 connect_from_top_col,
-                selected_lane_color_ix,
+                selected_lane,
                 super::history_graph_paint::BandNodePaint {
                     col: band_node.col,
                     color: node_color,
@@ -3361,7 +3362,7 @@ fn working_tree_summary_history_row(
     show_date: bool,
     show_sha: bool,
     node_color_ix: history_graph::LaneColorIx,
-    selected_lane_color_ix: Option<history_graph::LaneColorIx>,
+    selected_lane: Option<super::history_graph_paint::SelectedLane>,
     show_graph_color_marker: bool,
     repo_id: RepoId,
     selected: bool,
@@ -3372,9 +3373,10 @@ fn working_tree_summary_history_row(
     let cell_pad_x = scaled_px(HISTORY_COL_HANDLE_PX / 2.0);
     // The connector washes with its lane, like every other node in the graph;
     // the label still follows the row's relation to the selection.
+    // The pinned row sits above the newest commit, so it shares row 0's lanes.
     let node_color =
-        super::history_graph_paint::lane_wash_color(theme, node_color_ix, selected_lane_color_ix);
-    let on_selected_lane = selected_lane_color_ix.map(|selected| selected == node_color_ix);
+        super::history_graph_paint::lane_wash_color(theme, node_color_ix, 0, selected_lane);
+    let on_selected_lane = selected_lane.map(|selected| selected.covers(theme, 0, node_color_ix));
     let label_color = history_canvas::selection_related_summary_color(theme, on_selected_lane);
     let icon_count = |icon_path: &'static str, color: gpui::Rgba, count: usize| {
         div()

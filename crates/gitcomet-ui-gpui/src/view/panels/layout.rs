@@ -1249,14 +1249,12 @@ impl DetailsPaneView {
                     .gitcomet_tooltip(theme, "Close".into()),
             );
 
-        let files_body: AnyElement = if file_count == 0 {
-            div()
-                .debug_selector(|| "worktree_files_empty".to_string())
-                .text_sm()
-                .text_color(theme.colors.foreground.secondary)
-                .child("No files.")
-                .into_any_element()
-        } else if loaded_file_count == 0 {
+        // No "no files" state: the scan only reports a worktree once
+        // `WorktreeDirtySummary::is_dirty` holds, so `file_count` -- the sum of
+        // those same three counts -- is always positive here. A change that
+        // started reporting clean worktrees would need a branch of its own; it
+        // would otherwise sit on "Loading files…" forever.
+        let files_body: AnyElement = if loaded_file_count == 0 {
             // Counts without files means the scan carrying them is still running.
             // Saying so beats an empty list that reads as "nothing changed" while
             // the header above it counts the changes.

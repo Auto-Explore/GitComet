@@ -395,8 +395,8 @@ mod worktree_uncommitted {
             "both staged and unstaged files belong in the list"
         );
         assert!(
-            cx.debug_bounds("worktree_files_empty").is_none(),
-            "a worktree with changes must not read as empty"
+            cx.debug_bounds("worktree_files_loading").is_none(),
+            "a worktree whose files have arrived must not read as loading"
         );
         assert!(
             cx.debug_bounds("worktree_uncommitted_open").is_some(),
@@ -421,7 +421,7 @@ mod worktree_uncommitted {
 
         assert!(cx.debug_bounds("worktree_file_93_0").is_some());
         assert!(cx.debug_bounds("worktree_file_93_1").is_some());
-        assert!(cx.debug_bounds("worktree_files_empty").is_none());
+        assert!(cx.debug_bounds("worktree_files_loading").is_none());
     }
 
     /// Without a selection the pane stays on this tab's own content, however
@@ -474,22 +474,18 @@ mod worktree_uncommitted {
             "counts without files must read as loading"
         );
         assert!(
-            cx.debug_bounds("worktree_files_empty").is_none(),
-            "a worktree with counts must never read as having no changes"
-        );
-        assert!(
             cx.debug_bounds("worktree_file_94_0").is_none(),
             "no rows until the files arrive"
         );
     }
 
-    /// A worktree that reports no files still renders as itself rather than
-    /// falling through to the commit views.
+    /// A worktree with no files at all is not a state the scan can produce -- it
+    /// only reports worktrees `is_dirty` holds for -- but the pane must still be
+    /// the worktree's own rather than falling through to the commit views.
     #[gpui::test]
-    fn a_worktree_with_no_files_reads_as_empty(cx: &mut gpui::TestAppContext) {
+    fn a_worktree_with_no_files_still_owns_the_pane(cx: &mut gpui::TestAppContext) {
         let cx = draw_worktree(cx, RepoId(92), Vec::new(), Vec::new(), true);
 
         assert!(cx.debug_bounds("worktree_uncommitted_body").is_some());
-        assert!(cx.debug_bounds("worktree_files_empty").is_some());
     }
 }

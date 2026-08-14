@@ -1437,13 +1437,19 @@ fn index_of<'a>(
 }
 
 /// Caches the interleaving of synthetic rows into the commit list. Rebuilt
-/// whenever the commit set, the dirty-worktree scan, or the working-tree row's
+/// whenever the base cache, the dirty-worktree scan, or the working-tree row's
 /// visibility changes.
+///
+/// The key is the base cache's whole request, not just its `log_fingerprint`:
+/// the anchors are `visible_ix_by_commit` lookups, and that map is rebuilt for
+/// every field of the request. Filtering stash helper commits out renumbers the
+/// page without touching the fingerprint, so a fingerprint-only key hands back
+/// anchors pointing at the pre-filter indices -- worktree rows above the wrong
+/// commit, and blank gaps wherever the stale index ran off the end of
+/// `graph_rows`.
 #[derive(Clone, Debug)]
 pub(super) struct HistoryListPlanCache {
-    pub(super) repo_id: RepoId,
-    pub(super) log_fingerprint: u64,
-    pub(super) history_scope: LogScope,
+    pub(super) base_request: HistoryBaseCacheRequest,
     pub(super) worktrees_rev: u64,
     pub(super) worktree_dirty_rev: u64,
     pub(super) show_working_tree_summary_row: bool,

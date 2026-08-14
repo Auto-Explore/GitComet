@@ -3230,3 +3230,98 @@ fn hovering_a_repository_that_is_not_open_yet_reads_nothing() {
         "and nothing is recorded as being fetched"
     );
 }
+
+/// The multi-worktree scan is the most expensive thing the watcher can queue: a
+/// full `status` walk of every *other* linked worktree, which (see the known gix
+/// behaviour) does not honour the global gitignore and so traverses an un-ignored
+/// `target/` or `node_modules/` in full. What keeps that off the hot path is that
+/// the index is classified apart from the rest of the git dir: staging or
+/// unstaging writes `.git/index` and nothing else, which cannot change any other
+/// worktree's status and must not cost a scan. A linked worktree's own index
+/// lives at `.git/worktrees/<name>/index`, which is *not* `is_git_index_path`, so
+/// it still arrives as a git-state change and still earns one.
+#[test]
+fn an_index_only_change_does_not_rescan_the_other_worktrees() {
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id,
+            spec: RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+            repo: Arc::new(DummyRepo::new("/tmp/repo")),
+        }),
+    );
+
+    let scans = |effects: &[Effect]| {
+        effects
+            .iter()
+            .filter(
+                |e| matches!(e, Effect::LoadWorktreeDirty { repo_id: id, .. } if *id == repo_id),
+            )
+            .count()
+    };
+
+    // The open-repo refresh already queued one; let it finish so the in-flight
+    // guard is not what makes the next assertion pass.
+    let settle = |repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+                  state: &mut AppState,
+                  id_alloc: &AtomicU64| {
+        reduce(
+            repos,
+            id_alloc,
+            state,
+            Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                repo_id,
+                result: Ok(Vec::new()),
+            }),
+        );
+    };
+    settle(&mut repos, &mut state, &id_alloc);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Index,
+        },
+    );
+    assert_eq!(
+        scans(&effects),
+        0,
+        "an index write cannot change another worktree's status, so it must not \
+         queue a walk of every one of them"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert_eq!(
+        scans(&effects),
+        1,
+        "a git-state change can move another worktree's HEAD or index, so it still \
+         earns exactly one scan"
+    );
+    settle(&mut repos, &mut state, &id_alloc);
+}

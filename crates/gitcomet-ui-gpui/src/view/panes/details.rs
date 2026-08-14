@@ -933,7 +933,7 @@ impl DetailsPaneView {
         let staged = summary.staged.iter().map(|f| (f, DiffArea::Staged));
         let unstaged = summary.unstaged.iter().map(|f| (f, DiffArea::Unstaged));
         let mut files = Vec::with_capacity(summary.staged.len() + summary.unstaged.len());
-        let mut entries = Vec::with_capacity(files.capacity());
+        let mut entries = Vec::with_capacity(summary.staged.len() + summary.unstaged.len());
         for (file, area) in staged.chain(unstaged) {
             files.push(gitcomet_core::domain::CommitFileChange {
                 path: file.path.clone(),

@@ -626,13 +626,18 @@ enum HistoryLaneAnchor {
     Worktree { head: CommitId, on_branch: bool },
 }
 
+/// Keyed on the base cache's whole request rather than its `log_fingerprint`:
+/// the answer is read out of `graph_rows`, which is recomputed for every field
+/// of that request. Creating, deleting or checking out a branch changes which
+/// rows `force_branch_head_lane` fires on and so which colour index each lane
+/// draws, all without touching the fingerprint — a fingerprint-only key would
+/// keep saturating the lane the selection used to be on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct HistorySelectedLaneColorCache {
-    repo_id: RepoId,
-    log_fingerprint: u64,
+    base_request: HistoryBaseCacheRequest,
     anchor: HistoryLaneAnchor,
     /// `None` when the anchor is not on screen — then no lane is highlighted.
-    color_ix: Option<history_graph::LaneColorIx>,
+    lane: Option<crate::view::rows::history_graph_paint::SelectedLane>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1935,21 +1940,22 @@ impl HistoryView {
 use gitcomet_core::domain::{LogPage, LogScope, RemoteBranch, StashEntry};
 
 impl HistoryView {
-    /// Colour index of the lane the selection sits on. Every other lane — and
-    /// everything else coloured from a lane, the nodes, the message borders and
-    /// the graph fade — washes out against it.
+    /// The lane the selection sits on. Every other lane — and everything else
+    /// coloured from a lane, the nodes, the message borders and the graph fade —
+    /// washes out against it.
     ///
     /// The anchor is the selected commit, or HEAD while the uncommitted-changes
     /// row holds the selection: those changes sit on HEAD, so selecting that row
     /// lights the lane they will land on rather than leaving the list unwashed.
     /// A multi-selection has no single lane to pick, so nothing washes.
     ///
-    /// Memoised because resolving it is a scan of the page, and this is asked
-    /// once per render rather than once per row.
-    pub(in super::super) fn history_selected_lane_color_ix(
+    /// Memoised because resolving it is a scan of the page — the colour is one
+    /// lookup, but pinning it to a row span walks the lane's whole run — and this
+    /// is asked once per render rather than once per row.
+    pub(in super::super) fn history_selected_lane(
         &mut self,
         show_worktree_summary_row: bool,
-    ) -> Option<history_graph::LaneColorIx> {
+    ) -> Option<crate::view::rows::history_graph_paint::SelectedLane> {
         if !self.history_highlight_commit_chain {
             return None;
         }
@@ -1994,39 +2000,50 @@ impl HistoryView {
             .history_cache
             .as_ref()
             .filter(|cache| cache.base.request.repo_id == repo_id)?;
-        let log_fingerprint = cache.base.request.log_fingerprint;
+        let base_request = &cache.base.request;
 
         if let Some(memo) = &self.history_selected_lane_color_cache
-            && memo.repo_id == repo_id
-            && memo.log_fingerprint == log_fingerprint
+            && memo.base_request == *base_request
             && memo.anchor == anchor
         {
-            return memo.color_ix;
+            return memo.lane;
         }
 
         let (head, on_branch) = match &anchor {
             HistoryLaneAnchor::Commit(head) => (head, None),
             HistoryLaneAnchor::Worktree { head, on_branch } => (head, Some(*on_branch)),
         };
-        let color_ix = cache
+        let lane = cache
             .base
             .visible_ix_by_commit
             .get(head)
-            .and_then(|visible_ix| cache.base.graph_rows.get(*visible_ix))
-            .map(|row| match on_branch {
-                Some(on_branch) => {
-                    crate::view::rows::history_graph_paint::band_node_for(row, on_branch).color_ix
-                }
-                None => row.node_color_ix,
+            .copied()
+            .and_then(|anchor_row| {
+                let row = cache.base.graph_rows.get(anchor_row)?;
+                let color_ix = match on_branch {
+                    Some(on_branch) => {
+                        crate::view::rows::history_graph_paint::band_node_for(row, on_branch)
+                            .color_ix
+                    }
+                    None => row.node_color_ix,
+                };
+                // The colour alone would also match unrelated lanes elsewhere on
+                // the page that recycled the index; this resolves it to the one
+                // lane's row span.
+                crate::view::rows::history_graph_paint::selected_lane_at(
+                    &cache.base.graph_rows,
+                    anchor_row,
+                    color_ix,
+                )
             });
 
+        let base_request = base_request.clone();
         self.history_selected_lane_color_cache = Some(HistorySelectedLaneColorCache {
-            repo_id,
-            log_fingerprint,
+            base_request,
             anchor,
-            color_ix,
+            lane,
         });
-        color_ix
+        lane
     }
 
     /// Builds (or reuses) the mapping from list indices to rows.
@@ -2044,7 +2061,6 @@ impl HistoryView {
             return HistoryListPlan::new(show_working_tree_summary_row, Vec::new());
         };
         let repo_id = repo.id;
-        let history_scope = repo.history_state.history_scope;
         let worktrees_rev = repo.worktrees_rev;
         let worktree_dirty_rev = repo.worktree_dirty_rev;
 
@@ -2056,12 +2072,10 @@ impl HistoryView {
             self.history_list_plan_cache = None;
             return HistoryListPlan::new(show_working_tree_summary_row, Vec::new());
         };
-        let log_fingerprint = cache.base.request.log_fingerprint;
+        let base_request = &cache.base.request;
 
         if let Some(cached) = &self.history_list_plan_cache
-            && cached.repo_id == repo_id
-            && cached.log_fingerprint == log_fingerprint
-            && cached.history_scope == history_scope
+            && cached.base_request == *base_request
             && cached.worktrees_rev == worktrees_rev
             && cached.worktree_dirty_rev == worktree_dirty_rev
             && cached.show_working_tree_summary_row == show_working_tree_summary_row
@@ -2095,10 +2109,11 @@ impl HistoryView {
         })();
 
         let plan = HistoryListPlan::new(show_working_tree_summary_row, anchors);
+        // Cloned here rather than up front so a cache hit -- the common case, once
+        // per render -- costs a comparison and nothing else.
+        let base_request = base_request.clone();
         self.history_list_plan_cache = Some(HistoryListPlanCache {
-            repo_id,
-            log_fingerprint,
-            history_scope,
+            base_request,
             worktrees_rev,
             worktree_dirty_rev,
             show_working_tree_summary_row,
@@ -4524,6 +4539,275 @@ mod tests {
                 );
             });
         });
+    }
+
+    /// The commit set never changes here -- only the stash list does -- so the
+    /// log fingerprint is identical across both halves of this test. That is the
+    /// point: the plan's anchors are `visible_ix_by_commit` lookups, and that map
+    /// is renumbered when stash helper commits are filtered out of the page. A
+    /// plan cache keyed on the fingerprint alone hands back the pre-filter
+    /// indices, which puts every worktree row above the wrong commit and leaves a
+    /// blank gap wherever the stale index ran past the end of `graph_rows`.
+    #[gpui::test]
+    fn a_stash_list_arriving_replans_the_worktree_rows(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let worktree_path = PathBuf::from("/tmp/history-stash-replan/linked");
+        // `helper` is the stash's second parent, so it disappears from the page
+        // once the stash list names `wip` as a stash tip. `base` -- the commit the
+        // worktree is anchored on -- moves up a row when it does.
+        let page = Arc::new(log_page(
+            vec![
+                commit("wip", &["base", "helper"], "stash push"),
+                commit("helper", &["base"], "index on main"),
+                commit("base", &[], "base"),
+            ],
+            None,
+        ));
+
+        let state_with_stashes = |stashes: Vec<StashEntry>, stashes_rev: u64| {
+            let mut repo = RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("/tmp/history-stash-replan"),
+                },
+            );
+            repo.history_state.history_scope = LogScope::AllBranches;
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.head_branch_rev = 1;
+            repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "wip")]));
+            repo.branches_rev = 1;
+            repo.log = Loadable::Ready(Arc::clone(&page));
+            repo.log_rev = 1;
+            repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+            repo.history_state.log_rev = 1;
+            repo.stashes = Loadable::Ready(Arc::new(stashes));
+            repo.stashes_rev = stashes_rev;
+            repo.worktree_dirty = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::WorktreeDirtySummary {
+                    path: worktree_path.clone(),
+                    head: Some(CommitId("base".into())),
+                    branch: Some("side".into()),
+                    detached: false,
+                    added: 1,
+                    modified: 0,
+                    deleted: 0,
+                    staged: Vec::new(),
+                    unstaged: Vec::new(),
+                },
+            ]));
+            repo.worktree_dirty_rev = 1;
+            Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(RepoId(1)),
+                ..Default::default()
+            })
+        };
+
+        /// The visible row `base` renders on, and the list row its worktree
+        /// sits on, read back after the cache has settled at `visible_len` rows.
+        fn anchored_rows(
+            cx: &mut gpui::VisualTestContext,
+            view: &gpui::Entity<GitCometView>,
+            visible_len: usize,
+        ) -> (usize, usize, usize) {
+            wait_until(cx, "history cache to match the stash list", |cx| {
+                cx.update(|_window, app| {
+                    let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                    history_view
+                        .read(app)
+                        .history_cache
+                        .as_ref()
+                        .is_some_and(|cache| cache.base.row_vms.len() == visible_len)
+                })
+            });
+
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view.update(app, |history, _cx| {
+                    let plan = history.ensure_history_list_plan();
+                    let base_visible_ix = history
+                        .history_cache
+                        .as_ref()
+                        .expect("cache")
+                        .base
+                        .visible_ix_by_commit
+                        .get(&CommitId("base".into()))
+                        .copied()
+                        .expect("the anchored commit is on screen");
+                    (
+                        base_visible_ix,
+                        plan.list_ix_for_worktree(0)
+                            .expect("the dirty worktree keeps its row"),
+                        plan.list_ix_for_visible(base_visible_ix),
+                    )
+                })
+            })
+        }
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(cx, &view, state_with_stashes(Vec::new(), 1));
+        let (before_visible_ix, before_worktree_ix, before_commit_ix) = anchored_rows(cx, &view, 3);
+        assert_eq!(
+            before_visible_ix, 2,
+            "with no stashes every commit is on screen"
+        );
+        assert_eq!(
+            before_worktree_ix + 1,
+            before_commit_ix,
+            "the worktree row sits directly above the commit it is anchored on"
+        );
+
+        ensure_history_cache_for_tests(
+            cx,
+            &view,
+            state_with_stashes(
+                vec![StashEntry {
+                    index: 0,
+                    id: CommitId("wip".into()),
+                    message: "WIP on main: base".into(),
+                    created_at: None,
+                }],
+                2,
+            ),
+        );
+        let (after_visible_ix, after_worktree_ix, after_commit_ix) = anchored_rows(cx, &view, 2);
+        assert_eq!(
+            after_visible_ix, 1,
+            "the stash helper commit must have been filtered out of the page"
+        );
+        assert_eq!(
+            after_worktree_ix + 1,
+            after_commit_ix,
+            "the replanned worktree row must follow its commit up the renumbered page"
+        );
+    }
+
+    /// The lane colour is read out of `graph_rows`, which `force_branch_head_lane`
+    /// reshapes whenever the branch list changes -- again without touching the log
+    /// fingerprint. A fingerprint-keyed memo keeps saturating whichever lane held
+    /// that colour index before the branch appeared.
+    #[gpui::test]
+    fn a_new_branch_recolours_the_selected_lane(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        // `behind` sits on the main lane. Pointing a branch at it makes
+        // `force_branch_head_lane` fork a whisker lane for the head, and that fork
+        // takes a palette slot -- so `other`, whose lane is born on the row *below*
+        // it, draws a different colour than it did before the branch existed.
+        let page = Arc::new(log_page(
+            vec![
+                commit("tip", &["behind"], "tip"),
+                commit("behind", &["base"], "behind"),
+                commit("other", &["base"], "other"),
+                commit("base", &[], "base"),
+            ],
+            None,
+        ));
+
+        let state_with_branches = |branches: Vec<Branch>, branches_rev: u64| {
+            let mut repo = RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("/tmp/history-lane-recolour"),
+                },
+            );
+            repo.history_state.history_scope = LogScope::AllBranches;
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.head_branch_rev = 1;
+            repo.branches = Loadable::Ready(Arc::new(branches));
+            repo.branches_rev = branches_rev;
+            repo.log = Loadable::Ready(Arc::clone(&page));
+            repo.log_rev = 1;
+            repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+            repo.history_state.log_rev = 1;
+            repo.history_state.selected_commit = Some(CommitId("other".into()));
+            Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(RepoId(1)),
+                ..Default::default()
+            })
+        };
+
+        fn selected_lane_colour(
+            cx: &mut gpui::VisualTestContext,
+            view: &gpui::Entity<GitCometView>,
+        ) -> (
+            Option<crate::view::rows::history_graph_paint::SelectedLane>,
+            Option<crate::view::rows::history_graph_paint::SelectedLane>,
+        ) {
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view.update(app, |history, _cx| {
+                    let memoised = history.history_selected_lane(false);
+                    // The same answer computed from scratch. The memo is the only
+                    // thing that can make these two disagree.
+                    history.history_selected_lane_color_cache = None;
+                    let fresh = history.history_selected_lane(false);
+                    (memoised, fresh)
+                })
+            })
+        }
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(
+            cx,
+            &view,
+            state_with_branches(vec![branch("main", "tip")], 1),
+        );
+        wait_until(cx, "history cache for the unbranched graph", |cx| {
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view
+                    .read(app)
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.request.branches_rev == 1)
+            })
+        });
+        let (before, before_fresh) = selected_lane_colour(cx, &view);
+        assert_eq!(before, before_fresh, "the memo must start out agreeing");
+        let before = before.expect("the selected commit is on a lane");
+
+        ensure_history_cache_for_tests(
+            cx,
+            &view,
+            state_with_branches(vec![branch("main", "tip"), branch("behind", "behind")], 2),
+        );
+        wait_until(cx, "history cache for the branched graph", |cx| {
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view
+                    .read(app)
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.request.branches_rev == 2)
+            })
+        });
+        let (after, after_fresh) = selected_lane_colour(cx, &view);
+        let after_fresh = after_fresh.expect("the selected commit is still on a lane");
+        assert_ne!(
+            before.color_ix, after_fresh.color_ix,
+            "fixture must actually recolour the selected lane, or this test proves \
+             nothing about the memo"
+        );
+        assert_eq!(
+            after,
+            Some(after_fresh),
+            "the memo must be reissued when the graph it read is rebuilt"
+        );
     }
 
     #[gpui::test]

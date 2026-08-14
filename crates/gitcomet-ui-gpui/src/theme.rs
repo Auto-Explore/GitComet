@@ -291,6 +291,14 @@ impl GraphLanePalette {
         &self.colors[..len]
     }
 
+    /// A palette shorter than [`GRAPH_LANE_PALETTE_SIZE`], for tests that need
+    /// [`color_at`](Self::color_at) to actually wrap. Leaked because
+    /// [`AppTheme::graph_lane_palette`] is a `&'static`.
+    #[cfg(test)]
+    pub(crate) fn leaked_for_test(colors: &[Rgba]) -> &'static Self {
+        Box::leak(Box::new(Self::from_rgba_slice(colors)))
+    }
+
     /// Colour for a lane index, wrapping at the palette's own length.
     ///
     /// A custom theme may supply fewer than [`GRAPH_LANE_PALETTE_SIZE`] colours,

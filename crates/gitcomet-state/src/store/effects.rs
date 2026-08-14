@@ -5,6 +5,10 @@ mod repo_commands;
 mod repo_load;
 mod util;
 
+/// Called by the reducer as it drops a repo's handle, so the worktree scan's
+/// cached repository handles go with it. See [`repo_load`].
+pub(super) use repo_load::release_worktree_scan_handles;
+
 use crate::model::AppState;
 use crate::msg::{Effect, Msg, RepoActionKind, RepoCommandKind};
 use crate::session;

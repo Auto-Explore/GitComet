@@ -1133,16 +1133,15 @@ pub(super) fn retire_orphaned_worktree_diffs(state: &mut AppState) {
             continue;
         }
 
-        // The same set every other retire site clears, so no pane is left holding
-        // decoded bytes or text belonging to the file that just went away.
+        // Exactly what `CloseInlineSubmoduleDiff` clears, and no more. The inline
+        // diff carries its own `diff`/`diff_file`/`diff_file_image` inside
+        // `InlineSubmoduleDiffState`, so dropping it drops every loadable it ever
+        // owned. `diff_target` and the diff-state loadables beside it belong to
+        // the commit or working-tree file selected *behind* the inline diff --
+        // opening one never touched them -- and the pane falls back to that file
+        // once the inline diff is gone. Clearing them here blanked the pane
+        // instead.
         repo_state.diff_state.inline_submodule_diff = None;
-        repo_state.set_diff_target(None);
-        repo_state.diff_state.diff = Loadable::NotLoaded;
-        repo_state.diff_state.diff_file = Loadable::NotLoaded;
-        repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-        repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-        repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
-        super::actions_emit_effects::invalidate_loaded_blame(repo_state);
         repo_state.bump_diff_state_rev();
     }
 }
@@ -1509,7 +1508,14 @@ pub(super) fn load_worktree_dirty(state: &mut AppState, repo_id: RepoId) -> Vec<
 ///
 /// The watcher-driven trigger fires on every git-state flush, and a full scan
 /// runs `status` on every other worktree, so what bounds the cost is worth
-/// spelling out: the monitor debounces raw events at 250ms with a 2s ceiling
+/// spelling out. First, what does *not* reach here: `.git/index` is classified
+/// as `RepoExternalChange::Index`, not `git_state` (`repo_monitor.rs`,
+/// `is_git_index_path`), so the common edit-stage-unstage loop -- which writes
+/// nothing else -- costs no scan at all. A linked worktree's own index sits at
+/// `.git/worktrees/<name>/index` and is deliberately outside that test, so
+/// changes there do still arrive as git-state and do still earn a scan.
+/// Then, for what does reach here: the monitor debounces raw events at 250ms
+/// with a 2s ceiling
 /// (`repo_monitor.rs`), and `request` admits at most one scan in flight plus one
 /// queued. A storm therefore costs one scan at a time, never a growing queue,
 /// and always ends with one trailing scan — dropping the queued repeat instead
