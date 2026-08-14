@@ -1242,13 +1242,12 @@ fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<HashMap<String, Ru
     };
 
     let signature = runtime_themes_dir_signature(&dir);
-    let cache = RUNTIME_THEME_CACHE.get_or_init(|| Mutex::new(None));
+    let cache = RUNTIME_THEME_CACHE.get_or_init(|| Mutex::new(HashMap::default()));
     {
         let cached = cache
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(cached) = cached.as_ref()
-            && cached.dir == dir
+        if let Some(cached) = cached.get(&dir)
             && cached.signature == signature
         {
             return Arc::clone(&cached.themes);
@@ -1259,21 +1258,34 @@ fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<HashMap<String, Ru
     let mut cached = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    *cached = Some(RuntimeThemeCache {
+    // The app only ever asks for the one user theme directory, so this map holds
+    // a single entry in practice; the bound only keeps tests -- which each hand
+    // in their own temp directory -- from growing it without limit.
+    if cached.len() >= MAX_CACHED_RUNTIME_THEME_DIRS && !cached.contains_key(&dir) {
+        cached.clear();
+    }
+    cached.insert(
         dir,
-        signature,
-        themes: Arc::clone(&themes),
-    });
+        RuntimeThemeCache {
+            signature,
+            themes: Arc::clone(&themes),
+        },
+    );
     themes
 }
 
 struct RuntimeThemeCache {
-    dir: PathBuf,
     signature: u64,
     themes: Arc<HashMap<String, RuntimeThemeSpec>>,
 }
 
-static RUNTIME_THEME_CACHE: OnceLock<Mutex<Option<RuntimeThemeCache>>> = OnceLock::new();
+/// One entry per theme directory, rather than a single slot: a single slot is
+/// evicted by any interleaved load of a *different* directory, which would drop
+/// the memoization the settings dropdown depends on the moment anything else
+/// asks for themes elsewhere.
+static RUNTIME_THEME_CACHE: OnceLock<Mutex<HashMap<PathBuf, RuntimeThemeCache>>> = OnceLock::new();
+
+const MAX_CACHED_RUNTIME_THEME_DIRS: usize = 16;
 
 /// Identity of the theme directory's contents: every `.json` file's name, size
 /// and modification time. Stat-only, so validating the cache costs a directory
