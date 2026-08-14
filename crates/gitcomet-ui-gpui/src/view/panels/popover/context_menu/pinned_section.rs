@@ -38,8 +38,13 @@ pub(super) fn model(
         ),
         shortcut: None,
         disabled: false,
-        action: Box::new(ContextMenuAction::ToggleSidebarCollapseKey {
+        // Set, not toggle: under a live filter the label is computed from the
+        // force-expanded row while the stored key still says collapsed, and a
+        // flip would clear that key — leaving the section expanded once the
+        // filter clears, the opposite of the "Collapse" the user clicked.
+        action: Box::new(ContextMenuAction::SetSidebarCollapseKey {
             collapse_key: collapse_key.into(),
+            collapsed: !collapsed,
         }),
     });
 

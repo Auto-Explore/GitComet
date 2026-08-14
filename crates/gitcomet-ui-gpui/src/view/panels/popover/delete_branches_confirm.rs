@@ -1,7 +1,5 @@
 use super::*;
-
-/// How many branch names the dialog spells out before summarising the rest.
-const LISTED_NAMES: usize = 8;
+use gitcomet_state::name_summary::{LISTED_NAMES, branch_noun, elide_names, elision_suffix};
 
 /// Confirms emptying a branch group.
 ///
@@ -20,7 +18,7 @@ pub(super) fn panel(
 ) -> gpui::Div {
     let theme = this.theme;
     let count = names.len();
-    let noun = if count == 1 { "branch" } else { "branches" };
+    let noun = branch_noun(count);
 
     // `group_label` is `origin/feat/` for a remote group, so naming it says both
     // which remote and which scope — "on origin" alone would read as the whole
@@ -35,11 +33,11 @@ pub(super) fn panel(
     // scroll wrapper — the buttons would end up off screen.
     let command = match (section, remote.as_deref()) {
         (BranchSection::Remote, Some(remote)) => {
-            format!("git push --delete {remote} {}", elided_names(&names))
+            format!("git push --delete {remote} {}", elide_names(&names, " "))
         }
         // Both buttons are previewed, since the adjacent Force delete runs the
         // other one and a lone `-d` would read as "this cannot destroy work".
-        _ => format!("git branch -d|-D {}", elided_names(&names)),
+        _ => format!("git branch -d|-D {}", elide_names(&names, " ")),
     };
 
     let dialog = ConfirmDialog::new(title, DIALOG_420_WIDTH)
@@ -123,17 +121,9 @@ pub(super) fn panel(
     }
 }
 
-/// The branch names for a one-line command preview, capped like the list above.
-fn elided_names(names: &[String]) -> String {
-    if names.len() <= LISTED_NAMES {
-        return names.join(" ");
-    }
-    let rest = names.len() - LISTED_NAMES;
-    format!("{} …+{rest}", names[..LISTED_NAMES].join(" "))
-}
-
 /// The branches about to go, capped so a large group cannot push the buttons
-/// off screen.
+/// off screen. Shares its cap and its overflow wording with the command preview
+/// above and with the failure toast a partial delete produces.
 fn name_list(theme: AppTheme, names: &[String]) -> gpui::Div {
     let mut list = div()
         .px_2()
@@ -151,9 +141,8 @@ fn name_list(theme: AppTheme, names: &[String]) -> gpui::Div {
                 .child(name.clone()),
         );
     }
-    if names.len() > LISTED_NAMES {
-        let rest = names.len() - LISTED_NAMES;
-        list = list.child(div().child(format!("…and {rest} more")));
+    if let Some(suffix) = elision_suffix(names.len()) {
+        list = list.child(div().child(suffix));
     }
     list
 }

@@ -88,6 +88,15 @@ pub(in crate::view) enum ContextMenuAction {
     ToggleSidebarCollapseKey {
         collapse_key: SharedString,
     },
+    /// Drive one sidebar collapse key to an explicit state.
+    ///
+    /// For rows whose rendered state can diverge from the stored key — a live
+    /// branch filter force-expands the pinned sections — where a flip would
+    /// move the key the opposite way from what the entry's label promised.
+    SetSidebarCollapseKey {
+        collapse_key: SharedString,
+        collapsed: bool,
+    },
     /// Open or close a branch group together with every group beneath it.
     SetBranchGroupCollapsedRecursive {
         section: BranchSection,

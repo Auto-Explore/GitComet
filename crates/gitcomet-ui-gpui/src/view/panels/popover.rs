@@ -2238,7 +2238,7 @@ impl PopoverHost {
         matches!(self.popover, Some(PopoverKind::CreateTagPrompt { .. }))
             && self
                 .create_tag_input
-                .read_with(cx, |input, _| !input.text().trim().is_empty())
+                .read_with(cx, |input, _| is_submittable_branch_name(input.text()))
     }
 
     fn can_submit_clone_repo(&self, cx: &mut gpui::Context<Self>) -> bool {
@@ -2539,7 +2539,7 @@ impl PopoverHost {
         let name = self
             .create_branch_input
             .read_with(cx, |input, _| input.text().trim().to_string());
-        if name.is_empty() {
+        if !is_submittable_branch_name(&name) {
             return;
         }
 
@@ -3555,13 +3555,15 @@ impl PopoverHost {
         let Some(repo) = self.state.repos.iter().find(|r| r.id == repo_id) else {
             return false;
         };
-        match self.collapsed_items_by_repo.get(&repo.spec.workdir) {
-            Some(items) => crate::view::branch_sidebar::is_collapsed(items, collapse_key),
-            None => crate::view::branch_sidebar::is_collapsed(
-                &std::collections::BTreeSet::new(),
-                collapse_key,
-            ),
-        }
+        // A repo with nothing stored reads the same as one with an empty set:
+        // `is_collapsed` answers from the key's own default in both cases.
+        static EMPTY: std::sync::LazyLock<std::collections::BTreeSet<String>> =
+            std::sync::LazyLock::new(std::collections::BTreeSet::new);
+        let items = self
+            .collapsed_items_by_repo
+            .get(&repo.spec.workdir)
+            .unwrap_or(&EMPTY);
+        crate::view::branch_sidebar::is_collapsed(items, collapse_key)
     }
 
     /// How many pinned branches the section is actually showing, for the pinned

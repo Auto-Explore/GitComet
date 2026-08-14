@@ -14,7 +14,7 @@ pub(super) fn model(
     remote: Option<&str>,
     path: &str,
 ) -> ContextMenuModel {
-    let member_count = member_count(this, repo_id, section, remote, path);
+    let (member_count, deletable_count) = member_counts(this, repo_id, section, remote, path);
     let filtered = this.active_branch_filter().is_some();
     let collapse_key = match section {
         BranchSection::Local => branch_sidebar::local_group_storage_key(path),
@@ -103,8 +103,6 @@ pub(super) fn model(
         });
     }
 
-    let deletable_count = deletable_count(this, repo_id, section, remote, path);
-
     // While a filter is live the group shows only its matches, so the entry
     // says so rather than implying it covers the whole group.
     let count_label = if filtered {
@@ -136,18 +134,21 @@ pub(super) fn model(
 }
 
 fn branch_count_label(count: usize) -> String {
-    if count == 1 {
-        "1 branch".to_string()
-    } else {
-        format!("{count} branches")
-    }
+    format!(
+        "{count} {}",
+        gitcomet_state::name_summary::branch_noun(count)
+    )
 }
 
 /// Visits the branches the group row is actually showing.
 ///
-/// Matching is against `"{path}/"` rather than the bare `path`, so a sibling
-/// group whose name merely starts with the same characters (`features/`
-/// against `feat/`) is never counted as a member.
+/// Prefix matching is against `"{path}/"` rather than the bare `path`, so a
+/// sibling group whose name merely starts with the same characters
+/// (`features/` against `feat/`) is never counted as a member. A branch named
+/// exactly `path` is a member too: with both `feat` and `feat/a` present the
+/// tree renders the `feat/` group header and then `feat` itself as a row
+/// *inside* it, so a prefix-only test would skip a branch the user can see in
+/// the folder.
 ///
 /// The sidebar's branch filter is applied here too. The tree filters branch
 /// names *before* building the group tree, so a filtered `feat/` row lists only
@@ -177,7 +178,7 @@ fn for_each_member(
                 return;
             };
             for branch in branches.iter() {
-                if branch.name.starts_with(needle.as_str())
+                if is_group_member(&branch.name, path, &needle)
                     && branch_sidebar::branch_matches_raw_filter(&branch.name, filter)
                 {
                     visit(&branch.name);
@@ -193,7 +194,7 @@ fn for_each_member(
             };
             for branch in branches.iter() {
                 if branch.remote == remote
-                    && branch.name.starts_with(needle.as_str())
+                    && is_group_member(&branch.name, path, &needle)
                     && branch_sidebar::remote_branch_matches_raw_filter(
                         remote,
                         &branch.name,
@@ -207,16 +208,11 @@ fn for_each_member(
     }
 }
 
-fn member_count(
-    this: &PopoverHost,
-    repo_id: RepoId,
-    section: BranchSection,
-    remote: Option<&str>,
-    path: &str,
-) -> usize {
-    let mut count = 0;
-    for_each_member(this, repo_id, section, remote, path, |_| count += 1);
-    count
+/// Whether `name` is one of the rows the `path` group renders: anything beneath
+/// it, plus the branch named exactly `path`, which the tree draws as the group's
+/// own first child.
+fn is_group_member(name: &str, path: &str, needle: &str) -> bool {
+    name == path || name.starts_with(needle)
 }
 
 /// Whether a member is one the batch delete may touch.
@@ -228,21 +224,28 @@ fn is_deletable(section: BranchSection, name: &str, current_branch: Option<&str>
     section == BranchSection::Remote || Some(name) != current_branch
 }
 
-fn deletable_count(
+/// `(members, deletable)` in one walk.
+///
+/// Both numbers go into the same menu model, and that model is rebuilt on every
+/// repaint while the menu is open — walking a few thousand branch names twice
+/// per frame to render two counts is the waste this module already avoids for
+/// the name list.
+fn member_counts(
     this: &PopoverHost,
     repo_id: RepoId,
     section: BranchSection,
     remote: Option<&str>,
     path: &str,
-) -> usize {
+) -> (usize, usize) {
     let current_branch = current_branch_name(this, repo_id);
-    let mut count = 0;
+    let (mut members, mut deletable) = (0, 0);
     for_each_member(this, repo_id, section, remote, path, |name| {
+        members += 1;
         if is_deletable(section, name, current_branch) {
-            count += 1;
+            deletable += 1;
         }
     });
-    count
+    (members, deletable)
 }
 
 /// The member list the delete confirmation acts on, resolved once when the

@@ -52,12 +52,6 @@ pub(super) fn branch_pin_storage_key(section: BranchSection, name: &str) -> Stri
     key
 }
 
-/// Which section a stored pin key belongs to, for callers that act on a whole
-/// section and do not care which branch each key names.
-pub(super) fn branch_pin_key_section(key: &str) -> Option<BranchSection> {
-    parse_branch_pin_key(key).map(|(section, _)| section)
-}
-
 /// Whether a stored pin key would render a row in `section`.
 ///
 /// The row builder drops a pin whose branch no longer exists and one the branch
@@ -1994,12 +1988,14 @@ mod tests {
     }
 
     #[test]
-    fn branch_pin_key_section_round_trips_both_sections() {
+    fn branch_pin_key_round_trips_both_sections() {
         for section in [BranchSection::Local, BranchSection::Remote] {
             let key = branch_pin_storage_key(section, "feat/a");
-            assert_eq!(branch_pin_key_section(&key), Some(section));
+            assert_eq!(parse_branch_pin_key(&key), Some((section, "feat/a")));
         }
-        assert_eq!(branch_pin_key_section("garbage"), None);
+        // An unknown prefix is ignored rather than mis-rendered, so a stale key
+        // from an older session cannot claim a section.
+        assert_eq!(parse_branch_pin_key("garbage"), None);
     }
     use super::*;
     use gitcomet_core::domain::{

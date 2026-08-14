@@ -15,10 +15,14 @@ pub(super) fn model(
     let source = repo
         .map(|repo| repo.file_browser.source.clone())
         .unwrap_or_default();
+    // `Arc<PathBuf>` borrows as `PathBuf` but not as `Path`, so a caller holding
+    // a `&Path` has to hand the set an owned copy. Only the `PathBuf` though —
+    // wrapping it in an `Arc` as well would allocate a control block per repaint
+    // to answer one lookup, and the set never sees the `Arc`.
     let is_expanded = repo.is_some_and(|repo| {
         repo.file_browser
             .expanded_dirs
-            .contains(&std::sync::Arc::new(path.to_path_buf()))
+            .contains(&path.to_path_buf())
     });
     // While a search filters the tree, every directory renders force-expanded
     // and `expanded_dirs` is ignored entirely — the reducer freezes the set for

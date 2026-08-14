@@ -1468,12 +1468,25 @@ pub(super) fn reveal_file_browser_path(
 /// The search input is multiline and stores what was typed verbatim, so a lone
 /// space is a non-empty query that filters nothing. Mirrors the view's
 /// `file_browser_search_is_active`.
+fn file_browser_query_filters(query: &str) -> bool {
+    query.lines().any(|line| !line.trim().is_empty())
+}
+
+fn file_browser_is_filtered(repo_state: &RepoState) -> bool {
+    file_browser_query_filters(&repo_state.file_browser.search_query)
+}
+
 #[cfg(test)]
 mod file_browser_filter_tests {
+    use super::file_browser_query_filters;
+
     /// The same table the view asserts in
     /// `file_browser_search_predicate_agrees_with_the_renderers_matchers`.
     /// The predicate lives in both crates and cannot be shared, so the two
     /// tables are what keep them from drifting: change one, change both.
+    ///
+    /// Calls the real predicate rather than restating it: a copy here would
+    /// stay green through exactly the drift it exists to catch.
     #[test]
     fn filtered_predicate_matches_the_views_table() {
         for (query, expected) in [
@@ -1487,18 +1500,13 @@ mod file_browser_filter_tests {
             ("\na", true),
             ("#comment", true),
         ] {
-            let filtered = query.lines().any(|line| !line.trim().is_empty());
-            assert_eq!(filtered, expected, "disagreement for {query:?}");
+            assert_eq!(
+                file_browser_query_filters(query),
+                expected,
+                "disagreement for {query:?}"
+            );
         }
     }
-}
-
-fn file_browser_is_filtered(repo_state: &RepoState) -> bool {
-    repo_state
-        .file_browser
-        .search_query
-        .lines()
-        .any(|line| !line.trim().is_empty())
 }
 
 pub(super) fn toggle_file_browser_dir(
@@ -1536,6 +1544,12 @@ pub(super) fn set_file_browser_dir_expanded_recursive(
     path: PathBuf,
     expanded: bool,
 ) -> Vec<Effect> {
+    // `Path::starts_with("")` is true of every path, so an empty path would
+    // reach the whole tree and a collapse would wipe `expanded_dirs` outright.
+    // The branch-group sibling guards this the same way.
+    if path.as_os_str().is_empty() {
+        return Vec::new();
+    }
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };

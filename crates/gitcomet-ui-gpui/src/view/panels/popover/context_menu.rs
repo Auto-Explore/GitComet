@@ -653,10 +653,18 @@ impl PopoverHost {
                     .dispatch(Msg::ToggleFileBrowserDir { repo_id, path });
             }
             // The branch tree's collapse state is view-owned rather than a
-            // store message, so these three go through the sidebar pane.
+            // store message, so these four go through the sidebar pane.
             ContextMenuAction::ToggleSidebarCollapseKey { collapse_key } => {
                 self.sidebar_pane.update(cx, |pane, cx| {
                     pane.toggle_active_repo_collapse_key(collapse_key, cx);
+                });
+            }
+            ContextMenuAction::SetSidebarCollapseKey {
+                collapse_key,
+                collapsed,
+            } => {
+                self.sidebar_pane.update(cx, |pane, cx| {
+                    pane.set_active_repo_collapse_key(collapse_key, collapsed, cx);
                 });
             }
             ContextMenuAction::SetBranchGroupCollapsedRecursive {

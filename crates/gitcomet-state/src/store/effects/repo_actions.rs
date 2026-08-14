@@ -349,6 +349,10 @@ pub(super) fn schedule_delete_branches(
 /// Carries git's own first error: "not fully merged" is the common cause but
 /// not the only one — a branch checked out in a linked worktree fails too, and
 /// pointing that user at Force delete would send them round the same loop.
+///
+/// The name list is elided through [`crate::name_summary`], so this toast stops
+/// at the same count and in the same words as the confirm dialog that produced
+/// the delete.
 fn delete_branches_failure_message(
     total: usize,
     failed: &[String],
@@ -356,18 +360,9 @@ fn delete_branches_failure_message(
     first_error: Option<&str>,
 ) -> String {
     let deleted = total - failed.len();
-    let mut message = format!("Deleted {deleted} of {total} branches. Failed: ");
-    const LISTED: usize = 5;
-    for (ix, name) in failed.iter().take(LISTED).enumerate() {
-        if ix > 0 {
-            message.push_str(", ");
-        }
-        message.push_str(name);
-    }
-    if failed.len() > LISTED {
-        let rest = failed.len() - LISTED;
-        message.push_str(&format!(", and {rest} more"));
-    }
+    let noun = crate::name_summary::branch_noun(total);
+    let names = crate::name_summary::elide_names(failed, ", ");
+    let mut message = format!("Deleted {deleted} of {total} {noun}. Failed: {names}");
     if let Some(error) = first_error.map(str::trim).filter(|error| !error.is_empty()) {
         message.push_str(&format!(". {error}"));
     }
@@ -698,14 +693,29 @@ mod delete_branches_tests {
         assert!(message.contains("branch is checked out at /tmp/wt"));
     }
 
+    /// Elided through `name_summary`, so the toast stops where the confirm
+    /// dialog's own list stopped rather than at a second, private cap.
     #[test]
     fn failure_message_truncates_a_long_failure_list() {
-        let failed: Vec<String> = (0..9).map(|ix| format!("feat/{ix}")).collect();
-        let message = delete_branches_failure_message(9, &failed, true, None);
+        let failed: Vec<String> = (0..12).map(|ix| format!("feat/{ix}")).collect();
+        let message = delete_branches_failure_message(12, &failed, true, None);
 
-        assert!(message.contains("feat/4"), "the first five are named");
-        assert!(!message.contains("feat/5"), "the rest are summarised");
-        assert!(message.contains("and 4 more"));
+        assert!(message.contains("feat/7"), "the first eight are named");
+        assert!(!message.contains("feat/8"), "the rest are summarised");
+        assert!(message.contains("…and 4 more"), "got {message}");
+    }
+
+    /// Every other count message in this flow pluralises; a one-branch group
+    /// that fails must not report "Deleted 0 of 1 branches".
+    #[test]
+    fn failure_message_is_singular_for_a_single_branch() {
+        let failed = vec!["feat/a".to_string()];
+        let message = delete_branches_failure_message(1, &failed, true, None);
+
+        assert!(
+            message.starts_with("Deleted 0 of 1 branch. Failed: feat/a"),
+            "got {message}"
+        );
     }
 
     /// A blank error string must not leave a dangling ". ." in the message.

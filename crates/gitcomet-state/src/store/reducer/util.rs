@@ -1301,12 +1301,8 @@ fn summarize_command(
             format!("Remote branch {remote}/{branch}: Deleted")
         }
         RepoCommandKind::DeleteRemoteBranches { remote, branches } => {
-            let noun = if branches.len() == 1 {
-                "remote branch"
-            } else {
-                "remote branches"
-            };
-            format!("{} {noun} on {remote}: Deleted", branches.len())
+            let noun = crate::name_summary::branch_noun(branches.len());
+            format!("{} remote {noun} on {remote}: Deleted", branches.len())
         }
         RepoCommandKind::PushTag { remote, name } => {
             if output.stderr.contains("Everything up-to-date") {

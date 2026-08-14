@@ -575,6 +575,30 @@ impl SidebarPaneView {
             .collect()
     }
 
+    /// Set the pane's mirror of the filter text directly. The real path writes
+    /// it from the filter input's subscription, which a headless test has no
+    /// way to drive.
+    #[cfg(test)]
+    pub(in crate::view) fn set_branch_filter_query_for_test(&mut self, query: &str) {
+        self.branch_filter_query = query.to_string();
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+    }
+
+    /// Seed the collapse set for the active repo. The real path restores it from
+    /// the saved session, which the test harness constructs without.
+    #[cfg(test)]
+    pub(in crate::view) fn set_collapsed_keys_for_test(&mut self, keys: &[&str]) {
+        let Some(repo) = self.active_repo() else {
+            return;
+        };
+        let repo_path = repo.spec.workdir.clone();
+        self.sidebar_collapsed_items_by_repo.insert(
+            repo_path,
+            keys.iter().map(|key| (*key).to_string()).collect(),
+        );
+        self.sidebar_presentation_cache = SidebarPresentationCache::default();
+    }
+
     pub(in super::super) fn saved_sidebar_collapsed_items(
         &self,
     ) -> BTreeMap<std::path::PathBuf, BTreeSet<String>> {
@@ -625,7 +649,14 @@ impl SidebarPaneView {
         cx.notify();
     }
 
-    /// Drop every pin in one section, leaving the other section's pins alone.
+    /// Drop the pins the section is actually showing, leaving the other
+    /// section's pins alone.
+    ///
+    /// Scoped to the rendered rows, not every key in the section: the menu
+    /// labels itself with `PopoverHost::pinned_branch_count`, which skips a
+    /// pin the branch filter excludes and one whose branch is gone. Retaining
+    /// by section alone would delete pins the user cannot see under a count
+    /// that never mentioned them.
     pub(in super::super) fn unpin_all_branches(
         &mut self,
         repo_id: RepoId,
@@ -636,12 +667,13 @@ impl SidebarPaneView {
             return;
         };
         let repo_path = repo.spec.workdir.clone();
+        let filter = self.branch_filter_query.as_str();
         let Some(items) = self.sidebar_pinned_branches_by_repo.get_mut(&repo_path) else {
             return;
         };
 
         let before = items.len();
-        items.retain(|key| branch_sidebar::branch_pin_key_section(key) != Some(section));
+        items.retain(|key| !branch_sidebar::pinned_branch_renders(repo, key, section, filter));
         if items.len() == before {
             return;
         }
@@ -715,6 +747,31 @@ impl SidebarPaneView {
         collapse_key: SharedString,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.apply_active_repo_collapse_key(collapse_key, None, cx);
+    }
+
+    /// Drive a collapse key to an explicit state instead of flipping it.
+    ///
+    /// The pinned sections render force-expanded while a branch filter is live,
+    /// no matter what the stored key says, so a menu labelling itself from the
+    /// rendered state has to send the state it means — a flip would move the
+    /// key the opposite way from the label the user clicked.
+    pub(in super::super) fn set_active_repo_collapse_key(
+        &mut self,
+        collapse_key: SharedString,
+        collapsed: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.apply_active_repo_collapse_key(collapse_key, Some(collapsed), cx);
+    }
+
+    /// Shared body of the two above: `None` flips the key, `Some` drives it.
+    fn apply_active_repo_collapse_key(
+        &mut self,
+        collapse_key: SharedString,
+        target: Option<bool>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let Some(repo) = self.active_repo() else {
             return;
         };
@@ -733,7 +790,10 @@ impl SidebarPaneView {
             .sidebar_collapsed_items_by_repo
             .entry(repo_path.clone())
             .or_default();
-        branch_sidebar::toggle_collapse_state(items, collapse_key);
+        match target {
+            Some(collapsed) => branch_sidebar::set_collapse_state(items, collapse_key, collapsed),
+            None => branch_sidebar::toggle_collapse_state(items, collapse_key),
+        }
         if items.is_empty() {
             self.sidebar_collapsed_items_by_repo.remove(&repo_path);
         }
@@ -2230,6 +2290,14 @@ impl SidebarPaneView {
                 _ => None,
             })
             .unwrap_or(&[]);
+        // A filtered tree renders every directory expanded and never reads
+        // `expanded_dirs`, so the reducer refuses the toggle. Drop the row's
+        // chevron and its click with it — a control that cannot move is worse
+        // than none, and the folder menu greys its Expand/Collapse entries for
+        // exactly the same reason. Asked of the query rather than the matchers
+        // so this tracks what the reducer will actually honour.
+        let expansion_frozen =
+            repo.is_some_and(|repo| file_browser_search_is_active(&repo.file_browser.search_query));
 
         let svg_icon = |path: &'static str, color: gpui::Rgba, size_px: f32| {
             super::super::icons::svg_icon(path, color, scaled_px(size_px))
@@ -2396,14 +2464,16 @@ impl SidebarPaneView {
                         let path = (*entry.path).clone();
                         let menu_path = path.clone();
                         row_div = row_div
-                            .on_click(cx.listener(
-                                move |_this, _e: &gpui::ClickEvent, _window, _cx| {
-                                    store.dispatch(Msg::ToggleFileBrowserDir {
-                                        repo_id,
-                                        path: path.clone(),
-                                    });
-                                },
-                            ))
+                            .when(!expansion_frozen, |row| {
+                                row.on_click(cx.listener(
+                                    move |_this, _e: &gpui::ClickEvent, _window, _cx| {
+                                        store.dispatch(Msg::ToggleFileBrowserDir {
+                                            repo_id,
+                                            path: path.clone(),
+                                        });
+                                    },
+                                ))
+                            })
                             .on_mouse_down(
                                 MouseButton::Right,
                                 cx.listener(move |this, e: &gpui::MouseDownEvent, window, cx| {
@@ -2466,7 +2536,7 @@ impl SidebarPaneView {
                     }
 
                     row_div
-                        .child(chevron_slot(is_directory, is_expanded))
+                        .child(chevron_slot(is_directory && !expansion_frozen, is_expanded))
                         .child(icon_slot(file_or_folder_icon_path(entry, is_expanded)))
                         .child({
                             let highlight_ranges =

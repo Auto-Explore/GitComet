@@ -5252,6 +5252,39 @@ fn recursive_expand_does_not_match_name_prefixes_of_sibling_folders() {
     assert!(!expanded.contains(&Arc::new(PathBuf::from("src_generated"))));
 }
 
+/// `Path::starts_with("")` is true of every path, so an empty path would sweep
+/// the whole tree — a collapse would wipe `expanded_dirs` outright rather than
+/// touching one subtree.
+#[test]
+fn recursive_collapse_of_an_empty_path_leaves_the_tree_alone() {
+    let (mut repos, id_alloc, mut state, repo_id) = state_with_file_browser_tree();
+    for path in ["other", "src", "src/nested"] {
+        state.repos[0]
+            .file_browser
+            .expanded_dirs
+            .insert(Arc::new(PathBuf::from(path)));
+    }
+    let rev_before = state.repos[0].file_browser.file_browser_rev;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetFileBrowserDirExpandedRecursive {
+            repo_id,
+            path: PathBuf::new(),
+            expanded: false,
+        },
+    );
+
+    assert_eq!(
+        state.repos[0].file_browser.expanded_dirs.len(),
+        3,
+        "an empty path names no folder, so it may not collapse every folder"
+    );
+    assert_eq!(state.repos[0].file_browser.file_browser_rev, rev_before);
+}
+
 /// A no-op must not bump the rev: the file browser's row cache is keyed on it,
 /// so a bump on every right-click would throw away the memoized row list for
 /// nothing.

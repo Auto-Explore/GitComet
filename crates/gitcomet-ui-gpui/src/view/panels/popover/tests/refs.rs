@@ -687,6 +687,16 @@ fn create_tag_prompt_enter_creates_and_closes(cx: &mut gpui::TestAppContext) {
                     !host.can_submit_create_tag(cx),
                     "expected empty create-tag input to disable Create"
                 );
+                // The button's gate and the submit's gate have to be the same
+                // predicate: git rejects a ref ending in `/`, and `submit`
+                // returns early on one — an enabled button over that input is a
+                // click that silently does nothing.
+                host.create_tag_input
+                    .update(cx, |input, cx| input.set_text("v1.0/", cx));
+                assert!(
+                    !host.can_submit_create_tag(cx),
+                    "expected a trailing-slash name to disable Create"
+                );
                 host.create_tag_input
                     .update(cx, |input, cx| input.set_text("v1.0.0", cx));
                 assert!(
