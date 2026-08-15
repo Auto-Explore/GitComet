@@ -1,9 +1,8 @@
 use super::super::*;
 use crate::view::caches::{
-    HistoryRelatedCommitsCache, HistoryRelatedCommitsCacheRequest, HistoryShortShaVm,
-    HistoryVisibleIndices, HistoryWhenVm, analyze_history_stashes,
-    build_history_branch_containment_bits, build_history_branch_ref_items_by_target,
-    build_history_branch_text_by_target, build_history_related_commit_bits,
+    HistoryListPlan, HistoryListPlanCache, HistoryShortShaVm, HistoryVisibleIndices, HistoryWhenVm,
+    HistoryWorktreeRowAnchor, analyze_history_stashes, build_history_branch_containment_bits,
+    build_history_branch_ref_items_by_target, build_history_branch_text_by_target,
     build_history_tag_names_by_target, build_history_visible_indices,
     history_ref_items_from_displayed_refs, next_history_stash_tip_for_commit_ix,
     related_commit_contains,
@@ -11,6 +10,7 @@ use crate::view::caches::{
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::hash::{Hash, Hasher};
+use std::path::PathBuf;
 
 mod history_panel;
 
@@ -607,8 +607,37 @@ struct HistorySelectedListIndexCache {
     stashes_rev: u64,
     history_scope: LogScope,
     show_working_tree_summary_row: bool,
+    /// Identity of the row interleaving the cached `list_ix` was computed
+    /// against; a worktree row appearing or moving shifts every index below it.
+    plan_fingerprint: u64,
     selected_commit: Option<CommitId>,
     list_ix: usize,
+}
+
+/// Memo for [`HistoryView::history_selected_lane_color_ix`].
+/// What the lane highlight is anchored to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum HistoryLaneAnchor {
+    /// A commit, highlighting the lane it is drawn on.
+    Commit(CommitId),
+    /// A linked worktree. Its HEAD locates the row, but the lane is the
+    /// *branch's* — which for a branch that has fallen behind is the fork lane
+    /// beside that commit rather than the commit's own.
+    Worktree { head: CommitId, on_branch: bool },
+}
+
+/// Keyed on the base cache's whole request rather than its `log_fingerprint`:
+/// the answer is read out of `graph_rows`, which is recomputed for every field
+/// of that request. Creating, deleting or checking out a branch changes which
+/// rows `force_branch_head_lane` fires on and so which colour index each lane
+/// draws, all without touching the fingerprint — a fingerprint-only key would
+/// keep saturating the lane the selection used to be on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct HistorySelectedLaneColorCache {
+    base_request: HistoryBaseCacheRequest,
+    anchor: HistoryLaneAnchor,
+    /// `None` when the anchor is not on screen — then no lane is highlighted.
+    lane: Option<crate::view::rows::history_graph_paint::SelectedLane>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -616,6 +645,10 @@ struct PendingHistoryReveal {
     repo_id: RepoId,
     commit_id: CommitId,
     fallback_scope: Option<LogScope>,
+    /// Set when the reveal is aimed at a linked worktree's row rather than the
+    /// commit itself. The commit is still what gets located — the row sits
+    /// directly above it — but the selection and the scroll land on the row.
+    worktree_path: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -651,14 +684,15 @@ fn history_selected_list_index_cache_matches(
     log_rev: u64,
     stashes_rev: u64,
     history_scope: LogScope,
-    show_working_tree_summary_row: bool,
+    plan: &HistoryListPlan,
     selected_commit: Option<&CommitId>,
 ) -> bool {
     cache.repo_id == repo_id
         && cache.log_rev == log_rev
         && cache.stashes_rev == stashes_rev
         && cache.history_scope == history_scope
-        && cache.show_working_tree_summary_row == show_working_tree_summary_row
+        && cache.show_working_tree_summary_row == plan.show_working_tree_summary_row()
+        && cache.plan_fingerprint == plan.fingerprint()
         && cache.selected_commit.as_ref() == selected_commit
 }
 
@@ -668,7 +702,7 @@ fn set_history_selected_list_index_cache(
     log_rev: u64,
     stashes_rev: u64,
     history_scope: LogScope,
-    show_working_tree_summary_row: bool,
+    plan: &HistoryListPlan,
     selected_commit: Option<CommitId>,
     list_ix: usize,
 ) {
@@ -677,10 +711,20 @@ fn set_history_selected_list_index_cache(
         log_rev,
         stashes_rev,
         history_scope,
-        show_working_tree_summary_row,
+        show_working_tree_summary_row: plan.show_working_tree_summary_row(),
+        plan_fingerprint: plan.fingerprint(),
         selected_commit,
         list_ix,
     });
+}
+
+/// What the history selection currently rests on, for the list-index
+/// bookkeeping. The three states are mutually exclusive: a commit, a worktree
+/// row, or -- when neither -- the working-tree row.
+#[derive(Clone, Copy)]
+struct HistorySelectionRef<'a> {
+    commit: Option<&'a CommitId>,
+    worktree_selected: bool,
 }
 
 fn peek_history_selected_list_index(
@@ -689,12 +733,20 @@ fn peek_history_selected_list_index(
     log_rev: u64,
     stashes_rev: u64,
     history_scope: LogScope,
-    show_working_tree_summary_row: bool,
-    selected_commit: Option<&CommitId>,
+    plan: &HistoryListPlan,
+    selection: HistorySelectionRef<'_>,
     visible_indices: &HistoryVisibleIndices,
     commits: &[Commit],
 ) -> Option<usize> {
-    if show_working_tree_summary_row && selected_commit.is_none() {
+    // A selected worktree row also leaves the commit selection empty, but it is
+    // not the working-tree row -- claiming index 0 here would leave two rows
+    // looking selected and send the scroll bookkeeping to the wrong one. The
+    // worktree row's own index comes from `worktree_row_list_ix`.
+    if selection.worktree_selected {
+        return None;
+    }
+    let selected_commit = selection.commit;
+    if plan.show_working_tree_summary_row() && selected_commit.is_none() {
         return Some(0);
     }
 
@@ -706,7 +758,7 @@ fn peek_history_selected_list_index(
                 log_rev,
                 stashes_rev,
                 history_scope,
-                show_working_tree_summary_row,
+                plan,
                 selected_commit,
             )
         })
@@ -716,12 +768,7 @@ fn peek_history_selected_list_index(
     }
 
     let selected_commit = selected_commit?;
-    match visible_commit_match_for_reference(
-        selected_commit,
-        visible_indices,
-        commits,
-        show_working_tree_summary_row,
-    ) {
+    match visible_commit_match_for_reference(selected_commit, visible_indices, commits, plan) {
         HistoryCommitReferenceMatch::Unique { list_ix, .. } => Some(list_ix),
         HistoryCommitReferenceMatch::Ambiguous | HistoryCommitReferenceMatch::Missing => None,
     }
@@ -731,9 +778,8 @@ fn visible_commit_match_for_reference(
     reference: &CommitId,
     visible_indices: &HistoryVisibleIndices,
     commits: &[Commit],
-    show_working_tree_summary_row: bool,
+    plan: &HistoryListPlan,
 ) -> HistoryCommitReferenceMatch {
-    let offset = usize::from(show_working_tree_summary_row);
     let mut found = None;
 
     for (visible_ix, commit_ix) in visible_indices.iter().enumerate() {
@@ -744,7 +790,7 @@ fn visible_commit_match_for_reference(
             continue;
         }
 
-        let next = (visible_ix + offset, commit.id.clone());
+        let next = (plan.list_ix_for_visible(visible_ix), commit.id.clone());
         if found.is_some() {
             return HistoryCommitReferenceMatch::Ambiguous;
         }
@@ -758,14 +804,86 @@ fn visible_commit_match_for_reference(
     }
 }
 
+/// What clicking a worktree in the sidebar should focus in the log.
+#[derive(Clone, Debug, Eq, PartialEq)]
+enum WorktreeRevealTarget {
+    /// The pinned row at the top -- only this tab's own changes live there.
+    WorkingTreeSummaryRow,
+    /// A linked worktree's own uncommitted-changes row.
+    WorktreeRow {
+        head: CommitId,
+        fallback_scope: Option<LogScope>,
+    },
+    Commit {
+        head: CommitId,
+        fallback_scope: Option<LogScope>,
+    },
+    /// A clean worktree whose HEAD we could not resolve; nothing to aim at.
+    Nothing,
+}
+
+/// One rule for every worktree row: its changes if it has any, otherwise the
+/// commit it sits on. Where "its changes" live differs -- this tab's are pinned
+/// at the top of the log, every other worktree's are a row of their own.
+///
+/// `worktree_is_dirty` is `None` while the scan has not answered for this
+/// worktree yet, which is not the same as answering that it is clean: aiming at
+/// the commit on an unknown commits to a row set that is about to grow, and the
+/// first scan reply then shifts the log under the user. Aiming at the row
+/// instead costs nothing when the guess is wrong -- the reveal keeps the commit
+/// as its scroll target until the row exists, and a worktree that turns out
+/// clean has its selection dropped by the reducer.
+fn worktree_reveal_target(
+    is_current: bool,
+    current_has_changes: bool,
+    worktree_is_dirty: Option<bool>,
+    head: Option<CommitId>,
+) -> WorktreeRevealTarget {
+    if is_current && current_has_changes {
+        return WorktreeRevealTarget::WorkingTreeSummaryRow;
+    }
+    let Some(head) = head else {
+        return WorktreeRevealTarget::Nothing;
+    };
+    // A linked worktree's branch need not be in the current scope -- the same
+    // reason a non-HEAD branch row falls back to all branches. It applies to the
+    // row as much as to the commit: the row is anchored to the same commit, and
+    // without the fallback a dirty worktree on an out-of-scope branch had
+    // nothing to scroll to.
+    let fallback_scope = (!is_current).then_some(LogScope::AllBranches);
+    if !is_current && worktree_is_dirty != Some(false) {
+        return WorktreeRevealTarget::WorktreeRow {
+            head,
+            fallback_scope,
+        };
+    }
+    WorktreeRevealTarget::Commit {
+        head,
+        fallback_scope,
+    }
+}
+
+/// Where the worktree row for `path` currently sits, if anywhere.
+fn worktree_row_list_ix(
+    plan: &HistoryListPlan,
+    repo: Option<&RepoState>,
+    path: &std::path::Path,
+) -> Option<usize> {
+    let Loadable::Ready(dirty) = &repo?.worktree_dirty else {
+        return None;
+    };
+    let worktree_ix = dirty.iter().position(|summary| summary.path == path)?;
+    plan.list_ix_for_worktree(worktree_ix)
+}
+
 fn resolve_history_selected_list_index(
     cache: &mut Option<HistorySelectedListIndexCache>,
     repo_id: RepoId,
     log_rev: u64,
     stashes_rev: u64,
     history_scope: LogScope,
-    show_working_tree_summary_row: bool,
-    selected_commit: Option<&CommitId>,
+    plan: &HistoryListPlan,
+    selection: HistorySelectionRef<'_>,
     visible_indices: &HistoryVisibleIndices,
     commits: &[Commit],
 ) -> Option<usize> {
@@ -775,8 +893,8 @@ fn resolve_history_selected_list_index(
         log_rev,
         stashes_rev,
         history_scope,
-        show_working_tree_summary_row,
-        selected_commit,
+        plan,
+        selection,
         visible_indices,
         commits,
     )?;
@@ -786,8 +904,8 @@ fn resolve_history_selected_list_index(
         log_rev,
         stashes_rev,
         history_scope,
-        show_working_tree_summary_row,
-        selected_commit.cloned(),
+        plan,
+        selection.commit.cloned(),
         list_ix,
     );
     Some(list_ix)
@@ -806,7 +924,7 @@ fn decide_pending_history_reveal(
     live_page_has_more: Option<bool>,
     cache_request_matches: bool,
     visible_indices: Option<&HistoryVisibleIndices>,
-    show_working_tree_summary_row: bool,
+    plan: &HistoryListPlan,
     _selected_list_index_cache: Option<&HistorySelectedListIndexCache>,
 ) -> PendingHistoryRevealDecision {
     let mut decision = PendingHistoryRevealDecision::default();
@@ -851,7 +969,7 @@ fn decide_pending_history_reveal(
         &pending.commit_id,
         visible_indices,
         &display_page.commits,
-        show_working_tree_summary_row,
+        plan,
     ) {
         HistoryCommitReferenceMatch::Unique { list_ix, commit_id } => {
             // The row carries the full id; an abbreviated reference upgrades to
@@ -936,10 +1054,9 @@ pub(in super::super) struct HistoryView {
     /// the historical browse point actually changes.
     last_browse_commit: Option<CommitId>,
     pub(in super::super) history_worktree_summary_cache: Option<HistoryWorktreeSummaryCache>,
+    history_list_plan_cache: Option<HistoryListPlanCache>,
+    history_selected_lane_color_cache: Option<HistorySelectedLaneColorCache>,
     pub(in super::super) history_stash_ids_cache: Option<HistoryStashIdsCache>,
-    pub(in super::super) history_related_commits_cache: Option<HistoryRelatedCommitsCache>,
-    history_related_commits_inflight: Option<HistoryRelatedCommitsCacheRequest>,
-    history_related_commits_seq: u64,
     pub(in super::super) history_scroll: UniformListScrollHandle,
     pub(in super::super) history_panel_focus_handle: FocusHandle,
     /// Minute tick that re-renders the table while the relative date format is
@@ -971,6 +1088,11 @@ impl HistoryView {
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.file_browser.file_browser_rev.hash(&mut hasher);
+            // The linked-worktree rows live in this table: their badge counts come
+            // from the dirty scan and the selected row from the worktree selection,
+            // so both revs have to move the fingerprint or the rows never repaint.
+            repo.worktree_dirty_rev.hash(&mut hasher);
+            repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.worktree_status_cache_rev().hash(&mut hasher);
             repo.staged_status_cache_rev().hash(&mut hasher);
         }
@@ -1074,10 +1196,9 @@ impl HistoryView {
             pending_history_reveal: None,
             last_browse_commit: None,
             history_worktree_summary_cache: None,
+            history_list_plan_cache: None,
+            history_selected_lane_color_cache: None,
             history_stash_ids_cache: None,
-            history_related_commits_cache: None,
-            history_related_commits_inflight: None,
-            history_related_commits_seq: 0,
             history_scroll: UniformListScrollHandle::default(),
             history_panel_focus_handle,
             relative_time_tick: None,
@@ -1285,10 +1406,99 @@ impl HistoryView {
         fallback_scope: Option<LogScope>,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.request_reveal_commit_inner(repo_id, commit_id, fallback_scope, None, cx);
+    }
+
+    /// Focus whatever best represents a worktree in the log.
+    ///
+    /// The rule is the same for every worktree row in the sidebar, including the
+    /// one this tab is checked out on: land on its uncommitted-changes row when
+    /// it has changes, and on the commit its HEAD points at when it does not.
+    /// Only the *current* worktree's changes live in the pinned row at the top;
+    /// every other worktree's live in a row of their own.
+    pub(in crate::view) fn reveal_worktree(
+        &mut self,
+        repo_id: RepoId,
+        path: PathBuf,
+        is_current: bool,
+        head: Option<CommitId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let current_has_changes = self.ensure_history_worktree_summary_cache().0;
+        // `None` while the scan has not answered -- see `worktree_reveal_target`.
+        let worktree_is_dirty = self
+            .active_repo()
+            .and_then(|repo| match &repo.worktree_dirty {
+                Loadable::Ready(dirty) => Some(dirty.iter().any(|summary| summary.path == path)),
+                _ => None,
+            });
+
+        match worktree_reveal_target(is_current, current_has_changes, worktree_is_dirty, head) {
+            WorktreeRevealTarget::WorkingTreeSummaryRow => {
+                self.select_working_tree_summary_row(repo_id, cx)
+            }
+            WorktreeRevealTarget::WorktreeRow {
+                head,
+                fallback_scope,
+            } => self.request_reveal_worktree(repo_id, head, fallback_scope, path, cx),
+            WorktreeRevealTarget::Commit {
+                head,
+                fallback_scope,
+            } => self.request_reveal_commit(repo_id, head, fallback_scope, cx),
+            WorktreeRevealTarget::Nothing => {}
+        }
+    }
+
+    /// Select the pinned uncommitted-changes row at the top of the log.
+    pub(in crate::view) fn select_working_tree_summary_row(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.store.dispatch(Msg::ClearCommitSelection { repo_id });
+        self.store.dispatch(Msg::ClearDiffSelection { repo_id });
+        self.dismiss_history_refs_hover(cx);
+        self.history_scroll
+            .scroll_to_item_strict(0, gpui::ScrollStrategy::Center);
+        cx.notify();
+    }
+
+    /// Reveal the row for a linked worktree's uncommitted changes, locating it by
+    /// the commit that worktree has checked out.
+    pub(in crate::view) fn request_reveal_worktree(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        fallback_scope: Option<LogScope>,
+        worktree_path: PathBuf,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.store.dispatch(Msg::SelectWorktreeUncommitted {
+            repo_id,
+            path: worktree_path.clone(),
+        });
+        self.request_reveal_commit_inner(
+            repo_id,
+            commit_id,
+            fallback_scope,
+            Some(worktree_path),
+            cx,
+        );
+    }
+
+    fn request_reveal_commit_inner(
+        &mut self,
+        repo_id: RepoId,
+        commit_id: CommitId,
+        fallback_scope: Option<LogScope>,
+        worktree_path: Option<PathBuf>,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let next = PendingHistoryReveal {
             repo_id,
             commit_id,
             fallback_scope,
+            worktree_path,
         };
         if self.pending_history_reveal.as_ref() != Some(&next) {
             self.pending_history_reveal = Some(next);
@@ -1446,12 +1656,6 @@ impl HistoryView {
             return;
         }
         self.history_highlight_commit_chain = enabled;
-        // The relation cache is only consulted while the setting is on, but
-        // dropping it keeps a stale bitset from being reused if it goes back on
-        // after the log has moved. The in-flight marker goes with it so a build
-        // still running cannot land its result afterwards.
-        self.history_related_commits_cache = None;
-        self.history_related_commits_inflight = None;
         cx.notify();
     }
 
@@ -1600,7 +1804,7 @@ impl HistoryView {
             return;
         };
 
-        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        let plan = self.ensure_history_list_plan();
         let (
             active_repo_id,
             current_scope,
@@ -1624,10 +1828,10 @@ impl HistoryView {
                     None,
                     false,
                     None,
-                    show_working_tree_summary_row,
+                    &plan,
                     self.history_selected_list_index_cache.as_ref(),
                 );
-                return self.finish_pending_history_reveal(decision, pending, None, cx);
+                return self.finish_pending_history_reveal(decision, pending, None, &plan, cx);
             };
 
             let current_scope = repo.history_state.history_scope;
@@ -1661,7 +1865,7 @@ impl HistoryView {
                 live_page_has_more,
                 cache_request_matches,
                 visible_indices,
-                show_working_tree_summary_row,
+                &plan,
                 self.history_selected_list_index_cache.as_ref(),
             );
 
@@ -1678,21 +1882,17 @@ impl HistoryView {
 
         let cache_meta =
             (active_repo_id == Some(pending.repo_id) && page.is_some() && cache_request_matches)
-                .then_some((
-                    log_rev,
-                    stashes_rev,
-                    current_scope,
-                    show_working_tree_summary_row,
-                ));
+                .then_some((log_rev, stashes_rev, current_scope));
 
-        self.finish_pending_history_reveal(decision, pending, cache_meta, cx);
+        self.finish_pending_history_reveal(decision, pending, cache_meta, &plan, cx);
     }
 
     fn finish_pending_history_reveal(
         &mut self,
         decision: PendingHistoryRevealDecision,
         pending: PendingHistoryReveal,
-        cache_meta: Option<(u64, u64, LogScope, bool)>,
+        cache_meta: Option<(u64, u64, LogScope)>,
+        plan: &HistoryListPlan,
         cx: &mut gpui::Context<Self>,
     ) {
         if let Some(scope) = decision.set_scope {
@@ -1703,26 +1903,58 @@ impl HistoryView {
             return;
         }
 
-        if let Some(commit_id) = decision.select_commit {
-            self.store.dispatch(Msg::SelectCommit {
+        match (&pending.worktree_path, decision.select_commit) {
+            // A reveal aimed at a worktree row selects the row, not the commit
+            // that located it -- and only when the row is not already selected.
+            // This runs on every render of the history panel and the reveal
+            // stays pending for as long as pagination takes, so dispatching
+            // unconditionally would ask for the same selection every frame.
+            (Some(path), _) => {
+                let already_selected = self.active_repo().is_some_and(|repo| {
+                    repo.history_state.worktree_selection.as_deref() == Some(path.as_path())
+                });
+                if !already_selected {
+                    self.store.dispatch(Msg::SelectWorktreeUncommitted {
+                        repo_id: pending.repo_id,
+                        path: path.clone(),
+                    });
+                }
+            }
+            (None, Some(commit_id)) => self.store.dispatch(Msg::SelectCommit {
                 repo_id: pending.repo_id,
                 commit_id,
-            });
+            }),
+            (None, None) => {}
         }
 
-        if let Some(list_ix) = decision.scroll_to_list_ix {
-            if let Some((log_rev, stashes_rev, history_scope, show_working_tree_summary_row)) =
-                cache_meta
-            {
+        // The worktree row sits one line above the commit that located it, so
+        // scroll to the row itself once the plan knows where it landed.
+        // Two indices, bound together: the commit's own row, and the row to scroll
+        // to -- the worktree's, when the reveal was aimed at one, which sits one
+        // line above it.
+        let reveal_rows = decision.scroll_to_list_ix.map(|commit_list_ix| {
+            let scroll_to = pending
+                .worktree_path
+                .as_deref()
+                .and_then(|path| worktree_row_list_ix(plan, self.active_repo(), path))
+                .unwrap_or(commit_list_ix);
+            (commit_list_ix, scroll_to)
+        });
+
+        if let Some((commit_list_ix, list_ix)) = reveal_rows {
+            if let Some((log_rev, stashes_rev, history_scope)) = cache_meta {
+                // The cache is keyed on the commit and read back as *its* row,
+                // so it takes the commit's own index -- not the worktree row we
+                // scrolled to, which sits one line above it.
                 set_history_selected_list_index_cache(
                     &mut self.history_selected_list_index_cache,
                     pending.repo_id,
                     log_rev,
                     stashes_rev,
                     history_scope,
-                    show_working_tree_summary_row,
+                    plan,
                     Some(pending.commit_id.clone()),
-                    list_ix,
+                    commit_list_ix,
                 );
             }
             self.dismiss_history_refs_hover(cx);
@@ -1752,140 +1984,186 @@ impl HistoryView {
 use gitcomet_core::domain::{LogPage, LogScope, RemoteBranch, StashEntry};
 
 impl HistoryView {
-    /// Rows related to the commit selected in the history: the commit itself,
-    /// everything it descends from, and its direct children.
+    /// The lane the selection sits on. Every other lane — and everything else
+    /// coloured from a lane, the nodes, the message borders and the graph fade —
+    /// washes out against it.
     ///
-    /// Rebuilt only when the selection or the log changes. Selecting a branch in
-    /// the sidebar goes through here too, because that selects the branch's tip
-    /// commit -- so picking a branch lights its history without a second
-    /// mechanism.
+    /// The anchor is the selected commit, or HEAD while the uncommitted-changes
+    /// row holds the selection: those changes sit on HEAD, so selecting that row
+    /// lights the lane they will land on rather than leaving the list unwashed.
+    /// A multi-selection has no single lane to pick, so nothing washes.
     ///
-    /// The walk itself is two sweeps over the page plus, for any non-linear
-    /// history, an id -> index map with an entry per commit, so it goes to a
-    /// background task exactly like [`Self::ensure_history_cache`]. Running it
-    /// inline would put that work on the UI thread on every arrow-key press.
-    pub(in super::super) fn ensure_history_related_commits_cache(
+    /// Memoised because resolving it is a scan of the page — the colour is one
+    /// lookup, but pinning it to a row span walks the lane's whole run — and this
+    /// is asked once per render rather than once per row.
+    pub(in super::super) fn history_selected_lane(
         &mut self,
         show_worktree_summary_row: bool,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        let Some((request, page)) = (|| {
-            if !self.history_highlight_commit_chain {
+    ) -> Option<crate::view::rows::history_graph_paint::SelectedLane> {
+        if !self.history_highlight_commit_chain {
+            return None;
+        }
+
+        let (repo_id, anchor) = {
+            let repo = self.active_repo()?;
+            if repo.history_state.multi_selection.is_multi() {
                 return None;
             }
-            let repo = self.active_repo()?;
-            // A multi-selection has no single commit to relate to, so the whole
-            // list stays at full strength rather than picking one arbitrarily.
-            let anchor = if repo.history_state.multi_selection.is_multi() {
-                None
-            } else {
-                repo.history_state.selected_commit.clone().or_else(|| {
-                    // No selected commit *is* the uncommitted-changes row being
-                    // selected. Those changes sit on HEAD, so selecting that row
-                    // lights HEAD's chain -- the branch the changes will land on
-                    // -- rather than leaving the whole list unhighlighted.
-                    show_worktree_summary_row
-                        .then(|| repo.head_commit_id())
-                        .flatten()
+            // A selected worktree row highlights that worktree's branch, not the
+            // commit underneath it -- the two differ whenever the branch is
+            // behind and has been given a lane of its own.
+            let worktree_anchor = repo
+                .history_state
+                .worktree_selection
+                .as_ref()
+                .and_then(|path| match &repo.worktree_dirty {
+                    Loadable::Ready(dirty) => dirty.iter().find(|summary| &summary.path == path),
+                    _ => None,
                 })
-            };
-            let page = Self::display_log_page_for_repo(repo);
-            Some((
-                HistoryRelatedCommitsCacheRequest {
-                    repo_id: repo.id,
-                    log_fingerprint: page
-                        .as_deref()
-                        .map_or(0, |page| Self::log_fingerprint(&page.commits)),
-                    anchor,
-                },
-                page,
-            ))
-        })() else {
-            self.history_related_commits_cache = None;
-            self.history_related_commits_inflight = None;
-            return;
-        };
-
-        if self
-            .history_related_commits_cache
-            .as_ref()
-            .is_some_and(|cache| cache.request == request)
-        {
-            self.history_related_commits_inflight = None;
-            return;
-        }
-
-        // Nothing to walk, so settle it here rather than paying for a task.
-        let (Some(anchor), Some(page)) = (request.anchor.clone(), page) else {
-            self.history_related_commits_inflight = None;
-            self.history_related_commits_cache = Some(HistoryRelatedCommitsCache {
-                request,
-                related: Arc::from(Vec::new()),
-            });
-            return;
-        };
-
-        if self.history_related_commits_inflight.as_ref() == Some(&request) {
-            return;
-        }
-        // The bitset the previous anchor produced stays on screen while the
-        // rebuild runs. It describes the chain of the *previous* selection, but
-        // dropping it would blank the highlight between every keypress, and at
-        // key-repeat rates that strobes rather than tracking the selection --
-        // a briefly stale chain reads far better than a flashing one.
-        //
-        // Only while it still indexes the same page of the same repository,
-        // though: against a different page the bit indices mean nothing.
-        let stale_still_indexes_this_page = self
-            .history_related_commits_cache
-            .as_ref()
-            .is_some_and(|cache| {
-                cache.request.repo_id == request.repo_id
-                    && cache.request.log_fingerprint == request.log_fingerprint
-            });
-        if !stale_still_indexes_this_page {
-            self.history_related_commits_cache = None;
-        }
-        self.history_related_commits_inflight = Some(request.clone());
-        self.history_related_commits_seq = self.history_related_commits_seq.wrapping_add(1);
-        let seq = self.history_related_commits_seq;
-
-        cx.spawn(
-            async move |view: WeakEntity<HistoryView>, cx: &mut gpui::AsyncApp| {
-                let build = move || build_history_related_commit_bits(&page.commits, &anchor);
-                let related: Arc<[u64]> = if crate::ui_runtime::current().uses_background_compute()
-                {
-                    smol::unblock(build).await
-                } else {
-                    build()
-                };
-
-                let _ = view.update(cx, |this, cx| {
-                    if this.history_related_commits_seq != seq {
-                        return;
-                    }
-                    if this.history_related_commits_inflight.as_ref() != Some(&request) {
-                        return;
-                    }
-                    this.history_related_commits_inflight = None;
-                    this.history_related_commits_cache =
-                        Some(HistoryRelatedCommitsCache { request, related });
-                    cx.notify();
+                .and_then(|summary| {
+                    Some(HistoryLaneAnchor::Worktree {
+                        head: summary.head.clone()?,
+                        on_branch: summary.branch.is_some() && !summary.detached,
+                    })
                 });
-            },
-        )
-        .detach();
+            let anchor = worktree_anchor.or_else(|| {
+                repo.history_state
+                    .selected_commit
+                    .clone()
+                    .or_else(|| {
+                        show_worktree_summary_row
+                            .then(|| repo.head_commit_id())
+                            .flatten()
+                    })
+                    .map(HistoryLaneAnchor::Commit)
+            })?;
+            (repo.id, anchor)
+        };
+
+        let cache = self
+            .history_cache
+            .as_ref()
+            .filter(|cache| cache.base.request.repo_id == repo_id)?;
+        let base_request = &cache.base.request;
+
+        if let Some(memo) = &self.history_selected_lane_color_cache
+            && memo.base_request == *base_request
+            && memo.anchor == anchor
+        {
+            return memo.lane;
+        }
+
+        let (head, on_branch) = match &anchor {
+            HistoryLaneAnchor::Commit(head) => (head, None),
+            HistoryLaneAnchor::Worktree { head, on_branch } => (head, Some(*on_branch)),
+        };
+        let lane = cache
+            .base
+            .visible_ix_by_commit
+            .get(head)
+            .copied()
+            .and_then(|anchor_row| {
+                let row = cache.base.graph_rows.get(anchor_row)?;
+                let color_ix = match on_branch {
+                    Some(on_branch) => {
+                        crate::view::rows::history_graph_paint::band_node_for(row, on_branch)
+                            .color_ix
+                    }
+                    None => row.node_color_ix,
+                };
+                // The colour alone would also match unrelated lanes elsewhere on
+                // the page that recycled the index; this resolves it to the one
+                // lane's row span.
+                crate::view::rows::history_graph_paint::selected_lane_at(
+                    &cache.base.graph_rows,
+                    anchor_row,
+                    color_ix,
+                )
+            });
+
+        let base_request = base_request.clone();
+        self.history_selected_lane_color_cache = Some(HistorySelectedLaneColorCache {
+            base_request,
+            anchor,
+            lane,
+        });
+        lane
     }
 
-    /// Bitset of the rows related to the current selection, or `None` when
-    /// there is nothing to highlight: the feature is off, no single commit is
-    /// selected, the selection is not in this page, or the rebuild above is
-    /// still in flight.
-    pub(in super::super) fn history_related_commits_bits(&self) -> Option<Arc<[u64]>> {
-        self.history_related_commits_cache
+    /// Builds (or reuses) the mapping from list indices to rows.
+    ///
+    /// A dirty worktree only earns a row when its HEAD is one of the commits
+    /// currently on screen — anchoring it anywhere else would misstate which
+    /// commit the changes sit on top of. Worktrees whose HEAD has scrolled out
+    /// of the loaded page, or that are on a branch outside the current scope,
+    /// simply do not appear.
+    pub(in super::super) fn ensure_history_list_plan(&mut self) -> HistoryListPlan {
+        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+
+        let Some(repo) = self.active_repo() else {
+            self.history_list_plan_cache = None;
+            return HistoryListPlan::new(show_working_tree_summary_row, Vec::new());
+        };
+        let repo_id = repo.id;
+        let worktrees_rev = repo.worktrees_rev;
+        let worktree_dirty_rev = repo.worktree_dirty_rev;
+
+        let Some(cache) = self
+            .history_cache
             .as_ref()
-            .filter(|cache| !cache.is_empty())
-            .map(|cache| Arc::clone(&cache.related))
+            .filter(|cache| cache.base.request.repo_id == repo_id)
+        else {
+            self.history_list_plan_cache = None;
+            return HistoryListPlan::new(show_working_tree_summary_row, Vec::new());
+        };
+        let base_request = &cache.base.request;
+
+        if let Some(cached) = &self.history_list_plan_cache
+            && cached.base_request == *base_request
+            && cached.worktrees_rev == worktrees_rev
+            && cached.worktree_dirty_rev == worktree_dirty_rev
+            && cached.show_working_tree_summary_row == show_working_tree_summary_row
+        {
+            return cached.plan.clone();
+        }
+
+        let anchors = (|| {
+            let Loadable::Ready(dirty) = &repo.worktree_dirty else {
+                return Vec::new();
+            };
+            if dirty.is_empty() {
+                return Vec::new();
+            }
+
+            // The base cache already indexed the page by commit id, off the render
+            // path. Rebuilding that map here would walk every visible commit on
+            // every scan revision to answer one lookup per dirty worktree.
+            dirty
+                .iter()
+                .enumerate()
+                .filter_map(|(worktree_ix, summary)| {
+                    let head = summary.head.as_ref()?;
+                    let visible_ix = cache.base.visible_ix_by_commit.get(head).copied()?;
+                    Some(HistoryWorktreeRowAnchor {
+                        visible_ix,
+                        worktree_ix,
+                    })
+                })
+                .collect()
+        })();
+
+        let plan = HistoryListPlan::new(show_working_tree_summary_row, anchors);
+        // Cloned here rather than up front so a cache hit -- the common case, once
+        // per render -- costs a comparison and nothing else.
+        let base_request = base_request.clone();
+        self.history_list_plan_cache = Some(HistoryListPlanCache {
+            base_request,
+            worktrees_rev,
+            worktree_dirty_rev,
+            show_working_tree_summary_row,
+            plan: plan.clone(),
+        });
+        plan
     }
 
     pub(in super::super) fn ensure_history_worktree_summary_cache(
@@ -1930,21 +2208,9 @@ impl HistoryView {
                 };
             }
 
-            let count_for = |entries: &[FileStatus]| {
-                let mut added = 0usize;
-                let mut modified = 0usize;
-                let mut deleted = 0usize;
-                for entry in entries {
-                    match entry.kind {
-                        FileStatusKind::Untracked | FileStatusKind::Added => added += 1,
-                        FileStatusKind::Deleted => deleted += 1,
-                        FileStatusKind::Modified
-                        | FileStatusKind::Renamed
-                        | FileStatusKind::Conflicted => modified += 1,
-                    }
-                }
-                (added, modified, deleted)
-            };
+            // Shared with the per-worktree scan so the two rows can never
+            // report the same tree differently.
+            let count_for = gitcomet_core::domain::count_file_statuses;
 
             let unstaged_counts = worktree.map_or((0, 0, 0), count_for);
             let staged_counts = staged.map_or((0, 0, 0), count_for);
@@ -2369,9 +2635,22 @@ fn build_history_base_cache(
         }
     }
 
+    // One entry per visible commit, built here so its readers can look up an id
+    // during layout without walking the page.
+    let mut visible_ix_by_commit: rustc_hash::FxHashMap<CommitId, usize> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(visible_indices.len(), Default::default());
+    for (visible_ix, commit_ix) in visible_indices.iter().enumerate() {
+        if let Some(commit) = page.commits.get(commit_ix) {
+            visible_ix_by_commit
+                .entry(commit.id.clone())
+                .or_insert(visible_ix);
+        }
+    }
+
     HistoryBaseCache {
         request,
         visible_indices,
+        visible_ix_by_commit: Arc::new(visible_ix_by_commit),
         graph_rows,
         max_lanes,
         row_vms,
@@ -2683,6 +2962,46 @@ mod tests {
     use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime};
 
+    /// The linked-worktree rows live in this table, so the two revs behind them
+    /// have to move the fingerprint. Without them a finished scan -- or a row
+    /// being selected -- changed nothing the pane hashed, and the rows sat stale
+    /// until some unrelated rev happened to move. Not reachable from a
+    /// `#[gpui::test]`: `stable_cached_view` returns the uncached view under
+    /// `cfg!(test)`, so the missed repaint is invisible there.
+    #[test]
+    fn the_history_fingerprint_tracks_the_worktree_revs() {
+        let mut state = AppState::default();
+        state
+            .repos
+            .push(gitcomet_state::model::RepoState::new_opening(
+                gitcomet_state::model::RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo"),
+                },
+            ));
+        state.active_repo = Some(gitcomet_state::model::RepoId(1));
+
+        let fingerprint = |state: &AppState| HistoryView::notify_fingerprint_for(state, false);
+        let before = fingerprint(&state);
+
+        // The revs stand in for the writes that bump them: those setters are
+        // `pub(crate)` to `gitcomet-state`, and what is being asserted here is
+        // that the fingerprint reads them at all.
+        state.repos[0].worktree_dirty_rev += 1;
+        let after_scan = fingerprint(&state);
+        assert_ne!(
+            before, after_scan,
+            "a finished worktree scan must repaint the rows it feeds"
+        );
+
+        state.repos[0].history_state.worktree_selection_rev += 1;
+        assert_ne!(
+            after_scan,
+            fingerprint(&state),
+            "selecting a worktree row must repaint the row that shows it"
+        );
+    }
+
     struct BlockingBackend;
 
     impl GitBackend for BlockingBackend {
@@ -2759,6 +3078,97 @@ mod tests {
         }
     }
 
+    /// Anchor placement is the part of the plan that depends on repo data: a
+    /// dirty worktree earns a row only when its HEAD is a commit currently on
+    /// screen.
+    fn worktree_anchors_for(
+        commits: &[Commit],
+        worktrees: &[(&str, &str)],
+        dirty_paths: &[&str],
+    ) -> Vec<usize> {
+        let visible = HistoryVisibleIndices::all(commits.len());
+        let mut visible_ix_by_commit: HashMap<&str, usize> = HashMap::default();
+        for (visible_ix, commit_ix) in visible.iter().enumerate() {
+            visible_ix_by_commit
+                .entry(commits[commit_ix].id.as_ref())
+                .or_insert(visible_ix);
+        }
+        dirty_paths
+            .iter()
+            .filter_map(|path| {
+                let head = worktrees.iter().find(|(p, _)| p == path)?.1;
+                visible_ix_by_commit.get(head).copied()
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_dirty_worktree_anchors_to_its_head_commit() {
+        let commits = vec![
+            commit("c0", &["c1"], "newest"),
+            commit("c1", &["c2"], "middle"),
+            commit("c2", &[], "oldest"),
+        ];
+        let worktrees = [("/wt/a", "c1"), ("/wt/b", "c2")];
+        assert_eq!(
+            worktree_anchors_for(&commits, &worktrees, &["/wt/a"]),
+            vec![1]
+        );
+        assert_eq!(
+            worktree_anchors_for(&commits, &worktrees, &["/wt/a", "/wt/b"]),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn a_worktree_whose_head_is_not_on_screen_gets_no_row() {
+        let commits = vec![commit("c0", &["c1"], "newest"), commit("c1", &[], "older")];
+        // `c9` is on a branch outside the current scope, or past the loaded page.
+        let worktrees = [("/wt/offscreen", "c9")];
+        assert!(
+            worktree_anchors_for(&commits, &worktrees, &["/wt/offscreen"]).is_empty(),
+            "a worktree with no visible HEAD must not be anchored anywhere"
+        );
+    }
+
+    #[test]
+    fn a_clean_worktree_gets_no_row_even_though_it_is_listed() {
+        let commits = vec![commit("c0", &[], "only")];
+        let worktrees = [("/wt/clean", "c0")];
+        // `dirty_paths` is the scan's output, which only ever lists dirty trees.
+        assert!(worktree_anchors_for(&commits, &worktrees, &[]).is_empty());
+    }
+
+    /// The plan must place the rows the anchors describe, in log order.
+    #[test]
+    fn anchors_become_rows_above_their_commits() {
+        let commits = vec![
+            commit("c0", &["c1"], "newest"),
+            commit("c1", &["c2"], "middle"),
+            commit("c2", &[], "oldest"),
+        ];
+        let worktrees = [("/wt/a", "c2"), ("/wt/b", "c0")];
+        let anchors = worktree_anchors_for(&commits, &worktrees, &["/wt/a", "/wt/b"]);
+        let plan = HistoryListPlan::new(
+            true,
+            anchors
+                .iter()
+                .enumerate()
+                .map(|(worktree_ix, &visible_ix)| HistoryWorktreeRowAnchor {
+                    visible_ix,
+                    worktree_ix,
+                })
+                .collect(),
+        );
+
+        // working tree row, wt/b above c0, c0, c1, wt/a above c2, c2
+        assert_eq!(plan.list_len(3), 6);
+        assert_eq!(plan.list_ix_for_visible(0), 2);
+        assert_eq!(plan.list_ix_for_visible(2), 5);
+        assert_eq!(plan.list_ix_for_worktree(1), Some(1));
+        assert_eq!(plan.list_ix_for_worktree(0), Some(4));
+    }
+
     fn all_columns_visible_drag_layout() -> HistoryColumnDragLayout {
         HistoryColumnDragLayout {
             show_graph: true,
@@ -2799,6 +3209,56 @@ mod tests {
                 resume_token: None,
             }),
         }
+    }
+
+    /// The commit-id index the base cache carries agrees with the visible order it
+    /// was built from.
+    ///
+    /// Its readers -- the worktree row anchors and the selected lane's colour --
+    /// look commits up during layout, and both used to scan the page instead. A
+    /// map that disagrees with `visible_indices` would anchor rows on the wrong
+    /// commits, so this pins the two together.
+    #[test]
+    fn the_base_cache_indexes_every_visible_commit_by_id() {
+        let commits = vec![
+            commit("c0", &["c1"], "newest"),
+            commit("c1", &["c2"], "middle"),
+            commit("c2", &[], "oldest"),
+        ];
+        let page = log_page(commits, None);
+        let base = build_history_base_cache(
+            HistoryBaseCacheRequest {
+                repo_id: RepoId(1),
+                history_scope: LogScope::AllBranches,
+                log_fingerprint: 0,
+                head_branch_rev: 0,
+                detached_head_commit: None,
+                head_branch_target: None,
+                branches_rev: 0,
+                remote_branches_rev: 0,
+                stashes_rev: 0,
+            },
+            &page,
+            AppTheme::gitcomet_dark(),
+            None,
+            &[],
+            &[],
+            &[],
+        );
+
+        for (visible_ix, commit_ix) in base.visible_indices.iter().enumerate() {
+            let id = &page.commits[commit_ix].id;
+            assert_eq!(
+                base.visible_ix_by_commit.get(id).copied(),
+                Some(visible_ix),
+                "{id:?} should resolve to the row it renders at"
+            );
+        }
+        assert_eq!(base.visible_ix_by_commit.len(), base.visible_indices.len());
+        assert_eq!(
+            base.visible_ix_by_commit.get(&CommitId("absent".into())),
+            None
+        );
     }
 
     /// Branch attributed to each visible row, in row order.
@@ -3411,6 +3871,131 @@ mod tests {
         );
     }
 
+    /// The whole focus rule for a sidebar worktree click, in one table.
+    #[test]
+    fn a_worktree_click_focuses_its_changes_or_the_commit_it_sits_on() {
+        let head = CommitId("head-sha".into());
+
+        // This tab's own changes are the pinned row at the top of the log.
+        assert_eq!(
+            worktree_reveal_target(true, true, Some(false), Some(head.clone())),
+            WorktreeRevealTarget::WorkingTreeSummaryRow
+        );
+        // Clean, so there is no row -- land on what it is checked out at. No
+        // fallback scope: the current worktree's HEAD is in scope by definition.
+        assert_eq!(
+            worktree_reveal_target(true, false, Some(false), Some(head.clone())),
+            WorktreeRevealTarget::Commit {
+                head: head.clone(),
+                fallback_scope: None,
+            }
+        );
+        // A linked worktree's changes live in a row of their own.
+        assert_eq!(
+            worktree_reveal_target(false, false, Some(true), Some(head.clone())),
+            WorktreeRevealTarget::WorktreeRow {
+                head: head.clone(),
+                fallback_scope: Some(LogScope::AllBranches),
+            }
+        );
+        // Clean linked worktree: its branch may sit outside the current scope.
+        assert_eq!(
+            worktree_reveal_target(false, false, Some(false), Some(head.clone())),
+            WorktreeRevealTarget::Commit {
+                head: head.clone(),
+                fallback_scope: Some(LogScope::AllBranches),
+            }
+        );
+    }
+
+    /// The first scan has not replied when a repo opens, and "no answer yet" is
+    /// not the answer that the worktree is clean. Aiming at the commit on an
+    /// unknown fixes the reveal against a row set that is about to grow.
+    #[test]
+    fn an_unscanned_worktree_is_revealed_as_a_row_not_as_its_commit() {
+        let head = CommitId("head-sha".into());
+        assert_eq!(
+            worktree_reveal_target(false, false, None, Some(head.clone())),
+            WorktreeRevealTarget::WorktreeRow {
+                head,
+                fallback_scope: Some(LogScope::AllBranches),
+            }
+        );
+    }
+
+    /// The current worktree's own changes never appear as a linked-worktree row,
+    /// so a dirty *other* worktree must not divert this tab's click.
+    #[test]
+    fn the_current_worktree_ignores_other_worktrees_dirt() {
+        let head = CommitId("head-sha".into());
+        assert_eq!(
+            worktree_reveal_target(true, true, Some(true), Some(head)),
+            WorktreeRevealTarget::WorkingTreeSummaryRow
+        );
+    }
+
+    #[test]
+    fn a_clean_worktree_with_no_resolvable_head_focuses_nothing() {
+        assert_eq!(
+            worktree_reveal_target(false, false, Some(false), None),
+            WorktreeRevealTarget::Nothing
+        );
+        // Even a dirty one: its row is anchored by that same HEAD.
+        assert_eq!(
+            worktree_reveal_target(false, false, Some(true), None),
+            WorktreeRevealTarget::Nothing
+        );
+    }
+
+    /// Selecting a worktree row also leaves the commit selection empty, which is
+    /// the state the working-tree row uses to decide it is selected. Claiming
+    /// index 0 here is what made both rows light up at once.
+    #[test]
+    fn a_selected_worktree_row_does_not_claim_the_working_tree_row() {
+        let plan = HistoryListPlan::new(true, Vec::new());
+        let commits = vec![commit("aaa", &[], "tip")];
+        let visible = HistoryVisibleIndices::all(1);
+
+        let working_tree = peek_history_selected_list_index(
+            None,
+            RepoId(1),
+            1,
+            1,
+            LogScope::AllBranches,
+            &plan,
+            HistorySelectionRef {
+                commit: None,
+                worktree_selected: false,
+            },
+            &visible,
+            &commits,
+        );
+        assert_eq!(
+            working_tree,
+            Some(0),
+            "with nothing else selected the working-tree row owns index 0"
+        );
+
+        let worktree = peek_history_selected_list_index(
+            None,
+            RepoId(1),
+            1,
+            1,
+            LogScope::AllBranches,
+            &plan,
+            HistorySelectionRef {
+                commit: None,
+                worktree_selected: true,
+            },
+            &visible,
+            &commits,
+        );
+        assert_eq!(
+            worktree, None,
+            "a selected worktree row must not report the working-tree row's index"
+        );
+    }
+
     #[test]
     fn resolve_history_selected_list_index_populates_cache_for_commit_selection() {
         let commits = vec![
@@ -3427,8 +4012,11 @@ mod tests {
             11,
             13,
             LogScope::AllBranches,
-            true,
-            Some(&selected),
+            &HistoryListPlan::new(true, Vec::new()),
+            HistorySelectionRef {
+                commit: Some(&selected),
+                worktree_selected: false,
+            },
             &HistoryVisibleIndices::Filtered(vec![0, 2].into()),
             &commits,
         );
@@ -3442,6 +4030,7 @@ mod tests {
                 stashes_rev: 13,
                 history_scope: LogScope::AllBranches,
                 show_working_tree_summary_row: true,
+                plan_fingerprint: HistoryListPlan::new(true, Vec::new()).fingerprint(),
                 selected_commit: Some(selected),
                 list_ix: 2,
             })
@@ -3457,6 +4046,7 @@ mod tests {
             stashes_rev: 34,
             history_scope: LogScope::CurrentBranch,
             show_working_tree_summary_row: false,
+            plan_fingerprint: HistoryListPlan::new(false, Vec::new()).fingerprint(),
             selected_commit: Some(selected.clone()),
             list_ix: 5,
         });
@@ -3467,8 +4057,11 @@ mod tests {
             21,
             34,
             LogScope::CurrentBranch,
-            false,
-            Some(&selected),
+            &HistoryListPlan::new(false, Vec::new()),
+            HistorySelectionRef {
+                commit: Some(&selected),
+                worktree_selected: false,
+            },
             &HistoryVisibleIndices::all(0),
             &[],
         );
@@ -3484,6 +4077,7 @@ mod tests {
             commit("c", &["b"], "c"),
         ];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId("c".into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3501,7 +4095,7 @@ mod tests {
             Some(false),
             true,
             Some(&HistoryVisibleIndices::Filtered(vec![0, 2].into())),
-            true,
+            &HistoryListPlan::new(true, Vec::new()),
             None,
         );
 
@@ -3521,6 +4115,7 @@ mod tests {
     fn pending_history_reveal_missing_target_requests_load_more() {
         let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId("c".into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3538,7 +4133,7 @@ mod tests {
             Some(true),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3560,6 +4155,7 @@ mod tests {
     fn pending_history_reveal_switches_to_fallback_scope_after_exhausting_current_mode() {
         let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId("c".into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3577,7 +4173,7 @@ mod tests {
             Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3597,6 +4193,7 @@ mod tests {
     fn pending_history_reveal_missing_target_with_exhausted_history_and_no_fallback_clears() {
         let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId("c".into()),
             fallback_scope: None,
@@ -3614,7 +4211,7 @@ mod tests {
             Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3635,6 +4232,7 @@ mod tests {
         let commits = vec![commit("a", &["p0"], "a"), commit("b", &["a"], "b")];
         let selected = CommitId("b".into());
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: selected.clone(),
             fallback_scope: None,
@@ -3652,7 +4250,7 @@ mod tests {
             Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3677,6 +4275,7 @@ mod tests {
             commit(full, &[other], "target"),
         ];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId(full[..8].into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3694,7 +4293,7 @@ mod tests {
             Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3723,6 +4322,7 @@ mod tests {
             commit(full, &[other], "target"),
         ];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId(full[..8].into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3740,7 +4340,7 @@ mod tests {
             Some(true),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3759,6 +4359,7 @@ mod tests {
     #[test]
     fn pending_history_reveal_abbreviated_commit_waits_for_display_page_before_selecting() {
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId("abcdef01".into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3776,7 +4377,7 @@ mod tests {
             None,
             true,
             None,
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3797,6 +4398,7 @@ mod tests {
         let full = "abcdef0123456789abcdef0123456789abcdef01";
         let commits = vec![commit(full, &["p0"], "target")];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId(full[..8].into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3814,7 +4416,7 @@ mod tests {
             Some(false),
             false,
             Some(&HistoryVisibleIndices::all(1)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3839,6 +4441,7 @@ mod tests {
             commit(full, &[other], "target"),
         ];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId(full[..8].to_ascii_uppercase().into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3856,7 +4459,7 @@ mod tests {
             Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3881,6 +4484,7 @@ mod tests {
             commit(second, &["p0"], "second"),
         ];
         let pending = PendingHistoryReveal {
+            worktree_path: None,
             repo_id: RepoId(7),
             commit_id: CommitId(first[..8].into()),
             fallback_scope: Some(LogScope::AllBranches),
@@ -3898,7 +4502,7 @@ mod tests {
             Some(false),
             true,
             Some(&HistoryVisibleIndices::all(2)),
-            false,
+            &HistoryListPlan::new(false, Vec::new()),
             None,
         );
 
@@ -3932,21 +4536,28 @@ mod tests {
         assert!(Arc::ptr_eq(&display, &page));
     }
 
-    /// A repository whose page is `feat`, `tip`, `base`, with `feat` and `tip`
-    /// both forked off `base`, and `selected` selected in the history.
-    fn related_commits_test_state(repo_id: RepoId, selected: Option<&str>) -> Arc<AppState> {
-        let page = Arc::new(log_page(
-            vec![
-                commit("feat", &["base"], "feature work"),
-                commit("tip", &["base"], "tip"),
-                commit("base", &[], "base"),
-            ],
-            None,
-        ));
+    /// A worktree reveal scrolls to the worktree's own row, which sits one line
+    /// *above* the commit that located it. The selected-list-index cache it
+    /// writes is keyed on that commit, though, so it has to remember the
+    /// commit's row: caching the row we scrolled to hands the commit its
+    /// neighbour's index, and the first arrow step off that commit computes
+    /// `neighbour + 1` and lands back on the commit itself.
+    #[gpui::test]
+    fn a_worktree_reveal_caches_the_commits_row_not_the_worktree_row(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let worktree_path = PathBuf::from("/tmp/history-worktree-reveal/linked");
+        let page = Arc::new(log_page(vec![commit("tip", &[], "tip")], None));
         let mut repo = RepoState::new_opening(
             repo_id,
             RepoSpec {
-                workdir: PathBuf::from("/tmp/history-related-commits"),
+                workdir: PathBuf::from("/tmp/history-worktree-reveal"),
             },
         );
         repo.history_state.history_scope = LogScope::AllBranches;
@@ -3958,40 +4569,87 @@ mod tests {
         repo.log_rev = 1;
         repo.history_state.log = Loadable::Ready(page);
         repo.history_state.log_rev = 1;
-        repo.history_state.selected_commit = selected.map(|id| CommitId(id.into()));
+        repo.worktree_dirty = Loadable::Ready(Arc::new(vec![
+            gitcomet_core::domain::WorktreeDirtySummary {
+                path: worktree_path.clone(),
+                head: Some(CommitId("tip".into())),
+                branch: Some("side".into()),
+                detached: false,
+                added: 1,
+                modified: 0,
+                deleted: 0,
+                staged: Vec::new(),
+                unstaged: Vec::new(),
+            },
+        ]));
+        repo.worktree_dirty_rev = 1;
 
-        Arc::new(AppState {
+        let state = Arc::new(AppState {
             repos: vec![repo],
             active_repo: Some(repo_id),
             ..Default::default()
-        })
-    }
+        });
 
-    fn related_commits_view(
-        cx: &mut gpui::VisualTestContext,
-        view: &gpui::Entity<GitCometView>,
-    ) -> gpui::Entity<HistoryView> {
-        cx.update(|_window, app| view.read(app).main_pane.read(app).history_view.clone())
-    }
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+        wait_until(cx, "history cache for the worktree reveal", |cx| {
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view
+                    .read(app)
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.row_vms.len() == 1)
+            })
+        });
 
-    /// What `history_view_inner` does once per render, without needing the pane
-    /// to be on screen. Does not park, so the caller can observe the state while
-    /// the build is still in flight.
-    fn schedule_related_commits(
-        cx: &mut gpui::VisualTestContext,
-        history_view: &gpui::Entity<HistoryView>,
-    ) {
         cx.update(|_window, app| {
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
             history_view.update(app, |history, cx| {
-                history.ensure_history_related_commits_cache(false, cx);
+                let plan = history.ensure_history_list_plan();
+                let worktree_row_ix =
+                    worktree_row_list_ix(&plan, history.active_repo(), &worktree_path)
+                        .expect("the dirty worktree should have a row");
+                let commit_row_ix = plan.list_ix_for_visible(0);
+                assert_eq!(
+                    commit_row_ix,
+                    worktree_row_ix + 1,
+                    "fixture must put the worktree row directly above its commit"
+                );
+
+                history.pending_history_reveal = Some(PendingHistoryReveal {
+                    worktree_path: Some(worktree_path.clone()),
+                    repo_id,
+                    commit_id: CommitId("tip".into()),
+                    fallback_scope: None,
+                });
+                history.drive_pending_history_reveal(cx);
+
+                let cache = history
+                    .history_selected_list_index_cache
+                    .as_ref()
+                    .expect("the reveal should leave a list-index cache");
+                assert_eq!(
+                    cache.selected_commit.as_ref().map(|id| id.as_ref()),
+                    Some("tip")
+                );
+                assert_eq!(
+                    cache.list_ix, commit_row_ix,
+                    "the cache is keyed on the commit, so it holds the commit's row"
+                );
             });
         });
     }
 
-    /// The chain highlight is built off the UI thread now, so the bitset only
-    /// appears once the task has run -- and it has to actually appear.
+    /// `list_ix_for_worktree` returns `None` once the worktree goes clean or its
+    /// HEAD leaves the loaded page, and a selected row with no index is not the
+    /// same as nothing being selected. Falling through to the no-selection arms
+    /// wrapped the selection to the far end of the log instead of moving it by
+    /// one, and the user lost their place.
     #[gpui::test]
-    fn selecting_a_commit_marks_its_chain_related_once_the_build_lands(
+    fn arrowing_off_a_worktree_row_with_no_index_does_not_jump_to_the_end(
         cx: &mut gpui::TestAppContext,
     ) {
         let _visual_guard = crate::test_support::lock_visual_test();
@@ -3999,175 +4657,344 @@ mod tests {
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-        let repo_id = RepoId(41);
-        ensure_history_cache_for_tests(cx, &view, related_commits_test_state(repo_id, Some("tip")));
-        let history_view = related_commits_view(cx, &view);
-
-        schedule_related_commits(cx, &history_view);
-        wait_until(cx, "the selected commit's chain to be marked", |cx| {
-            cx.update(|_window, app| {
-                history_view
-                    .read(app)
-                    .history_related_commits_bits()
-                    .is_some()
-            })
-        });
-
-        cx.update(|_window, app| {
-            let history = history_view.read(app);
-            let bits = history
-                .history_related_commits_bits()
-                .expect("chain bitset after the background build");
-            assert!(
-                related_commit_contains(&bits, 1),
-                "the selected commit is part of its own chain"
-            );
-            assert!(
-                related_commit_contains(&bits, 2),
-                "and so is the commit it descends from"
-            );
-            assert!(
-                !related_commit_contains(&bits, 0),
-                "a sibling forked off the same base is not"
-            );
-            assert!(
-                history.history_related_commits_inflight.is_none(),
-                "a settled build must clear its in-flight marker, or it never rebuilds again"
-            );
-        });
-
-        // Moving the selection within the same page keeps the previous bitset on
-        // screen until the replacement lands, rather than blanking the highlight
-        // between keypresses.
-        set_history_view_state_for_tests(
-            cx,
-            &view,
-            related_commits_test_state(repo_id, Some("feat")),
+        let repo_id = RepoId(1);
+        let worktree_path = PathBuf::from("/tmp/history-worktree-nav/linked");
+        let page = Arc::new(log_page(
+            vec![commit("tip", &["base"], "tip"), commit("base", &[], "base")],
+            None,
+        ));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-worktree-nav"),
+            },
         );
-        schedule_related_commits(cx, &history_view);
-        cx.update(|_window, app| {
-            assert!(
-                history_view
-                    .read(app)
-                    .history_related_commits_bits()
-                    .is_some(),
-                "the highlight must not blank out while the rebuild is in flight"
-            );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        repo.branches_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+        // Selected, but with no row: the scan that would list it has not landed,
+        // which is exactly the state the reducer refuses to read as "clean".
+        repo.history_state.worktree_selection = Some(worktree_path.clone());
+        repo.worktree_dirty = Loadable::Ready(Arc::new(Vec::new()));
+        repo.worktree_dirty_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
         });
 
-        wait_until(cx, "the chain to follow the new selection", |cx| {
-            schedule_related_commits(cx, &history_view);
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+        wait_until(cx, "history cache for the worktree nav", |cx| {
             cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
                 history_view
                     .read(app)
-                    .history_related_commits_bits()
-                    .is_some_and(|bits| related_commit_contains(&bits, 0))
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.row_vms.len() == 2)
             })
+        });
+
+        cx.update(|_window, app| {
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                let plan = history.ensure_history_list_plan();
+                assert!(
+                    worktree_row_list_ix(&plan, history.active_repo(), &worktree_path).is_none(),
+                    "fixture must leave the selected worktree without a row"
+                );
+
+                assert!(
+                    !history.history_select_adjacent_commit(-1, cx),
+                    "there is nothing to step from, so the key is not handled"
+                );
+                assert!(
+                    history
+                        .active_repo()
+                        .is_none_or(|repo| repo.history_state.selected_commit.is_none()),
+                    "and nothing at the far end of the log may be selected in its place"
+                );
+            });
         });
     }
 
-    /// Turning the setting off has to stop the highlight immediately, and
-    /// turning it back on has to rebuild rather than resurrect the old bitset.
+    /// The commit set never changes here -- only the stash list does -- so the
+    /// log fingerprint is identical across both halves of this test. That is the
+    /// point: the plan's anchors are `visible_ix_by_commit` lookups, and that map
+    /// is renumbered when stash helper commits are filtered out of the page. A
+    /// plan cache keyed on the fingerprint alone hands back the pre-filter
+    /// indices, which puts every worktree row above the wrong commit and leaves a
+    /// blank gap wherever the stale index ran past the end of `graph_rows`.
     #[gpui::test]
-    fn turning_the_chain_highlight_off_drops_it_and_back_on_rebuilds_it(
-        cx: &mut gpui::TestAppContext,
-    ) {
+    fn a_stash_list_arriving_replans_the_worktree_rows(cx: &mut gpui::TestAppContext) {
         let _visual_guard = crate::test_support::lock_visual_test();
         let (store, events) = AppStore::new(Arc::new(BlockingBackend));
         let (view, cx) =
             cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
 
-        let repo_id = RepoId(43);
-        ensure_history_cache_for_tests(cx, &view, related_commits_test_state(repo_id, Some("tip")));
-        let history_view = related_commits_view(cx, &view);
+        let worktree_path = PathBuf::from("/tmp/history-stash-replan/linked");
+        // `helper` is the stash's second parent, so it disappears from the page
+        // once the stash list names `wip` as a stash tip. `base` -- the commit the
+        // worktree is anchored on -- moves up a row when it does.
+        let page = Arc::new(log_page(
+            vec![
+                commit("wip", &["base", "helper"], "stash push"),
+                commit("helper", &["base"], "index on main"),
+                commit("base", &[], "base"),
+            ],
+            None,
+        ));
 
-        schedule_related_commits(cx, &history_view);
-        wait_until(cx, "the chain to be marked", |cx| {
-            cx.update(|_window, app| {
-                history_view
-                    .read(app)
-                    .history_related_commits_bits()
-                    .is_some()
-            })
-        });
-
-        cx.update(|_window, app| {
-            history_view.update(app, |history, cx| {
-                history.set_history_highlight_commit_chain(false, cx);
-            });
-        });
-        schedule_related_commits(cx, &history_view);
-        cx.update(|_window, app| {
-            let history = history_view.read(app);
-            assert!(
-                history.history_related_commits_bits().is_none(),
-                "the highlight stops the moment the setting is turned off"
+        let state_with_stashes = |stashes: Vec<StashEntry>, stashes_rev: u64| {
+            let mut repo = RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("/tmp/history-stash-replan"),
+                },
             );
-            assert!(
-                history.history_related_commits_inflight.is_none(),
-                "and nothing is left scheduled behind it"
-            );
-        });
-
-        cx.update(|_window, app| {
-            history_view.update(app, |history, cx| {
-                history.set_history_highlight_commit_chain(true, cx);
-            });
-        });
-        wait_until(cx, "the chain to come back", |cx| {
-            schedule_related_commits(cx, &history_view);
-            cx.update(|_window, app| {
-                history_view
-                    .read(app)
-                    .history_related_commits_bits()
-                    .is_some_and(|bits| related_commit_contains(&bits, 1))
+            repo.history_state.history_scope = LogScope::AllBranches;
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.head_branch_rev = 1;
+            repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "wip")]));
+            repo.branches_rev = 1;
+            repo.log = Loadable::Ready(Arc::clone(&page));
+            repo.log_rev = 1;
+            repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+            repo.history_state.log_rev = 1;
+            repo.stashes = Loadable::Ready(Arc::new(stashes));
+            repo.stashes_rev = stashes_rev;
+            repo.worktree_dirty = Loadable::Ready(Arc::new(vec![
+                gitcomet_core::domain::WorktreeDirtySummary {
+                    path: worktree_path.clone(),
+                    head: Some(CommitId("base".into())),
+                    branch: Some("side".into()),
+                    detached: false,
+                    added: 1,
+                    modified: 0,
+                    deleted: 0,
+                    staged: Vec::new(),
+                    unstaged: Vec::new(),
+                },
+            ]));
+            repo.worktree_dirty_rev = 1;
+            Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(RepoId(1)),
+                ..Default::default()
             })
+        };
+
+        /// The visible row `base` renders on, and the list row its worktree
+        /// sits on, read back after the cache has settled at `visible_len` rows.
+        fn anchored_rows(
+            cx: &mut gpui::VisualTestContext,
+            view: &gpui::Entity<GitCometView>,
+            visible_len: usize,
+        ) -> (usize, usize, usize) {
+            wait_until(cx, "history cache to match the stash list", |cx| {
+                cx.update(|_window, app| {
+                    let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                    history_view
+                        .read(app)
+                        .history_cache
+                        .as_ref()
+                        .is_some_and(|cache| cache.base.row_vms.len() == visible_len)
+                })
+            });
+
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view.update(app, |history, _cx| {
+                    let plan = history.ensure_history_list_plan();
+                    let base_visible_ix = history
+                        .history_cache
+                        .as_ref()
+                        .expect("cache")
+                        .base
+                        .visible_ix_by_commit
+                        .get(&CommitId("base".into()))
+                        .copied()
+                        .expect("the anchored commit is on screen");
+                    (
+                        base_visible_ix,
+                        plan.list_ix_for_worktree(0)
+                            .expect("the dirty worktree keeps its row"),
+                        plan.list_ix_for_visible(base_visible_ix),
+                    )
+                })
+            })
+        }
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
         });
-    }
 
-    /// A selection left over from a wider page must read as "nothing to relate
-    /// to", not as "every row is unrelated" -- otherwise the whole list dims.
-    #[gpui::test]
-    fn an_anchor_missing_from_the_page_leaves_every_row_unhighlighted(
-        cx: &mut gpui::TestAppContext,
-    ) {
-        let _visual_guard = crate::test_support::lock_visual_test();
-        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
-        let (view, cx) =
-            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        ensure_history_cache_for_tests(cx, &view, state_with_stashes(Vec::new(), 1));
+        let (before_visible_ix, before_worktree_ix, before_commit_ix) = anchored_rows(cx, &view, 3);
+        assert_eq!(
+            before_visible_ix, 2,
+            "with no stashes every commit is on screen"
+        );
+        assert_eq!(
+            before_worktree_ix + 1,
+            before_commit_ix,
+            "the worktree row sits directly above the commit it is anchored on"
+        );
 
-        let repo_id = RepoId(42);
         ensure_history_cache_for_tests(
             cx,
             &view,
-            related_commits_test_state(repo_id, Some("filtered-out")),
+            state_with_stashes(
+                vec![StashEntry {
+                    index: 0,
+                    id: CommitId("wip".into()),
+                    message: "WIP on main: base".into(),
+                    created_at: None,
+                }],
+                2,
+            ),
         );
-        let history_view = related_commits_view(cx, &view);
+        let (after_visible_ix, after_worktree_ix, after_commit_ix) = anchored_rows(cx, &view, 2);
+        assert_eq!(
+            after_visible_ix, 1,
+            "the stash helper commit must have been filtered out of the page"
+        );
+        assert_eq!(
+            after_worktree_ix + 1,
+            after_commit_ix,
+            "the replanned worktree row must follow its commit up the renumbered page"
+        );
+    }
 
-        schedule_related_commits(cx, &history_view);
-        wait_until(cx, "the empty relation to settle", |cx| {
+    /// The lane colour is read out of `graph_rows`, which `force_branch_head_lane`
+    /// reshapes whenever the branch list changes -- again without touching the log
+    /// fingerprint. A fingerprint-keyed memo keeps saturating whichever lane held
+    /// that colour index before the branch appeared.
+    #[gpui::test]
+    fn a_new_branch_recolours_the_selected_lane(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        // `behind` sits on the main lane. Pointing a branch at it makes
+        // `force_branch_head_lane` fork a whisker lane for the head, and that fork
+        // takes a palette slot -- so `other`, whose lane is born on the row *below*
+        // it, draws a different colour than it did before the branch existed.
+        let page = Arc::new(log_page(
+            vec![
+                commit("tip", &["behind"], "tip"),
+                commit("behind", &["base"], "behind"),
+                commit("other", &["base"], "other"),
+                commit("base", &[], "base"),
+            ],
+            None,
+        ));
+
+        let state_with_branches = |branches: Vec<Branch>, branches_rev: u64| {
+            let mut repo = RepoState::new_opening(
+                RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("/tmp/history-lane-recolour"),
+                },
+            );
+            repo.history_state.history_scope = LogScope::AllBranches;
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.head_branch_rev = 1;
+            repo.branches = Loadable::Ready(Arc::new(branches));
+            repo.branches_rev = branches_rev;
+            repo.log = Loadable::Ready(Arc::clone(&page));
+            repo.log_rev = 1;
+            repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+            repo.history_state.log_rev = 1;
+            repo.history_state.selected_commit = Some(CommitId("other".into()));
+            Arc::new(AppState {
+                repos: vec![repo],
+                active_repo: Some(RepoId(1)),
+                ..Default::default()
+            })
+        };
+
+        fn selected_lane_colour(
+            cx: &mut gpui::VisualTestContext,
+            view: &gpui::Entity<GitCometView>,
+        ) -> (
+            Option<crate::view::rows::history_graph_paint::SelectedLane>,
+            Option<crate::view::rows::history_graph_paint::SelectedLane>,
+        ) {
             cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view.update(app, |history, _cx| {
+                    let memoised = history.history_selected_lane(false);
+                    // The same answer computed from scratch. The memo is the only
+                    // thing that can make these two disagree.
+                    history.history_selected_lane_color_cache = None;
+                    let fresh = history.history_selected_lane(false);
+                    (memoised, fresh)
+                })
+            })
+        }
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        ensure_history_cache_for_tests(
+            cx,
+            &view,
+            state_with_branches(vec![branch("main", "tip")], 1),
+        );
+        wait_until(cx, "history cache for the unbranched graph", |cx| {
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
                 history_view
                     .read(app)
-                    .history_related_commits_cache
-                    .is_some()
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.request.branches_rev == 1)
             })
         });
+        let (before, before_fresh) = selected_lane_colour(cx, &view);
+        assert_eq!(before, before_fresh, "the memo must start out agreeing");
+        let before = before.expect("the selected commit is on a lane");
 
-        cx.update(|_window, app| {
-            let history = history_view.read(app);
-            assert!(
-                history
-                    .history_related_commits_cache
+        ensure_history_cache_for_tests(
+            cx,
+            &view,
+            state_with_branches(vec![branch("main", "tip"), branch("behind", "behind")], 2),
+        );
+        wait_until(cx, "history cache for the branched graph", |cx| {
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view
+                    .read(app)
+                    .history_cache
                     .as_ref()
-                    .is_some_and(|cache| cache.related.is_empty()),
-                "an anchor outside the page yields an empty bitset"
-            );
-            assert!(
-                history.history_related_commits_bits().is_none(),
-                "and that must not reach the rows, or every one of them renders dimmed"
-            );
+                    .is_some_and(|cache| cache.base.request.branches_rev == 2)
+            })
         });
+        let (after, after_fresh) = selected_lane_colour(cx, &view);
+        let after_fresh = after_fresh.expect("the selected commit is still on a lane");
+        assert_ne!(
+            before.color_ix, after_fresh.color_ix,
+            "fixture must actually recolour the selected lane, or this test proves \
+             nothing about the memo"
+        );
+        assert_eq!(
+            after,
+            Some(after_fresh),
+            "the memo must be reissued when the graph it read is rebuilt"
+        );
     }
 
     #[gpui::test]

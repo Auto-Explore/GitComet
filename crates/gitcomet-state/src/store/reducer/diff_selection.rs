@@ -453,6 +453,25 @@ pub(super) fn global_nav(
         }
     }
 
+    // Restore (or clear) a linked-worktree row selection. It is mutually
+    // exclusive with the commit selection -- each setter clears the other -- so
+    // it runs after the commit restore and only has the last word when the
+    // snapshot actually named a worktree.
+    {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return effects;
+        };
+        if repo_state.history_state.worktree_selection != snapshot.worktree_selection {
+            repo_state.set_worktree_selection(snapshot.worktree_selection.clone());
+            if snapshot.worktree_selection.is_some() {
+                repo_state.set_commit_details(Loadable::NotLoaded);
+                // Only the selected worktree's changed files are carried in
+                // state, so the restored row needs a scan to fetch its own.
+                effects.extend(super::effects::request_worktree_dirty_effect(repo_state));
+            }
+        }
+    }
+
     // Restore the two-point comparison. This has to run before the diff-target
     // restore below: entering a comparison clears the diff pane, so doing it
     // afterwards would wipe the very target this step is meant to show.
@@ -632,6 +651,7 @@ pub(super) fn clear_diff_selection(state: &mut AppState, repo_id: RepoId) -> Vec
 pub(super) fn open_inline_submodule_diff(
     state: &mut AppState,
     repo_id: RepoId,
+    origin: crate::model::ForeignDiffOrigin,
     submodule_repo_path: std::path::PathBuf,
     parent_submodule_path: std::path::PathBuf,
     entries: Vec<InlineSubmoduleDiffEntry>,
@@ -648,6 +668,7 @@ pub(super) fn open_inline_submodule_diff(
     let load_plan = inline_submodule_selected_diff_load_plan(&target);
     let rev = next_inline_submodule_diff_rev(repo_state);
     repo_state.diff_state.inline_submodule_diff = Some(InlineSubmoduleDiffState {
+        origin,
         submodule_repo_path,
         parent_submodule_path,
         entries,
@@ -715,6 +736,40 @@ pub(super) fn select_inline_submodule_diff(
         next_load_plan
     };
     repo_state.bump_diff_state_rev();
+
+    let mut effects = SelectDiffEffects::new();
+    push_inline_submodule_diff_load_effects(repo_id, inline_rev, load_plan, &mut effects);
+    effects.into_vec()
+}
+
+/// Re-issues the loads for the inline diff already on screen, without moving the
+/// selection.
+///
+/// `select_inline_submodule_diff` is a no-op once its target is selected, which
+/// is right for a click and wrong for a rescan: a linked worktree's file can
+/// change contents without changing which entry it is, and no other trigger
+/// invalidates that patch -- the filesystem watcher covers the repo the user has
+/// open, not the other worktrees.
+///
+/// The load-plan state is deliberately left alone. Resetting `diff` to `Loading`
+/// would flash the pane empty on every scan; the reply is gated on `inline.rev`,
+/// so bumping it is enough to make the in-flight load stale and let the new one
+/// replace the contents when it lands.
+pub(super) fn refresh_inline_submodule_selected_diff(
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let inline_rev = next_inline_submodule_diff_rev(repo_state);
+    let load_plan = {
+        let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+            return Vec::new();
+        };
+        inline.rev = inline_rev;
+        inline_submodule_selected_diff_load_plan(&inline.target)
+    };
 
     let mut effects = SelectDiffEffects::new();
     push_inline_submodule_diff_load_effects(repo_id, inline_rev, load_plan, &mut effects);

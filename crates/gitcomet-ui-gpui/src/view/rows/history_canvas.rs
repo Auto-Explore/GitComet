@@ -124,17 +124,21 @@ struct HistoryChipVisual {
 fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryChipVisual {
     match kind {
         HistoryChipStyleKind::Tag => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent, 0.35),
-            bg: with_alpha(theme.colors.accent, 0.12),
-            text: theme.colors.accent,
+            border: with_alpha(theme.colors.accent.foreground, 0.35),
+            bg: with_alpha(theme.colors.accent.foreground, 0.12),
+            text: theme.colors.accent.foreground,
         },
         // The HEAD chip carries no selection state: a ring around a pill that is
         // already a solid accent fill reads as a rendering artifact, not as a
         // selection. Selecting the checked-out branch is left unmarked here.
         HistoryChipStyleKind::Head => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent, 0.90),
-            bg: with_alpha(theme.colors.accent, 0.90),
-            text: theme.colors.accent_text,
+            // `accent.solid`, not a near-opaque `accent.foreground`: this is the
+            // one solid-accent surface in the app, and the theme asserts 4.5:1
+            // of `on_solid` against `solid`. Mixing the fill from a different
+            // token let a theme pass that gate and still ship an unreadable chip.
+            border: theme.colors.accent.solid,
+            bg: theme.colors.accent.solid,
+            text: theme.colors.accent.on_solid,
         },
         // The branch picked in the sidebar is tinted rather than merely
         // re-bordered: on a busy ref column a border alone reads as noise, and
@@ -142,14 +146,14 @@ fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryCh
         // is the tip of. It stays short of the solid HEAD fill so the two
         // remain distinguishable on the same row.
         HistoryChipStyleKind::Branch { selected: true } => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent, 0.85),
-            bg: with_alpha(theme.colors.accent, 0.22),
+            border: with_alpha(theme.colors.accent.foreground, 0.85),
+            bg: with_alpha(theme.colors.accent.foreground, 0.22),
             text: selected_branch_label_color(theme),
         },
         HistoryChipStyleKind::Branch { selected: false } => HistoryChipVisual {
-            border: with_alpha(theme.colors.border, 0.90),
-            bg: theme.colors.surface_bg_elevated,
-            text: theme.colors.text_muted,
+            border: with_alpha(theme.colors.stroke.default, 0.90),
+            bg: theme.colors.surface.raised,
+            text: theme.colors.foreground.secondary,
         },
     }
 }
@@ -202,17 +206,20 @@ const UNRELATED_LANE_COLOR_MIX: f32 = 0.75;
 ///
 /// `related_to_selection` is `None` when no single commit is selected, and only
 /// then does the row render as ordinary body text. While a commit *is* selected
-/// the column splits in two: the commit, everything it descends from and its
-/// direct children go to full contrast (pure white on a dark theme, pure black
-/// on a light one), and everything else drops to muted -- so the selected
-/// commit's line of history reads as a continuous run.
+/// the column splits in two: every row the selected commit's own graph lane runs
+/// through goes to the theme's emphasis foreground, and everything else drops to
+/// muted -- so that lane reads as a continuous run down the list.
+///
+/// A lane, not an ancestry walk: a merge's second parent lives on a lane of its
+/// own and washes out with the rest, even though the commit is genuinely an
+/// ancestor. That is what the graph draws, so it is what the highlight follows.
 ///
 /// A row background tint was tried first and was far too intrusive: it washed
 /// most of the list and fought with the table's own shading for selection, HEAD
 /// and hover. Moving only the message text leaves all of that legible underneath.
 ///
-/// The revealed branch tip keeps `emphasis_text` when nothing is selected, so it
-/// still reads while the relation cache has not caught up.
+/// The revealed branch tip keeps its branch colour when nothing is selected, so
+/// it still reads while the relation cache has not caught up.
 fn history_summary_color(
     theme: AppTheme,
     is_selected_branch_tip: bool,
@@ -222,9 +229,9 @@ fn history_summary_color(
         Some(true) => full_contrast_text(theme),
         // All the way to muted: against pure white/black on the related rows,
         // anything short of this left the two too close to separate at a glance.
-        Some(false) => theme.colors.text_muted,
+        Some(false) => theme.colors.foreground.secondary,
         None if is_selected_branch_tip => selected_branch_label_color(theme),
-        None => theme.colors.text,
+        None => theme.colors.foreground.primary,
     }
 }
 
@@ -248,7 +255,7 @@ pub(super) fn selection_related_lane_color(
     if related_to_selection == Some(false) {
         crate::theme::mix_colors(
             lane_color,
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             UNRELATED_LANE_COLOR_MIX,
         )
     } else {
@@ -256,13 +263,14 @@ pub(super) fn selection_related_lane_color(
     }
 }
 
-/// Pure white or pure black, whichever the theme's appearance calls for.
+/// The theme's highest-contrast text against the list background.
+///
+/// This is what `foreground.emphasis` already means, and the bundled themes set
+/// it to exactly the pure white / pure black this used to hardcode -- so the
+/// built-in themes render identically, while a custom theme that deliberately
+/// softens its emphasis colour is no longer overridden here.
 fn full_contrast_text(theme: AppTheme) -> gpui::Rgba {
-    if theme.is_dark {
-        gpui::rgb(0xffffff)
-    } else {
-        gpui::rgb(0x000000)
-    }
+    theme.colors.foreground.emphasis
 }
 
 fn history_chip_style_kind(
@@ -351,12 +359,18 @@ pub(super) fn history_commit_row_canvas(
     tag_names: Arc<[HistoryTextVm]>,
     ref_items: Arc<[HistoryRefListItem]>,
     selected_branch: Option<SelectedHistoryBranch>,
-    related_to_selection: Option<bool>,
+    selected_lane: Option<super::history_graph_paint::SelectedLane>,
     lane_branch_name: Option<SharedString>,
     author: HistoryTextVm,
     summary: HistoryTextVm,
     when: HistoryTextVm,
     short_sha: HistoryTextVm,
+    // The background the row's own `div` carries (selection, HEAD, open context
+    // menu), and the one it swaps in while hovered. Mirrored rather than painted
+    // again: the graph's icon nodes knock their glyphs out in the row background,
+    // so the canvas has to know what the row is actually showing.
+    row_bg_overlay: Option<gpui::Rgba>,
+    hover_bg_overlay: gpui::Rgba,
 ) -> AnyElement {
     super::canvas::keyed_canvas(
         ("history_commit_row_canvas", row_id),
@@ -376,8 +390,18 @@ pub(super) fn history_commit_row_canvas(
             let Some(graph_row) = graph_rows.get(graph_row_ix) else {
                 return;
             };
-            if hitbox.is_hovered(window) {
-                window.paint_quad(fill(bounds, theme.colors.hover));
+            // What the row is painted over, flattened as it is built up, so the
+            // graph's icon nodes can knock their glyphs out in it. The row's own
+            // `div` already paints the hover tint (or `row_bg_overlay` when not
+            // hovered) behind this canvas, so that one is only accounted for
+            // here, never painted a second time.
+            let mut row_background = theme.colors.surface.canvas;
+            if let Some(overlay) = if hitbox.is_hovered(window) {
+                Some(hover_bg_overlay)
+            } else {
+                row_bg_overlay
+            } {
+                row_background = crate::theme::composite_over(row_background, overlay);
             }
             // Purple highlight on the commit currently being browsed historically.
             if view
@@ -385,10 +409,10 @@ pub(super) fn history_commit_row_canvas(
                 .active_repo()
                 .is_some_and(|repo| repo.browsing_commit() == Some(&commit_id))
             {
-                window.paint_quad(fill(
-                    bounds,
-                    crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22),
-                ));
+                let tint =
+                    crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22);
+                window.paint_quad(fill(bounds, tint));
+                row_background = crate::theme::composite_over(row_background, tint);
             }
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
 
@@ -482,13 +506,17 @@ pub(super) fn history_commit_row_canvas(
                 size((summary_right - x).max(px(0.0)), bounds.size.height),
             );
 
-            // Rows unrelated to the selection mute their lane colour too: a
-            // full-strength border and fade on a dimmed row read as louder than
-            // the history they are supposed to sit behind.
-            let node_color = selection_related_lane_color(
+            // Everything coloured from this row's lane -- the node, the
+            // message border, the fade wash and the hover badge -- washes with
+            // that lane, so a row never shows two different strengths of the
+            // same colour.
+            let related_to_selection = selected_lane
+                .map(|selected| selected.covers(theme, graph_row_ix, graph_row.node_color_ix));
+            let node_color = super::history_graph_paint::lane_wash_color(
                 theme,
-                history_graph::lane_color(theme, graph_row.node_color_ix),
-                related_to_selection,
+                graph_row.node_color_ix,
+                graph_row_ix,
+                selected_lane,
             );
 
             // A lane-coloured wash across the right of the graph column, fading
@@ -498,25 +526,13 @@ pub(super) fn history_commit_row_canvas(
             //
             // `graph_bounds.right()` is exactly `summary_bounds.left()`, so the
             // gradient ends where the border begins.
-            if show_graph && show_graph_color_marker && graph_bounds.size.width > px(0.0) {
-                let fade_w = graph_bounds
-                    .size
-                    .width
-                    .min(scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX));
-                window.paint_quad(fill(
-                    Bounds::new(
-                        point(graph_bounds.right() - fade_w, graph_bounds.top()),
-                        size(fade_w, graph_bounds.size.height),
-                    ),
-                    gpui::linear_gradient(
-                        90.0,
-                        gpui::linear_color_stop(with_alpha(node_color, 0.0), 0.0),
-                        gpui::linear_color_stop(
-                            with_alpha(node_color, HISTORY_GRAPH_FADE_ALPHA),
-                            1.0,
-                        ),
-                    ),
-                ));
+            if show_graph && show_graph_color_marker {
+                super::history_graph_paint::paint_graph_fade(
+                    node_color,
+                    graph_bounds,
+                    scaled_px(HISTORY_GRAPH_FADE_WIDTH_PX),
+                    window,
+                );
             }
 
             if show_graph {
@@ -529,10 +545,14 @@ pub(super) fn history_commit_row_canvas(
                             super::history_graph_paint::paint_history_graph(
                                 theme,
                                 graph_row,
+                                graph_row_ix,
                                 connect_from_top_col,
                                 is_stash_node,
+                                selected_lane,
+                                row_background,
                                 graph_bounds,
                                 window,
+                                cx,
                             );
                         });
                     },
@@ -625,7 +645,7 @@ pub(super) fn history_commit_row_canvas(
                                 &probe,
                                 fx_hash_str(probe.as_ref()),
                                 branch_content_bounds.size.width,
-                                theme.colors.text_muted,
+                                theme.colors.foreground.secondary,
                                 None,
                             );
                             shaped.width + chip_pad_x * 2.0 + chip_gap
@@ -761,7 +781,7 @@ pub(super) fn history_commit_row_canvas(
                                 &label,
                                 fx_hash_str(label.as_ref()),
                                 (branch_content_bounds.right() - x - chip_pad_x * 2.0).max(px(0.0)),
-                                theme.colors.text_muted,
+                                theme.colors.foreground.secondary,
                                 None,
                             );
                             let chip_bounds = Bounds::new(
@@ -788,7 +808,8 @@ pub(super) fn history_commit_row_canvas(
                 );
             }
 
-            let mut summary_text_left = summary_bounds.left() + cell_pad_x;
+            let mut summary_text_left =
+                summary_bounds.left() + scaled_px(history_message_text_left_px(false));
             if show_graph_color_marker {
                 // A lane-coloured border down the left edge of the message cell,
                 // where the graph column's fade lands. Inset vertically so
@@ -807,7 +828,8 @@ pub(super) fn history_commit_row_canvas(
                     )
                     .corner_radii(border_w * 0.5),
                 );
-                summary_text_left = summary_bounds.left() + border_w + scaled_px(6.0);
+                summary_text_left =
+                    summary_bounds.left() + scaled_px(history_message_text_left_px(true));
             }
 
             let summary_text_bounds = Bounds::new(
@@ -921,7 +943,7 @@ pub(super) fn history_commit_row_canvas(
                     author.shared(),
                     author.text_hash(),
                     author_text_bounds.size.width.max(px(0.0)),
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     None,
                 );
                 window.with_content_mask(
@@ -956,7 +978,7 @@ pub(super) fn history_commit_row_canvas(
                     when.shared(),
                     when.text_hash(),
                     date_text_bounds.size.width.max(px(0.0)),
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     Some(UI_MONOSPACE_FONT_FAMILY),
                 );
                 let origin_x =
@@ -993,7 +1015,7 @@ pub(super) fn history_commit_row_canvas(
                     short_sha.shared(),
                     short_sha.text_hash(),
                     sha_text_bounds.size.width.max(px(0.0)),
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     Some(UI_MONOSPACE_FONT_FAMILY),
                 );
                 let origin_x = (sha_text_bounds.right() - shaped.width).max(sha_text_bounds.left());
@@ -1323,7 +1345,7 @@ mod tests {
         for theme in [dark, light] {
             let on_chain = history_summary_color(theme, false, Some(true));
             // Has to actually move off body text, or the cue says nothing.
-            assert_ne!(on_chain, theme.colors.text);
+            assert_ne!(on_chain, theme.colors.foreground.primary);
             // The relation covers the tip too, so it wins over tip styling.
             assert_eq!(history_summary_color(theme, true, Some(true)), on_chain);
         }
@@ -1337,8 +1359,8 @@ mod tests {
 
             // Pushed all the way to muted, and clearly apart from both the
             // related rows' full contrast and ordinary body text.
-            assert_eq!(off, theme.colors.text_muted);
-            assert_ne!(off, theme.colors.text);
+            assert_eq!(off, theme.colors.foreground.secondary);
+            assert_ne!(off, theme.colors.foreground.primary);
             assert_ne!(off, on);
         }
     }
@@ -1353,7 +1375,7 @@ mod tests {
             assert_eq!(selection_related_lane_color(theme, lane, None), lane);
             assert_eq!(
                 selection_related_summary_color(theme, None),
-                theme.colors.text
+                theme.colors.foreground.primary
             );
 
             // On the selected chain: full contrast, matching the commit rows.
@@ -1368,7 +1390,7 @@ mod tests {
             assert_ne!(selection_related_lane_color(theme, lane, Some(false)), lane);
             assert_eq!(
                 selection_related_summary_color(theme, Some(false)),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
         }
     }
@@ -1376,7 +1398,10 @@ mod tests {
     #[test]
     fn summaries_are_plain_body_text_while_nothing_is_selected() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-            assert_eq!(history_summary_color(theme, false, None), theme.colors.text);
+            assert_eq!(
+                history_summary_color(theme, false, None),
+                theme.colors.foreground.primary
+            );
         }
     }
 
@@ -1394,7 +1419,7 @@ mod tests {
             // way the tip must move away from body text, not sit between it and
             // the muted text used for de-emphasized columns.
             assert_eq!(
-                tip, theme.colors.emphasis_text,
+                tip, theme.colors.foreground.emphasis,
                 "the tip summary should use the theme's emphasis color"
             );
         }

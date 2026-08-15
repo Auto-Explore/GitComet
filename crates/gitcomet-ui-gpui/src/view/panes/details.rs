@@ -11,6 +11,21 @@ struct PendingCommitAmend {
     last_command_log_entry: Option<CommandLogEntry>,
 }
 
+/// The cached [`WorktreeFileListInputs`] and the scan they were derived from:
+/// repo, worktree-dirty revision, and the worktree's own path.
+type WorktreeFileListInputsCacheEntry = (
+    (RepoId, u64, std::path::PathBuf),
+    Arc<WorktreeFileListInputs>,
+);
+
+/// A linked worktree's changed files, derived once per scan: the rows render from
+/// `files`, and a click hands `entries` to the inline-diff machinery so the diff
+/// view can step between them.
+pub(in super::super) struct WorktreeFileListInputs {
+    pub(in super::super) files: Vec<gitcomet_core::domain::CommitFileChange>,
+    pub(in super::super) entries: Vec<gitcomet_state::model::InlineSubmoduleDiffEntry>,
+}
+
 pub(in super::super) struct DetailsPaneView {
     pub(in super::super) store: Arc<AppStore>,
     pub(in super::super) state: Arc<AppState>,
@@ -42,6 +57,7 @@ pub(in super::super) struct DetailsPaneView {
     pub(in super::super) commit_files_scroll: UniformListScrollHandle,
     pub(in super::super) commit_multi_scroll: UniformListScrollHandle,
     pub(in super::super) range_files_scroll: UniformListScrollHandle,
+    pub(in super::super) worktree_files_scroll: UniformListScrollHandle,
     pub(in super::super) commit_message_scroll: ScrollHandle,
     pub(in super::super) commit_scroll: ScrollHandle,
 
@@ -73,12 +89,25 @@ pub(in super::super) struct DetailsPaneView {
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
     range_file_rows:
         std::cell::RefCell<crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64)>>,
+    /// Keyed by the worktree as well as the scan revision: `rows_for` returns
+    /// cached rows on a key match alone, and `worktree_dirty_rev` bumps per
+    /// repo-wide scan, so without the path a different worktree would be served
+    /// the previous one's rows.
+    worktree_file_rows: std::cell::RefCell<
+        crate::view::rows::CommitFileRowPresentationCache<(RepoId, u64, std::path::PathBuf)>,
+    >,
+    /// The per-file inputs the worktree file list is built from, derived once per
+    /// scan rather than per frame. Same key as `worktree_file_rows`, and for the
+    /// same reason.
+    worktree_file_inputs: std::cell::RefCell<Option<WorktreeFileListInputsCacheEntry>>,
     pub(in super::super) untracked_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) unstaged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) staged_path_alignment_group: components::PathTruncationAlignmentGroup,
     pub(in super::super) commit_files_path_alignment_group:
         components::PathTruncationAlignmentGroup,
     pub(in super::super) range_files_path_alignment_group: components::PathTruncationAlignmentGroup,
+    pub(in super::super) worktree_files_path_alignment_group:
+        components::PathTruncationAlignmentGroup,
 }
 
 pub(in super::super) struct DetailsPaneInit {
@@ -201,6 +230,8 @@ impl DetailsPaneView {
             repo.ops_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.history_state.commit_details_rev.hash(&mut hasher);
+            repo.history_state.worktree_selection_rev.hash(&mut hasher);
+            repo.worktree_dirty_rev.hash(&mut hasher);
             repo.merge_message_rev.hash(&mut hasher);
             repo.recent_commit_messages_rev.hash(&mut hasher);
             repo.head_branch_rev.hash(&mut hasher);
@@ -390,6 +421,7 @@ impl DetailsPaneView {
             commit_files_scroll: UniformListScrollHandle::default(),
             commit_multi_scroll: UniformListScrollHandle::default(),
             range_files_scroll: UniformListScrollHandle::default(),
+            worktree_files_scroll: UniformListScrollHandle::default(),
             commit_message_scroll,
             commit_scroll: ScrollHandle::new(),
             commit_message_input,
@@ -419,11 +451,17 @@ impl DetailsPaneView {
             range_file_rows: std::cell::RefCell::new(
                 crate::view::rows::CommitFileRowPresentationCache::default(),
             ),
+            worktree_file_rows: std::cell::RefCell::new(
+                crate::view::rows::CommitFileRowPresentationCache::default(),
+            ),
+            worktree_file_inputs: std::cell::RefCell::new(None),
             untracked_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             unstaged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             staged_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             commit_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
             range_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(),
+            worktree_files_path_alignment_group: components::PathTruncationAlignmentGroup::default(
+            ),
         };
         pane.sync_scaled_section_heights_from_design();
         pane.set_theme(theme, cx);
@@ -856,6 +894,106 @@ impl DetailsPaneView {
         cache.rows_for(&(repo_id, range_files_rev), files)
     }
 
+    /// The scan entry for the worktree row the history selection is on.
+    pub(in super::super) fn selected_worktree_summary(
+        &self,
+    ) -> Option<&gitcomet_core::domain::WorktreeDirtySummary> {
+        let repo = self.active_repo()?;
+        let path = repo.history_state.worktree_selection.as_ref()?;
+        let Loadable::Ready(dirty) = &repo.worktree_dirty else {
+            return None;
+        };
+        dirty.iter().find(|summary| &summary.path == path)
+    }
+
+    /// The changed files of a linked worktree, in the shape the row builder and
+    /// the inline-diff navigation need them.
+    ///
+    /// Derived once per scan and shared by every frame afterwards. Built inline it
+    /// is O(all changed files) — three vectors and three `PathBuf` clones per file
+    /// — on every layout pass of a list that only ever shows a screenful of rows.
+    pub(in super::super) fn cached_worktree_file_inputs(
+        &self,
+        repo_id: RepoId,
+        worktree_dirty_rev: u64,
+        summary: &gitcomet_core::domain::WorktreeDirtySummary,
+    ) -> Arc<WorktreeFileListInputs> {
+        let mut cache = self.worktree_file_inputs.borrow_mut();
+        // Compared field by field rather than against a freshly built key: the hit
+        // path runs every frame, and building the key clones a `PathBuf`.
+        if let Some(((cached_repo, cached_rev, cached_path), inputs)) = cache.as_ref()
+            && *cached_repo == repo_id
+            && *cached_rev == worktree_dirty_rev
+            && cached_path == &summary.path
+        {
+            return Arc::clone(inputs);
+        }
+
+        // Every file is an entry so the diff view can step between them with the
+        // same navigation submodule diffs get. Built by the shared builder rather
+        // than here: the reducer re-resolves an open diff's entries against each
+        // new scan, and it has to arrive at the same order these rows are in.
+        let entries = gitcomet_state::model::worktree_inline_diff_entries(summary);
+        let files = entries
+            .iter()
+            .map(|entry| gitcomet_core::domain::CommitFileChange {
+                path: entry.path.clone(),
+                kind: entry.kind,
+                is_submodule: false,
+                additions: None,
+                deletions: None,
+            })
+            .collect();
+
+        let inputs = Arc::new(WorktreeFileListInputs { files, entries });
+        *cache = Some((
+            (repo_id, worktree_dirty_rev, summary.path.clone()),
+            Arc::clone(&inputs),
+        ));
+        inputs
+    }
+
+    /// Presentation rows for a linked worktree's changed files. Keyed on the
+    /// scan revision, so it rebuilds when the worktree is rescanned and is shared
+    /// across renders otherwise.
+    pub(in super::super) fn cached_worktree_file_rows(
+        &self,
+        repo_id: RepoId,
+        worktree_dirty_rev: u64,
+        worktree_path: &std::path::Path,
+        files: &[gitcomet_core::domain::CommitFileChange],
+    ) -> Arc<[crate::view::rows::CommitFileRowPresentation]> {
+        let mut cache = self.worktree_file_rows.borrow_mut();
+        cache.rows_for(
+            &(repo_id, worktree_dirty_rev, worktree_path.to_path_buf()),
+            files,
+        )
+    }
+
+    /// Path-truncation signature for a linked worktree's file rows.
+    ///
+    /// The scan revision bumps per repo-wide rescan, not per worktree, so the
+    /// worktree's own path has to be in here: two worktrees with the same file
+    /// count and the same visible range are otherwise indistinguishable, and the
+    /// second one would inherit the first one's measured alignment.
+    pub(in super::super) fn worktree_files_visible_signature(
+        &self,
+        repo_id: RepoId,
+        worktree_dirty_rev: u64,
+        worktree_path: &std::path::Path,
+        range: &Range<usize>,
+        total_rows: usize,
+    ) -> u64 {
+        path_alignment_visible_signature(&(
+            repo_id,
+            worktree_dirty_rev,
+            worktree_path,
+            total_rows,
+            range.start,
+            range.end,
+        ))
+    }
+
     pub(in super::super) fn range_files_visible_signature(
         &self,
         repo_id: RepoId,
@@ -967,6 +1105,13 @@ impl DetailsPaneView {
         self.state = next;
         self.commit_message_drafts
             .retain(|repo_id, _| self.state.repos.iter().any(|repo| repo.id == *repo_id));
+
+        // Nothing renders a worktree's file list once its row is deselected, and
+        // the derived inputs are one entry per changed file -- worth releasing
+        // rather than holding until some other worktree replaces them.
+        if self.selected_worktree_summary().is_none() {
+            self.worktree_file_inputs.borrow_mut().take();
+        }
 
         let repos = &self.state.repos;
         let last_status = &mut self.status_multi_selection_last_status;

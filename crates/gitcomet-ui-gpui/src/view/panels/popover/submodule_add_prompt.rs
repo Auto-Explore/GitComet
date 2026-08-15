@@ -27,7 +27,7 @@ fn advanced_toggle(
         } else {
             "icons/chevron_down.svg"
         },
-        theme.colors.text_muted,
+        theme.colors.foreground.secondary,
         scaled_px(12.0),
     ))
 }
@@ -55,9 +55,9 @@ fn force_toggle(
         div()
             .text_sm()
             .text_color(if enabled {
-                theme.colors.success
+                theme.colors.status.success.foreground
             } else {
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             })
             .child(if enabled { "On" } else { "Off" }),
     )
@@ -79,7 +79,7 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(640.0))
         .child(popover_title("Add submodule"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(input_label(theme, "URL"))
         .child(
             div()
@@ -147,13 +147,13 @@ pub(super) fn panel(
                         .px_2()
                         .pb_1()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(
                             "Force reuses an existing local submodule git dir or bypasses Git's normal collision refusal.",
                         ),
                 )
         })
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

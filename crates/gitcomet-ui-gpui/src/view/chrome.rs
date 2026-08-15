@@ -201,11 +201,11 @@ fn lighten(color: gpui::Rgba, amount: f32) -> gpui::Rgba {
 pub(in crate::view) fn title_bar_background(theme: AppTheme, window_is_active: bool) -> gpui::Rgba {
     if window_is_active {
         lighten(
-            theme.colors.surface_bg,
+            theme.colors.surface.panel,
             if theme.is_dark { 0.06 } else { 0.03 },
         )
     } else {
-        theme.colors.surface_bg
+        theme.colors.surface.panel
     }
 }
 
@@ -260,9 +260,12 @@ pub(in crate::view) fn client_frame_corner_rounding(
 
 fn window_frame_outline_color(theme: AppTheme) -> gpui::Rgba {
     if cfg!(target_os = "macos") {
-        with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.90 })
+        with_alpha(
+            theme.colors.stroke.default,
+            if theme.is_dark { 0.96 } else { 0.90 },
+        )
     } else {
-        theme.colors.border
+        theme.colors.stroke.default
     }
 }
 
@@ -444,17 +447,21 @@ impl Render for TitleBarView {
                 .upgrade()
                 .is_some_and(|root| show_titlebar_repo_tabs(root.read(cx).view_mode));
         let app_menu_open = self.app_menu_open;
-        let app_menu_open_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.30 } else { 0.24 });
-        let app_menu_open_active_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.48 } else { 0.38 });
+        let app_menu_open_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.30 } else { 0.24 },
+        );
+        let app_menu_open_active_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.48 } else { 0.38 },
+        );
         let app_menu_hover_bg = theme.titlebar_hover_overlay();
         let app_menu_active_bg = theme.titlebar_active_overlay();
         // Matches `ButtonStyle::Transparent`'s hover border exactly, so the
         // hand-rolled repo-picker div and the `Button`s either side of it grow
         // the same outline under the cursor.
         let titlebar_hover_border = with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.40 } else { 0.30 },
         );
         let bar_bg = title_bar_background(theme, window.is_window_active());
@@ -469,7 +476,7 @@ impl Render for TitleBarView {
                 components::Button::new("app_menu_btn", "")
                     .start_slot(svg_icon(
                         "icons/menu.svg",
-                        theme.colors.text,
+                        theme.colors.foreground.primary,
                         scaled_px(16.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -541,7 +548,7 @@ impl Render for TitleBarView {
                     })
                     .child(svg_icon(
                         "icons/chevron_down.svg",
-                        theme.colors.text,
+                        theme.colors.foreground.primary,
                         scaled_px(16.0),
                     ))
                     .block_mouse_except_scroll()
@@ -635,8 +642,8 @@ impl Render for TitleBarView {
             ui_scale_percent,
             "win_min_btn",
             "icons/generic_minimize.svg",
-            theme.colors.text_muted,
-            theme.colors.text,
+            theme.colors.foreground.secondary,
+            theme.colors.foreground.primary,
         )
         .id("win_min")
         .debug_selector(|| "titlebar_win_min".to_string())
@@ -661,8 +668,8 @@ impl Render for TitleBarView {
             ui_scale_percent,
             "win_max_btn",
             max_icon,
-            theme.colors.text_muted,
-            theme.colors.text,
+            theme.colors.foreground.secondary,
+            theme.colors.foreground.primary,
         )
         .id("win_max")
         .debug_selector(|| "titlebar_win_max".to_string())
@@ -679,8 +686,8 @@ impl Render for TitleBarView {
             ui_scale_percent,
             "win_close_btn",
             "icons/generic_close.svg",
-            theme.colors.text_muted,
-            theme.colors.danger,
+            theme.colors.foreground.secondary,
+            theme.colors.status.danger.foreground,
         )
         .id("win_close")
         .debug_selector(|| "titlebar_win_close".to_string())
@@ -813,7 +820,7 @@ pub(crate) fn window_frame(
         .id("window_surface")
         .size_full()
         .relative()
-        .bg(theme.colors.window_bg);
+        .bg(theme.colors.surface.canvas);
 
     if !suppress_frame {
         let draw_outline = should_draw_window_frame_outline();
@@ -852,8 +859,8 @@ mod tests {
                     ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_1",
                     "icons/generic_minimize.svg",
-                    theme.colors.text_muted,
-                    theme.colors.text,
+                    theme.colors.foreground.secondary,
+                    theme.colors.foreground.primary,
                 );
             })
             .is_ok()
@@ -864,8 +871,8 @@ mod tests {
                     ui_scale::DEFAULT_UI_SCALE_PERCENT,
                     "test_btn_2",
                     "icons/generic_close.svg",
-                    theme.colors.text_muted,
-                    theme.colors.danger,
+                    theme.colors.foreground.secondary,
+                    theme.colors.status.danger.foreground,
                 );
             })
             .is_ok()
@@ -895,18 +902,21 @@ mod tests {
         {
             assert_eq!(
                 window_frame_outline_color(dark),
-                with_alpha(dark.colors.border, 0.96)
+                with_alpha(dark.colors.stroke.default, 0.96)
             );
             assert_eq!(
                 window_frame_outline_color(light),
-                with_alpha(light.colors.border, 0.90)
+                with_alpha(light.colors.stroke.default, 0.90)
             );
         }
 
         #[cfg(not(target_os = "macos"))]
         {
-            assert_eq!(window_frame_outline_color(dark), dark.colors.border);
-            assert_eq!(window_frame_outline_color(light), light.colors.border);
+            assert_eq!(window_frame_outline_color(dark), dark.colors.stroke.default);
+            assert_eq!(
+                window_frame_outline_color(light),
+                light.colors.stroke.default
+            );
         }
     }
 

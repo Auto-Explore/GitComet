@@ -40,6 +40,9 @@ pub struct InteractiveRowStyle {
     active: Rgba,
     focus: Rgba,
     focus_ring: Rgba,
+    selected_indicator: Rgba,
+    focus_spread: f32,
+    show_selection_outline: bool,
     radius: f32,
 }
 
@@ -49,8 +52,11 @@ impl InteractiveRowStyle {
             surface,
             hover: theme.hover_overlay(),
             active: theme.active_overlay(),
-            focus: theme.colors.focus_ring_bg,
-            focus_ring: theme.colors.focus_ring,
+            focus: theme.colors.interaction.focus_background,
+            focus_ring: theme.colors.interaction.focus_ring,
+            selected_indicator: theme.colors.interaction.selected_indicator,
+            focus_spread: 1.0,
+            show_selection_outline: !theme.is_dark,
             radius: theme.radii.row,
         }
     }
@@ -94,6 +100,16 @@ impl InteractiveRowStyle {
             color: self.focus_ring.into(),
             offset: gpui::point(px(0.0), px(0.0)),
             blur_radius: px(0.0),
+            spread_radius: px(self.focus_spread),
+            inset: true,
+        }
+    }
+
+    fn selection_outline(self) -> gpui::BoxShadow {
+        gpui::BoxShadow {
+            color: self.selected_indicator.into(),
+            offset: gpui::point(px(0.0), px(0.0)),
+            blur_radius: px(0.0),
             spread_radius: px(1.0),
             inset: true,
         }
@@ -114,10 +130,14 @@ impl InteractiveRowStyle {
         let active = self.active_fill(state);
         let focus = self.focus_fill(state);
         let focus_outline = vec![self.focus_outline()];
+        let selection_outline = (self.show_selection_outline
+            && matches!(state, InteractiveRowState::Selected(_)))
+        .then(|| vec![self.selection_outline()]);
 
         row.rounded(px(self.radius))
             .cursor(CursorStyle::PointingHand)
             .when_some(resting, |row, background| row.bg(background))
+            .when_some(selection_outline, |row, outline| row.shadow(outline))
             .hover(move |row| row.bg(hover))
             .active(move |row| row.bg(active))
             .focus(move |row| row.bg(focus).shadow(focus_outline.clone()))
@@ -161,7 +181,7 @@ mod tests {
     fn selected_background_persists_through_hover_and_press() {
         let theme = dark_theme();
         let selected = gpui::rgba(0x22446680);
-        let style = InteractiveRowStyle::new(theme, theme.colors.sidebar_bg);
+        let style = InteractiveRowStyle::new(theme, theme.colors.surface.chrome);
         let state = InteractiveRowState::Selected(selected);
 
         assert_eq!(style.resting_fill(state), Some(selected));
@@ -170,21 +190,37 @@ mod tests {
     }
 
     #[test]
-    fn focus_outline_is_inset_and_does_not_require_layout_border() {
-        let theme = dark_theme();
-        let outline = InteractiveRowStyle::new(theme, theme.colors.sidebar_bg).focus_outline();
+    fn focus_outline_is_a_one_pixel_inset_in_both_appearances() {
+        for theme in [dark_theme(), AppTheme::gitcomet_light()] {
+            let outline =
+                InteractiveRowStyle::new(theme, theme.colors.surface.chrome).focus_outline();
+
+            assert!(outline.inset);
+            assert_eq!(outline.offset, gpui::point(px(0.0), px(0.0)));
+            assert_eq!(outline.blur_radius, px(0.0));
+            assert_eq!(outline.spread_radius, px(1.0));
+        }
+    }
+
+    #[test]
+    fn selection_outline_adds_a_non_fill_selection_cue() {
+        let theme = AppTheme::gitcomet_light();
+        let outline =
+            InteractiveRowStyle::new(theme, theme.colors.surface.chrome).selection_outline();
 
         assert!(outline.inset);
-        assert_eq!(outline.offset, gpui::point(px(0.0), px(0.0)));
-        assert_eq!(outline.blur_radius, px(0.0));
         assert_eq!(outline.spread_radius, px(1.0));
+        assert_eq!(
+            outline.color,
+            theme.colors.interaction.selected_indicator.into()
+        );
     }
 
     #[test]
     fn idle_rows_use_canonical_overlays_on_every_surface() {
         let theme = dark_theme();
-        let sidebar = InteractiveRowStyle::new(theme, theme.colors.sidebar_bg);
-        let popover = InteractiveRowStyle::new(theme, theme.colors.surface_bg_elevated);
+        let sidebar = InteractiveRowStyle::new(theme, theme.colors.surface.chrome);
+        let popover = InteractiveRowStyle::new(theme, theme.colors.surface.raised);
 
         assert_eq!(
             sidebar.hover_fill(InteractiveRowState::Idle),

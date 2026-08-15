@@ -74,14 +74,23 @@ pub fn repository_initials_box(
 ) -> Div {
     let scale = scale.into();
     let foreground = if active {
-        theme.colors.accent
+        theme.colors.accent.foreground
     } else {
-        with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 })
+        with_alpha(
+            theme.colors.foreground.primary,
+            if theme.is_dark { 0.72 } else { 0.62 },
+        )
     };
     let background = if active {
-        with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 })
+        with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.28 } else { 0.18 },
+        )
     } else {
-        with_alpha(theme.colors.text, if theme.is_dark { 0.16 } else { 0.11 })
+        with_alpha(
+            theme.colors.foreground.primary,
+            if theme.is_dark { 0.16 } else { 0.11 },
+        )
     };
     let size = scale.px(REPOSITORY_BADGE_SIZE_PX);
     let font_size = scale.px(REPOSITORY_BADGE_FONT_SIZE_PX);

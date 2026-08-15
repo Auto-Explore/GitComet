@@ -4625,3 +4625,153 @@ fn stage_selected_label_shrinks_when_the_details_pane_is_narrow(cx: &mut gpui::T
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// The worktree scan revision bumps per repo-wide rescan, not per worktree, so
+/// two worktrees with the same file count and the same visible range would share
+/// a path-truncation signature if the path were left out of it — and the second
+/// one would render with the first one's measured alignment.
+#[gpui::test]
+fn worktree_file_alignment_signatures_differ_per_worktree(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let repo_id = gitcomet_state::model::RepoId(4);
+        let signature = |path: &str| {
+            pane.worktree_files_visible_signature(
+                repo_id,
+                7,
+                std::path::Path::new(path),
+                &(0..5),
+                5,
+            )
+        };
+
+        assert_ne!(
+            signature("/wt/a"),
+            signature("/wt/b"),
+            "two worktrees scanned at the same revision must not share a signature"
+        );
+        assert_eq!(
+            signature("/wt/a"),
+            signature("/wt/a"),
+            "the same worktree keeps its alignment across renders"
+        );
+    });
+}
+
+/// The worktree file list is virtualized, but its inputs are one entry per
+/// changed file: building them inline made every layout pass O(all files). They
+/// are derived once per scan instead, and keyed by worktree — the scan revision
+/// alone bumps for the whole repo, so it cannot tell two worktrees apart.
+#[gpui::test]
+fn worktree_file_inputs_are_derived_once_per_scan_and_keyed_by_worktree(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let summary = |path: &str, files: usize| gitcomet_core::domain::WorktreeDirtySummary {
+        path: std::path::PathBuf::from(path),
+        head: Some(gitcomet_core::domain::CommitId("tip".into())),
+        branch: Some("side".to_string()),
+        detached: false,
+        added: files,
+        modified: 0,
+        deleted: 0,
+        staged: (0..files)
+            .map(|ix| gitcomet_core::domain::FileStatus {
+                path: std::path::PathBuf::from(format!("staged_{ix}.rs")),
+                kind: gitcomet_core::domain::FileStatusKind::Added,
+                conflict: None,
+            })
+            .collect(),
+        unstaged: (0..files)
+            .map(|ix| gitcomet_core::domain::FileStatus {
+                path: std::path::PathBuf::from(format!("unstaged_{ix}.rs")),
+                kind: gitcomet_core::domain::FileStatusKind::Modified,
+                conflict: None,
+            })
+            .collect(),
+    };
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).details_pane.read(app);
+        let repo_id = gitcomet_state::model::RepoId(9);
+        let worktree_a = summary("/wt/a", 3);
+        let worktree_b = summary("/wt/b", 3);
+
+        let first = pane.cached_worktree_file_inputs(repo_id, 1, &worktree_a);
+        let again = pane.cached_worktree_file_inputs(repo_id, 1, &worktree_a);
+        assert!(
+            Arc::ptr_eq(&first, &again),
+            "a second frame at the same scan revision must reuse the derived inputs"
+        );
+        assert_eq!(first.files.len(), 6);
+        assert_eq!(first.entries.len(), 6);
+
+        // `selected_ix` indexes `entries` by the row's position in `files`, so the
+        // two vectors have to stay in step -- staged first, then unstaged, each
+        // entry pointing at its own file and carrying the section it came from.
+        let staged_then_unstaged: Vec<_> =
+            first.files.iter().map(|file| file.path.clone()).collect();
+        assert_eq!(
+            staged_then_unstaged,
+            vec![
+                std::path::PathBuf::from("staged_0.rs"),
+                std::path::PathBuf::from("staged_1.rs"),
+                std::path::PathBuf::from("staged_2.rs"),
+                std::path::PathBuf::from("unstaged_0.rs"),
+                std::path::PathBuf::from("unstaged_1.rs"),
+                std::path::PathBuf::from("unstaged_2.rs"),
+            ],
+            "staged files come first, in scan order"
+        );
+        for (ix, entry) in first.entries.iter().enumerate() {
+            assert_eq!(
+                entry.path, first.files[ix].path,
+                "entry {ix} must describe the file rendered at row {ix}"
+            );
+            let staged = ix < 3;
+            assert_eq!(
+                entry.section,
+                if staged {
+                    gitcomet_state::model::InlineSubmoduleDiffSection::LiveStaged
+                } else {
+                    gitcomet_state::model::InlineSubmoduleDiffSection::LiveUnstaged
+                },
+                "entry {ix} must open in the section its file was scanned in"
+            );
+            assert_eq!(
+                entry.target,
+                gitcomet_core::domain::DiffTarget::WorkingTree {
+                    path: first.files[ix].path.clone(),
+                    area: if staged {
+                        gitcomet_core::domain::DiffArea::Staged
+                    } else {
+                        gitcomet_core::domain::DiffArea::Unstaged
+                    },
+                },
+                "entry {ix} must diff against the right side of the index"
+            );
+        }
+
+        // Same repo, same revision, same file count: only the path tells them apart.
+        let other = pane.cached_worktree_file_inputs(repo_id, 1, &worktree_b);
+        assert!(
+            !Arc::ptr_eq(&first, &other),
+            "another worktree must not be served the first one's files"
+        );
+
+        let rescanned = pane.cached_worktree_file_inputs(repo_id, 2, &worktree_b);
+        assert!(
+            !Arc::ptr_eq(&other, &rescanned),
+            "a new scan revision must rebuild them"
+        );
+    });
+}

@@ -7561,46 +7561,15 @@ fn assert_resolved_output_carries_treesitter_classes(
 
 /// A dark theme that differs from `gitcomet_dark` only in its syntax palette.
 fn other_dark_theme() -> crate::theme::AppTheme {
-    crate::theme::AppTheme::from_json_str(
+    crate::theme::AppTheme::from_json_str(&crate::theme::test_theme_json_with_syntax(
+        "gitcomet_dark",
         r##"{
-            "name": "OtherDark",
-            "themes": [
-                {
-                    "key": "other_dark",
-                    "name": "OtherDark",
-                    "appearance": "dark",
-                    "colors": {
-                        "window_bg": "#0d1016ff",
-                        "surface_bg": "#1f2127ff",
-                        "surface_bg_elevated": "#1f2127ff",
-                        "active_section": "#2d2f34ff",
-                        "border": "#2d2f34ff",
-                        "text": "#bfbdb6ff",
-                        "text_muted": "#8a8986ff",
-                        "accent": "#5ac1feff",
-                        "hover": "#2d2f34ff",
-                        "active": { "hex": "#2d2f34ff", "alpha": 0.78 },
-                        "focus_ring": { "hex": "#5ac1feff", "alpha": 0.60 },
-                        "focus_ring_bg": { "hex": "#5ac1feff", "alpha": 0.16 },
-                        "scrollbar_thumb": { "hex": "#8a8986ff", "alpha": 0.30 },
-                        "scrollbar_thumb_hover": { "hex": "#8a8986ff", "alpha": 0.42 },
-                        "scrollbar_thumb_active": { "hex": "#8a8986ff", "alpha": 0.52 },
-                        "danger": "#ef7177ff",
-                        "warning": "#feb454ff",
-                        "success": "#aad84cff"
-                    },
-                    "syntax": {
-                        "keyword": "#112233ff",
-                        "comment": "#445566ff"
-                    },
-                    "radii": { "panel": 2.0, "pill": 2.0, "row": 2.0 }
-                }
-            ]
+            "keyword": "#112233ff",
+            "comment": "#445566ff"
         }"##,
-    )
+    ))
     .expect("fixture theme JSON should parse")
 }
-
 /// The placeholder mask for a resolved-output text, matching what the pane
 /// derives: the placeholder rows minus their line terminator.
 fn resolved_output_placeholder_protected_ranges_for_test(

@@ -225,6 +225,11 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::WorktreeDirtyLoaded { repo_id, result } => f
+                .debug_struct("WorktreeDirtyLoaded")
+                .field("repo_id", repo_id)
+                .field("result", result)
+                .finish(),
             InternalMsg::RefMetadataLoaded { repo_id, result } => f
                 .debug_struct("RefMetadataLoaded")
                 .field("repo_id", repo_id)

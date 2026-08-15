@@ -24,6 +24,7 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
 
 ```javascript
 {
+  "schema_version": 2,
   "name": "My Theme Pack",
   "author": "Example Author",                           // Optional
   "themes": [
@@ -32,36 +33,72 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
       "name": "My Theme Dark",
       "appearance": "dark",
       "colors": {
-        "window_bg": "#10131aff",
-        "surface_bg": "#171b24ff",
-        "surface_bg_elevated": "#1d2230ff",
-        "active_section": "#262c3bff",
-        "border": "#2c3445ff",
-        "border_variant": "#ffffff14",                  // Optional
-        "shadow": "#000000ff",                          // Optional
-        "sidebar_bg": "#141821ff",                      // Optional
-        "tooltip_bg": "#0b0e14ff",                      // Optional
-        "tooltip_text": "#f5f7fbff",                    // Optional
-        "text": "#edf1f7ff",
-        "text_muted": "#9ea7b8ff",
-        "accent": "#59b7ffff",
-        "hover": "#222839ff",
-        "active": { "hex": "#3a4560ff", "alpha": 0.85 },
-        "focus_ring": { "hex": "#59b7ffff", "alpha": 0.55 },
-        "focus_ring_bg": { "hex": "#59b7ffff", "alpha": 0.16 },
-        "scrollbar_thumb": { "hex": "#9ea7b8ff", "alpha": 0.30 },
-        "scrollbar_thumb_hover": { "hex": "#9ea7b8ff", "alpha": 0.42 },
-        "scrollbar_thumb_active": { "hex": "#9ea7b8ff", "alpha": 0.52 },
-        "danger": "#f16b73ff",
-        "warning": "#ffc06aff",
-        "success": "#9edb63ff",
-        "diff_add_bg": "#163322ff",                     // Optional
-        "diff_add_text": "#b9f2c0ff",                   // Optional
-        "diff_remove_bg": "#40171dff",                  // Optional
-        "diff_remove_text": "#ffc4ccff",                // Optional
-        "input_placeholder": "#ffffff59",               // Optional
-        "accent_text": "#08111cff",                     // Optional
-        "emphasis_text": "#f5f7fbff",                   // Optional
+        "surface": {
+          "canvas": "#10131aff",
+          "chrome": "#171b24ff",
+          "panel": "#171b24ff",
+          "raised": "#1d2230ff",
+          "input": "#202633ff"
+        },
+        "foreground": {
+          "primary": "#edf1f7ff",
+          "secondary": "#9ea7b8ff",
+          "disabled": { "hex": "#9ea7b8ff", "alpha": 0.62 },
+          "placeholder": "#ffffff59",
+          "emphasis": "#ffffffff"
+        },
+        "stroke": {
+          "subtle": "#ffffff14",
+          "default": "#2c3445ff",
+          "control": "#556176ff"
+        },
+        "interaction": {
+          "hover_overlay": { "hex": "#edf1f7ff", "alpha": 0.07 },
+          "pressed_overlay": { "hex": "#edf1f7ff", "alpha": 0.11 },
+          "hover_background": "#222839ff",
+          "pressed_background": "#3a4560d9",
+          "selected_background": "#262c3bff",
+          "selected_foreground": "#edf1f7ff",
+          "selected_indicator": "#59b7ffff",
+          "focus_ring": "#59b7ffff",
+          "focus_background": { "hex": "#59b7ffff", "alpha": 0.16 }
+        },
+        "accent": {
+          "foreground": "#59b7ffff",
+          "solid": "#59b7ffff",
+          "on_solid": "#08111cff",
+          "subtle_background": "#183246ff"
+        },
+        "status": {
+          "info": { "foreground": "#59b7ffff", "background": "#183246ff", "border": "#387ba7ff" },
+          "success": { "foreground": "#9edb63ff", "background": "#20351fff", "border": "#59823fff" },
+          "warning": { "foreground": "#ffc06aff", "background": "#3b2d1bff", "border": "#98713eff" },
+          "danger": { "foreground": "#f16b73ff", "background": "#3b1d24ff", "border": "#95434aff" }
+        },
+        "editor": {
+          "background": "#10131aff",
+          "foreground": "#edf1f7ff",
+          "gutter_background": "#10131aff",
+          "line_number": "#9ea7b8ff",
+          "cursor": "#edf1f7c7",
+          "selection_background": "#59b7ff47",
+          "search_match_background": "#3b2d1bff",
+          "search_match_foreground": "#ffc06aff",
+          "bracket_match_background": "#ffffff26",
+          "indent_guide": "#ffffff14"
+        },
+        "diff": {
+          "added": { "foreground": "#b9f2c0ff", "background": "#163322ff", "word_background": "#b9f2c038", "focused_background": "#b9f2c033" },
+          "removed": { "foreground": "#ffc4ccff", "background": "#40171dff", "word_background": "#ffc4cc38", "focused_background": "#ffc4cc33" },
+          "modified": { "foreground": "#ffc06aff", "background": "#3b2d1bff", "word_background": "#ffc06a38", "focused_background": "#ffc06a33" }
+        },
+        "tooltip": { "background": "#0b0e14ff", "foreground": "#f5f7fbff" },
+        "scrollbar": {
+          "thumb": { "hex": "#9ea7b8ff", "alpha": 0.30 },
+          "thumb_hover": { "hex": "#9ea7b8ff", "alpha": 0.42 },
+          "thumb_pressed": { "hex": "#9ea7b8ff", "alpha": 0.52 }
+        },
+        "shadow": "#000000ff",
         "graph_lane_palette": [                         // Optional
           "#ff6b6bff",
           "#ffd166ff",
@@ -152,25 +189,41 @@ The bundle root supports:
 
 | Field | Type | Notes |
 | --- | --- | --- |
+| `schema_version` | number | Required. Must be `2` |
 | `name` | string | Required. Bundle name |
 | `author` | string | Optional |
 | `themes` | array | Required. One or more theme entries |
 
 ## Colors Schema
 
-### Required color fields
+Theme schema v2 uses semantic groups. Define every group and field below: a token
+your file leaves out falls back to the bundled theme matching your `appearance`
+(`gitcomet_dark` or `gitcomet_light`), which keeps older theme files loading when
+new tokens are added but means the omitted token is not yours to control. A token
+you misspell is still an error — the file is rejected rather than half-applied.
 
-`window_bg`, `surface_bg`, `surface_bg_elevated`, `active_section`, `border`, `text`, `text_muted`, `accent`, `hover`, `active`, `focus_ring`, `focus_ring_bg`, `scrollbar_thumb`, `scrollbar_thumb_hover`, `scrollbar_thumb_active`, `danger`, `warning`, `success`
+- `surface`: `canvas`, `chrome`, `panel`, `raised`, `input`
+- `foreground`: `primary`, `secondary`, `disabled`, `placeholder`, `emphasis`
+- `stroke`: `subtle`, `default`, `control`
+- `interaction`: `hover_overlay`, `pressed_overlay`, `hover_background`,
+  `pressed_background`, `selected_background`, `selected_foreground`,
+  `selected_indicator`, `focus_ring`, `focus_background`
+- `accent`: `foreground`, `solid`, `on_solid`, `subtle_background`
+- `status`: `info`, `success`, `warning`, `danger`; each contains
+  `foreground`, `background`, and `border`
+- `editor`: `background`, `foreground`, `gutter_background`, `line_number`,
+  `cursor`, `selection_background`, `search_match_background`,
+  `search_match_foreground`, `bracket_match_background`, `indent_guide`
+- `diff`: `added`, `removed`, `modified`; each contains `foreground`,
+  `background`, `word_background`, and `focused_background`
+- `tooltip`: `background`, `foreground`
+- `scrollbar`: `thumb`, `thumb_hover`, `thumb_pressed`
+- `shadow`
+- `graph_lane_palette` and `graph_lane_hues` are optional
 
-### Optional color fields
-
-`tooltip_bg`, `tooltip_text`, `diff_add_bg`, `diff_add_text`, `diff_remove_bg`, `diff_remove_text`, `input_placeholder`, `accent_text`, `emphasis_text`, `border_variant`, `shadow`, `sidebar_bg`, `graph_lane_palette`, `graph_lane_hues`
-
-`border_variant` is a softer separator used for inner dividers (row and
-section separators inside panels); `border` stays on outer panel edges.
-`shadow` is the base color that popover and dialog shadows are derived from.
-`sidebar_bg` is the left sidebar panel background; when omitted it defaults to
-the midpoint of `window_bg` and `surface_bg`.
+`surface.canvas` is the central content area. `surface.chrome` is the surrounding
+title/action/sidebar/status band. Necessary input and button outlines should use
+`stroke.control`; `stroke.subtle` is for decorative separators.
 
 ### Color value format
 
@@ -181,9 +234,13 @@ Most color fields accept either:
 
 Use `graph_lane_palette` for an explicit list of colors, or `graph_lane_hues` for a list of hue values that GitComet turns into graph lane colors automatically.
 
-If you omit optional diff colors, tooltip colors, placeholder color, accent text color, emphasis text color, or syntax colors, GitComet falls back to built-in defaults.
-
-More generally, omitted optional values are either derived from the theme's base colors or filled with built-in defaults, depending on the field.
+Syntax colors, graph lanes, and the documented radius extensions have fallbacks of
+their own — omitting `graph_lane_palette` and `graph_lane_hues` generates lane
+colors for your `appearance` rather than copying the bundled theme's. Every other
+semantic UI color falls back to the bundled theme for your `appearance`. Spell
+them all out anyway: a component never infers a status, editor, selection, or
+control color from an unrelated token, so an omitted one is a bundled color
+sitting in your theme, not a shade of it.
 
 ## Syntax Schema
 
@@ -214,5 +271,7 @@ These values are numeric and control the corner radius used by major UI elements
 - Built-in system themes stay embedded in the GitComet binary and are not loaded from the custom themes directory.
 - GitComet loads custom `.json` files from the themes directory, but ignores files whose basename matches a bundled system theme file such as `gitcomet.json`.
 - Custom themes can add new theme keys, but they cannot override built-in system theme keys. Any runtime theme entry that reuses a built-in key is ignored.
-- A file that cannot be read or parsed is ignored.
+- A file that cannot be read or parsed is ignored and reported with its path and reason.
+- GitComet validates the structure and types of custom themes, but does not
+  measure, warn about, reject, or alter their colors based on contrast.
 - GitComet does not expose a separate machine-readable JSON Schema file today; the implementation in [`crates/gitcomet-ui-gpui/src/theme.rs`](crates/gitcomet-ui-gpui/src/theme.rs) is the source of truth.

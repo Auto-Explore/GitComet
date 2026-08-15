@@ -3908,8 +3908,8 @@ fn auth_prompt_banner_colors_use_accent_palette() {
     let theme = AppTheme::gitcomet_light();
     let (bg, border) = GitCometView::auth_prompt_banner_colors(theme);
 
-    assert_eq!(bg, with_alpha(theme.colors.accent, 0.15));
-    assert_eq!(border, with_alpha(theme.colors.accent, 0.3));
+    assert_eq!(bg, with_alpha(theme.colors.accent.foreground, 0.15));
+    assert_eq!(border, with_alpha(theme.colors.accent.foreground, 0.3));
 }
 
 #[gpui::test]

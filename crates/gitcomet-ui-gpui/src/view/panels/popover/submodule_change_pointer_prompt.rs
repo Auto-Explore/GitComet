@@ -15,13 +15,13 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(420.0))
         .child(popover_title("Change submodule pointer"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()
                 .py_1()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(format!("Submodule: {}", path.display())),
         )
         .child(input_label(theme, "Target ref / branch / tag / commit"))
@@ -33,7 +33,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.submodule_ref_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

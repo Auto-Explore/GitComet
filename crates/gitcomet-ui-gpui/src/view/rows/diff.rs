@@ -111,26 +111,29 @@ fn collapsed_hunk_bg_fill_bounds(bounds: gpui::Bounds<Pixels>) -> gpui::Bounds<P
 
 fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(
-        theme.colors.text_muted,
+        theme.colors.foreground.secondary,
         if theme.is_dark { 0.14 } else { 0.10 },
     )
 }
 
-fn focused_diff_row_alpha(theme: AppTheme) -> f32 {
-    if theme.is_dark { 0.30 } else { 0.20 }
-}
-
 fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(
-        theme.colors.text_muted,
+        theme.colors.foreground.secondary,
         if theme.is_dark { 0.26 } else { 0.16 },
     )
 }
 
+/// The focused row sits inside the diff body, so it takes the diff palette's own
+/// focused token rather than a tint derived from the status palette: those are
+/// two different greens and reds in every theme, and deriving it here made
+/// focusing a row shift its hue and left `diff.*.focused_background` with no
+/// effect at all.
+///
+/// A context/header/hunk row belongs to no diff kind and keeps the neutral wash.
 fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
     match kind {
-        DiffLineKind::Add => with_alpha(theme.colors.success, focused_diff_row_alpha(theme)),
-        DiffLineKind::Remove => with_alpha(theme.colors.danger, focused_diff_row_alpha(theme)),
+        DiffLineKind::Add => theme.colors.diff.added.focused_background,
+        DiffLineKind::Remove => theme.colors.diff.removed.focused_background,
         DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
             focused_diff_neutral_row_bg(theme)
         }
@@ -138,7 +141,10 @@ fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
 }
 
 fn focused_collapsed_hunk_bg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
-    with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 })
+    with_alpha(
+        theme.colors.accent.foreground,
+        if theme.is_dark { 0.22 } else { 0.16 },
+    )
 }
 
 fn collapsed_inline_hunk_bg(
@@ -150,7 +156,7 @@ fn collapsed_inline_hunk_bg(
 }
 
 fn collapsed_inline_hunk_fg(theme: AppTheme, _hunk: Option<CollapsedDiffHunk>) -> gpui::Rgba {
-    theme.colors.text_muted
+    theme.colors.foreground.secondary
 }
 
 fn collapsed_split_hunk_bg(
@@ -162,7 +168,7 @@ fn collapsed_split_hunk_bg(
 }
 
 fn collapsed_split_hunk_fg(theme: AppTheme, _column: PatchSplitColumn) -> gpui::Rgba {
-    theme.colors.text_muted
+    theme.colors.foreground.secondary
 }
 
 fn collapsed_hunk_reveal_button(
@@ -189,8 +195,8 @@ fn collapsed_hunk_reveal_button(
     if enabled {
         button = button
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
+            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|_this, _e: &MouseDownEvent, _w, cx| {
@@ -295,27 +301,26 @@ impl gpui::Element for ScrollPinnedHunkShell {
     }
 }
 
-/// Returns the word-highlight color for a diff line kind.
-fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgba> {
+/// Which diff palette a line's word highlights come from.
+fn diff_line_word_kind(kind: DiffLineKind) -> Option<crate::theme::DiffColorKind> {
     match kind {
-        DiffLineKind::Add => Some(theme.colors.diff_add_text),
-        DiffLineKind::Remove => Some(theme.colors.diff_remove_text),
+        DiffLineKind::Add => Some(crate::theme::DiffColorKind::Added),
+        DiffLineKind::Remove => Some(crate::theme::DiffColorKind::Removed),
         _ => None,
     }
 }
 
-/// Returns the word-highlight color for a file diff split column.
+/// Same, for a file diff split column.
 /// Left highlights Remove/Modify; Right highlights Add/Modify.
-fn file_diff_split_word_color(
+fn file_diff_split_word_kind(
     column: PatchSplitColumn,
     kind: FileDiffRowKind,
-    theme: AppTheme,
-) -> Option<gpui::Rgba> {
+) -> Option<crate::theme::DiffColorKind> {
     match column {
         PatchSplitColumn::Left => matches!(kind, FileDiffRowKind::Remove | FileDiffRowKind::Modify)
-            .then_some(theme.colors.diff_remove_text),
+            .then_some(crate::theme::DiffColorKind::Removed),
         PatchSplitColumn::Right => matches!(kind, FileDiffRowKind::Add | FileDiffRowKind::Modify)
-            .then_some(theme.colors.diff_add_text),
+            .then_some(crate::theme::DiffColorKind::Added),
     }
 }
 
@@ -329,7 +334,7 @@ fn diff_placeholder_row(
         .h(diff_row_height(ui_scale_percent))
         .px_2()
         .text_xs()
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .child("")
         .into_any_element()
 }
@@ -340,7 +345,7 @@ fn streamed_diff_text_spec_with_syntax(
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
     diff_canvas::is_streamable_diff_text(&raw_text).then(|| {
@@ -350,7 +355,7 @@ fn streamed_diff_text_spec_with_syntax(
             query_options,
             query_matcher,
             word_ranges: Arc::from(word_ranges),
-            word_color,
+            word_kind,
             syntax,
         }
     })
@@ -362,7 +367,7 @@ fn heuristic_streamed_diff_text_spec(
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     mode: rows::DiffSyntaxMode,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
@@ -376,7 +381,7 @@ fn heuristic_streamed_diff_text_spec(
         query_options,
         query_matcher,
         word_ranges,
-        word_color,
+        word_kind,
         syntax,
     )
 }
@@ -388,7 +393,7 @@ fn prepared_streamed_diff_text_spec(
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     fallback_mode: rows::DiffSyntaxMode,
     document_text: Arc<str>,
@@ -415,7 +420,7 @@ fn prepared_streamed_diff_text_spec(
         query_options,
         query_matcher,
         word_ranges,
-        word_color,
+        word_kind,
         syntax,
     )
 }
@@ -427,7 +432,7 @@ fn build_file_diff_cached_styled_text(
     context_prefix: &str,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     if should_truncate_file_diff_display(raw_text) {
         let display = file_diff_display_text(raw_text);
@@ -449,7 +454,7 @@ fn build_file_diff_cached_styled_text(
         context_prefix,
         language,
         syntax_mode,
-        word_color,
+        word_kind,
     )
 }
 
@@ -460,7 +465,7 @@ fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
     word_ranges: &[Range<usize>],
     context_prefix: &str,
     syntax: DiffSyntaxConfig,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     projected: rows::PreparedDiffSyntaxLine,
 ) -> (CachedDiffStyledText, bool) {
     if should_truncate_file_diff_display(raw_text) {
@@ -485,7 +490,7 @@ fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
         word_ranges,
         context_prefix,
         syntax,
-        word_color,
+        word_kind,
         projected,
     )
     .into_parts()
@@ -1056,7 +1061,7 @@ impl MainPaneView {
                                 )
                                 .then_some(language)
                                 .flatten();
-                                let word_color = diff_line_word_color(visual_kind, theme);
+                                let word_kind = diff_line_word_kind(visual_kind);
                                 let prepared_line = match row.kind {
                                     DiffLineKind::Remove => {
                                         rows::prepared_diff_syntax_line_for_one_based_line(
@@ -1101,7 +1106,7 @@ impl MainPaneView {
                                     query_options,
                                     query_matcher.clone(),
                                     row_word_ranges.clone(),
-                                    word_color,
+                                    word_kind,
                                     line_language,
                                     syntax_mode,
                                     document_text,
@@ -1119,7 +1124,7 @@ impl MainPaneView {
                                     .diff_text_segments_cache_get(row_ix, cache_epoch)
                                     .is_none()
                                 {
-                                    let word_color = diff_line_word_color(visual_kind, theme);
+                                    let word_kind = diff_line_word_kind(visual_kind);
                                     let is_content_line = matches!(
                                         line.kind,
                                         DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -1138,7 +1143,7 @@ impl MainPaneView {
                                                 language: line_language,
                                                 mode: syntax_mode,
                                             },
-                                            word_color,
+                                            word_kind,
                                             projected,
                                         );
                                     if is_pending {
@@ -1313,7 +1318,7 @@ impl MainPaneView {
                         )
                         .then_some(language)
                         .flatten();
-                        let word_color = diff_line_word_color(visual_kind, theme);
+                        let word_kind = diff_line_word_kind(visual_kind);
                         let prepared_line = match row.kind {
                             DiffLineKind::Remove => rows::prepared_diff_syntax_line_for_one_based_line(
                                 this.file_diff_split_prepared_syntax_document(
@@ -1354,7 +1359,7 @@ impl MainPaneView {
                             query_options,
                             query_matcher.clone(),
                             row_word_ranges.clone(),
-                            word_color,
+                            word_kind,
                             line_language,
                             syntax_mode,
                             document_text,
@@ -1376,7 +1381,7 @@ impl MainPaneView {
                                 .diff_text_segments_cache_get(inline_ix, cache_epoch)
                                 .is_none()
                             {
-                                let word_color = diff_line_word_color(visual_kind, theme);
+                                let word_kind = diff_line_word_kind(visual_kind);
                                 let is_content_line = matches!(
                                     line.kind,
                                     DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -1394,7 +1399,7 @@ impl MainPaneView {
                                             language: line_language,
                                             mode: syntax_mode,
                                         },
-                                        word_color,
+                                        word_kind,
                                         projected,
                                     );
                                 if is_pending {
@@ -1430,7 +1435,7 @@ impl MainPaneView {
                             .diff_text_segments_cache_get(inline_ix, cache_epoch)
                             .is_none()
                         {
-                            let word_color = diff_line_word_color(visual_kind, theme);
+                            let word_kind = diff_line_word_kind(visual_kind);
                             let is_content_line = matches!(
                                 line.kind,
                                 DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -1448,7 +1453,7 @@ impl MainPaneView {
                                         language: line_language,
                                         mode: syntax_mode,
                                     },
-                                    word_color,
+                                    word_kind,
                                     projected,
                                 )
                                 .into_parts();
@@ -1555,7 +1560,7 @@ impl MainPaneView {
                             query_options,
                             query_matcher.clone(),
                             word_ranges.to_vec(),
-                            diff_line_word_color(visual_kind, theme),
+                            diff_line_word_kind(visual_kind),
                             language,
                             syntax_mode,
                         )
@@ -1570,7 +1575,7 @@ impl MainPaneView {
                         .is_none()
                 {
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
-                        let word_color = diff_line_word_color(visual_kind, theme);
+                        let word_kind = diff_line_word_kind(visual_kind);
                         let content_text = diff_content_text(&line);
 
                         build_cached_diff_styled_text_with_source_identity(
@@ -1581,7 +1586,7 @@ impl MainPaneView {
                             "",
                             language,
                             syntax_mode,
-                            word_color,
+                            word_kind,
                         )
                     } else {
                         let display =
@@ -1839,8 +1844,8 @@ impl MainPaneView {
                             let visual_kind = this.file_diff_split_visual_kind(row_ix);
                             let row_word_ranges =
                                 this.file_diff_split_word_ranges(row_ix, region);
-                            let row_word_color =
-                                file_diff_split_word_color(column, visual_kind, theme);
+                            let row_word_kind =
+                                file_diff_split_word_kind(column, visual_kind);
                             let streamed_spec =
                                 file_diff_split_side_text_owned(&row, is_left).and_then(
                                     |raw_text| {
@@ -1850,7 +1855,7 @@ impl MainPaneView {
                                             query_options,
                                             query_matcher.clone(),
                                             row_word_ranges.clone(),
-                                            row_word_color,
+                                            row_word_kind,
                                             language,
                                             syntax_mode,
                                             Arc::clone(&document_text),
@@ -1879,7 +1884,7 @@ impl MainPaneView {
                                                 language,
                                                 mode: syntax_mode,
                                             },
-                                            row_word_color,
+                                            row_word_kind,
                                             rows::prepared_diff_syntax_line_for_one_based_line(
                                                 syntax_document,
                                                 file_diff_split_side_line(&row, is_left),
@@ -1975,7 +1980,7 @@ impl MainPaneView {
                     };
                     let visual_kind = this.file_diff_split_visual_kind(row_ix);
                     let row_word_ranges = this.file_diff_split_word_ranges(row_ix, region);
-                    let row_word_color = file_diff_split_word_color(column, visual_kind, theme);
+                    let row_word_kind = file_diff_split_word_kind(column, visual_kind);
                     let streamed_spec = file_diff_split_side_text_owned(&row, is_left).and_then(
                         |raw_text| {
                             prepared_streamed_diff_text_spec(
@@ -1984,7 +1989,7 @@ impl MainPaneView {
                                 query_options,
                                 query_matcher.clone(),
                                 row_word_ranges.clone(),
-                                row_word_color,
+                                row_word_kind,
                                 language,
                                 syntax_mode,
                                 Arc::clone(&document_text),
@@ -2012,7 +2017,7 @@ impl MainPaneView {
                                     language,
                                     mode: syntax_mode,
                                 },
-                                row_word_color,
+                                row_word_kind,
                                 rows::prepared_diff_syntax_line_for_one_based_line(
                                     syntax_document,
                                     file_diff_split_side_line(&row, is_left),
@@ -2126,8 +2131,8 @@ impl MainPaneView {
                                 .get(src_ix)
                                 .and_then(|r| r.as_ref().cloned())
                                 .unwrap_or_default();
-                            let word_color =
-                                diff_line_word_color(this.patch_visual_line_kind(src_ix), theme);
+                            let word_kind =
+                                diff_line_word_kind(this.patch_visual_line_kind(src_ix));
                             let streamed_spec = file_diff_split_side_text_owned(&row, is_left)
                                 .and_then(|raw_text| {
                                     heuristic_streamed_diff_text_spec(
@@ -2136,7 +2141,7 @@ impl MainPaneView {
                                         query_options,
                                         query_matcher.clone(),
                                         word_ranges.clone(),
-                                        word_color,
+                                        word_kind,
                                         language,
                                         syntax_mode,
                                     )
@@ -2156,7 +2161,7 @@ impl MainPaneView {
                                         "",
                                         language,
                                         syntax_mode,
-                                        word_color,
+                                        word_kind,
                                     )
                                 } else {
                                     build_cached_diff_styled_text(
@@ -2166,7 +2171,7 @@ impl MainPaneView {
                                         "",
                                         language,
                                         syntax_mode,
-                                        word_color,
+                                        word_kind,
                                     )
                                 };
                                 this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
@@ -2352,14 +2357,14 @@ fn diff_row(
             .px_2()
             .bg(crate::theme::content_header_bg(theme))
             .border_b_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .text_sm()
             .font_weight(FontWeight::BOLD)
             .child(selectable_cached_diff_text(
                 visible_ix,
                 DiffTextRegion::Inline,
                 DiffClickKind::FileHeader,
-                theme.colors.text,
+                theme.colors.foreground.primary,
                 None,
                 file,
                 cx,
@@ -2390,21 +2395,21 @@ fn diff_row(
             .items_center()
             .px_2()
             .bg(with_alpha(
-                theme.colors.accent,
+                theme.colors.accent.foreground,
                 if theme.is_dark { 0.10 } else { 0.07 },
             ))
             .border_b_1()
             .border_color(with_alpha(
-                theme.colors.accent,
+                theme.colors.accent.foreground,
                 if theme.is_dark { 0.28 } else { 0.22 },
             ))
             .text_xs()
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(selectable_cached_diff_text(
                 visible_ix,
                 DiffTextRegion::Inline,
                 DiffClickKind::HunkHeader,
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 None,
                 display,
                 cx,
@@ -2437,7 +2442,7 @@ fn diff_row(
             row = row.bg(focused_diff_neutral_row_bg(theme));
         }
         if context_menu_active {
-            row = row.bg(theme.colors.active);
+            row = row.bg(theme.colors.interaction.pressed_background);
         }
 
         return row.into_any_element();
@@ -2640,7 +2645,7 @@ fn collapsed_inline_header_row(
                     visible_ix,
                     DiffTextRegion::Inline,
                     DiffClickKind::FileHeader,
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     styled,
                     display,
                     cx,
@@ -2656,7 +2661,7 @@ fn collapsed_inline_header_row(
                 .min_w(min_width)
                 .bg(header_bg)
                 .border_b_1()
-                .border_color(theme.colors.border_variant)
+                .border_color(theme.colors.stroke.subtle)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
                     None,
@@ -2839,7 +2844,7 @@ fn collapsed_inline_header_row(
                 row = row.bg(painted_row_bg);
             }
             if context_menu_active {
-                row = row.bg(theme.colors.active);
+                row = row.bg(theme.colors.interaction.pressed_background);
             }
 
             div()
@@ -3006,14 +3011,14 @@ fn patch_split_header_row(
                 .px_2()
                 .bg(crate::theme::content_header_bg(theme))
                 .border_b_1()
-                .border_color(theme.colors.border)
+                .border_color(theme.colors.stroke.default)
                 .text_sm()
                 .font_weight(FontWeight::BOLD)
                 .child(selectable_cached_diff_text(
                     visible_ix,
                     region,
                     DiffClickKind::FileHeader,
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     styled,
                     display,
                     cx,
@@ -3049,21 +3054,21 @@ fn patch_split_header_row(
                 .items_center()
                 .px_2()
                 .bg(with_alpha(
-                    theme.colors.accent,
+                    theme.colors.accent.foreground,
                     if theme.is_dark { 0.10 } else { 0.07 },
                 ))
                 .border_b_1()
                 .border_color(with_alpha(
-                    theme.colors.accent,
+                    theme.colors.accent.foreground,
                     if theme.is_dark { 0.28 } else { 0.22 },
                 ))
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(selectable_cached_diff_text(
                     visible_ix,
                     region,
                     DiffClickKind::HunkHeader,
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     styled,
                     display,
                     cx,
@@ -3103,7 +3108,7 @@ fn patch_split_header_row(
                 row = row.bg(focused_diff_neutral_row_bg(theme));
             }
             if context_menu_active {
-                row = row.bg(theme.colors.active);
+                row = row.bg(theme.colors.interaction.pressed_background);
             }
 
             row.into_any_element()
@@ -3179,7 +3184,7 @@ fn collapsed_split_header_row(
                     visible_ix,
                     region,
                     DiffClickKind::FileHeader,
-                    theme.colors.text,
+                    theme.colors.foreground.primary,
                     styled,
                     display,
                     cx,
@@ -3195,7 +3200,7 @@ fn collapsed_split_header_row(
                 .min_w(min_width)
                 .bg(header_bg)
                 .border_b_1()
-                .border_color(theme.colors.border_variant)
+                .border_color(theme.colors.stroke.subtle)
                 .child(scroll_pinned_hunk_shell(
                     pinned_hunk_shell_scroll,
                     None,
@@ -3409,7 +3414,7 @@ fn collapsed_split_header_row(
                 row = row.bg(painted_row_bg);
             }
             if context_menu_active {
-                row = row.bg(theme.colors.active);
+                row = row.bg(theme.colors.interaction.pressed_background);
             }
 
             div()
@@ -3588,13 +3593,13 @@ mod tests {
         let (staged, _) =
             build_row_blame_paint_inner(&ctx, true, Some(1), Some(1), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(staged.border, theme.colors.diff_add_text);
+        assert_eq!(staged.border, theme.colors.diff.added.foreground);
         assert_eq!(staged.when.as_ref(), "Staged");
         // Added line -> unstaged: red diff-remove bar.
         let (unstaged, _) =
             build_row_blame_paint_inner(&ctx, false, None, Some(2), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(unstaged.border, theme.colors.diff_remove_text);
+        assert_eq!(unstaged.border, theme.colors.diff.removed.foreground);
         assert_eq!(unstaged.when.as_ref(), "Unstaged");
     }
 
@@ -3608,7 +3613,7 @@ mod tests {
         let (paint, _) =
             build_row_blame_paint_inner(&ctx, false, Some(1), Some(1), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(paint.border, theme.colors.diff_remove_text);
+        assert_eq!(paint.border, theme.colors.diff.removed.foreground);
         assert_eq!(paint.when.as_ref(), "Unstaged");
     }
 
@@ -3621,7 +3626,7 @@ mod tests {
         let (paint, _) =
             build_row_blame_paint_inner(&ctx, false, None, Some(1), BlamePrev::default(), theme)
                 .unwrap();
-        assert_eq!(paint.border, theme.colors.diff_add_text);
+        assert_eq!(paint.border, theme.colors.diff.added.foreground);
         assert_eq!(paint.when.as_ref(), "Staged");
     }
 
@@ -3752,7 +3757,7 @@ mod tests {
         let prev = std::cell::Cell::new(BlamePrev::default());
         let removal =
             build_row_blame_paint_tracked(&ctx, false, Some(5), None, &prev, None, theme).unwrap();
-        assert_eq!(removal.border, theme.colors.diff_remove_text);
+        assert_eq!(removal.border, theme.colors.diff.removed.foreground);
         assert_eq!(removal.when.as_ref(), "Unstaged");
         // Revision blame has no staged/unstaged concept, so removals get no bar.
         let ctx_rev = blame_ctx(Vec::new(), None);
@@ -3766,8 +3771,10 @@ mod tests {
     #[test]
     fn focused_diff_row_backgrounds_are_semantic_and_not_text_selection() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-            let text_selection_bg =
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 });
+            let text_selection_bg = with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.28 } else { 0.18 },
+            );
             let add_focus = focused_diff_line_bg(theme, DiffLineKind::Add);
             let remove_focus = focused_diff_line_bg(theme, DiffLineKind::Remove);
             let neutral_focus = focused_diff_line_bg(theme, DiffLineKind::Context);
@@ -3775,13 +3782,17 @@ mod tests {
             let (remove_bg, _, _) = diff_line_colors(theme, DiffLineKind::Remove);
             let (context_bg, _, _) = diff_line_colors(theme, DiffLineKind::Context);
 
+            // The focused row is the diff palette's own token, not a tint mixed
+            // from the status palette: those greens and reds differ in every
+            // bundled theme, so deriving it there shifted the row's hue the
+            // moment it took focus.
+            assert_eq!(add_focus, theme.colors.diff.added.focused_background);
+            assert_eq!(remove_focus, theme.colors.diff.removed.focused_background);
+
             assert_ne!(add_focus, text_selection_bg);
             assert_ne!(remove_focus, text_selection_bg);
             assert_ne!(neutral_focus, text_selection_bg);
-            assert_ne!(
-                neutral_focus,
-                with_alpha(theme.colors.warning, focused_diff_row_alpha(theme))
-            );
+            assert_ne!(neutral_focus, theme.colors.diff.modified.focused_background);
             assert_ne!(add_focus, add_bg);
             assert_ne!(remove_focus, remove_bg);
             assert_ne!(neutral_focus, context_bg);
@@ -3790,13 +3801,14 @@ mod tests {
             assert_ne!(remove_focus, neutral_focus);
 
             let collapsed_focus = focused_collapsed_hunk_bg(theme, None);
-            let expected_collapsed_focus =
-                with_alpha(theme.colors.accent, if theme.is_dark { 0.22 } else { 0.16 });
-            assert_eq!(collapsed_focus, expected_collapsed_focus);
-            assert_ne!(
-                collapsed_focus,
-                with_alpha(theme.colors.accent, focused_diff_row_alpha(theme))
+            let expected_collapsed_focus = with_alpha(
+                theme.colors.accent.foreground,
+                if theme.is_dark { 0.22 } else { 0.16 },
             );
+            assert_eq!(collapsed_focus, expected_collapsed_focus);
+            assert_ne!(collapsed_focus, add_focus);
+            assert_ne!(collapsed_focus, remove_focus);
+            assert_ne!(collapsed_focus, neutral_focus);
             assert_ne!(collapsed_focus, text_selection_bg);
             assert_eq!(
                 focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(false, true))),
@@ -3887,19 +3899,19 @@ mod tests {
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, false))),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(false, true))),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, Some(collapsed_hunk(true, true))),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_inline_hunk_fg(theme, None),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
         }
     }
@@ -3967,11 +3979,11 @@ mod tests {
             );
             assert_eq!(
                 collapsed_split_hunk_fg(theme, PatchSplitColumn::Left),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
             assert_eq!(
                 collapsed_split_hunk_fg(theme, PatchSplitColumn::Right),
-                theme.colors.text_muted
+                theme.colors.foreground.secondary
             );
         }
     }

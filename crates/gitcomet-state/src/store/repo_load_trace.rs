@@ -130,6 +130,7 @@ pub(super) fn internal_msg_name(msg: &InternalMsg) -> &'static str {
         InternalMsg::RemoteTagsLoaded { .. } => "RemoteTagsLoaded",
         InternalMsg::StashesLoaded { .. } => "StashesLoaded",
         InternalMsg::WorktreesLoaded { .. } => "WorktreesLoaded",
+        InternalMsg::WorktreeDirtyLoaded { .. } => "WorktreeDirtyLoaded",
         InternalMsg::RefMetadataLoaded { .. } => "RefMetadataLoaded",
         InternalMsg::SubmodulesLoaded { .. } => "SubmodulesLoaded",
         InternalMsg::RebaseStateLoaded { .. } => "RebaseStateLoaded",
@@ -155,6 +156,7 @@ pub(super) fn effect_name(effect: &Effect) -> &'static str {
         Effect::LoadRemoteTags { .. } => "LoadRemoteTags",
         Effect::LoadStashes { .. } => "LoadStashes",
         Effect::LoadWorktrees { .. } => "LoadWorktrees",
+        Effect::LoadWorktreeDirty { .. } => "LoadWorktreeDirty",
         Effect::LoadRefMetadata { .. } => "LoadRefMetadata",
         Effect::LoadSubmodules { .. } => "LoadSubmodules",
         Effect::LoadRebaseAndMergeState { .. } => "LoadRebaseAndMergeState",
@@ -183,6 +185,7 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         | Effect::LoadRemoteTags { repo_id }
         | Effect::LoadStashes { repo_id, .. }
         | Effect::LoadWorktrees { repo_id }
+        | Effect::LoadWorktreeDirty { repo_id, .. }
         | Effect::LoadRefMetadata { repo_id }
         | Effect::LoadSubmodules { repo_id }
         | Effect::LoadRebaseAndMergeState { repo_id }
@@ -194,5 +197,40 @@ pub(super) fn effect_repo_id(effect: &Effect) -> Option<RepoId> {
         Effect::PersistRepoHistoryModesBatch { repo_id, .. } => *repo_id,
         Effect::PersistRepoHistoryAuthorFilter { repo_id, .. } => *repo_id,
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The worktree-dirty scan is the most expensive recurring background load,
+    /// so the trace that exists to explain slow repo loads has to name it. Both
+    /// matches above end in a catch-all, so a missing arm is not a compile error
+    /// -- it just makes every one of these scans log as an anonymous `Effect`
+    /// with no repo, which `store/mod.rs` then cannot resolve a workdir for.
+    #[test]
+    fn the_worktree_dirty_scan_is_traced_against_its_repo() {
+        let effect = Effect::LoadWorktreeDirty {
+            repo_id: RepoId(7),
+            workdir: PathBuf::from("/tmp/repo"),
+            files_for: None,
+        };
+
+        assert_eq!(effect_name(&effect), "LoadWorktreeDirty");
+        assert_eq!(effect_repo_id(&effect), Some(RepoId(7)));
+    }
+
+    /// The reply side is half the trace: a load with no matching completion is
+    /// exactly the shape a stall takes, and an anonymous `InternalMsg` hides it.
+    #[test]
+    fn the_worktree_dirty_reply_is_named() {
+        assert_eq!(
+            internal_msg_name(&InternalMsg::WorktreeDirtyLoaded {
+                repo_id: RepoId(7),
+                result: Ok(Vec::new()),
+            }),
+            "WorktreeDirtyLoaded"
+        );
     }
 }

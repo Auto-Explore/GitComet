@@ -1,7 +1,70 @@
 use super::*;
 
 impl MainPaneView {
-    pub(super) fn diff_panel_title(&self, theme: AppTheme, cx: &gpui::Context<Self>) -> AnyElement {
+    /// The worktree chip for the diff currently on screen, when that diff comes
+    /// from a linked worktree rather than this tab. `None` for everything else,
+    /// including submodule diffs, which the file list already labels.
+    fn foreign_worktree_diff_chip(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> Option<AnyElement> {
+        let inline = self.active_inline_submodule_diff()?;
+        let gitcomet_state::model::ForeignDiffOrigin::Worktree { branch, detached } =
+            &inline.origin
+        else {
+            return None;
+        };
+        let label = crate::view::rows::sidebar::worktree_origin_label(
+            branch.as_deref(),
+            *detached,
+            &inline.submodule_repo_path,
+        );
+        let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+        let open_path = inline.submodule_repo_path.clone();
+        // Scaled like the other two chips (the details pane's and the history
+        // row's): an unscaled chip stops matching the title row it sits in.
+        let ui_scale = crate::ui_scale::UiScale::current(cx);
+        Some(
+            crate::view::rows::sidebar::worktree_origin_chip(
+                theme,
+                label,
+                ui_scale.px(10.0),
+                ui_scale.px(18.0),
+                ui_scale.px(220.0),
+                ui_scale.px(6.0),
+            )
+            .id("diff_title_worktree_origin")
+            .cursor(CursorStyle::PointingHand)
+            .hover(move |s| {
+                s.border_color(palette.hover_border)
+                    .text_color(palette.hover_text)
+            })
+            .gitcomet_tooltip(
+                theme,
+                format!(
+                    "Open this worktree in a tab\n{}",
+                    inline.submodule_repo_path.display()
+                )
+                .into(),
+            )
+            .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                if !e.standard_click() {
+                    return;
+                }
+                cx.stop_propagation();
+                this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                cx.notify();
+            }))
+            .into_any_element(),
+        )
+    }
+
+    pub(super) fn diff_panel_title(
+        &self,
+        theme: AppTheme,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
         self.rendered_diff_target()
             .map(|t| {
                 let (icon, color, text): (Option<&'static str>, gpui::Rgba, SharedString) = match t
@@ -19,13 +82,19 @@ impl MainPaneView {
 
                         let (icon, color) = match kind.unwrap_or(FileStatusKind::Modified) {
                             FileStatusKind::Untracked | FileStatusKind::Added => {
-                                ("icons/plus.svg", theme.colors.success)
+                                ("icons/plus.svg", theme.colors.status.success.foreground)
                             }
-                            FileStatusKind::Modified => ("icons/pencil.svg", theme.colors.warning),
-                            FileStatusKind::Deleted => ("icons/minus.svg", theme.colors.danger),
-                            FileStatusKind::Renamed => ("icons/swap.svg", theme.colors.accent),
+                            FileStatusKind::Modified => {
+                                ("icons/pencil.svg", theme.colors.status.warning.foreground)
+                            }
+                            FileStatusKind::Deleted => {
+                                ("icons/minus.svg", theme.colors.status.danger.foreground)
+                            }
+                            FileStatusKind::Renamed => {
+                                ("icons/swap.svg", theme.colors.accent.foreground)
+                            }
                             FileStatusKind::Conflicted => {
-                                ("icons/warning.svg", theme.colors.danger)
+                                ("icons/warning.svg", theme.colors.status.danger.foreground)
                             }
                         };
                         (Some(icon), color, self.cached_path_display(path))
@@ -33,12 +102,12 @@ impl MainPaneView {
                     DiffTarget::Commit { commit_id: _, path } => match path {
                         Some(path) => (
                             Some("icons/pencil.svg"),
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             self.cached_path_display(path),
                         ),
                         None => (
                             Some("icons/pencil.svg"),
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             "Full diff".into(),
                         ),
                     },
@@ -49,12 +118,12 @@ impl MainPaneView {
                     } => match path {
                         Some(path) => (
                             Some("icons/swap.svg"),
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             self.cached_path_display(path),
                         ),
                         None => (
                             Some("icons/swap.svg"),
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             "Commit range".into(),
                         ),
                     },
@@ -89,6 +158,9 @@ impl MainPaneView {
                                     .render(cx),
                             ),
                     )
+                    // These contents belong to another checkout, and the path
+                    // alone gives no hint of that.
+                    .children(self.foreign_worktree_diff_chip(theme, cx))
                     .into_any_element()
             })
             .unwrap_or_else(|| {
@@ -147,13 +219,13 @@ impl MainPaneView {
             .h(components::control_height(ui_scale_percent))
             .rounded(px(theme.radii.row))
             .border_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .cursor(CursorStyle::PointingHand)
-            .hover(move |s| s.bg(with_alpha(theme.colors.hover, 0.55)))
-            .active(move |s| s.bg(theme.colors.active))
+            .hover(move |s| s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55)))
+            .active(move |s| s.bg(theme.colors.interaction.pressed_background))
             .child(svg_icon(
                 "icons/history.svg",
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 px(12.0),
             ))
             .child(
@@ -179,7 +251,7 @@ impl MainPaneView {
         let back_btn = components::Button::new("viewer_nav_back", "")
             .start_slot(svg_icon(
                 "icons/arrow_left.svg",
-                theme.colors.text,
+                theme.colors.foreground.primary,
                 px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
@@ -193,7 +265,7 @@ impl MainPaneView {
         let forward_btn = components::Button::new("viewer_nav_forward", "")
             .start_slot(svg_icon(
                 "icons/arrow_right.svg",
-                theme.colors.text,
+                theme.colors.foreground.primary,
                 px(14.0),
             ))
             .style(components::ButtonStyle::Outlined)
@@ -222,7 +294,7 @@ impl MainPaneView {
         div()
             .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
             .text_xs()
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(label)
     }
 
@@ -332,7 +404,7 @@ impl MainPaneView {
                       delta: i8,
                       cx: &mut gpui::Context<Self>| {
             let btn = components::Button::new(id, "")
-                .start_slot(svg_icon(icon, theme.colors.text, px(14.0)))
+                .start_slot(svg_icon(icon, theme.colors.foreground.primary, px(14.0)))
                 .style(components::ButtonStyle::Outlined);
             let btn = if borderless { btn.borderless() } else { btn };
             btn.on_click(theme, cx, move |this, _e, window, cx| {

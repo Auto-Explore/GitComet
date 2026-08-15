@@ -173,7 +173,7 @@ pub(super) fn resolved_output_heuristic_provider_binding_key(
 
 pub(super) fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
     gpui::HighlightStyle {
-        color: Some(theme.colors.danger.into()),
+        color: Some(theme.colors.status.danger.foreground.into()),
         ..gpui::HighlightStyle::default()
     }
 }
@@ -195,7 +195,7 @@ pub(super) fn resolved_output_active_unresolved_highlight_style(
 /// one row reads as one band across all three.
 pub(in crate::view) fn resolved_output_active_conflict_background(theme: AppTheme) -> gpui::Rgba {
     with_alpha(
-        theme.colors.warning,
+        theme.colors.status.warning.foreground,
         if theme.is_dark { 0.30 } else { 0.34 },
     )
 }

@@ -14,7 +14,7 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(420.0))
         .child(popover_title("Commit Changes"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div().px_2().py_1().w_full().min_w(px(0.0)).child(
                 components::ScrollContainer::vertical(

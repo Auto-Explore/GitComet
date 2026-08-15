@@ -38,20 +38,20 @@ fn scope_picker(
         .items_center()
         .rounded(px(theme.radii.row))
         .border_1()
-        .border_color(theme.colors.border)
+        .border_color(theme.colors.stroke.default)
         .overflow_hidden()
         .p(px(1.0));
 
     for (ix, scope) in scopes.iter().copied().enumerate() {
         if ix > 0 {
-            pill = pill.child(div().h_full().w(px(1.0)).bg(theme.colors.border));
+            pill = pill.child(div().h_full().w(px(1.0)).bg(theme.colors.stroke.default));
         }
         pill = pill.child(
             components::Button::new(scope_button_id(scope), scope_label(scope))
                 .borderless()
                 .style(components::ButtonStyle::Subtle)
                 .selected(scope == selected)
-                .selected_bg(theme.colors.active)
+                .selected_bg(theme.colors.interaction.pressed_background)
                 .on_click(theme, cx, move |this, _e, _w, cx| {
                     this.set_add_to_gitignore_scope(scope, cx);
                 }),
@@ -67,7 +67,7 @@ fn scope_picker(
         .child(
             div()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Ignore"),
         )
         .child(pill)
@@ -158,7 +158,7 @@ pub(super) fn panel(
                 .px_2()
                 .pb_1()
                 .text_xs()
-                .text_color(theme.colors.danger)
+                .text_color(theme.colors.status.danger.foreground)
                 .child(format!(
                     "{} has unsaved edits open in the editor. Saving them will overwrite this change.",
                     gitcomet_core::gitignore::FILE_NAME

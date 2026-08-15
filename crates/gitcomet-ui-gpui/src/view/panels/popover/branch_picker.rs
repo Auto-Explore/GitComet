@@ -506,7 +506,7 @@ pub(super) fn panel(this: &mut PopoverHost, cx: &mut gpui::Context<PopoverHost>)
         .min_w(width.min_px(ui_scale))
         .max_w(width.max_px(ui_scale))
         .child(popover_title(title))
-        .child(div().border_t_1().border_color(theme.colors.border));
+        .child(div().border_t_1().border_color(theme.colors.stroke.default));
 
     // The checkout picker renders sectioned, metadata-bearing rows and a create
     // row, so it drives PickerPrompt directly rather than through

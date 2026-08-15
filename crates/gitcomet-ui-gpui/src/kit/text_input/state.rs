@@ -498,47 +498,28 @@ pub(super) struct TextInputContextMenuState {
 
 impl TextInputStyle {
     pub(super) fn from_theme(theme: AppTheme) -> Self {
-        fn mix(mut a: Rgba, b: Rgba, t: f32) -> Rgba {
-            let t = t.clamp(0.0, 1.0);
-            a.r = a.r + (b.r - a.r) * t;
-            a.g = a.g + (b.g - a.g) * t;
-            a.b = a.b + (b.b - a.b) * t;
-            a.a = a.a + (b.a - a.a) * t;
-            a
-        }
-
-        // Ensure inputs look like inputs even in themes where `surface_bg` and `surface_bg_elevated`
-        // are equal (Ayu/One).
-        let background = if theme.is_dark {
-            mix(
-                theme.colors.surface_bg_elevated,
-                gpui::rgba(0xFFFFFFFF),
-                0.03,
-            )
+        let hover_border = if theme.is_dark {
+            // Preserve the established dark-theme input treatment while light
+            // themes use the stronger semantic control boundary.
+            with_alpha(theme.colors.foreground.secondary, 0.55)
         } else {
-            mix(
-                theme.colors.surface_bg_elevated,
-                gpui::rgba(0x000000FF),
-                0.03,
-            )
+            theme.colors.interaction.selected_indicator
         };
-
-        let base_border = theme.colors.border;
-        let hover_border = with_alpha(
-            theme.colors.text_muted,
-            if theme.is_dark { 0.55 } else { 0.40 },
-        );
-        let focus_border = with_alpha(theme.colors.accent, if theme.is_dark { 0.98 } else { 0.92 });
+        let focus_border = if theme.is_dark {
+            with_alpha(theme.colors.accent.foreground, 0.98)
+        } else {
+            theme.colors.interaction.focus_ring
+        };
         Self {
-            background,
-            border: base_border,
+            background: theme.colors.surface.input,
+            border: theme.colors.stroke.control,
             hover_border,
             focus_border,
             radius: theme.radii.control,
-            text: theme.colors.text.into(),
-            placeholder: theme.colors.input_placeholder.into(),
-            cursor: with_alpha(theme.colors.text, if theme.is_dark { 0.78 } else { 0.62 }),
-            selection: with_alpha(theme.colors.accent, if theme.is_dark { 0.28 } else { 0.18 }),
+            text: theme.colors.editor.foreground.into(),
+            placeholder: theme.colors.foreground.placeholder.into(),
+            cursor: theme.colors.editor.cursor,
+            selection: theme.colors.editor.selection_background,
         }
     }
 }
@@ -873,4 +854,30 @@ pub struct TextInput {
     /// spans ride along with edits elsewhere so they stay accurate between
     /// refreshes by the owner.
     pub(super) protected_ranges: Arc<[Range<usize>]>,
+}
+
+#[cfg(test)]
+mod semantic_theme_tests {
+    use super::*;
+
+    #[test]
+    fn light_input_uses_explicit_control_and_editor_roles() {
+        let theme = AppTheme::gitcomet_light();
+        let style = TextInputStyle::from_theme(theme);
+
+        assert_eq!(style.background, theme.colors.surface.input);
+        assert_eq!(style.border, theme.colors.stroke.control);
+        assert_eq!(style.focus_border, theme.colors.interaction.focus_ring);
+        assert_eq!(style.cursor, theme.colors.editor.cursor);
+        assert_eq!(style.selection, theme.colors.editor.selection_background);
+    }
+
+    #[test]
+    fn dark_input_keeps_its_resolved_background_and_selection() {
+        let theme = AppTheme::gitcomet_dark();
+        let style = TextInputStyle::from_theme(theme);
+
+        assert_eq!(style.background, theme.colors.surface.input);
+        assert_eq!(style.selection, theme.colors.editor.selection_background);
+    }
 }

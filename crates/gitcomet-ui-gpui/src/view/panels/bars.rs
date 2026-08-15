@@ -13,14 +13,14 @@ impl GitCometView {
             .gap_2()
             .px_2()
             .py_1()
-            .bg(theme.colors.surface_bg)
+            .bg(theme.colors.surface.panel)
             .border_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .rounded(px(theme.radii.panel))
             .child(
                 div()
                     .text_sm()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child("Path"),
             )
             .child(div().flex_1().child(self.open_repo_input.clone()))

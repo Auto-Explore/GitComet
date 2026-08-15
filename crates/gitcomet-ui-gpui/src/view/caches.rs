@@ -23,6 +23,13 @@ pub(super) struct HistoryCache {
 pub(super) struct HistoryBaseCache {
     pub(super) request: HistoryBaseCacheRequest,
     pub(super) visible_indices: HistoryVisibleIndices,
+    /// Visible index of the first row carrying each commit id.
+    ///
+    /// Built here, with the rest of the cache, because this is the one place the
+    /// work happens off the render path. Its readers -- the worktree row anchors
+    /// and the selected lane's colour -- each need a handful of lookups but are
+    /// called during layout, where a scan of a 50k-commit page is a scan too many.
+    pub(super) visible_ix_by_commit: Arc<rustc_hash::FxHashMap<CommitId, usize>>,
     pub(super) graph_rows: Arc<[history_graph::GraphRow]>,
     pub(super) max_lanes: usize,
     pub(super) row_vms: Vec<HistoryBaseRowVm>,
@@ -173,6 +180,281 @@ impl HistoryVisibleIndices {
             Self::All { len } => HistoryVisibleIndicesIter::All(0..*len),
             Self::Filtered(indices) => HistoryVisibleIndicesIter::Filtered(indices.iter().copied()),
         }
+    }
+}
+
+/// Where a worktree's "Uncommitted changes" row sits: immediately above the
+/// commit at `visible_ix`, which is that worktree's HEAD.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) struct HistoryWorktreeRowAnchor {
+    pub(in crate::view) visible_ix: usize,
+    /// Index into the repo's `worktree_dirty` list.
+    pub(in crate::view) worktree_ix: usize,
+}
+
+/// What the list shows at a given `list_ix`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum HistoryListRow {
+    WorkingTreeSummary,
+    WorktreeUncommitted {
+        visible_ix: usize,
+        worktree_ix: usize,
+    },
+    Commit {
+        visible_ix: usize,
+    },
+}
+
+/// Maps between the virtualized list's indices and the commit indices behind
+/// them, once synthetic rows are interleaved.
+///
+/// The list used to be "commits, optionally shifted by one", so every call site
+/// could do `list_ix = visible_ix + offset`. Worktree rows sit *inside* the run
+/// of commits, so the shift is no longer constant. Anchors are kept sorted by
+/// `visible_ix` and both directions binary-search them, which keeps this O(log n)
+/// per lookup and costs no per-row allocation.
+#[derive(Clone, Debug, Default)]
+pub(in crate::view) struct HistoryListPlan {
+    show_working_tree_summary_row: bool,
+    /// Sorted by `visible_ix`, ascending.
+    anchors: Arc<[HistoryWorktreeRowAnchor]>,
+}
+
+impl HistoryListPlan {
+    pub(in crate::view) fn new(
+        show_working_tree_summary_row: bool,
+        mut anchors: Vec<HistoryWorktreeRowAnchor>,
+    ) -> Self {
+        anchors.sort_by_key(|anchor| anchor.visible_ix);
+        Self {
+            show_working_tree_summary_row,
+            anchors: anchors.into(),
+        }
+    }
+
+    pub(in crate::view) fn show_working_tree_summary_row(&self) -> bool {
+        self.show_working_tree_summary_row
+    }
+
+    /// Identity of the interleaving, for caches that store a `list_ix`.
+    /// Two plans that place the same rows at the same indices hash equal.
+    pub(in crate::view) fn fingerprint(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = rustc_hash::FxHasher::default();
+        self.show_working_tree_summary_row.hash(&mut hasher);
+        self.anchors.len().hash(&mut hasher);
+        for anchor in self.anchors.iter() {
+            anchor.visible_ix.hash(&mut hasher);
+            anchor.worktree_ix.hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn worktree_row_count(&self) -> usize {
+        self.anchors.len()
+    }
+
+    fn base_offset(&self) -> usize {
+        usize::from(self.show_working_tree_summary_row)
+    }
+
+    /// Total rows for `visible_len` commits.
+    pub(in crate::view) fn list_len(&self, visible_len: usize) -> usize {
+        self.base_offset() + visible_len + self.anchors.len()
+    }
+
+    /// The `list_ix` the commit at `visible_ix` renders at.
+    pub(in crate::view) fn list_ix_for_visible(&self, visible_ix: usize) -> usize {
+        // Anchors at exactly `visible_ix` render immediately above this commit,
+        // so they count towards its offset.
+        let before = self
+            .anchors
+            .partition_point(|anchor| anchor.visible_ix <= visible_ix);
+        self.base_offset() + visible_ix + before
+    }
+
+    /// The `list_ix` of the row for `worktree_ix`, if that worktree still has
+    /// one. `None` once it goes clean or its HEAD leaves the visible log.
+    pub(in crate::view) fn list_ix_for_worktree(&self, worktree_ix: usize) -> Option<usize> {
+        self.anchors
+            .iter()
+            .enumerate()
+            .find(|(_, anchor)| anchor.worktree_ix == worktree_ix)
+            .map(|(k, anchor)| self.base_offset() + anchor.visible_ix + k)
+    }
+
+    pub(in crate::view) fn row_at(&self, list_ix: usize) -> Option<HistoryListRow> {
+        let base = self.base_offset();
+        if self.show_working_tree_summary_row && list_ix == 0 {
+            return Some(HistoryListRow::WorkingTreeSummary);
+        }
+        let offset_ix = list_ix.checked_sub(base)?;
+
+        // An anchor's own position is `visible_ix + <number of earlier anchors>`,
+        // which is strictly increasing, so it can be binary-searched directly.
+        let anchor_pos = |k: usize| self.anchors[k].visible_ix + k;
+        let mut lo = 0usize;
+        let mut hi = self.anchors.len();
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            match anchor_pos(mid).cmp(&offset_ix) {
+                std::cmp::Ordering::Equal => {
+                    let anchor = self.anchors[mid];
+                    return Some(HistoryListRow::WorktreeUncommitted {
+                        visible_ix: anchor.visible_ix,
+                        worktree_ix: anchor.worktree_ix,
+                    });
+                }
+                std::cmp::Ordering::Less => lo = mid + 1,
+                std::cmp::Ordering::Greater => hi = mid,
+            }
+        }
+        // `lo` is now the number of anchors sitting above this row.
+        Some(HistoryListRow::Commit {
+            visible_ix: offset_ix.checked_sub(lo)?,
+        })
+    }
+}
+
+#[cfg(test)]
+mod history_list_plan_tests {
+    use super::*;
+
+    fn anchor(visible_ix: usize, worktree_ix: usize) -> HistoryWorktreeRowAnchor {
+        HistoryWorktreeRowAnchor {
+            visible_ix,
+            worktree_ix,
+        }
+    }
+
+    /// Every list index maps to exactly one row, and every commit round-trips
+    /// back to the index it was placed at.
+    fn assert_plan_round_trips(plan: &HistoryListPlan, visible_len: usize) {
+        let len = plan.list_len(visible_len);
+        let mut seen_commits = Vec::new();
+        let mut seen_worktrees = Vec::new();
+        for list_ix in 0..len {
+            match plan.row_at(list_ix).expect("row within list length") {
+                HistoryListRow::WorkingTreeSummary => assert_eq!(list_ix, 0),
+                HistoryListRow::WorktreeUncommitted { visible_ix, .. } => {
+                    seen_worktrees.push((list_ix, visible_ix))
+                }
+                HistoryListRow::Commit { visible_ix } => {
+                    assert_eq!(
+                        plan.list_ix_for_visible(visible_ix),
+                        list_ix,
+                        "commit {visible_ix} did not round-trip"
+                    );
+                    seen_commits.push(visible_ix);
+                }
+            }
+        }
+        assert_eq!(seen_commits, (0..visible_len).collect::<Vec<_>>());
+        assert_eq!(seen_worktrees.len(), plan.worktree_row_count());
+        // A worktree row always renders directly above the commit it anchors to.
+        for (list_ix, visible_ix) in seen_worktrees {
+            assert!(plan.list_ix_for_visible(visible_ix) > list_ix);
+        }
+    }
+
+    #[test]
+    fn a_plan_without_synthetic_rows_is_the_identity() {
+        let plan = HistoryListPlan::new(false, Vec::new());
+        assert_eq!(plan.list_len(5), 5);
+        assert_eq!(plan.list_ix_for_visible(3), 3);
+        assert_eq!(
+            plan.row_at(3),
+            Some(HistoryListRow::Commit { visible_ix: 3 })
+        );
+        assert_plan_round_trips(&plan, 5);
+    }
+
+    #[test]
+    fn the_working_tree_row_shifts_every_commit_by_one() {
+        let plan = HistoryListPlan::new(true, Vec::new());
+        assert_eq!(plan.list_len(5), 6);
+        assert_eq!(plan.row_at(0), Some(HistoryListRow::WorkingTreeSummary));
+        assert_eq!(plan.list_ix_for_visible(0), 1);
+        assert_plan_round_trips(&plan, 5);
+    }
+
+    #[test]
+    fn a_worktree_row_sits_directly_above_its_head_commit() {
+        let plan = HistoryListPlan::new(false, vec![anchor(2, 0)]);
+        assert_eq!(plan.list_len(5), 6);
+        assert_eq!(
+            plan.row_at(1),
+            Some(HistoryListRow::Commit { visible_ix: 1 })
+        );
+        assert_eq!(
+            plan.row_at(2),
+            Some(HistoryListRow::WorktreeUncommitted {
+                visible_ix: 2,
+                worktree_ix: 0,
+            })
+        );
+        assert_eq!(
+            plan.row_at(3),
+            Some(HistoryListRow::Commit { visible_ix: 2 })
+        );
+        assert_eq!(plan.list_ix_for_visible(2), 3);
+        assert_plan_round_trips(&plan, 5);
+    }
+
+    #[test]
+    fn several_worktrees_on_the_same_commit_stack_above_it() {
+        let plan = HistoryListPlan::new(true, vec![anchor(1, 0), anchor(1, 1)]);
+        assert_eq!(plan.list_len(4), 7);
+        assert_eq!(
+            plan.row_at(2),
+            Some(HistoryListRow::WorktreeUncommitted {
+                visible_ix: 1,
+                worktree_ix: 0,
+            })
+        );
+        assert_eq!(
+            plan.row_at(3),
+            Some(HistoryListRow::WorktreeUncommitted {
+                visible_ix: 1,
+                worktree_ix: 1,
+            })
+        );
+        assert_eq!(plan.list_ix_for_visible(1), 4);
+        assert_plan_round_trips(&plan, 4);
+    }
+
+    #[test]
+    fn anchors_are_sorted_so_construction_order_does_not_matter() {
+        let scrambled = HistoryListPlan::new(false, vec![anchor(4, 1), anchor(0, 0), anchor(2, 2)]);
+        let ordered = HistoryListPlan::new(false, vec![anchor(0, 0), anchor(2, 2), anchor(4, 1)]);
+        for list_ix in 0..ordered.list_len(6) {
+            assert_eq!(scrambled.row_at(list_ix), ordered.row_at(list_ix));
+        }
+        assert_plan_round_trips(&scrambled, 6);
+    }
+
+    /// `row_at` is deliberately unbounded above: the plan never learns how many
+    /// commits are visible (`list_len` takes that as an argument), so an index
+    /// past the end still resolves to a commit row that is simply not there.
+    /// Every caller bounds the index itself before looking the commit up. Pinned
+    /// here so a caller that forgets is a bug in the caller, not a surprise from
+    /// a method that looks like it range-checks.
+    #[test]
+    fn row_at_leaves_the_upper_bound_to_its_callers() {
+        let plan = HistoryListPlan::new(true, vec![anchor(0, 0)]);
+        let len = plan.list_len(2);
+        assert_eq!(
+            plan.row_at(len - 1),
+            Some(HistoryListRow::Commit { visible_ix: 1 }),
+            "the last in-range row is the last visible commit"
+        );
+        assert_eq!(
+            plan.row_at(len),
+            Some(HistoryListRow::Commit { visible_ix: 2 }),
+            "one past the end keeps counting commits instead of returning None"
+        );
+        assert_plan_round_trips(&plan, 2);
     }
 }
 
@@ -1050,42 +1332,8 @@ pub(super) fn branch_sidebar_cache_store(
     });
 }
 
-/// Which rows are related to the commit selected in the history.
-///
-/// "Related" is the selected commit, everything it descends from, and its direct
-/// children -- the shape you want when asking "where does this commit sit?".
-/// Deliberately its own cache rather than a field on [`HistoryBaseCache`]:
-/// folding the selection into that cache's request would rebuild the entire
-/// graph -- up to 50k rows -- on every arrow-key press.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct HistoryRelatedCommitsCacheRequest {
-    pub(super) repo_id: RepoId,
-    pub(super) log_fingerprint: u64,
-    /// Commit the relation is computed around.
-    pub(super) anchor: Option<CommitId>,
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct HistoryRelatedCommitsCache {
-    pub(super) request: HistoryRelatedCommitsCacheRequest,
-    /// One bit per index into the log page's `commits`, set when that commit is
-    /// related to the anchor. Indexed by commit index, which is what the row
-    /// renderer already resolves through `visible_indices`.
-    pub(super) related: Arc<[u64]>,
-}
-
-impl HistoryRelatedCommitsCache {
-    /// Nothing to highlight. Either there is no anchor, or the anchor is not in
-    /// the current page and the bitset came back empty -- which must read as
-    /// "no selection to relate to" rather than "every row is unrelated", or a
-    /// selection left over from a narrower reload would dim the whole list.
-    pub(super) fn is_empty(&self) -> bool {
-        self.request.anchor.is_none() || self.related.is_empty()
-    }
-}
-
-/// Whether `commit_ix` is related to the anchor, against the bitset built by
-/// [`build_history_related_commit_bits`].
+/// Whether `commit_ix` is set in a commit bitset. Used by the branch-containment
+/// bitsets that attribute a row to an integration branch.
 #[inline]
 pub(super) fn related_commit_contains(bits: &[u64], commit_ix: usize) -> bool {
     bits.get(commit_ix / 64)
@@ -1188,68 +1436,24 @@ fn index_of<'a>(
     .copied()
 }
 
-pub(super) fn build_history_related_commit_bits(
-    commits: &[Commit],
-    anchor: &CommitId,
-) -> Arc<[u64]> {
-    #[inline]
-    fn mark(bits: &mut [u64], ix: usize) {
-        bits[ix / 64] |= 1u64 << (ix % 64);
-    }
-    #[inline]
-    fn is_marked(bits: &[u64], ix: usize) -> bool {
-        bits[ix / 64] & (1u64 << (ix % 64)) != 0
-    }
-
-    let anchor_id = anchor.as_ref();
-    let Some(anchor_ix) = commits
-        .iter()
-        .position(|commit| commit.id.as_ref() == anchor_id)
-    else {
-        return Arc::from(Vec::new());
-    };
-
-    let words = commits.len().div_ceil(64);
-    let mut id_to_index: Option<HashMap<&str, usize>> = None;
-    let resolve = |ix: usize, parent_pos: usize, parent: &CommitId, map: &mut _| {
-        let parent_id = parent.as_ref();
-        if parent_pos == 0
-            && commits
-                .get(ix + 1)
-                .is_some_and(|next| next.id.as_ref() == parent_id)
-        {
-            return Some(ix + 1);
-        }
-        index_of(map, commits, parent_id)
-    };
-
-    // Ancestors: downward through the list, so every parent is already resolved
-    // by the time its child is reached.
-    let mut ancestors = ancestor_bits(commits, anchor_ix, &mut id_to_index);
-
-    // Descendants: upward through the list. A commit descends from the anchor if
-    // any of its parents does, and those parents sit at higher indices, which
-    // this order has already decided.
-    let mut descendants = vec![0u64; words];
-    mark(&mut descendants, anchor_ix);
-    for ix in (0..anchor_ix).rev() {
-        let descends = commits[ix]
-            .parent_ids
-            .iter()
-            .enumerate()
-            .any(|(parent_pos, parent)| {
-                resolve(ix, parent_pos, parent, &mut id_to_index)
-                    .is_some_and(|parent_ix| parent_ix > ix && is_marked(&descendants, parent_ix))
-            });
-        if descends {
-            mark(&mut descendants, ix);
-        }
-    }
-
-    for (word, descendant_word) in ancestors.iter_mut().zip(descendants) {
-        *word |= descendant_word;
-    }
-    Arc::from(ancestors)
+/// Caches the interleaving of synthetic rows into the commit list. Rebuilt
+/// whenever the base cache, the dirty-worktree scan, or the working-tree row's
+/// visibility changes.
+///
+/// The key is the base cache's whole request, not just its `log_fingerprint`:
+/// the anchors are `visible_ix_by_commit` lookups, and that map is rebuilt for
+/// every field of the request. Filtering stash helper commits out renumbers the
+/// page without touching the fingerprint, so a fingerprint-only key hands back
+/// anchors pointing at the pre-filter indices -- worktree rows above the wrong
+/// commit, and blank gaps wherever the stale index ran off the end of
+/// `graph_rows`.
+#[derive(Clone, Debug)]
+pub(super) struct HistoryListPlanCache {
+    pub(super) base_request: HistoryBaseCacheRequest,
+    pub(super) worktrees_rev: u64,
+    pub(super) worktree_dirty_rev: u64,
+    pub(super) show_working_tree_summary_row: bool,
+    pub(super) plan: HistoryListPlan,
 }
 
 #[derive(Clone, Debug)]
@@ -1315,113 +1519,6 @@ mod tests {
             author: "author".into(),
             time: SystemTime::UNIX_EPOCH,
         }
-    }
-
-    fn related_indices(commits: &[Commit], anchor: &str) -> Vec<usize> {
-        let bits = build_history_related_commit_bits(commits, &commit_id(anchor));
-        (0..commits.len())
-            .filter(|ix| related_commit_contains(&bits, *ix))
-            .collect()
-    }
-
-    #[test]
-    fn related_commits_are_the_anchor_its_ancestors_and_all_its_descendants() {
-        //   0 child_a   \
-        //   1 child_b    > both have `anchor` as a parent
-        //   2 anchor
-        //   3 parent
-        //   4 root
-        let commits = vec![
-            commit("child_a", &["anchor"], "a"),
-            commit("child_b", &["anchor"], "b"),
-            commit("anchor", &["parent"], "anchor"),
-            commit("parent", &["root"], "parent"),
-            commit("root", &[], "root"),
-        ];
-
-        assert_eq!(related_indices(&commits, "anchor"), vec![0, 1, 2, 3, 4]);
-    }
-
-    #[test]
-    fn descendants_run_the_whole_way_up_not_just_one_row() {
-        //   0 grandchild
-        //   1 child
-        //   2 anchor
-        //   3 root
-        let commits = vec![
-            commit("grandchild", &["child"], "gc"),
-            commit("child", &["anchor"], "c"),
-            commit("anchor", &["root"], "anchor"),
-            commit("root", &[], "root"),
-        ];
-
-        assert_eq!(related_indices(&commits, "anchor"), vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn a_merge_child_is_related_without_dragging_in_its_other_side() {
-        // `merge` descends from the anchor, so it is related -- but the branch
-        // it merges in does not, and neither does that branch's own base.
-        let commits = vec![
-            commit("merge", &["anchor", "side"], "merge"),
-            commit("side", &["side_base"], "side work"),
-            commit("anchor", &["root"], "anchor"),
-            commit("side_base", &["root"], "side base"),
-            commit("root", &[], "root"),
-        ];
-
-        let related = related_indices(&commits, "anchor");
-        assert!(related.contains(&0), "the merge descends from the anchor");
-        assert!(related.contains(&2), "the anchor itself is related");
-        assert!(related.contains(&4), "the anchor's ancestor is related");
-        assert!(!related.contains(&1), "the merged-in side is not");
-        assert!(!related.contains(&3), "nor that side's own base");
-    }
-
-    #[test]
-    fn a_sibling_forking_off_a_shared_ancestor_is_not_a_descendant() {
-        // `sibling` hangs off `root`, which the anchor also descends from. A
-        // marked parent alone must not make it related -- it is neither an
-        // ancestor nor a descendant of the anchor.
-        let commits = vec![
-            commit("sibling", &["root"], "sibling"),
-            commit("anchor", &["root"], "anchor"),
-            commit("root", &[], "root"),
-        ];
-
-        assert_eq!(related_indices(&commits, "anchor"), vec![1, 2]);
-    }
-
-    #[test]
-    fn ancestors_follow_every_parent_of_a_merge() {
-        // A merge in the anchor's own history pulls in both sides: they are all
-        // commits the anchor descends from.
-        let commits = vec![
-            commit("anchor", &["left", "right"], "merge"),
-            commit("left", &["root"], "left"),
-            commit("right", &["root"], "right"),
-            commit("root", &[], "root"),
-        ];
-
-        assert_eq!(related_indices(&commits, "anchor"), vec![0, 1, 2, 3]);
-    }
-
-    #[test]
-    fn unrelated_branches_stay_unmarked() {
-        let commits = vec![
-            commit("other_tip", &["other_base"], "other"),
-            commit("anchor", &["root"], "anchor"),
-            commit("other_base", &[], "other base"),
-            commit("root", &[], "root"),
-        ];
-
-        assert_eq!(related_indices(&commits, "anchor"), vec![1, 3]);
-    }
-
-    #[test]
-    fn nothing_is_related_when_the_anchor_is_not_in_the_page() {
-        let commits = vec![commit("a", &[], "a")];
-        assert!(related_indices(&commits, "missing").is_empty());
     }
 
     #[test]

@@ -45,25 +45,25 @@ impl MainPaneView {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.colors.text)
+                        .text_color(theme.colors.foreground.primary)
                         .w(px(80.0))
                         .child(label),
                 )
                 .child(
                     div()
                         .text_sm()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(size_label),
                 )
                 .child(
                     div()
                         .text_xs()
                         .text_color(if has_text {
-                            theme.colors.text_muted
+                            theme.colors.foreground.secondary
                         } else if size.is_some() {
-                            theme.colors.warning
+                            theme.colors.status.warning.foreground
                         } else {
-                            theme.colors.text_muted
+                            theme.colors.foreground.secondary
                         })
                         .child(kind_label),
                 )
@@ -182,7 +182,7 @@ impl MainPaneView {
                 }),
             )
             .when(show_external_mergetool_actions(self.view_mode), |d| {
-                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
+                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.stroke.default))
                     .child(
                         components::Button::new("binary_launch_mergetool", "External Mergetool")
                             .style(components::ButtonStyle::Outlined)
@@ -223,7 +223,7 @@ impl MainPaneView {
                     .min_w(px(0.0))
                     .h_full()
                     .border_1()
-                    .border_color(theme.colors.border)
+                    .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.row))
                     .overflow_hidden()
                     .flex()
@@ -235,16 +235,16 @@ impl MainPaneView {
                             .flex()
                             .items_center()
                             .justify_between()
-                            .bg(theme.colors.surface_bg_elevated)
+                            .bg(theme.colors.surface.raised)
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .child(label),
                     )
                     .child(
                         div()
                             .flex_1()
                             .min_h(px(0.0))
-                            .bg(theme.colors.window_bg)
+                            .bg(theme.colors.surface.canvas)
                             .flex()
                             .items_center()
                             .justify_center()
@@ -256,22 +256,22 @@ impl MainPaneView {
                                     .into_any_element(),
                                 Loadable::NotLoaded | Loadable::Loading if has_source => div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Processing image...")
                                     .into_any_element(),
                                 Loadable::Error(error) => div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(error)
                                     .into_any_element(),
                                 Loadable::Ready(None) if has_source => div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("Preview unavailable.")
                                     .into_any_element(),
                                 _ => div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("No image")
                                     .into_any_element(),
                             }),
@@ -285,7 +285,7 @@ impl MainPaneView {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(theme.colors.text)
+                        .text_color(theme.colors.foreground.primary)
                         .child("Image preview"),
                 )
                 .child(
@@ -336,7 +336,7 @@ impl MainPaneView {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.text)
+                        .text_color(theme.colors.foreground.primary)
                         .child(title),
                 ),
             )
@@ -346,7 +346,7 @@ impl MainPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .border_1()
-                    .border_color(theme.colors.border)
+                    .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.row))
                     .overflow_hidden()
                     .flex()
@@ -354,16 +354,16 @@ impl MainPaneView {
                     .items_center()
                     .justify_center()
                     .gap_4()
-                    .bg(theme.colors.window_bg)
+                    .bg(theme.colors.surface.canvas)
                     // Icon/label
                     .child(
                         div()
                             .text_lg()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.warning)
+                            .text_color(theme.colors.status.warning.foreground)
                             .child("Binary file conflict"),
                     )
-                    .child(div().text_sm().text_color(theme.colors.text_muted).child(
+                    .child(div().text_sm().text_color(theme.colors.foreground.secondary).child(
                         "This file contains binary or non-UTF8 data and cannot be merged as text.",
                     ))
                     .when_some(image_preview, |d, preview| d.child(preview))
@@ -371,9 +371,9 @@ impl MainPaneView {
                     .child(
                         div()
                             .border_1()
-                            .border_color(theme.colors.border)
+                            .border_color(theme.colors.stroke.default)
                             .rounded(px(theme.radii.row))
-                            .bg(theme.colors.surface_bg_elevated)
+                            .bg(theme.colors.surface.raised)
                             .child(info_section),
                     )
                     // Action buttons

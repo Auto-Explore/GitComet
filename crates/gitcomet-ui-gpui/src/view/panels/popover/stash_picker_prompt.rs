@@ -128,7 +128,7 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(420.0))
         .child(popover_title(title))
-        .child(div().border_t_1().border_color(theme.colors.border));
+        .child(div().border_t_1().border_color(theme.colors.stroke.default));
 
     if let Some(search) = this.stash_picker_search_input.clone() {
         match this

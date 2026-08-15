@@ -103,6 +103,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CompareWithWorkingTree { .. }
             | Msg::SelectDiff { .. }
             | Msg::SelectConflictDiff { .. }
+            | Msg::SelectWorktreeUncommitted { .. }
             | Msg::LoadStashes { .. }
             | Msg::LoadConflictFile { .. }
             | Msg::LoadReflog { .. }
@@ -111,6 +112,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
+            | Msg::LoadWorktreeDirty { .. }
             | Msg::LoadRefMetadata { .. }
             | Msg::LoadSubmodules { .. }
             | Msg::LoadSubmodule { .. }
@@ -741,6 +743,10 @@ pub(super) fn reduce(
 
     let effects = reduce_inner(repos, id_alloc, state, msg);
 
+    // Enforced here rather than at each of the four places a worktree selection
+    // can end; see the helper.
+    effects::retire_orphaned_worktree_diffs(state);
+
     if reconcile {
         reconcile_active_nav_history(state, push);
     }
@@ -758,6 +764,9 @@ fn is_view_navigation(msg: &Msg) -> bool {
         Msg::SelectDiff { .. }
             | Msg::SelectConflictDiff { .. }
             | Msg::SelectCommit { .. }
+            // Selecting a linked-worktree row is a destination like any other
+            // history selection; it just is not a commit.
+            | Msg::SelectWorktreeUncommitted { .. }
             | Msg::CompareCommitRange { .. }
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
@@ -977,6 +986,7 @@ fn reduce_inner(
         Msg::SelectDiff { repo_id, target } => diff_selection::select_diff(state, repo_id, target),
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
+            origin,
             submodule_repo_path,
             parent_submodule_path,
             entries,
@@ -984,6 +994,7 @@ fn reduce_inner(
         } => diff_selection::open_inline_submodule_diff(
             state,
             repo_id,
+            origin,
             submodule_repo_path,
             parent_submodule_path,
             entries,
@@ -1027,6 +1038,10 @@ fn reduce_inner(
             source,
         } => effects::load_blame(state, repo_id, path, source),
         Msg::LoadWorktrees { repo_id } => effects::load_worktrees(state, repo_id),
+        Msg::LoadWorktreeDirty { repo_id } => effects::load_worktree_dirty(state, repo_id),
+        Msg::SelectWorktreeUncommitted { repo_id, path } => {
+            effects::select_worktree_uncommitted(state, repo_id, path)
+        }
         Msg::LoadRefMetadata { repo_id } => effects::load_ref_metadata(state, repo_id),
         Msg::LoadSubmodules { repo_id } => effects::load_submodules(state, repo_id),
         Msg::LoadTags { repo_id } => effects::load_tags(state, repo_id),
@@ -1967,6 +1982,9 @@ fn reduce_inner(
         Msg::Internal(crate::msg::InternalMsg::WorktreesLoaded { repo_id, result }) => {
             effects::worktrees_loaded(state, repo_id, result)
         }
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }) => {
+            effects::worktree_dirty_loaded(state, repo_id, result)
+        }
         Msg::Internal(crate::msg::InternalMsg::RefMetadataLoaded { repo_id, result }) => {
             effects::ref_metadata_loaded(state, repo_id, result)
         }
@@ -2394,6 +2412,58 @@ mod nav_history_tests {
         );
     }
 
+    /// A linked-worktree row is a third kind of history selection, and selecting
+    /// one clears the commit selection. Left out of the navigation machinery it
+    /// read as "the view went back to the log": the entry for the commit the user
+    /// came from was overwritten in place, so Back skipped it, and no snapshot
+    /// could reproduce the worktree row on the way forward.
+    #[test]
+    fn selecting_a_worktree_row_is_a_navigation_step_of_its_own() {
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+        let commit = CommitId("abc".into());
+        let worktree = std::path::PathBuf::from("/tmp/wt/a");
+
+        dispatch(
+            &mut state,
+            Msg::SelectCommit {
+                repo_id,
+                commit_id: commit.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectWorktreeUncommitted {
+                repo_id,
+                path: worktree.clone(),
+            },
+        );
+        assert_eq!(
+            repo(&state, repo_id).history_state.selected_commit,
+            None,
+            "the worktree row displaces the commit selection"
+        );
+
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        assert_eq!(
+            repo(&state, repo_id).history_state.selected_commit.as_ref(),
+            Some(&commit),
+            "back must return to the commit the worktree row was selected from"
+        );
+        assert_eq!(repo(&state, repo_id).history_state.worktree_selection, None);
+
+        dispatch(&mut state, Msg::GlobalNavForward { repo_id });
+        assert_eq!(
+            repo(&state, repo_id)
+                .history_state
+                .worktree_selection
+                .as_ref(),
+            Some(&worktree),
+            "forward must reproduce the worktree row, not just clear the commit"
+        );
+        assert_eq!(repo(&state, repo_id).history_state.selected_commit, None);
+    }
+
     #[test]
     fn opening_a_file_diff_is_recorded_and_back_restores_the_log() {
         let repo_id = RepoId(1);
@@ -2536,6 +2606,7 @@ mod nav_history_tests {
             repo_id: RepoId(1),
         }));
         assert!(is_view_navigation(&Msg::OpenInlineSubmoduleDiff {
+            origin: crate::model::ForeignDiffOrigin::Submodule,
             repo_id: RepoId(1),
             submodule_repo_path: std::path::PathBuf::from("/tmp/sub"),
             parent_submodule_path: std::path::PathBuf::from("sub"),
@@ -2571,6 +2642,7 @@ mod nav_history_tests {
         dispatch(
             &mut state,
             Msg::OpenInlineSubmoduleDiff {
+                origin: crate::model::ForeignDiffOrigin::Submodule,
                 repo_id,
                 submodule_repo_path: std::path::PathBuf::from("/tmp/repo/vendor/first"),
                 parent_submodule_path: std::path::PathBuf::from("vendor/first"),

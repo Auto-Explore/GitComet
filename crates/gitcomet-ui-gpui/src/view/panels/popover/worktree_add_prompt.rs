@@ -71,7 +71,7 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(640.0))
         .child(popover_title("Add worktree"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(input_label(theme, "Worktree folder"))
         .child(
             div()
@@ -129,11 +129,11 @@ pub(super) fn panel(
                 .px_2()
                 .py_1()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Branch / commit (optional)"),
         )
         .child(ref_row)
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

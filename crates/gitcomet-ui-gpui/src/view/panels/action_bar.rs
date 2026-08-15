@@ -241,8 +241,11 @@ impl Render for ActionBarView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
-        let icon_primary = theme.colors.accent;
-        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let icon_primary = theme.colors.accent.foreground;
+        let icon_muted = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.72 } else { 0.82 },
+        );
         let icon = |path: &'static str, color: gpui::Rgba| svg_icon(path, color, scaled_px(14.0));
         let spinner =
             |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, scaled_px(14.0));
@@ -257,8 +260,10 @@ impl Render for ActionBarView {
 
         // Workspace, branch and historical badges all light up while their own
         // picker is open, so they need the active invoker before any of them.
-        let menu_selected_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+        let menu_selected_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.26 } else { 0.20 },
+        );
         let active_invoker = self.active_context_menu_invoker.clone();
 
         // Badge shown next to the selectors when the file directory is pinned to
@@ -384,9 +389,9 @@ impl Render for ActionBarView {
             .start_slot(icon(
                 "icons/arrow_left.svg",
                 if nav_can_back {
-                    theme.colors.text
+                    theme.colors.foreground.primary
                 } else {
-                    theme.colors.text_muted
+                    theme.colors.foreground.secondary
                 },
             ))
             .style(components::ButtonStyle::Transparent)
@@ -408,9 +413,9 @@ impl Render for ActionBarView {
             .start_slot(icon(
                 "icons/arrow_right.svg",
                 if nav_can_forward {
-                    theme.colors.text
+                    theme.colors.foreground.primary
                 } else {
-                    theme.colors.text_muted
+                    theme.colors.foreground.secondary
                 },
             ))
             .style(components::ButtonStyle::Transparent)
@@ -511,7 +516,7 @@ impl Render for ActionBarView {
         });
 
         let pull_color = if pull_count > 0 {
-            theme.colors.warning
+            theme.colors.status.warning.foreground
         } else {
             icon_muted
         };
@@ -534,7 +539,7 @@ impl Render for ActionBarView {
             .is_some_and(|id| id.as_ref() == pull_picker_invoker.as_ref());
         let pull_tracking_branch_name = tracking_branch_name.clone();
         let pull_menu_icon_color = if pull_picker_active {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
             icon_muted
         };
@@ -580,7 +585,7 @@ impl Render for ActionBarView {
             );
 
         let push_color = if push_count > 0 {
-            theme.colors.success
+            theme.colors.status.success.foreground
         } else {
             icon_muted
         };
@@ -627,7 +632,7 @@ impl Render for ActionBarView {
             .is_some_and(|id| id.as_ref() == push_picker_invoker.as_ref());
         let push_tracking_branch_name = tracking_branch_name.clone();
         let push_menu_icon_color = if push_picker_active {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
             icon_muted
         };
@@ -789,7 +794,7 @@ impl Render for ActionBarView {
             .items_center()
             .justify_between()
             .px_2()
-            .bg(theme.colors.sidebar_bg)
+            .bg(theme.colors.surface.chrome)
             .child(
                 div()
                     .flex()
@@ -809,7 +814,7 @@ impl Render for ActionBarView {
                                 .child(
                                     div()
                                         .text_xs()
-                                        .text_color(theme.colors.warning)
+                                        .text_color(theme.colors.status.warning.foreground)
                                         .font_weight(FontWeight::BOLD)
                                         .child("MERGING"),
                                 )
@@ -841,7 +846,7 @@ impl Render for ActionBarView {
                                     .child(
                                         div()
                                             .text_xs()
-                                            .text_color(theme.colors.warning)
+                                            .text_color(theme.colors.status.warning.foreground)
                                             .font_weight(FontWeight::BOLD)
                                             .child(sequencer_label),
                                     )

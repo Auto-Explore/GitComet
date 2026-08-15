@@ -124,7 +124,7 @@ impl LargeFileDiffScrollFixture {
                             language: self.language,
                             mode: DiffSyntaxMode::Auto,
                         },
-                        word_color: None,
+                        word_kind: None,
                     },
                     prepared_line: super::diff_text::PreparedDiffSyntaxLine {
                         document: Some(document),
@@ -147,7 +147,7 @@ impl LargeFileDiffScrollFixture {
                         language: self.language,
                         mode: DiffSyntaxMode::Auto,
                     },
-                    word_color: None,
+                    word_kind: None,
                 },
             ),
             false,

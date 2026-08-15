@@ -15,7 +15,7 @@ const INLINE_EDGE_CAPACITY: usize = 2;
 
 type LanePaints = SmallVec<[LanePaint; INLINE_LANE_CAPACITY]>;
 type GraphEdges = SmallVec<[GraphEdge; INLINE_EDGE_CAPACITY]>;
-type LaneColorIx = u8;
+pub(in crate::view) type LaneColorIx = u8;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct LaneId(pub u32);
@@ -51,7 +51,11 @@ impl LanePaint {
     };
 
     #[inline]
-    const fn lane(color_ix: LaneColorIx, incoming: bool, from_node: bool) -> Self {
+    pub(in crate::view) const fn lane(
+        color_ix: LaneColorIx,
+        incoming: bool,
+        from_node: bool,
+    ) -> Self {
         let mut flags = Self::ACTIVE;
         if incoming {
             flags |= Self::INCOMING;
@@ -503,11 +507,16 @@ where
         // -- rather than as a swap. `lanes_now` has already been snapshotted with
         // the old colour by then, so the segment above the node stays the
         // descendant's colour and everything below it is the head's.
-        let fork = force_branch_head_lane.then(|| {
-            (
-                free_col_from(&lanes, node_col + 1),
-                pick_lane_color_ix(&lanes, &ended_colors),
-            )
+        let fork_color_ix =
+            force_branch_head_lane.then(|| pick_lane_color_ix(&lanes, &ended_colors));
+        // The whisker only marks the head where it can sit immediately beside
+        // the node. Reaching on to the next free column would draw a horizontal
+        // straight across whatever live lanes lie between, which reads as a
+        // stray line belonging to one of them rather than as a marker for this
+        // head. The colour hand-over below does not depend on it.
+        let fork = fork_color_ix.and_then(|color_ix| {
+            let col = node_col + 1;
+            lane_at(&lanes, col).is_none().then_some((col, color_ix))
         });
         let adopt_fork_color = force_branch_head_lane && !only_hit_is_main_lane;
 
@@ -562,8 +571,8 @@ where
 
         // The node's colour: the fork colour when the branch head takes over the
         // lane, otherwise the colour of the lane the node sits on.
-        let node_color_ix = match fork {
-            Some((_, color_ix)) if adopt_fork_color => color_ix,
+        let node_color_ix = match fork_color_ix {
+            Some(color_ix) if adopt_fork_color => color_ix,
             _ => lane_at(&lanes, node_col).map_or(0, |l| l.color_ix),
         };
 
@@ -603,7 +612,7 @@ where
         // head is born in the same column. `home_col` is deliberately untouched
         // -- the column is precisely what stays put.
         if adopt_fork_color
-            && let Some((_, color_ix)) = fork
+            && let Some(color_ix) = fork_color_ix
             && let Some(lane) = lanes.get_mut(node_col).and_then(Option::as_mut)
         {
             ended_colors.push(lane.color_ix);
@@ -787,6 +796,39 @@ mod tests {
         let c0 = row.lanes_now[0].color_ix;
         let c1 = row.lanes_now[1].color_ix;
         assert_ne!(c0, c1);
+    }
+
+    /// The whisker marks a head that is behind, but only where it can sit right
+    /// beside the node. With a live lane in that column it would have to run
+    /// horizontally across it to reach the next free one, which reads as a stray
+    /// line belonging to that lane -- the shape a `main` sitting on the trunk
+    /// with `upstream/main` alongside produces.
+    #[test]
+    fn a_behind_head_gets_no_whisker_when_it_would_cross_a_live_lane() {
+        let theme = AppTheme::gitcomet_dark();
+        // `side` keeps a lane alive in the column right of the trunk while
+        // `shared` -- a branch head -- sits on the trunk itself.
+        let commits = vec![
+            commit("tip", vec!["shared"]),
+            commit("side", vec!["shared"]),
+            commit("shared", vec!["root"]),
+            commit("root", Vec::new()),
+        ];
+
+        let graph = compute_graph(&commits, theme, ["side", "shared"], Some("tip"));
+        let shared_row = &graph[2];
+
+        assert!(
+            shared_row.joins_in.iter().all(|edge| {
+                // Every join here comes from a lane that genuinely reaches this
+                // commit, not from a whisker conjured beside it.
+                shared_row
+                    .lanes_now
+                    .get(usize::from(edge.from_col))
+                    .is_some_and(|lane| lane.is_active() && lane.incoming())
+            }),
+            "a whisker must not be drawn across the lane sitting beside the node"
+        );
     }
 
     #[test]

@@ -25,6 +25,12 @@ pub fn diff_stat(theme: AppTheme, scale: impl Into<UiScale>, added: usize, remov
         .items_center()
         .flex_none()
         .gap_1()
-        .child(part(format!("+{added}"), theme.colors.diff_add_text))
-        .child(part(format!("-{removed}"), theme.colors.diff_remove_text))
+        .child(part(
+            format!("+{added}"),
+            theme.colors.diff.added.foreground,
+        ))
+        .child(part(
+            format!("-{removed}"),
+            theme.colors.diff.removed.foreground,
+        ))
 }

@@ -67,9 +67,9 @@ impl MainPaneView {
                 div()
                     .text_xs()
                     .text_color(if unresolved_count == 0 {
-                        theme.colors.success
+                        theme.colors.status.success.foreground
                     } else {
-                        theme.colors.text_muted
+                        theme.colors.foreground.secondary
                     })
                     .child(format!("Resolved {resolved_count}/{conflict_count}")),
             );
@@ -77,7 +77,7 @@ impl MainPaneView {
                 controls = controls.child(
                     div()
                         .text_xs()
-                        .text_color(theme.colors.danger)
+                        .text_color(theme.colors.status.danger.foreground)
                         .child(format!("{unresolved_count} unresolved")),
                 );
             }
@@ -114,7 +114,7 @@ impl MainPaneView {
                     components::Button::new("conflict_first", "")
                         .start_slot(svg_icon(
                             "icons/arrow_up_to_line.svg",
-                            theme.colors.text,
+                            theme.colors.foreground.primary,
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
@@ -127,7 +127,11 @@ impl MainPaneView {
                 )
                 .child(
                     components::Button::new("conflict_prev", "")
-                        .start_slot(svg_icon("icons/arrow_up.svg", theme.colors.text, px(14.0)))
+                        .start_slot(svg_icon(
+                            "icons/arrow_up.svg",
+                            theme.colors.foreground.primary,
+                            px(14.0),
+                        ))
                         .style(components::ButtonStyle::Outlined)
                         .borderless()
                         .disabled(!can_nav_prev)
@@ -148,7 +152,7 @@ impl MainPaneView {
                     components::Button::new("conflict_next", "")
                         .start_slot(svg_icon(
                             "icons/arrow_down.svg",
-                            theme.colors.text,
+                            theme.colors.foreground.primary,
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
@@ -171,7 +175,7 @@ impl MainPaneView {
                     components::Button::new("conflict_last", "")
                         .start_slot(svg_icon(
                             "icons/arrow_down_to_line.svg",
-                            theme.colors.text,
+                            theme.colors.foreground.primary,
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
@@ -186,7 +190,7 @@ impl MainPaneView {
                     components::Button::new("conflict_prev_unresolved", "")
                         .start_slot(svg_icon(
                             "icons/arrow_up.svg",
-                            theme.colors.warning,
+                            theme.colors.status.warning.foreground,
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
@@ -201,7 +205,7 @@ impl MainPaneView {
                     components::Button::new("conflict_next_unresolved", "")
                         .start_slot(svg_icon(
                             "icons/arrow_down.svg",
-                            theme.colors.warning,
+                            theme.colors.status.warning.foreground,
                             px(14.0),
                         ))
                         .style(components::ButtonStyle::Outlined)
@@ -242,7 +246,8 @@ impl MainPaneView {
                                 })
                                 .gitcomet_tooltip(theme, tooltip.into())
                         };
-                    let cluster = d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border));
+                    let cluster =
+                        d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.stroke.default));
                     if is_three_way {
                         cluster
                             .child(pick_btn(
@@ -377,7 +382,7 @@ impl MainPaneView {
                     });
                 });
             controls = controls
-                .child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.border))
+                .child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.stroke.default))
                 .child(save_button)
                 .when(show_conflict_save_stage_action(self.view_mode), |d| {
                     let mut save_stage_btn =
@@ -464,7 +469,7 @@ impl MainPaneView {
         let status: AnyElement = if total == 0 {
             div()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("No conflicts in this file")
                 .into_any_element()
         } else if unresolved > 0 {
@@ -476,7 +481,7 @@ impl MainPaneView {
             div()
                 .id("conflict_resolver_status")
                 .text_xs()
-                .text_color(theme.colors.warning)
+                .text_color(theme.colors.status.warning.foreground)
                 .child(format!("⚠ {unresolved} {noun} unresolved"))
                 .gitcomet_tooltip(
                     theme,
@@ -489,7 +494,7 @@ impl MainPaneView {
             div()
                 .id("conflict_resolver_status")
                 .text_xs()
-                .text_color(theme.colors.success)
+                .text_color(theme.colors.status.success.foreground)
                 .child("✓ All conflicts resolved")
                 .gitcomet_tooltip(
                     theme,
@@ -529,7 +534,7 @@ impl MainPaneView {
                             d.child(
                                 div()
                                     .text_xs()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(format!("{whitespace} {noun}")),
                             )
                         },
@@ -538,7 +543,7 @@ impl MainPaneView {
                         d.child(
                             div()
                                 .text_xs()
-                                .text_color(theme.colors.danger)
+                                .text_color(theme.colors.status.danger.foreground)
                                 .child("markers remain"),
                         )
                     }),
@@ -683,7 +688,7 @@ impl MainPaneView {
                                         d = d.child(
                                             div()
                                                 .text_xs()
-                                                .text_color(theme.colors.accent)
+                                                .text_color(theme.colors.accent.foreground)
                                                 .child(label.clone()),
                                         );
                                     }
@@ -730,9 +735,9 @@ impl MainPaneView {
                                 px(0.0)
                             };
                             let preview_toggle = show_preview_toggle.then(|| {
-                                let view_toggle_border = theme.colors.border;
-                                let view_toggle_selected_bg = theme.colors.active;
-                                let view_toggle_divider = theme.colors.border;
+                                let view_toggle_border = theme.colors.stroke.default;
+                                let view_toggle_selected_bg = theme.colors.interaction.pressed_background;
+                                let view_toggle_divider = theme.colors.stroke.default;
                                 div()
                                     .id("conflict_preview_toggle")
                                     .flex()
@@ -858,7 +863,7 @@ impl MainPaneView {
                                             id,
                                             components::ResizeGripAxis::Vertical,
                                             dragging,
-                                            Some(theme.colors.border),
+                                            Some(theme.colors.stroke.default),
                                         ))
                                         .on_drag(which, |_handle, _offset, _window, cx| {
                                             cx.new(|_cx| ConflictHSplitResizeDragGhost)
@@ -977,7 +982,7 @@ impl MainPaneView {
                                         id,
                                         components::ResizeGripAxis::Vertical,
                                         conflict_diff_split_dragging,
-                                        Some(theme.colors.border),
+                                        Some(theme.colors.stroke.default),
                                     ))
                                     .on_drag(
                                         ConflictDiffSplitResizeHandle::Divider,
@@ -1059,7 +1064,7 @@ impl MainPaneView {
                                             .items_center()
                                             .gap_2()
                                             .text_xs()
-                                            .text_color(theme.colors.text_muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Base (A, index :1)"),
@@ -1077,7 +1082,7 @@ impl MainPaneView {
                                             .items_center()
                                             .gap_2()
                                             .text_xs()
-                                            .text_color(theme.colors.text_muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Local (B, index :2)"),
@@ -1096,7 +1101,7 @@ impl MainPaneView {
                                             .items_center()
                                             .gap_2()
                                             .text_xs()
-                                            .text_color(theme.colors.text_muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Remote (C, index :3)"),
@@ -1113,7 +1118,7 @@ impl MainPaneView {
                                             .items_center()
                                             .gap_2()
                                             .text_xs()
-                                            .text_color(theme.colors.text_muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Local (index :2)"),
@@ -1131,7 +1136,7 @@ impl MainPaneView {
                                             .items_center()
                                             .gap_2()
                                             .text_xs()
-                                            .text_color(theme.colors.text_muted)
+                                            .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
                                             .child(div().w(px(38.0)).flex_shrink_0())
                                             .child("Remote (index :3)"),
@@ -1270,7 +1275,7 @@ impl MainPaneView {
                                             .relative()
                                             .flex_1()
                                             .min_h(px(0.0))
-                                            .bg(theme.colors.window_bg)
+                                            .bg(theme.colors.surface.canvas)
                                             .font_family(editor_font_family.clone())
                                             .flex()
                                             .child(
@@ -1498,7 +1503,7 @@ impl MainPaneView {
                                             .relative()
                                             .flex_1()
                                             .min_h(px(0.0))
-                                            .bg(theme.colors.window_bg)
+                                            .bg(theme.colors.surface.canvas)
                                             .font_family(editor_font_family.clone())
                                             .flex()
                                             .child(
@@ -1664,13 +1669,13 @@ impl MainPaneView {
                                         .items_center()
                                         .gap_1()
                                         .text_xs()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child("Resolved output")
                                         .when(output_modified, |d| {
                                             d.child(
                                                 div()
                                                     .id("conflict_resolved_output_modified")
-                                                    .text_color(theme.colors.warning)
+                                                    .text_color(theme.colors.status.warning.foreground)
                                                     .child("[Modified]"),
                                             )
                                         }),
@@ -1700,7 +1705,7 @@ impl MainPaneView {
                                     "conflict_resolver_vsplit_handle",
                                     components::ResizeGripAxis::Horizontal,
                                     self.conflict_resolver_vsplit_resize.is_some(),
-                                    Some(theme.colors.border),
+                                    Some(theme.colors.stroke.default),
                                 ))
                                 .on_drag(
                                     ConflictVSplitResizeHandle::Divider,
@@ -1785,7 +1790,7 @@ impl MainPaneView {
                                                 .child(
                                                     div()
                                                         .border_t_1()
-                                                        .border_color(theme.colors.border),
+                                                        .border_color(theme.colors.stroke.default),
                                                 )
                                                 .child(top_body),
                                         )
@@ -1808,11 +1813,11 @@ impl MainPaneView {
                                             .py_0p5()
                                             .rounded(px(theme.radii.row))
                                             .bg(with_alpha(
-                                                theme.colors.accent,
+                                                theme.colors.accent.foreground,
                                                 if theme.is_dark { 0.14 } else { 0.10 },
                                             ))
                                             .text_xs()
-                                            .text_color(theme.colors.accent)
+                                            .text_color(theme.colors.accent.foreground)
                                             .child(summary),
                                     )
                                 })
@@ -1827,7 +1832,7 @@ impl MainPaneView {
                                             .overflow_hidden()
                                             .flex()
                                             .flex_col()
-                                            .bg(theme.colors.window_bg)
+                                            .bg(theme.colors.surface.canvas)
                                             .child(
                                                 {
                                                     // Fold-projected row count in collapsed
@@ -1917,7 +1922,7 @@ impl MainPaneView {
                                                         .relative()
                                                         .flex_1()
                                                         .min_h(px(0.0))
-                                                        .bg(theme.colors.window_bg)
+                                                        .bg(theme.colors.surface.canvas)
                                                         .child(
                                                             div()
                                                                 .id("conflict_resolver_output_surface")
@@ -2029,7 +2034,7 @@ impl MainPaneView {
                                                                                 .flex_shrink_0()
                                                                                 .border_r_1()
                                                                                 .border_color(
-                                                                                    theme.colors.border,
+                                                                                    theme.colors.stroke.default,
                                                                                 )
                                                                                 .child(outline_list),
                                                                         )
@@ -2194,7 +2199,7 @@ impl MainPaneView {
                 .min_w(px(0.0))
                 .h_full()
                 .border_1()
-                .border_color(theme.colors.border)
+                .border_color(theme.colors.stroke.default)
                 .rounded(px(theme.radii.row))
                 .overflow_hidden()
                 .flex()
@@ -2205,16 +2210,16 @@ impl MainPaneView {
                         .px_2()
                         .flex()
                         .items_center()
-                        .bg(theme.colors.surface_bg_elevated)
+                        .bg(theme.colors.surface.raised)
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(label),
                 )
                 .child(
                     div()
                         .flex_1()
                         .min_h(px(0.0))
-                        .bg(theme.colors.window_bg)
+                        .bg(theme.colors.surface.canvas)
                         .flex()
                         .items_center()
                         .justify_center()
@@ -2226,22 +2231,22 @@ impl MainPaneView {
                                 .into_any_element(),
                             Loadable::NotLoaded | Loadable::Loading if has_source => div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("Processing preview...")
                                 .into_any_element(),
                             Loadable::Error(error) => div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(error)
                                 .into_any_element(),
                             Loadable::Ready(None) if has_source => div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("Preview unavailable.")
                                 .into_any_element(),
                             _ => div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("(empty)")
                                 .into_any_element(),
                         }),
@@ -2256,7 +2261,7 @@ impl MainPaneView {
             .flex()
             .gap_2()
             .p_2()
-            .bg(theme.colors.window_bg)
+            .bg(theme.colors.surface.canvas)
             .child(preview_cell(
                 "conflict_preview_base",
                 "Base (A)",
@@ -2330,7 +2335,7 @@ impl MainPaneView {
             .min_h(px(0.0))
             .w_full()
             .p_2()
-            .bg(theme.colors.window_bg)
+            .bg(theme.colors.surface.canvas)
             .child(
                 div()
                     .flex()
@@ -2410,7 +2415,7 @@ impl MainPaneView {
                 .justify_center()
                 .p_2()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(message)
                 .into_any_element()
         };
@@ -2484,7 +2489,7 @@ impl MainPaneView {
             .min_w(px(0.0))
             .h_full()
             .border_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .rounded(px(theme.radii.row))
             .overflow_hidden()
             .flex()
@@ -2495,16 +2500,16 @@ impl MainPaneView {
                     .px_2()
                     .flex()
                     .items_center()
-                    .bg(theme.colors.surface_bg_elevated)
+                    .bg(theme.colors.surface.raised)
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(label),
             )
             .child(
                 div()
                     .flex_1()
                     .min_h(px(0.0))
-                    .bg(theme.colors.window_bg)
+                    .bg(theme.colors.surface.canvas)
                     .child(body),
             )
             .into_any_element()

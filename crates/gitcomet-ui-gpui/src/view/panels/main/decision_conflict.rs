@@ -177,7 +177,7 @@ impl MainPaneView {
                 )
             })
             .when(show_external_mergetool_actions(self.view_mode), |d| {
-                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.border))
+                d.child(div().w(px(1.0)).h(px(16.0)).bg(theme.colors.stroke.default))
                     .child(
                         components::Button::new("decision_mergetool", "External Mergetool")
                             .style(components::ButtonStyle::Outlined)
@@ -207,7 +207,7 @@ impl MainPaneView {
                     div()
                         .text_sm()
                         .font_weight(FontWeight::BOLD)
-                        .text_color(theme.colors.text)
+                        .text_color(theme.colors.foreground.primary)
                         .child(title),
                 ),
             )
@@ -217,7 +217,7 @@ impl MainPaneView {
                     .flex_1()
                     .min_h(px(0.0))
                     .border_1()
-                    .border_color(theme.colors.border)
+                    .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.row))
                     .overflow_hidden()
                     .flex()
@@ -225,18 +225,18 @@ impl MainPaneView {
                     .items_center()
                     .justify_center()
                     .gap_4()
-                    .bg(theme.colors.window_bg)
+                    .bg(theme.colors.surface.canvas)
                     .child(
                         div()
                             .text_lg()
                             .font_weight(FontWeight::BOLD)
-                            .text_color(theme.colors.warning)
+                            .text_color(theme.colors.status.warning.foreground)
                             .child("Both sides deleted this file"),
                     )
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .text_center()
                             .child(
                                 "This file was deleted on both the local and remote branches. \
@@ -247,7 +247,7 @@ impl MainPaneView {
                         d.child(
                             div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child(summary),
                         )
                     })

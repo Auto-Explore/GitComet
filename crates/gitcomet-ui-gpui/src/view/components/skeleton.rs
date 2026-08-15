@@ -16,12 +16,12 @@ pub fn skeleton(theme: AppTheme) -> Div {
     div()
         .rounded(px(theme.radii.row))
         .bg(with_alpha(
-            theme.colors.surface_bg_elevated,
+            theme.colors.surface.raised,
             if theme.is_dark { 0.55 } else { 0.75 },
         ))
         .border_1()
         .border_color(with_alpha(
-            theme.colors.border,
+            theme.colors.stroke.default,
             if theme.is_dark { 0.70 } else { 0.60 },
         ))
 }

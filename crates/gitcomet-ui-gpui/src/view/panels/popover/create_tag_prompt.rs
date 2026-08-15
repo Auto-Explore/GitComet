@@ -8,13 +8,13 @@ fn annotated_toggle(
 ) -> gpui::Stateful<gpui::Div> {
     let scaled_px = super::popover_scaled_px_fn(cx);
     let border = if enabled {
-        theme.colors.success
+        theme.colors.status.success.foreground
     } else {
-        theme.colors.border
+        theme.colors.stroke.default
     };
     let background = if enabled {
         with_alpha(
-            theme.colors.success,
+            theme.colors.status.success.foreground,
             if theme.is_dark { 0.18 } else { 0.12 },
         )
     } else {
@@ -44,7 +44,7 @@ fn annotated_toggle(
             .when(enabled, |this| {
                 this.child(crate::view::icons::svg_icon(
                     "icons/check.svg",
-                    theme.colors.success,
+                    theme.colors.status.success.foreground,
                     scaled_px(10.0),
                 ))
             }),
@@ -69,13 +69,13 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(420.0))
         .child(popover_title("Create tag"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()
                 .py_1()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(format!("Target: {target}")),
         )
         .child(
@@ -86,7 +86,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.create_tag_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             annotated_toggle(
                 theme,
@@ -104,18 +104,18 @@ pub(super) fn panel(
                 .px_2()
                 .pb_1()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Annotated tags can be GPG signed and include a message"),
         )
         .when(annotated, |panel| {
             panel
-                .child(div().border_t_1().border_color(theme.colors.border))
+                .child(div().border_t_1().border_color(theme.colors.stroke.default))
                 .child(
                     div()
                         .px_2()
                         .pt_1()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("Annotation message"),
                 )
                 .child(
@@ -130,7 +130,7 @@ pub(super) fn panel(
                     ),
                 )
         })
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

@@ -32,7 +32,7 @@ pub(super) fn panel(
                 .px_2()
                 .pb_1()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(
                     div()
                         .flex()

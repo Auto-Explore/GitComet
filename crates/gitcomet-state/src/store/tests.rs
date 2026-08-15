@@ -17,12 +17,12 @@ use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
-struct DummyRepo {
+pub(in crate::store) struct DummyRepo {
     spec: RepoSpec,
 }
 
 impl DummyRepo {
-    fn new(path: &str) -> Self {
+    pub(in crate::store) fn new(path: &str) -> Self {
         Self {
             spec: RepoSpec {
                 workdir: PathBuf::from(path),

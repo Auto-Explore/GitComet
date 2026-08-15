@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::HistoryView;
+use crate::view::caches::HistoryListRow;
 
 impl Render for HistoryView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
@@ -29,20 +30,17 @@ impl HistoryView {
         self.ensure_history_cache(cx);
         self.ensure_relative_time_tick(cx);
         self.drive_pending_history_reveal(cx);
-        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
-        // Scheduled here rather than from the row builder: the walk goes to a
-        // background task, and the row builder runs during layout.
-        self.ensure_history_related_commits_cache(show_working_tree_summary_row, cx);
+        let plan = self.ensure_history_list_plan();
         let repo = self.active_repo();
         let commits_count = self
             .history_cache
             .as_ref()
             .map(|cache| cache.base.visible_indices.len())
             .unwrap_or(0);
-        let count = commits_count + usize::from(show_working_tree_summary_row);
+        let count = plan.list_len(commits_count);
         let scan_progress = repo.and_then(|r| r.history_state.log_scan_progress);
 
-        let bg = theme.colors.window_bg;
+        let bg = theme.colors.surface.canvas;
 
         let body: AnyElement = if count == 0 {
             match repo.map(|r| &r.log) {
@@ -149,6 +147,7 @@ impl HistoryView {
                     && match key {
                         "up" => this.history_select_adjacent_commit(-1, cx),
                         "down" => this.history_select_adjacent_commit(1, cx),
+                        "enter" => this.history_open_selected_worktree(cx),
                         _ => false,
                     };
 
@@ -163,7 +162,7 @@ impl HistoryView {
                     .w_full()
                     .bg(bg)
                     .border_b_1()
-                    .border_color(theme.colors.border_variant)
+                    .border_color(theme.colors.stroke.subtle)
                     .child(
                         div()
                             .pr(scrollbar_gutter)
@@ -182,9 +181,9 @@ impl HistoryView {
                         .py(ui_scale::design_px_from_percent(2.0, self.ui_scale_percent))
                         .bg(bg)
                         .border_b_1()
-                        .border_color(theme.colors.border_variant)
+                        .border_color(theme.colors.stroke.subtle)
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .whitespace_nowrap()
                         .overflow_hidden()
                         .debug_selector(|| "history_scan_progress".to_string())
@@ -204,6 +203,23 @@ impl HistoryView {
             )
     }
 
+    /// Enter on a worktree row opens that worktree, matching what clicking its
+    /// badge does. Returns `false` for every other selection so the key keeps
+    /// falling through to whatever else handles it.
+    pub(in crate::view) fn history_open_selected_worktree(
+        &mut self,
+        _cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        let Some(path) = self
+            .active_repo()
+            .and_then(|repo| repo.history_state.worktree_selection.clone())
+        else {
+            return false;
+        };
+        self.store.dispatch(Msg::OpenRepo(path));
+        true
+    }
+
     pub(in crate::view) fn history_select_adjacent_commit(
         &mut self,
         direction: i8,
@@ -213,7 +229,8 @@ impl HistoryView {
             return false;
         };
 
-        let (show_working_tree_summary_row, _) = self.ensure_history_worktree_summary_cache();
+        let plan = self.ensure_history_list_plan();
+        let show_working_tree_summary_row = plan.show_working_tree_summary_row();
         let offset = usize::from(show_working_tree_summary_row);
 
         let (selected_commit, page, log_rev, stashes_rev, history_scope) = match self.active_repo()
@@ -247,7 +264,12 @@ impl HistoryView {
             return false;
         }
 
-        let list_len = total_commits + offset;
+        let list_len = plan.list_len(total_commits);
+
+        // Read before the cache is borrowed mutably below.
+        let selected_worktree = self
+            .active_repo()
+            .and_then(|repo| repo.history_state.worktree_selection.clone());
 
         let current_list_ix = super::resolve_history_selected_list_index(
             &mut self.history_selected_list_index_cache,
@@ -255,11 +277,28 @@ impl HistoryView {
             log_rev,
             stashes_rev,
             history_scope,
-            show_working_tree_summary_row,
-            selected_commit.as_ref(),
+            &plan,
+            super::HistorySelectionRef {
+                commit: selected_commit.as_ref(),
+                worktree_selected: selected_worktree.is_some(),
+            },
             &cache.base.visible_indices,
             &page.commits,
         );
+
+        let current_list_ix = selected_worktree
+            .as_deref()
+            .and_then(|path| super::worktree_row_list_ix(&plan, self.active_repo(), path))
+            .or(current_list_ix);
+
+        // A selected worktree with nothing to anchor to -- it went clean, its
+        // HEAD left the loaded page, or the scan has not answered yet -- leaves
+        // no row to step from. The `None` arms below mean "nothing is selected"
+        // and wrap to the far end of the list, which from a live selection reads
+        // as the log teleporting rather than moving by one.
+        if current_list_ix.is_none() && selected_worktree.is_some() {
+            return false;
+        }
 
         let next_list_ix = match (current_list_ix, direction.is_negative()) {
             (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
@@ -279,6 +318,25 @@ impl HistoryView {
             return true;
         }
 
+        if let Some(HistoryListRow::WorktreeUncommitted { worktree_ix, .. }) =
+            plan.row_at(next_list_ix)
+        {
+            let path = self
+                .active_repo()
+                .and_then(|repo| match &repo.worktree_dirty {
+                    Loadable::Ready(dirty) => dirty.get(worktree_ix).map(|s| s.path.clone()),
+                    _ => None,
+                });
+            let Some(path) = path else {
+                return false;
+            };
+            self.store
+                .dispatch(Msg::SelectWorktreeUncommitted { repo_id, path });
+            self.dismiss_history_refs_hover(_cx);
+            self.history_scroll
+                .scroll_to_item_strict(next_list_ix, gpui::ScrollStrategy::Center);
+            return true;
+        }
         if show_working_tree_summary_row && next_list_ix == 0 {
             self.store.dispatch(Msg::ClearCommitSelection { repo_id });
             self.store.dispatch(Msg::ClearDiffSelection { repo_id });
@@ -288,7 +346,7 @@ impl HistoryView {
                 log_rev,
                 stashes_rev,
                 history_scope,
-                show_working_tree_summary_row,
+                &plan,
                 None,
                 0,
             );
@@ -298,7 +356,9 @@ impl HistoryView {
             return true;
         }
 
-        let visible_ix = next_list_ix.saturating_sub(offset);
+        let Some(HistoryListRow::Commit { visible_ix }) = plan.row_at(next_list_ix) else {
+            return false;
+        };
         let Some(commit_ix) = cache.base.visible_indices.get(visible_ix) else {
             return false;
         };
@@ -316,7 +376,7 @@ impl HistoryView {
             log_rev,
             stashes_rev,
             history_scope,
-            show_working_tree_summary_row,
+            &plan,
             Some(commit.id.clone()),
             next_list_ix,
         );
@@ -329,7 +389,10 @@ impl HistoryView {
     fn history_column_headers(&mut self, cx: &mut gpui::Context<Self>) -> gpui::Div {
         let theme = self.theme;
         let scaled_px = |value| ui_scale::design_px_from_percent(value, self.ui_scale_percent);
-        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let icon_muted = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.72 } else { 0.82 },
+        );
         let (show_graph, show_author, show_date, show_sha) = self.history_visible_columns();
         let col_author = self.history_col_author;
         let col_date = self.history_col_date;
@@ -406,7 +469,7 @@ impl HistoryView {
                     id,
                     components::ResizeGripAxis::Vertical,
                     dragging,
-                    Some(theme.colors.border_variant),
+                    Some(theme.colors.stroke.subtle),
                 ))
                 .on_drag(handle, |_handle, _offset, _window, cx| {
                     cx.new(|_cx| HistoryColResizeDragGhost)
@@ -494,7 +557,7 @@ impl HistoryView {
             .px_2()
             .text_xs()
             .font_weight(FontWeight::SEMIBOLD)
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .child(
                 div()
                     .w(self.history_col_branch)
@@ -521,15 +584,22 @@ impl HistoryView {
                                     .h(scaled_px(18.0))
                                     .line_height(scaled_px(18.0))
                                     .rounded(px(theme.radii.row))
-                                    .when(scope_active, |d| d.bg(theme.colors.active))
+                                    .when(scope_active, |d| {
+                                        d.bg(theme.colors.interaction.pressed_background)
+                                    })
                                     .hover(move |s| {
                                         if scope_active {
-                                            s.bg(theme.colors.active)
+                                            s.bg(theme.colors.interaction.pressed_background)
                                         } else {
-                                            s.bg(with_alpha(theme.colors.hover, 0.55))
+                                            s.bg(with_alpha(
+                                                theme.colors.interaction.hover_background,
+                                                0.55,
+                                            ))
                                         }
                                     })
-                                    .active(move |s| s.bg(theme.colors.active))
+                                    .active(move |s| {
+                                        s.bg(theme.colors.interaction.pressed_background)
+                                    })
                                     .cursor(CursorStyle::PointingHand)
                                     .child(
                                         div()
@@ -643,15 +713,22 @@ impl HistoryView {
                                         .h(scaled_px(18.0))
                                         .line_height(scaled_px(18.0))
                                         .rounded(px(theme.radii.row))
-                                        .when(author_active, |d| d.bg(theme.colors.active))
+                                        .when(author_active, |d| {
+                                            d.bg(theme.colors.interaction.pressed_background)
+                                        })
                                         .hover(move |s| {
                                             if author_active {
-                                                s.bg(theme.colors.active)
+                                                s.bg(theme.colors.interaction.pressed_background)
                                             } else {
-                                                s.bg(with_alpha(theme.colors.hover, 0.55))
+                                                s.bg(with_alpha(
+                                                    theme.colors.interaction.hover_background,
+                                                    0.55,
+                                                ))
                                             }
                                         })
-                                        .active(move |s| s.bg(theme.colors.active))
+                                        .active(move |s| {
+                                            s.bg(theme.colors.interaction.pressed_background)
+                                        })
                                         .cursor(CursorStyle::PointingHand)
                                         .child(
                                             div()
@@ -659,10 +736,10 @@ impl HistoryView {
                                                 .line_clamp(1)
                                                 .whitespace_nowrap()
                                                 .when(author_filter_active, |d| {
-                                                    d.text_color(theme.colors.accent)
+                                                    d.text_color(theme.colors.accent.foreground)
                                                 })
                                                 .when(!author_filter_active, |d| {
-                                                    d.text_color(theme.colors.text_muted)
+                                                    d.text_color(theme.colors.foreground.secondary)
                                                 })
                                                 .child(author_label.clone()),
                                         )

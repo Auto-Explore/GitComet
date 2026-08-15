@@ -38,18 +38,18 @@ impl SplitButton {
         let ui_scale = ui_scale.into();
         let borderless = self.style == SplitButtonStyle::Borderless;
         let bg = match self.style {
-            SplitButtonStyle::Filled => theme.colors.surface_bg_elevated,
+            SplitButtonStyle::Filled => theme.colors.surface.raised,
             SplitButtonStyle::Borderless => gpui::rgba(0x00000000),
         };
         let border_color = with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.34 } else { 0.26 },
         );
         // Without a frame around it the divider is the only thing left holding
         // the pair together, so it stays — just quieter than a real border.
         let divider_color = if borderless {
             with_alpha(
-                theme.colors.text_muted,
+                theme.colors.foreground.secondary,
                 if theme.is_dark { 0.24 } else { 0.18 },
             )
         } else {

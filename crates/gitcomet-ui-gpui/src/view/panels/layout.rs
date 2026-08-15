@@ -64,7 +64,7 @@ fn commit_details_author_row(
                         column.child(
                             div()
                                 .text_xs()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .child(details.author_email.clone()),
@@ -76,7 +76,7 @@ fn commit_details_author_row(
                     div()
                         .flex_none()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(relative),
                 )
             }),
@@ -107,7 +107,7 @@ fn commit_details_selectable_row(theme: AppTheme, key: &'static str, value: AnyE
         .child(
             div()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(key),
         )
         .child(div().w_full().min_w(px(0.0)).text_sm().child(value))
@@ -960,7 +960,7 @@ impl DetailsPaneView {
             // The last card sits directly above the files section's own top
             // separator, so it omits its bottom border to avoid a double line.
             .when(show_border, |row| {
-                row.border_b_1().border_color(theme.colors.border)
+                row.border_b_1().border_color(theme.colors.stroke.default)
             })
             .child(components::author_avatar(theme, ui_scale, &author))
             .child(
@@ -974,7 +974,7 @@ impl DetailsPaneView {
                     .child(
                         div()
                             .text_xs()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(when),
                     ),
@@ -984,7 +984,7 @@ impl DetailsPaneView {
                     .flex_none()
                     .text_xs()
                     .font_family(crate::view::UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(short_sha),
             )
             .into_any_element()
@@ -1090,9 +1090,9 @@ impl DetailsPaneView {
             .justify_between()
             .h(components::control_height_md(ui_scale))
             .px_2()
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface.raised)
             .border_b_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
@@ -1106,7 +1106,7 @@ impl DetailsPaneView {
                 components::Button::new("commit_details_close", "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -1141,6 +1141,185 @@ impl DetailsPaneView {
                     .min_h(px(0.0))
                     .p_2()
                     .child(body),
+            )
+            .into_any_element()
+    }
+
+    /// The changed files of a linked worktree that is *not* this tab, shown when
+    /// its history row is selected.
+    ///
+    /// The worktree chip is the header rather than decoration: everything below
+    /// belongs to another checkout, and nothing else on screen says so.
+    fn worktree_uncommitted_view(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) -> AnyElement {
+        let theme = self.theme;
+        let ui_scale = self.ui_scale();
+
+        // Only the counts and the chip's three fields are needed here. Cloning the
+        // summary would copy both `FileStatus` vectors -- every changed *and*
+        // untracked file of the worktree -- on every repaint of this pane.
+        let Some((file_count, loaded_file_count, chip_label, worktree_path)) =
+            self.selected_worktree_summary().map(|summary| {
+                (
+                    // Counts, not `staged.len() + unstaged.len()`: the file lists
+                    // arrive with the scan the selection asked for, and the header
+                    // has to be right before then. Each changed file lands in
+                    // exactly one bucket, so the two agree once loaded.
+                    summary.added + summary.modified + summary.deleted,
+                    summary.staged.len() + summary.unstaged.len(),
+                    crate::view::rows::sidebar::worktree_origin_label(
+                        summary.branch.as_deref(),
+                        summary.detached,
+                        &summary.path,
+                    ),
+                    summary.path.clone(),
+                )
+            })
+        else {
+            return div().into_any_element();
+        };
+
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .h(components::control_height_md(ui_scale))
+            .px_2()
+            .bg(theme.colors.surface.raised)
+            .border_b_1()
+            .border_color(theme.colors.stroke.default)
+            .child(
+                div()
+                    .flex_none()
+                    .text_sm()
+                    .font_weight(FontWeight::BOLD)
+                    // Not "Uncommitted changes": that is the current repo's
+                    // own row, and these are somebody else's.
+                    .child(SharedString::from("Worktree changes")),
+            )
+            .child(div().flex_1().min_w(px(0.0)))
+            .child({
+                let open_path = worktree_path.clone();
+                let palette = crate::view::rows::sidebar::worktree_badge_palette(theme);
+                crate::view::rows::sidebar::worktree_origin_chip(
+                    theme,
+                    chip_label,
+                    ui_scale.px(10.0),
+                    ui_scale.px(18.0),
+                    ui_scale.px(220.0),
+                    ui_scale.px(6.0),
+                )
+                .id("worktree_uncommitted_origin")
+                .debug_selector(|| "worktree_uncommitted_open".to_string())
+                .cursor(CursorStyle::PointingHand)
+                .hover(move |s| {
+                    s.border_color(palette.hover_border)
+                        .text_color(palette.hover_text)
+                })
+                .gitcomet_tooltip(
+                    theme,
+                    format!("Open this worktree in a tab\n{}", worktree_path.display()).into(),
+                )
+                // A chip is a control of its own: a right or middle click must not
+                // open a repo tab, and a left click must not reach the row behind it.
+                .on_click(cx.listener(move |this, e: &ClickEvent, _w, cx| {
+                    if !e.standard_click() {
+                        return;
+                    }
+                    cx.stop_propagation();
+                    this.store.dispatch(Msg::OpenRepo(open_path.clone()));
+                    cx.notify();
+                }))
+            })
+            .child(
+                components::Button::new("worktree_uncommitted_close", "")
+                    .start_slot(svg_icon(
+                        "icons/generic_close.svg",
+                        theme.colors.foreground.secondary,
+                        px(12.0),
+                    ))
+                    .style(components::ButtonStyle::Transparent)
+                    .on_click(theme, cx, move |this, _e, _w, cx| {
+                        this.store.dispatch(Msg::ClearCommitSelection { repo_id });
+                        cx.notify();
+                    })
+                    .gitcomet_tooltip(theme, "Close".into()),
+            );
+
+        // No "no files" state: the scan only reports a worktree once
+        // `WorktreeDirtySummary::is_dirty` holds, so `file_count` -- the sum of
+        // those same three counts -- is always positive here. A change that
+        // started reporting clean worktrees would need a branch of its own; it
+        // would otherwise sit on "Loading files…" forever.
+        let files_body: AnyElement = if loaded_file_count == 0 {
+            // Counts without files means the scan carrying them is still running.
+            // Saying so beats an empty list that reads as "nothing changed" while
+            // the header above it counts the changes.
+            div()
+                .debug_selector(|| "worktree_files_loading".to_string())
+                .text_sm()
+                .text_color(theme.colors.foreground.secondary)
+                .child("Loading files…")
+                .into_any_element()
+        } else {
+            Self::vertical_scroll_frame(
+                theme,
+                ("worktree_files_container", repo_id.0),
+                ("worktree_files_scrollbar", repo_id.0),
+                &self.worktree_files_scroll,
+                uniform_list(
+                    ("worktree_files_list", repo_id.0),
+                    loaded_file_count,
+                    cx.processor(Self::render_worktree_file_rows),
+                ),
+            )
+            .into_any_element()
+        };
+
+        div()
+            .id("worktree_uncommitted_container")
+            .relative()
+            .flex()
+            .flex_col()
+            .flex_1()
+            .h_full()
+            .min_h(px(0.0))
+            .child(header)
+            .child(
+                div()
+                    .id("worktree_uncommitted_body")
+                    .debug_selector(|| "worktree_uncommitted_body".to_string())
+                    .relative()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .flex_1()
+                    .h_full()
+                    .min_h(px(0.0))
+                    .p_2()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(theme.colors.foreground.secondary)
+                            .line_clamp(1)
+                            .child(SharedString::from(format!("{file_count} changed"))),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .gap_1()
+                            .flex_1()
+                            .h_full()
+                            .min_h(ui_scale.px(RANGE_FILES_SECTION_MIN_HEIGHT_PX))
+                            .border_t_1()
+                            .border_color(theme.colors.stroke.subtle)
+                            .pt_2()
+                            .child(files_body),
+                    ),
             )
             .into_any_element()
     }
@@ -1202,9 +1381,9 @@ impl DetailsPaneView {
             .justify_between()
             .h(components::control_height_md(ui_scale))
             .px_2()
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface.raised)
             .border_b_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .child(
                 div()
                     .flex_1()
@@ -1218,7 +1397,7 @@ impl DetailsPaneView {
                 components::Button::new("range_comparison_close", "")
                     .start_slot(svg_icon(
                         "icons/generic_close.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         px(12.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -1271,7 +1450,7 @@ impl DetailsPaneView {
             RangeFilesState::Loading => div()
                 .debug_selector(|| "range_files_loading".to_string())
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Loading")
                 .into_any_element(),
             // An error must not render as "No files." — that is exactly what a
@@ -1280,13 +1459,13 @@ impl DetailsPaneView {
             RangeFilesState::Failed(message) => div()
                 .debug_selector(|| "range_files_error".to_string())
                 .text_sm()
-                .text_color(theme.colors.danger)
+                .text_color(theme.colors.status.danger.foreground)
                 .child(SharedString::from(message.clone()))
                 .into_any_element(),
             RangeFilesState::Loaded(0) => div()
                 .debug_selector(|| "range_files_empty".to_string())
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("No files.")
                 .into_any_element(),
             RangeFilesState::Loaded(count) => Self::vertical_scroll_frame(
@@ -1327,7 +1506,7 @@ impl DetailsPaneView {
                     .child(
                         div()
                             .text_sm()
-                            .text_color(theme.colors.text_muted)
+                            .text_color(theme.colors.foreground.secondary)
                             .line_clamp(1)
                             .child(subheader),
                     )
@@ -1346,13 +1525,13 @@ impl DetailsPaneView {
                             // pane and collapsing the list to nothing.
                             .min_h(ui_scale.px(RANGE_FILES_SECTION_MIN_HEIGHT_PX))
                             .border_t_1()
-                            .border_color(theme.colors.border_variant)
+                            .border_color(theme.colors.stroke.subtle)
                             .pt_2()
                             .child(
                                 div()
                                     .debug_selector(move || files_label_selector.to_string())
                                     .text_sm()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child(files_label),
                             )
                             .child(files_body),
@@ -1387,6 +1566,18 @@ impl DetailsPaneView {
         let selected_id = self
             .active_repo()
             .and_then(|repo| repo.history_state.selected_commit.clone());
+
+        // A selected worktree row owns the pane outright: its files belong to a
+        // different checkout, so none of the commit-detail views below apply.
+        //
+        // Only while its scan entry is actually there, though. The reducer drops
+        // the selection when the worktree goes clean, but a scan that is still in
+        // flight (or that failed) leaves the selection pointing at nothing for a
+        // frame or two, and this view has nothing to render without it.
+        let has_worktree_selection = self.selected_worktree_summary().is_some();
+        if let (Some(repo_id), true) = (active_repo_id, has_worktree_selection) {
+            return self.worktree_uncommitted_view(repo_id, cx);
+        }
 
         // An active two-point comparison takes precedence over both the single
         // and multi commit-detail views: show the range's changed files.
@@ -1433,7 +1624,7 @@ impl DetailsPaneView {
                     components::Button::new("commit_details_close", "")
                         .start_slot(svg_icon(
                             "icons/generic_close.svg",
-                            theme.colors.text_muted,
+                            theme.colors.foreground.secondary,
                             px(12.0),
                         ))
                         .style(components::ButtonStyle::Transparent)
@@ -1490,7 +1681,7 @@ impl DetailsPaneView {
                             let files = if details.files.is_empty() {
                                 div()
                                     .text_sm()
-                                    .text_color(theme.colors.text_muted)
+                                    .text_color(theme.colors.foreground.secondary)
                                     .child("No files.")
                                     .into_any_element()
                             } else {
@@ -1582,12 +1773,12 @@ impl DetailsPaneView {
                                         .h_full()
                                         .min_h(commit_files_section_min_height)
                                         .border_t_1()
-                                        .border_color(theme.colors.border_variant)
+                                        .border_color(theme.colors.stroke.subtle)
                                         .pt_2()
                                         .child(
                                             div()
                                                 .text_sm()
-                                                .text_color(theme.colors.text_muted)
+                                                .text_color(theme.colors.foreground.secondary)
                                                 .child(format!(
                                                     "Committed files ({})",
                                                     details.files.len()
@@ -1607,7 +1798,7 @@ impl DetailsPaneView {
                         let files = if details.files.is_empty() {
                             div()
                                 .text_sm()
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .child("No files.")
                                 .into_any_element()
                         } else {
@@ -1710,12 +1901,16 @@ impl DetailsPaneView {
                                     .h_full()
                                     .min_h(commit_files_section_min_height)
                                     .border_t_1()
-                                    .border_color(theme.colors.border_variant)
+                                    .border_color(theme.colors.stroke.subtle)
                                     .pt_2()
                                     .child(
-                                        div().text_sm().text_color(theme.colors.text_muted).child(
-                                            format!("Committed files ({})", details.files.len()),
-                                        ),
+                                        div()
+                                            .text_sm()
+                                            .text_color(theme.colors.foreground.secondary)
+                                            .child(format!(
+                                                "Committed files ({})",
+                                                details.files.len()
+                                            )),
                                     )
                                     .child(files),
                             )
@@ -1819,7 +2014,10 @@ impl DetailsPaneView {
         let spinner = |id: (&'static str, u64), color: gpui::Rgba| svg_spinner(id, color, px(14.0));
         let repo_key = repo_id.map(|id| id.0).unwrap_or(0);
         let split_change_tracking = self.change_tracking_view == ChangeTrackingView::SplitUntracked;
-        let icon_muted = with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 });
+        let icon_muted = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.72 } else { 0.82 },
+        );
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
 
         // Measured last frame by the probe on the sections container below; the
@@ -2311,7 +2509,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("unstaged_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2328,7 +2529,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("untracked_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2347,7 +2551,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("split_unstaged_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2366,7 +2573,10 @@ impl DetailsPaneView {
                 actions = actions.child(
                     spinner(
                         ("staged_actions_spinner", repo_key),
-                        with_alpha(theme.colors.accent, if theme.is_dark { 0.72 } else { 0.82 }),
+                        with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.72 } else { 0.82 },
+                        ),
                     )
                     .into_any_element(),
                 );
@@ -2423,15 +2633,17 @@ impl DetailsPaneView {
                     .px_1()
                     .h(px(18.0))
                     .rounded(px(theme.radii.row))
-                    .when(change_tracking_active, |d| d.bg(theme.colors.active))
+                    .when(change_tracking_active, |d| {
+                        d.bg(theme.colors.interaction.pressed_background)
+                    })
                     .hover(move |s| {
                         if change_tracking_active {
-                            s.bg(theme.colors.active)
+                            s.bg(theme.colors.interaction.pressed_background)
                         } else {
-                            s.bg(with_alpha(theme.colors.hover, 0.55))
+                            s.bg(with_alpha(theme.colors.interaction.hover_background, 0.55))
                         }
                     })
-                    .active(move |s| s.bg(theme.colors.active))
+                    .active(move |s| s.bg(theme.colors.interaction.pressed_background))
                     .cursor(CursorStyle::PointingHand)
                     .child(
                         div()
@@ -2488,7 +2700,7 @@ impl DetailsPaneView {
                     id,
                     components::ResizeGripAxis::Horizontal,
                     dragging,
-                    Some(theme.colors.border),
+                    Some(theme.colors.stroke.default),
                 ))
                 .on_mouse_down(
                     MouseButton::Left,
@@ -2959,7 +3171,7 @@ impl DetailsPaneView {
             self.commit_amend_enabled,
         );
         let repo_key = self.active_repo_id().map(|id| id.0).unwrap_or(0);
-        let icon_color = theme.colors.accent;
+        let icon_color = theme.colors.accent.foreground;
         let icon = |path: &'static str| svg_icon(path, icon_color, px(14.0));
         let spinner = |id: (&'static str, u64)| svg_spinner(id, icon_color, px(14.0));
         let commit_label = match (self.commit_amend_enabled, self.commit_push_after_enabled) {
@@ -2986,17 +3198,19 @@ impl DetailsPaneView {
             .active_context_menu_invoker
             .as_ref()
             .is_some_and(|id| id.as_ref() == previous_messages_invoker.as_ref());
-        let menu_selected_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.26 } else { 0.20 });
+        let menu_selected_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.26 } else { 0.20 },
+        );
         let menu_icon_color = if commit_options_active {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         let previous_messages_icon_color = if previous_messages_active {
-            theme.colors.accent
+            theme.colors.accent.foreground
         } else {
-            theme.colors.text_muted
+            theme.colors.foreground.secondary
         };
         let commit_message = components::ScrollContainer::vertical(
             ("commit_message_scroll_surface", repo_key),

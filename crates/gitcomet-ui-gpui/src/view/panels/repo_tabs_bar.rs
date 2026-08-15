@@ -154,8 +154,10 @@ fn repo_tab_close_button_fill(
     } else {
         components::REMOVE_BUTTON_HOVER_ALPHA
     };
-    let mut fill =
-        crate::theme::composite_over(background, with_alpha(theme.colors.danger, amount));
+    let mut fill = crate::theme::composite_over(
+        background,
+        with_alpha(theme.colors.status.danger.foreground, amount),
+    );
     fill.a = 1.0;
     fill
 }
@@ -774,9 +776,9 @@ impl Render for RepoTabsBarView {
             let label = repo_tab_labels[ix].clone();
             let initials: SharedString = components::repository_initials(label.as_ref()).into();
             let label_bg = if is_active || context_menu_active {
-                theme.colors.sidebar_bg
+                theme.colors.surface.chrome
             } else if is_pressed {
-                theme.colors.active
+                theme.colors.interaction.pressed_background
             } else if is_hovered {
                 hovered_tab_bg
             } else {
@@ -808,7 +810,7 @@ impl Render for RepoTabsBarView {
                 .active(move |s| s.bg(close_pressed_bg))
                 .child(svg_icon(
                     components::REMOVE_BUTTON_ICON,
-                    theme.colors.danger,
+                    theme.colors.status.danger.foreground,
                     scaled_px(components::REMOVE_BUTTON_ICON_SIZE_PX),
                 ))
                 .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -836,10 +838,12 @@ impl Render for RepoTabsBarView {
 
             let show_missing_warning = Self::repo_tab_shows_missing_warning(repo, show_spinner);
             let show_initials = !show_spinner && !show_missing_warning;
-            let status_color =
-                with_alpha(theme.colors.text, if theme.is_dark { 0.72 } else { 0.62 });
+            let status_color = with_alpha(
+                theme.colors.foreground.primary,
+                if theme.is_dark { 0.72 } else { 0.62 },
+            );
             let badge_color = if is_active {
-                theme.colors.accent
+                theme.colors.accent.foreground
             } else {
                 status_color
             };
@@ -881,7 +885,7 @@ impl Render for RepoTabsBarView {
                         .when(show_missing_warning, |d| {
                             d.child(svg_icon(
                                 "icons/warning.svg",
-                                theme.colors.warning,
+                                theme.colors.status.warning.foreground,
                                 scaled_px(12.0),
                             ))
                         })
@@ -918,7 +922,7 @@ impl Render for RepoTabsBarView {
                             .debug_selector(move || format!("repo_tab_terminal_{}", repo_id.0))
                             .child(svg_icon(
                                 "icons/terminal.svg",
-                                theme.colors.accent,
+                                theme.colors.accent.foreground,
                                 scaled_px(REPO_TAB_STATUS_SIZE_PX),
                             )),
                     )
@@ -1091,7 +1095,7 @@ impl Render for RepoTabsBarView {
                 components::Button::new("add_repo_menu", "")
                     .start_slot(svg_icon(
                         "icons/plus.svg",
-                        theme.colors.text_muted,
+                        theme.colors.foreground.secondary,
                         scaled_px(14.0),
                     ))
                     .style(components::ButtonStyle::Transparent)
@@ -1268,10 +1272,10 @@ mod tests {
             crate::theme::AppTheme::gitcomet_dark(),
             crate::theme::AppTheme::gitcomet_light(),
         ] {
-            let background = theme.colors.sidebar_bg;
+            let background = theme.colors.surface.chrome;
             let hover = repo_tab_close_button_fill(theme, background, false);
             let pressed = repo_tab_close_button_fill(theme, background, true);
-            let danger = theme.colors.danger;
+            let danger = theme.colors.status.danger.foreground;
             let distance_to_danger = |color: gpui::Rgba| {
                 (color.r - danger.r).abs() + (color.g - danger.g).abs() + (color.b - danger.b).abs()
             };

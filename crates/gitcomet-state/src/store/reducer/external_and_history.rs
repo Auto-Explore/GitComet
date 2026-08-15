@@ -103,6 +103,13 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
 
     let mut effects = refresh_full_effects(repo_state, git_log_settings);
     append_auto_background_metadata_effects(repo_state, git_log_settings, &mut effects);
+    // Linked-worktree rows survive a reload, so their dirty counts have to be
+    // refreshed along with everything else. The monitor only flushes for this
+    // repo's own `.git`, so a commit or stash made inside a linked worktree
+    // reaches us no other way, and Reload is exactly how a user asks for it.
+    if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
+        effects.push(effect);
+    }
     effects
 }
 
@@ -133,6 +140,9 @@ pub(super) fn repo_externally_changed(
             .request(RepoLoadsInFlight::REMOTE_BRANCHES)
         {
             effects.push(Effect::LoadRemoteBranches { repo_id });
+        }
+        if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
+            effects.push(effect);
         }
         effects
     } else {

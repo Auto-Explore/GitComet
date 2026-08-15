@@ -988,7 +988,7 @@ impl SidebarPaneView {
                     .min_w(px(0.0))
                     .text_size(scaled_px(12.0))
                     .font_weight(FontWeight::BOLD)
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .child(section.title()),
             )
             .when(filterable, |header| {
@@ -998,15 +998,15 @@ impl SidebarPaneView {
                         .style(components::ButtonStyle::Subtle)
                         .selected(filter_open)
                         .selected_bg(with_alpha(
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             if theme.is_dark { 0.34 } else { 0.24 },
                         ))
                         .start_slot(crate::view::icons::svg_icon(
                             "icons/zoom.svg",
                             if filter_open {
-                                theme.colors.text
+                                theme.colors.foreground.primary
                             } else {
-                                theme.colors.text_muted
+                                theme.colors.foreground.secondary
                             },
                             scaled_px(13.0),
                         ))
@@ -1033,15 +1033,15 @@ impl SidebarPaneView {
                         .style(components::ButtonStyle::Subtle)
                         .selected(section_menu_active)
                         .selected_bg(with_alpha(
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             if theme.is_dark { 0.34 } else { 0.24 },
                         ))
                         .start_slot(crate::view::icons::svg_icon(
                             "icons/more_vertical.svg",
                             if section_menu_active {
-                                theme.colors.text
+                                theme.colors.foreground.primary
                             } else {
-                                theme.colors.text_muted
+                                theme.colors.foreground.secondary
                             },
                             scaled_px(15.0),
                         ))
@@ -1062,7 +1062,7 @@ impl SidebarPaneView {
             .flex_none()
             .h(px(1.0))
             .w_full()
-            .bg(theme.colors.border_variant);
+            .bg(theme.colors.stroke.subtle);
 
         let is_files = matches!(section, CollapsedSidebarSection::Files);
         let collapsed_popover_scroll = self.collapsed_popover_scroll.clone();
@@ -1082,7 +1082,7 @@ impl SidebarPaneView {
             // on the ambient color (e.g. worktree path labels) would otherwise fall
             // back to the default text style across the panel/entity boundary and
             // render near-black.
-            .text_color(theme.colors.text)
+            .text_color(theme.colors.foreground.primary)
             .child(title)
             .child(divider)
             .children(filter_bar);
@@ -1106,7 +1106,7 @@ impl SidebarPaneView {
             .flex()
             .flex_col()
             .min_h(px(0.0))
-            .text_color(theme.colors.text)
+            .text_color(theme.colors.foreground.primary)
             .child(surface.child(content))
             .child(scrollbar.render(theme))
             .into_any()
@@ -1138,8 +1138,8 @@ impl SidebarPaneView {
                     .pr(scaled_px(2.0))
                     .rounded(px(theme.radii.control))
                     .border_1()
-                    .border_color(theme.colors.border)
-                    .bg(theme.colors.surface_bg)
+                    .border_color(theme.colors.stroke.default)
+                    .bg(theme.colors.surface.panel)
                     .child(
                         div()
                             .flex_1()
@@ -1154,7 +1154,7 @@ impl SidebarPaneView {
                                 .style(components::ButtonStyle::Subtle)
                                 .start_slot(crate::view::icons::svg_icon(
                                     "icons/generic_close.svg",
-                                    theme.colors.text_muted,
+                                    theme.colors.foreground.secondary,
                                     scaled_px(12.0),
                                 ))
                                 .on_click(theme, cx, |this, _e, _w, cx| {
@@ -1421,27 +1421,27 @@ impl SidebarPaneView {
                 .active_repo()
                 .is_some_and(|r| r.browsing_commit().is_some());
         let bg = if browsing_files {
-            crate::theme::historical_header_bg(theme, theme.colors.sidebar_bg)
+            crate::theme::historical_header_bg(theme, theme.colors.surface.chrome)
         } else {
-            theme.colors.sidebar_bg
+            theme.colors.surface.chrome
         };
 
         let store_branches = Arc::clone(&self.store);
         let store_files = Arc::clone(&self.store);
-        // `theme.colors.hover` is nearly identical to the sidebar chrome bg,
+        // `theme.colors.interaction.hover_background` is nearly identical to the sidebar chrome bg,
         // so use the standard text-tinted overlay that reads on hover.
         let tab_hover_bg = theme.hover_overlay();
-        // Lifts the active chip, which already carries `active_section` and so
+        // Lifts the active chip, which already carries `interaction.selected_background` and so
         // cannot show the plain overlay the inactive one uses.
         let tab_active_hover_bg = crate::theme::mix_colors(
-            theme.colors.active_section,
-            theme.colors.text,
+            theme.colors.interaction.selected_background,
+            theme.colors.foreground.primary,
             if theme.is_dark { 0.08 } else { 0.05 },
         );
         // Same value as `ButtonStyle::Subtle`'s hover border, so the chips match
         // the locate button sharing their strip.
         let tab_hover_border = with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.45 } else { 0.32 },
         );
 
@@ -1461,12 +1461,12 @@ impl SidebarPaneView {
             .border_1()
             .border_color(gpui::transparent_black())
             .when(mode == SidebarMode::Branches, |d| {
-                d.bg(theme.colors.active_section)
-                    .text_color(theme.colors.text)
+                d.bg(theme.colors.interaction.selected_background)
+                    .text_color(theme.colors.interaction.selected_foreground)
             })
             .when(mode != SidebarMode::Branches, |d| {
                 d.bg(gpui::transparent_black())
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
             })
             .hover(move |d| {
                 let d = d.border_color(tab_hover_border);
@@ -1503,15 +1503,18 @@ impl SidebarPaneView {
                 // Carry the tint onto the active chip too, so it does not read
                 // as a neutral hole punched in a tinted bar.
                 d.bg(if browsing_files {
-                    crate::theme::historical_header_bg(theme, theme.colors.active_section)
+                    crate::theme::historical_header_bg(
+                        theme,
+                        theme.colors.interaction.selected_background,
+                    )
                 } else {
-                    theme.colors.active_section
+                    theme.colors.interaction.selected_background
                 })
-                .text_color(theme.colors.text)
+                .text_color(theme.colors.interaction.selected_foreground)
             })
             .when(mode != SidebarMode::Files, |d| {
                 d.bg(gpui::transparent_black())
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
             })
             .hover(move |d| {
                 let d = d.border_color(tab_hover_border);
@@ -1562,9 +1565,9 @@ impl SidebarPaneView {
                         .start_slot(crate::view::icons::svg_icon(
                             "icons/locate.svg",
                             if can_locate {
-                                theme.colors.text_muted
+                                theme.colors.foreground.secondary
                             } else {
-                                with_alpha(theme.colors.text_muted, 0.45)
+                                with_alpha(theme.colors.foreground.secondary, 0.45)
                             },
                             scaled_px(13.0),
                         ))
@@ -1729,8 +1732,8 @@ impl SidebarPaneView {
                     .pr(scaled_px(2.0))
                     .rounded(px(theme.radii.control))
                     .border_1()
-                    .border_color(theme.colors.border)
-                    .bg(theme.colors.surface_bg_elevated)
+                    .border_color(theme.colors.stroke.default)
+                    .bg(theme.colors.surface.raised)
                     .child(
                         div()
                             .flex_1()
@@ -1745,7 +1748,7 @@ impl SidebarPaneView {
                                 .style(components::ButtonStyle::Subtle)
                                 .start_slot(crate::view::icons::svg_icon(
                                     "icons/generic_close.svg",
-                                    theme.colors.text_muted,
+                                    theme.colors.foreground.secondary,
                                     scaled_px(12.0),
                                 ))
                                 .on_click(theme, cx, |this, _e, _w, cx| {
@@ -1854,8 +1857,10 @@ impl SidebarPaneView {
         let search_error = file_search_matchers(&search_query, search_options)
             .iter()
             .any(|matcher| matcher.regex_error().is_some());
-        let option_selected_bg =
-            with_alpha(theme.colors.accent, if theme.is_dark { 0.34 } else { 0.24 });
+        let option_selected_bg = with_alpha(
+            theme.colors.accent.foreground,
+            if theme.is_dark { 0.34 } else { 0.24 },
+        );
         div()
             .px(scaled_px(8.0))
             .pt(scaled_px(8.0))
@@ -1871,11 +1876,11 @@ impl SidebarPaneView {
                     .rounded(px(theme.radii.control))
                     .border_1()
                     .border_color(if search_error {
-                        theme.colors.danger
+                        theme.colors.status.danger.foreground
                     } else {
-                        theme.colors.border
+                        theme.colors.stroke.default
                     })
-                    .bg(theme.colors.surface_bg_elevated)
+                    .bg(theme.colors.surface.raised)
                     .child(
                         div()
                             .flex_1()
@@ -2017,11 +2022,11 @@ impl SidebarPaneView {
             // A wash rather than a frame: browse mode should read as a change of
             // surface, not as a box drawn around the list.
             .when(browsing_commit, |d| {
-                // Over `sidebar_bg`: that is what the pane behind this paints, so
+                // Over `surface.chrome`: that is what the pane behind this paints, so
                 // browse mode shifts the hue without also stepping the lightness.
                 d.bg(crate::theme::historical_surface_bg(
                     theme,
-                    theme.colors.sidebar_bg,
+                    theme.colors.surface.chrome,
                 ))
             })
             .child(search_bar)
@@ -2251,20 +2256,20 @@ impl SidebarPaneView {
         };
         let theme = this.theme;
         let icon_muted = with_alpha(
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             if theme.is_dark { 0.6 } else { 0.5 },
         );
         // Zed renders file/folder icons in a neutral, muted tone rather than a
         // bright accent — match that so the tree reads the same way.
-        let icon_color = theme.colors.text_muted;
-        let text_color = theme.colors.text;
+        let icon_color = theme.colors.foreground.secondary;
+        let text_color = theme.colors.foreground.primary;
         let row_surface = if matches!(
             this.collapsed_popover_section,
             Some(CollapsedSidebarSection::Files)
         ) {
-            theme.colors.surface_bg_elevated
+            theme.colors.surface.raised
         } else {
-            theme.colors.sidebar_bg
+            theme.colors.surface.chrome
         };
         let row_style = components::InteractiveRowStyle::new(theme, row_surface);
         let store = Arc::clone(&this.store);
@@ -2384,13 +2389,16 @@ impl SidebarPaneView {
                                     },
                                 ))
                                 .child(chevron_slot(true, !unsaved_collapsed))
-                                .child(icon_slot_tinted("icons/pencil.svg", theme.colors.warning))
+                                .child(icon_slot_tinted(
+                                    "icons/pencil.svg",
+                                    theme.colors.status.warning.foreground,
+                                ))
                                 .child(
                                     div()
                                         .flex_1()
                                         .min_w(px(0.0))
                                         .text_xs()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child(format!("Unsaved edits ({count})")),
                                 )
                                 .into_any_element(),
@@ -2547,7 +2555,7 @@ impl SidebarPaneView {
                                 .text_sm();
                             if !highlight_ranges.is_empty() {
                                 let style = gpui::HighlightStyle {
-                                    color: Some(theme.colors.accent.into()),
+                                    color: Some(theme.colors.accent.foreground.into()),
                                     font_weight: Some(FontWeight::BOLD),
                                     ..gpui::HighlightStyle::default()
                                 };
@@ -2560,7 +2568,7 @@ impl SidebarPaneView {
                         .when(has_unsaved_edits, |row| {
                             row.child(div().flex_none().flex().items_center().child(svg_icon(
                                 "icons/pencil.svg",
-                                theme.colors.warning,
+                                theme.colors.status.warning.foreground,
                                 10.0,
                             )))
                         })
@@ -2598,6 +2606,36 @@ impl SidebarPaneView {
             root.main_pane.update(cx, |pane, cx| {
                 pane.rebuild_diff_cache(cx);
                 cx.notify();
+            });
+        });
+    }
+
+    /// Focus a worktree in the log: its uncommitted-changes row when it has
+    /// changes, otherwise the commit its HEAD points at.
+    ///
+    /// HEAD comes from the worktree listing rather than the dirty scan, because
+    /// the scan skips this tab's own worktree and omits clean ones entirely. The
+    /// listing is loaded by the time a row in it can be clicked.
+    pub(in super::super) fn reveal_worktree_in_history(
+        &mut self,
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+        is_current: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let head = self.active_repo().and_then(|repo| match &repo.worktrees {
+            Loadable::Ready(worktrees) => worktrees
+                .iter()
+                .find(|worktree| worktree.path == path)
+                .and_then(|worktree| worktree.head.clone()),
+            _ => None,
+        });
+        let root_view = self.root_view.clone();
+        cx.defer(move |cx| {
+            let _ = root_view.update(cx, |root, cx| {
+                root.main_pane.update(cx, |pane, cx| {
+                    pane.reveal_history_worktree(repo_id, path, is_current, head, cx);
+                });
             });
         });
     }
@@ -2929,7 +2967,7 @@ fn unsaved_file_row(
                 .justify_center()
                 .child(super::super::icons::svg_icon(
                     "icons/pencil.svg",
-                    theme.colors.warning,
+                    theme.colors.status.warning.foreground,
                     icon_px,
                 )),
         )
@@ -2939,7 +2977,7 @@ fn unsaved_file_row(
                     // Path elision keeps the file name, which is what identifies
                     // the row, and drops the folders in the middle.
                     .profile(components::TextTruncationProfile::Path)
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .text_sm()
                     .render(cx),
             ),
@@ -2950,7 +2988,7 @@ fn unsaved_file_row(
                 .style(components::ButtonStyle::Subtle)
                 .start_slot(super::super::icons::svg_icon(
                     "icons/undo.svg",
-                    theme.colors.text_muted,
+                    theme.colors.foreground.secondary,
                     icon_px,
                 ))
                 .on_click(theme, cx, {

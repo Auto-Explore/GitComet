@@ -50,8 +50,8 @@ pub(super) struct TerminalAnsiPalette {
 impl TerminalAnsiPalette {
     pub(super) fn from_theme(theme: AppTheme) -> Self {
         let colors = theme.colors;
-        let fg = colors.text;
-        let bg = colors.window_bg;
+        let fg = colors.foreground.primary;
+        let bg = colors.surface.canvas;
 
         let dark = theme.is_dark;
         if dark {
@@ -88,13 +88,13 @@ impl TerminalAnsiPalette {
                 foreground: fg,
                 background: bg,
                 black: gpui::rgb(0xfffffe),
-                red: gpui::rgb(0xc43d35),
-                green: gpui::rgb(0x2e7d32),
-                yellow: gpui::rgb(0xa97822),
-                blue: gpui::rgb(0x4f72dd),
+                red: colors.status.danger.foreground,
+                green: colors.status.success.foreground,
+                yellow: colors.status.warning.foreground,
+                blue: colors.accent.foreground,
                 magenta: gpui::rgb(0x8e4c6f),
                 cyan: gpui::rgb(0x1a7f82),
-                white: gpui::rgb(0x1d2330),
+                white: colors.foreground.primary,
                 bright_black: gpui::rgb(0x9aa0b0),
                 bright_red: gpui::rgb(0xe06c75),
                 bright_green: gpui::rgb(0x4caf50),

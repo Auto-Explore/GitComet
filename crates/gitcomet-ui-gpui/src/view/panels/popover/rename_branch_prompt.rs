@@ -21,13 +21,13 @@ pub(super) fn panel(
         } else {
             "Rename branch"
         }))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()
                 .py_1()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(format!("Current name: {name}")),
         )
         .child(input_label(theme, "New branch name"))
@@ -39,7 +39,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.create_branch_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

@@ -445,7 +445,7 @@ impl Render for CommitMessageHoverHost {
             .items_center()
             .gap_1p5()
             .pt_1()
-            .text_color(theme.colors.text_muted);
+            .text_color(theme.colors.foreground.secondary);
         if !state.author.is_empty() {
             footer = footer
                 .child(components::author_avatar(
@@ -484,13 +484,13 @@ impl Render for CommitMessageHoverHost {
                     .flex_col()
                     .px_2()
                     .py_1p5()
-                    .bg(theme.colors.tooltip_bg)
+                    .bg(theme.colors.surface.raised)
                     .border_1()
-                    .border_color(theme.colors.border)
+                    .border_color(theme.colors.stroke.default)
                     .rounded(px(theme.radii.popover))
                     .shadow(crate::theme::shadow_popover(theme))
                     .text_xs()
-                    .text_color(theme.colors.tooltip_text)
+                    .text_color(theme.colors.foreground.primary)
                     .child(message_text)
                     .when(has_footer, |card| {
                         card.child(
@@ -500,7 +500,7 @@ impl Render for CommitMessageHoverHost {
                                 .mt_1()
                                 .pt_1()
                                 .border_t_1()
-                                .border_color(theme.colors.border)
+                                .border_color(theme.colors.stroke.subtle)
                                 .text_size(ui_scale.px(COMMIT_MESSAGE_HOVER_FOOTER_FONT_PX))
                                 .child(footer),
                         )

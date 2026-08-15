@@ -503,9 +503,9 @@ impl Render for HistoryRefsHoverHost {
             let debug_selector = Self::item_debug_selector(item);
             let icon = Self::item_icon(item);
             let icon_color = match item.kind {
-                HistoryRefListItemKind::Tag { .. } => theme.colors.accent,
-                HistoryRefListItemKind::DetachedHead => theme.colors.text_muted,
-                _ => theme.colors.text_muted,
+                HistoryRefListItemKind::Tag { .. } => theme.colors.accent.foreground,
+                HistoryRefListItemKind::DetachedHead => theme.colors.foreground.secondary,
+                _ => theme.colors.foreground.secondary,
             };
             div()
                 .id(("history_refs_hover_item", ix))
@@ -521,34 +521,36 @@ impl Render for HistoryRefsHoverHost {
                 .line_height(ui_scale.px(16.0))
                 .rounded(px(theme.radii.row))
                 .text_color(if actionable {
-                    theme.colors.text
+                    theme.colors.foreground.primary
                 } else {
-                    theme.colors.text_muted
+                    theme.colors.foreground.secondary
                 })
                 .cursor(if actionable && !frozen {
                     CursorStyle::PointingHand
                 } else {
                     CursorStyle::Arrow
                 })
-                .when(pinned, |row| row.bg(theme.colors.active))
+                .when(pinned, |row| {
+                    row.bg(theme.colors.interaction.pressed_background)
+                })
                 .hover(move |row| {
                     if pinned {
-                        row.bg(theme.colors.active)
+                        row.bg(theme.colors.interaction.pressed_background)
                     } else if frozen {
                         row
                     } else {
-                        // `theme.colors.hover` is nearly identical to the
+                        // `theme.colors.interaction.hover_background` is nearly identical to the
                         // elevated popover surface; use a text-tinted overlay
                         // that reads clearly.
                         row.bg(with_alpha(
-                            theme.colors.text,
+                            theme.colors.foreground.primary,
                             if theme.is_dark { 0.08 } else { 0.05 },
                         ))
                     }
                 })
                 .active(move |row| {
                     if pinned || !frozen {
-                        row.bg(theme.colors.active)
+                        row.bg(theme.colors.interaction.pressed_background)
                     } else {
                         row
                     }
@@ -631,9 +633,9 @@ impl Render for HistoryRefsHoverHost {
             .max_h(layout.max_panel_h)
             .overflow_y_scroll()
             .p_1()
-            .bg(theme.colors.surface_bg_elevated)
+            .bg(theme.colors.surface.raised)
             .border_1()
-            .border_color(theme.colors.border)
+            .border_color(theme.colors.stroke.default)
             .rounded(px(theme.radii.popover))
             .shadow(crate::theme::shadow_popover(theme))
             .occlude()

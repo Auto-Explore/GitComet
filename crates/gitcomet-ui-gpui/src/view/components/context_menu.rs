@@ -96,7 +96,7 @@ pub fn context_menu(theme: AppTheme, content: impl IntoElement) -> Div {
         .flex()
         .flex_col()
         .items_stretch()
-        .text_color(theme.colors.text)
+        .text_color(theme.colors.foreground.primary)
         .child(content)
 }
 
@@ -130,7 +130,7 @@ pub fn context_menu_header<V: 'static>(
         .text_size(rems(MENU_PRIMARY_REMS))
         .line_height(scaled_px(18.0))
         .font_weight(gpui::FontWeight::MEDIUM)
-        .text_color(theme.colors.text)
+        .text_color(theme.colors.foreground.primary)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
         .child(context_menu_text_content(
@@ -138,7 +138,7 @@ pub fn context_menu_header<V: 'static>(
             tooltip_host,
             cx,
             max_lines,
-            theme.colors.text,
+            theme.colors.foreground.primary,
             rems(MENU_PRIMARY_REMS),
             Some(gpui::FontWeight::MEDIUM),
         ))
@@ -162,7 +162,7 @@ pub fn context_menu_description<V: 'static>(
         .pb(scaled_px(4.0))
         .text_size(rems(MENU_SECONDARY_REMS))
         .line_height(scaled_px(14.0))
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
         .child(context_menu_text_content(
@@ -170,7 +170,7 @@ pub fn context_menu_description<V: 'static>(
             tooltip_host,
             cx,
             max_lines,
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             rems(MENU_SECONDARY_REMS),
             None,
         ))
@@ -197,7 +197,7 @@ pub fn context_menu_label<V: 'static>(
         .pb(scaled_px(4.0))
         .text_size(rems(MENU_SECONDARY_REMS))
         .line_height(scaled_px(14.0))
-        .text_color(theme.colors.text_muted)
+        .text_color(theme.colors.foreground.secondary)
         .when(max_lines == 1, |s| s.whitespace_nowrap().overflow_hidden())
         .when(max_lines > 1, |s| s.line_clamp(max_lines))
         .child(context_menu_text_content(
@@ -205,7 +205,7 @@ pub fn context_menu_label<V: 'static>(
             tooltip_host,
             cx,
             max_lines,
-            theme.colors.text_muted,
+            theme.colors.foreground.secondary,
             rems(MENU_SECONDARY_REMS),
             None,
         ))
@@ -217,7 +217,7 @@ pub fn context_menu_separator(theme: AppTheme, ui_scale: impl Into<UiScale>) -> 
     div()
         .my(scaled_px(2.0))
         .border_t_1()
-        .border_color(theme.colors.border_variant)
+        .border_color(theme.colors.stroke.subtle)
 }
 
 pub struct ContextMenuEntry {
@@ -384,7 +384,7 @@ fn context_menu_entry<V: 'static>(
         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
         .text_xs()
         .line_height(scaled_px(14.0))
-        .text_color(theme.colors.text_muted);
+        .text_color(theme.colors.foreground.secondary);
 
     if let Some(shortcut) = shortcut {
         end = if shortcut_keycaps {
@@ -397,7 +397,7 @@ fn context_menu_entry<V: 'static>(
 
     if disabled {
         row = row
-            .text_color(theme.colors.text_muted)
+            .text_color(theme.colors.foreground.secondary)
             .cursor(CursorStyle::Arrow);
     }
 
@@ -410,12 +410,12 @@ fn context_menu_entry_text_color(
     icon_color: gpui::Rgba,
 ) -> gpui::Rgba {
     if disabled {
-        theme.colors.text_muted
-    } else if icon_color == theme.colors.danger {
+        theme.colors.foreground.secondary
+    } else if icon_color == theme.colors.status.danger.foreground {
         // Destructive entries carry the danger tint on both icon and label.
-        theme.colors.danger
+        theme.colors.status.danger.foreground
     } else {
-        theme.colors.text
+        theme.colors.foreground.primary
     }
 }
 
@@ -426,11 +426,11 @@ fn context_menu_icon_color(
     icon_path: Option<&'static str>,
 ) -> gpui::Rgba {
     if disabled {
-        return theme.colors.text_muted;
+        return theme.colors.foreground.secondary;
     }
 
     if label == "Close" && icon_path == Some("icons/repo_tab_close.svg") {
-        return theme.colors.accent;
+        return theme.colors.accent.foreground;
     }
 
     // Semantic-ish mapping for common actions.
@@ -441,28 +441,28 @@ fn context_menu_icon_color(
         || label.contains("Drop")
         || label.contains("Remove")
     {
-        return theme.colors.danger;
+        return theme.colors.status.danger.foreground;
     }
     if matches!(icon_path, Some("icons/warning.svg"))
         || label.contains("Force")
         || label.contains("Discard")
     {
-        return theme.colors.warning;
+        return theme.colors.status.warning.foreground;
     }
     if matches!(icon_path, Some("icons/arrow_up.svg")) || label.starts_with("Push") {
-        return theme.colors.success;
+        return theme.colors.status.success.foreground;
     }
     if matches!(icon_path, Some("icons/arrow_down.svg")) || label.starts_with("Pull") {
-        return theme.colors.warning;
+        return theme.colors.status.warning.foreground;
     }
     if matches!(icon_path, Some("icons/plus.svg")) || label.starts_with("Stage") {
-        return theme.colors.success;
+        return theme.colors.status.success.foreground;
     }
     if matches!(icon_path, Some("icons/minus.svg")) || label.starts_with("Unstage") {
-        return theme.colors.warning;
+        return theme.colors.status.warning.foreground;
     }
 
-    theme.colors.accent
+    theme.colors.accent.foreground
 }
 
 fn context_menu_icon_path(icon: &str, label: &str) -> Option<&'static str> {
@@ -666,7 +666,7 @@ mod tests {
             crate::theme::AppTheme::gitcomet_light(),
         ] {
             assert_ne!(
-                theme.colors.text_muted, theme.colors.text,
+                theme.colors.foreground.secondary, theme.colors.foreground.primary,
                 "the two headings must not share a color"
             );
         }
@@ -751,15 +751,15 @@ mod tests {
         let theme = AppTheme::gitcomet_dark();
         assert_eq!(
             context_menu_icon_color(theme, false, "Delete branch", Some("icons/trash.svg")),
-            theme.colors.danger
+            theme.colors.status.danger.foreground
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg")),
-            theme.colors.accent
+            theme.colors.accent.foreground
         );
         assert_eq!(
             context_menu_icon_color(theme, false, "Force push", Some("icons/warning.svg")),
-            theme.colors.warning
+            theme.colors.status.warning.foreground
         );
     }
 
@@ -769,14 +769,14 @@ mod tests {
         let close_icon =
             context_menu_icon_color(theme, false, "Close", Some("icons/repo_tab_close.svg"));
 
-        assert_eq!(close_icon, theme.colors.accent);
+        assert_eq!(close_icon, theme.colors.accent.foreground);
         assert_eq!(
             context_menu_entry_text_color(theme, false, close_icon),
-            theme.colors.text
+            theme.colors.foreground.primary
         );
         assert_eq!(
-            context_menu_entry_text_color(theme, false, theme.colors.danger),
-            theme.colors.danger,
+            context_menu_entry_text_color(theme, false, theme.colors.status.danger.foreground),
+            theme.colors.status.danger.foreground,
             "other destructive entries should retain their danger text"
         );
     }

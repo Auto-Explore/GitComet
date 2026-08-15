@@ -6,40 +6,256 @@
       "name": "Tokyo Night",
       "appearance": "dark",
       "colors": {
-        "window_bg": "#1a1b26ff",
-        "surface_bg": "#1f2335ff",
-        "surface_bg_elevated": "#24283bff",
-        "active_section": "#2a3050ff",
-        "border": "#2b3047ff",
-        "border_variant": "#ffffff10",
+        "surface": {
+          "canvas": "#1a1b26ff",
+          "chrome": "#222638ff",
+          "panel": "#1f2335ff",
+          "raised": "#24283bff",
+          "input": "#2b2e41ff"
+        },
+        "foreground": {
+          "primary": "#c0caf5ff",
+          "secondary": "#565f89ff",
+          "disabled": {
+            "hex": "#565f89ff",
+            "alpha": 0.62
+          },
+          "placeholder": "#787c99aa",
+          "emphasis": "#ffffffff"
+        },
+        "stroke": {
+          "subtle": "#ffffff10",
+          "default": "#2b3047ff",
+          "control": "#2b3047ff"
+        },
+        "interaction": {
+          "hover_overlay": {
+            "hex": "#c0caf5ff",
+            "alpha": 0.07
+          },
+          "pressed_overlay": {
+            "hex": "#c0caf5ff",
+            "alpha": 0.11
+          },
+          "hover_background": "#292e42ff",
+          "pressed_background": {
+            "hex": "#7aa2f7ff",
+            "alpha": 0.18
+          },
+          "selected_background": "#2a3050ff",
+          "selected_foreground": "#c0caf5ff",
+          "selected_indicator": "#7aa2f7ff",
+          "focus_ring": {
+            "hex": "#89ddffff",
+            "alpha": 0.82
+          },
+          "focus_background": {
+            "hex": "#89ddffff",
+            "alpha": 0.24
+          }
+        },
+        "accent": {
+          "foreground": "#7aa2f7ff",
+          "solid": "#7aa2f7ff",
+          "on_solid": "#1a1b26ff",
+          "subtle_background": {
+            "hex": "#7aa2f7ff",
+            "alpha": 0.18
+          }
+        },
+        "status": {
+          "info": {
+            "foreground": "#7aa2f7ff",
+            "background": {
+              "hex": "#7aa2f7ff",
+              "alpha": 0.18
+            },
+            "border": {
+              "hex": "#7aa2f7ff",
+              "alpha": 0.48
+            }
+          },
+          "success": {
+            "foreground": "#9ece6aff",
+            "background": {
+              "hex": "#9ece6aff",
+              "alpha": 0.18
+            },
+            "border": {
+              "hex": "#9ece6aff",
+              "alpha": 0.48
+            }
+          },
+          "warning": {
+            "foreground": "#e0af68ff",
+            "background": {
+              "hex": "#e0af68ff",
+              "alpha": 0.18
+            },
+            "border": {
+              "hex": "#e0af68ff",
+              "alpha": 0.48
+            }
+          },
+          "danger": {
+            "foreground": "#f7768eff",
+            "background": {
+              "hex": "#f7768eff",
+              "alpha": 0.18
+            },
+            "border": {
+              "hex": "#f7768eff",
+              "alpha": 0.48
+            }
+          }
+        },
+        "editor": {
+          "background": "#1a1b26ff",
+          "foreground": "#c0caf5ff",
+          "gutter_background": "#1a1b26ff",
+          "line_number": "#565f89ff",
+          "cursor": {
+            "hex": "#c0caf5ff",
+            "alpha": 0.78
+          },
+          "selection_background": {
+            "hex": "#7aa2f7ff",
+            "alpha": 0.28
+          },
+          "search_match_background": {
+            "hex": "#e0af68ff",
+            "alpha": 0.22
+          },
+          "search_match_foreground": "#e0af68ff",
+          "bracket_match_background": "#ffffff26",
+          "indent_guide": "#ffffff10"
+        },
+        "diff": {
+          "added": {
+            "foreground": "#9ece6aff",
+            "background": "#20303bff",
+            "word_background": {
+              "hex": "#9ece6aff",
+              "alpha": 0.22
+            },
+            "focused_background": {
+              "hex": "#9ece6aff",
+              "alpha": 0.20
+            }
+          },
+          "removed": {
+            "foreground": "#f7768eff",
+            "background": "#37222cff",
+            "word_background": {
+              "hex": "#f7768eff",
+              "alpha": 0.22
+            },
+            "focused_background": {
+              "hex": "#f7768eff",
+              "alpha": 0.20
+            }
+          },
+          "modified": {
+            "foreground": "#e0af68ff",
+            "background": {
+              "hex": "#e0af68ff",
+              "alpha": 0.14
+            },
+            "word_background": {
+              "hex": "#e0af68ff",
+              "alpha": 0.22
+            },
+            "focused_background": {
+              "hex": "#e0af68ff",
+              "alpha": 0.20
+            }
+          }
+        },
+        "tooltip": {
+          "background": "#16161eff",
+          "foreground": "#c0caf5ff"
+        },
+        "scrollbar": {
+          "thumb": {
+            "hex": "#565f89ff",
+            "alpha": 0.30
+          },
+          "thumb_hover": {
+            "hex": "#565f89ff",
+            "alpha": 0.42
+          },
+          "thumb_pressed": {
+            "hex": "#565f89ff",
+            "alpha": 0.52
+          }
+        },
         "shadow": "#000000ff",
-        "tooltip_bg": "#16161eff",
-        "tooltip_text": "#c0caf5ff",
-        "text": "#c0caf5ff",
-        "text_muted": "#565f89ff",
-        "accent": "#7aa2f7ff",
-        "hover": "#292e42ff",
-        "active": { "hex": "#7aa2f7ff", "alpha": 0.18 },
-        "focus_ring": { "hex": "#89ddffff", "alpha": 0.82 },
-        "focus_ring_bg": { "hex": "#89ddffff", "alpha": 0.24 },
-        "scrollbar_thumb": { "hex": "#565f89ff", "alpha": 0.30 },
-        "scrollbar_thumb_hover": { "hex": "#565f89ff", "alpha": 0.42 },
-        "scrollbar_thumb_active": { "hex": "#565f89ff", "alpha": 0.52 },
-        "danger": "#f7768eff",
-        "warning": "#e0af68ff",
-        "success": "#9ece6aff",
-        "diff_add_bg": "#20303bff",
-        "diff_add_text": "#9ece6aff",
-        "diff_remove_bg": "#37222cff",
-        "diff_remove_text": "#f7768eff",
-        "input_placeholder": "#787c99aa",
-        "accent_text": "#1a1b26ff",
-        "emphasis_text": "#ffffffff",
+        "graph_lane_palette": null,
         "graph_lane_hues": [
-          0.00, 0.13, 0.26, 0.39, 0.52, 0.65, 0.78, 0.91, 0.04, 0.17, 0.30, 0.43, 0.56, 0.69, 0.82, 0.95,
-          0.08, 0.21, 0.34, 0.47, 0.60, 0.73, 0.86, 0.99, 0.12, 0.25, 0.38, 0.51, 0.64, 0.77, 0.90, 0.03,
-          0.16, 0.29, 0.42, 0.55, 0.68, 0.81, 0.94, 0.07, 0.20, 0.33, 0.46, 0.59, 0.72, 0.85, 0.98, 0.11,
-          0.24, 0.37, 0.50, 0.63, 0.76, 0.89, 0.02, 0.15, 0.28, 0.41, 0.54, 0.67, 0.80, 0.93, 0.06, 0.19
+          0.00,
+          0.13,
+          0.26,
+          0.39,
+          0.52,
+          0.65,
+          0.78,
+          0.91,
+          0.04,
+          0.17,
+          0.30,
+          0.43,
+          0.56,
+          0.69,
+          0.82,
+          0.95,
+          0.08,
+          0.21,
+          0.34,
+          0.47,
+          0.60,
+          0.73,
+          0.86,
+          0.99,
+          0.12,
+          0.25,
+          0.38,
+          0.51,
+          0.64,
+          0.77,
+          0.90,
+          0.03,
+          0.16,
+          0.29,
+          0.42,
+          0.55,
+          0.68,
+          0.81,
+          0.94,
+          0.07,
+          0.20,
+          0.33,
+          0.46,
+          0.59,
+          0.72,
+          0.85,
+          0.98,
+          0.11,
+          0.24,
+          0.37,
+          0.50,
+          0.63,
+          0.76,
+          0.89,
+          0.02,
+          0.15,
+          0.28,
+          0.41,
+          0.54,
+          0.67,
+          0.80,
+          0.93,
+          0.06,
+          0.19
         ]
       },
       "syntax": {
@@ -95,5 +311,6 @@
         "window": 12.0
       }
     }
-  ]
+  ],
+  "schema_version": 2
 }

@@ -117,6 +117,9 @@ fn append_repo_switch_worktree_refresh_effect(
             repo_id: repo_state.id,
         });
     }
+    if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
+        effects.push(effect);
+    }
 }
 
 fn clear_loading<T>(loadable: &mut Loadable<T>) -> bool {
@@ -540,6 +543,11 @@ pub(super) fn close_repo(
     let closed_workdir = state.repos[removed_repo_ix].spec.workdir.clone();
     state.repos.remove(removed_repo_ix);
     repos.remove(&repo_id);
+    // The worktree scan's cached handles are pruned only by that repo's own scan,
+    // and a closed repo never scans again. This is the one place that knows the
+    // repo is gone rather than merely idle -- `CancelRepoLoads` also fires on tab
+    // switches and reloads, where the handles are still worth keeping.
+    crate::store::effects::release_worktree_scan_handles(repo_id);
     effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
     if was_active {
         let next_active_repo = if state.repos.is_empty() {
@@ -604,6 +612,7 @@ pub(super) fn close_repos(
             ));
         }
         repos.remove(&repo_id);
+        crate::store::effects::release_worktree_scan_handles(repo_id);
     }
 
     state.repos.retain(|repo| !close_ids.contains(&repo.id));
@@ -1153,6 +1162,12 @@ pub(super) fn repo_opened_ok(
         {
             repo_state.set_worktrees(Loadable::Loading);
             effects.push(Effect::LoadWorktrees { repo_id });
+        }
+        // The history rows want this from the moment the repo opens, and the
+        // switch-time trigger fires before the handle exists, so this is the
+        // first point where the scan can actually run.
+        if let Some(effect) = super::effects::request_worktree_dirty_effect(repo_state) {
+            effects.push(effect);
         }
         if should_refresh_worktrees {
             append_ensure_sidebar_data_effects(repo_state, &mut effects);

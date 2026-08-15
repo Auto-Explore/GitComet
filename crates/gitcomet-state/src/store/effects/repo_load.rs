@@ -1,14 +1,19 @@
 use crate::model::{AppState, ConflictFileLoadMode};
 use crate::msg::Msg;
 use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession, ConflictStageParts};
-use gitcomet_core::domain::{DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope};
+use gitcomet_core::domain::{
+    DiffArea, DiffPreviewTextSide, DiffTarget, LogCursor, LogScope, RepoStatus, Worktree,
+    WorktreeDirtySummary, count_file_statuses,
+};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
+use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
 
 use super::super::{RepoId, executor::TaskExecutor, worker_channel::StoreWorkerSender};
@@ -922,6 +927,353 @@ pub(super) fn schedule_load_worktrees(
             );
         },
     );
+}
+
+/// Scans every *other* linked worktree for uncommitted changes.
+///
+/// The worktree list is re-read inside the task rather than passed in from
+/// state: this way the scan can never disagree with the paths it walks, and it
+/// has no ordering dependency on `LoadWorktrees` having landed first. One `git
+/// worktree list` is negligible next to the per-worktree status scans that
+/// follow.
+///
+/// A worktree that cannot be opened or stat'd is skipped rather than failing the
+/// whole scan — removed directories and unmounted volumes are routine.
+pub(super) fn schedule_load_worktree_dirty(
+    executor: &TaskExecutor,
+    backend: Arc<dyn GitBackend>,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    own_workdir: PathBuf,
+    files_for: Option<PathBuf>,
+    cancellation: CancellationToken,
+) {
+    spawn_detached_with_repo_or_else(
+        executor,
+        "load-worktree-dirty",
+        repos,
+        repo_id,
+        msg_tx,
+        move |repo, msg_tx| {
+            let own_workdir = canonicalize_or_original(own_workdir);
+            let result = repo
+                .list_worktrees_cancellable(&cancellation)
+                .inspect_err(|_| {
+                    // The listing is what names the live worktrees, so a failed
+                    // one leaves nothing to prune against -- and its causes (a
+                    // concurrent `git worktree prune`, a permissions blip, an
+                    // unmounted volume) are exactly when stale handles pile up.
+                    // Drop this repo's cache outright: it is only a cache, and
+                    // the next scan reopens whatever it still needs. A cancelled
+                    // listing is not evidence of anything, so it keeps its
+                    // handles.
+                    if !cancellation.is_cancelled() {
+                        retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &[]);
+                    }
+                })
+                .and_then(|worktrees| {
+                    let mut summaries = Vec::new();
+                    let mut scanned = Vec::with_capacity(worktrees.len());
+                    for worktree in worktrees {
+                        // A scan that stops here has seen only a prefix of the
+                        // list, and the reducer commits an `Ok` as the complete
+                        // set of dirty worktrees: it would blank the rows for
+                        // everything unscanned and -- through
+                        // `selected_worktree_is_gone` -- drop the selection and
+                        // close the diff the user is reading. Cancellation is
+                        // the absence of an answer, so it surfaces as one.
+                        if cancellation.is_cancelled() {
+                            return Err(Error::new(ErrorKind::Cancelled));
+                        }
+                        if is_own_worktree(&worktree.path, &own_workdir) {
+                            continue;
+                        }
+                        scanned.push(worktree.path.clone());
+                        let Some(handle) = worktree_scan_handle(
+                            worktree_scan_handles(),
+                            &*backend,
+                            repo_id,
+                            &worktree.path,
+                        ) else {
+                            continue;
+                        };
+                        let status = match handle.status_cancellable(&cancellation) {
+                            Ok(status) => status,
+                            // Cancellation surfaces as an `Err` here like any
+                            // other failure, and it says nothing about the
+                            // handle. `CancelRepoLoads` fires on every tab
+                            // switch, reload and completed action, so treating
+                            // it as a broken handle would discard healthy ones
+                            // routinely and pay full discovery to reopen them.
+                            Err(_) if cancellation.is_cancelled() => {
+                                return Err(Error::new(ErrorKind::Cancelled));
+                            }
+                            Err(_) => {
+                                // A handle that cannot report status is not
+                                // worth keeping: the worktree may have been
+                                // removed or replaced underneath it.
+                                forget_worktree_scan_handle(
+                                    worktree_scan_handles(),
+                                    repo_id,
+                                    &worktree.path,
+                                );
+                                continue;
+                            }
+                        };
+                        // Only the selected worktree's files are carried back;
+                        // see `WorktreeDirtySummary`.
+                        let keep_files = files_for.as_deref() == Some(worktree.path.as_path());
+                        let summary = worktree_dirty_summary(worktree, status, keep_files);
+                        if summary.is_dirty() {
+                            summaries.push(summary);
+                        }
+                    }
+                    // Reaching here means the whole list was walked, so `scanned`
+                    // is complete and safe to prune against -- a cancellation
+                    // part-way returned above rather than falling through with a
+                    // partial set.
+                    retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &scanned);
+                    Ok(summaries)
+                });
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded { repo_id, result }),
+            );
+        },
+        move |msg_tx| {
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+                    repo_id,
+                    result: Err(missing_repo_error(repo_id)),
+                }),
+            );
+        },
+    );
+}
+
+/// Repository handles for the *other* worktrees, kept between scans.
+///
+/// The scan runs on every git-state flush, and opening a repository is discovery
+/// plus config parsing — several milliseconds each, paid per worktree per scan
+/// for handles that were identical the last time round. Status itself re-reads
+/// the index and the worktree, so a reused handle reports fresh results; a handle
+/// that fails is dropped ([`forget_worktree_scan_handle`]) and reopened next time.
+///
+/// Keyed by repo as well as path: entries are pruned against the worktree list of
+/// the scan that owns them ([`retain_worktree_scan_handles`]), dropped outright
+/// when the repo's tab closes ([`release_worktree_scan_handles`]), and one repo's
+/// scan must not evict another's.
+static WORKTREE_SCAN_HANDLES: OnceLock<Mutex<WorktreeScanHandles>> = OnceLock::new();
+
+/// Handles held open across scans. Each one keeps file descriptors and mapped
+/// index data alive, so the total is capped rather than left to grow with every
+/// worktree the session has ever looked at.
+const WORKTREE_SCAN_HANDLE_LIMIT: usize = 16;
+
+#[derive(Default)]
+struct WorktreeScanHandles {
+    entries: HashMap<(RepoId, PathBuf), WorktreeScanHandle>,
+    /// Ticks once per lookup; the entry holding the highest tick is the hottest.
+    clock: u64,
+}
+
+struct WorktreeScanHandle {
+    handle: Arc<dyn GitRepository>,
+    last_used: u64,
+}
+
+impl WorktreeScanHandles {
+    fn tick(&mut self) -> u64 {
+        self.clock = self.clock.wrapping_add(1);
+        self.clock
+    }
+
+    /// Frees a slot for a new entry belonging to `repo_id`.
+    ///
+    /// The slot comes out of whichever repo holds the most, with the requester
+    /// winning ties. That first step is what keeps repos from starving each
+    /// other: the map is process-wide, and a rule that always spent the
+    /// requester's own budget froze whatever split the tabs happened to open in.
+    /// Two repos of ten worktrees each, the first to scan taking ten slots and
+    /// the second the remaining six, left the second pinned at six forever --
+    /// every scan re-paying discovery and config parsing for the tail of its
+    /// list, which is the cost this cache exists to avoid. Taking from the
+    /// largest holder walks that split down to an even one and then holds there.
+    ///
+    /// Within the requester's own entries the *most* recently used goes, not the
+    /// coldest. A scan walks `list_worktrees` in order and every scan walks the
+    /// same list, so the access pattern is a cycle -- LRU's textbook worst case.
+    /// Under LRU a repo with more worktrees than the limit evicts precisely the
+    /// entry its next scan reaches first, every time, and reopens all of them on
+    /// every pass: the same behaviour clearing the map wholesale had. Giving up
+    /// the entry the scan has just finished with instead leaves a stable prefix
+    /// cached and confines the reopens to the tail.
+    ///
+    /// Within *another* repo's entries the coldest goes: there LRU is right,
+    /// because another repo's oldest handle really is the least likely to be
+    /// wanted next, and nothing about this repo's cycle says which of theirs to
+    /// keep.
+    fn evict_one_for(&mut self, repo_id: RepoId) -> bool {
+        let mut held: HashMap<RepoId, usize> = HashMap::new();
+        for (entry_repo, _) in self.entries.keys() {
+            *held.entry(*entry_repo).or_default() += 1;
+        }
+        let Some(largest) = held
+            .into_iter()
+            // The requester wins ties, so a single repo over the limit keeps the
+            // cyclic behaviour below and an even split stays put. `entry_repo`
+            // breaks the rest, only so the map's iteration order cannot make this
+            // vary between runs.
+            .max_by_key(|&(entry_repo, count)| (count, entry_repo == repo_id, entry_repo.0))
+            .map(|(entry_repo, _)| entry_repo)
+        else {
+            return false;
+        };
+
+        let of_largest = self
+            .entries
+            .iter()
+            .filter(|((entry_repo, _), _)| *entry_repo == largest);
+        let victim = if largest == repo_id {
+            of_largest.max_by_key(|(_, entry)| entry.last_used)
+        } else {
+            of_largest.min_by_key(|(_, entry)| entry.last_used)
+        }
+        .map(|(key, _)| key.clone());
+
+        match victim {
+            Some(victim) => {
+                self.entries.remove(&victim);
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+fn worktree_scan_handles() -> &'static Mutex<WorktreeScanHandles> {
+    WORKTREE_SCAN_HANDLES.get_or_init(|| Mutex::new(WorktreeScanHandles::default()))
+}
+
+fn lock_worktree_scan_handles(
+    handles: &Mutex<WorktreeScanHandles>,
+) -> std::sync::MutexGuard<'_, WorktreeScanHandles> {
+    handles
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// The map is threaded in rather than reached for through the static so tests can
+/// drive an instance of their own. Sharing the process-wide one made the handle
+/// tests evict each other's entries whenever cargo ran them in parallel.
+fn worktree_scan_handle(
+    handles: &Mutex<WorktreeScanHandles>,
+    backend: &dyn GitBackend,
+    repo_id: RepoId,
+    path: &Path,
+) -> Option<Arc<dyn GitRepository>> {
+    let key = (repo_id, path.to_path_buf());
+    {
+        let mut handles = lock_worktree_scan_handles(handles);
+        let now = handles.tick();
+        if let Some(entry) = handles.entries.get_mut(&key) {
+            entry.last_used = now;
+            return Some(Arc::clone(&entry.handle));
+        }
+    }
+
+    // Opened outside the lock: this is the several-millisecond discovery-and-
+    // config-parse the cache exists to avoid, and holding the map across it would
+    // stall every other repo's scan behind it.
+    let handle = backend.open(path).ok()?;
+    let mut handles = lock_worktree_scan_handles(handles);
+    while handles.entries.len() >= WORKTREE_SCAN_HANDLE_LIMIT && handles.evict_one_for(repo_id) {}
+    let last_used = handles.tick();
+    handles.entries.insert(
+        key,
+        WorktreeScanHandle {
+            handle: Arc::clone(&handle),
+            last_used,
+        },
+    );
+    Some(handle)
+}
+
+/// Drops this repo's handles for worktrees the current scan did not walk — ones
+/// that have been pruned, removed, or unmounted since the last scan. Called with
+/// the paths the scan actually saw, so a repo never accumulates handles for
+/// worktrees that no longer exist.
+fn retain_worktree_scan_handles(
+    handles: &Mutex<WorktreeScanHandles>,
+    repo_id: RepoId,
+    seen: &[PathBuf],
+) {
+    lock_worktree_scan_handles(handles)
+        .entries
+        .retain(|(entry_repo, path), _| *entry_repo != repo_id || seen.contains(path));
+}
+
+fn forget_worktree_scan_handle(handles: &Mutex<WorktreeScanHandles>, repo_id: RepoId, path: &Path) {
+    lock_worktree_scan_handles(handles)
+        .entries
+        .remove(&(repo_id, path.to_path_buf()));
+}
+
+/// Drops every handle a repo holds, for when the repo itself goes away.
+///
+/// Nothing else can: the per-scan prune only runs from that repo's own scan, so a
+/// closed tab's handles -- file descriptors and mapped index data, one set per
+/// linked worktree -- would otherwise sit there for the life of the process,
+/// released only if unrelated repos happened to push the map to its limit.
+pub(in crate::store) fn release_worktree_scan_handles(repo_id: RepoId) {
+    lock_worktree_scan_handles(worktree_scan_handles())
+        .entries
+        .retain(|(entry_repo, _), _| *entry_repo != repo_id);
+}
+
+/// Whether `worktree_path` is the worktree this tab already has open — those
+/// changes belong in the pinned working-tree row, not in a linked-worktree one.
+///
+/// `own_workdir` is canonicalized: the spec's workdir goes through
+/// `canonicalize_path` when the repo is opened. Git reports the path it recorded
+/// verbatim, so the two can spell the same directory differently — `/tmp/x`
+/// against `/private/tmp/x` on macOS, or either side of a symlinked repo root on
+/// any platform. A raw comparison misses that, and this tab's own changes come
+/// back a second time as a duplicate row anchored on HEAD. The cheap equality is
+/// tried first so the common case costs no syscall.
+fn is_own_worktree(worktree_path: &Path, own_workdir: &Path) -> bool {
+    worktree_path == own_workdir
+        || canonicalize_or_original(worktree_path.to_path_buf()) == own_workdir
+}
+
+/// Counts always; the file lists only when this is the worktree the details pane
+/// is showing. The counts are derived before the lists are dropped, so a summary
+/// without files still reports exactly what the row renders.
+fn worktree_dirty_summary(
+    worktree: Worktree,
+    status: RepoStatus,
+    keep_files: bool,
+) -> WorktreeDirtySummary {
+    let (added, modified, deleted) = count_file_statuses(&status.unstaged);
+    let (staged_added, staged_modified, staged_deleted) = count_file_statuses(&status.staged);
+    let (staged, unstaged) = if keep_files {
+        (status.staged, status.unstaged)
+    } else {
+        (Vec::new(), Vec::new())
+    };
+    WorktreeDirtySummary {
+        path: worktree.path,
+        head: worktree.head,
+        branch: worktree.branch,
+        detached: worktree.detached,
+        added: added + staged_added,
+        modified: modified + staged_modified,
+        deleted: deleted + staged_deleted,
+        staged,
+        unstaged,
+    }
 }
 
 pub(super) fn schedule_load_ref_metadata(
@@ -1873,4 +2225,415 @@ pub(super) fn schedule_load_interactive_rebase_setup(
             );
         },
     );
+}
+
+#[cfg(test)]
+mod worktree_dirty_tests {
+    use super::*;
+    use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
+
+    fn status(path: &str, kind: FileStatusKind) -> FileStatus {
+        FileStatus {
+            path: PathBuf::from(path),
+            kind,
+            conflict: None,
+        }
+    }
+
+    fn worktree() -> Worktree {
+        Worktree {
+            path: PathBuf::from("/wt/side"),
+            head: Some(CommitId("abc123".into())),
+            branch: Some("side".into()),
+            detached: false,
+        }
+    }
+
+    #[test]
+    fn a_summary_sums_staged_and_unstaged_into_the_three_buckets() {
+        let repo_status = RepoStatus {
+            staged: vec![status("gone.txt", FileStatusKind::Deleted)],
+            unstaged: vec![
+                status("edited.txt", FileStatusKind::Modified),
+                status("new.txt", FileStatusKind::Untracked),
+            ],
+        };
+
+        let summary = worktree_dirty_summary(worktree(), repo_status, true);
+        assert_eq!(
+            (summary.added, summary.modified, summary.deleted),
+            (1, 1, 1)
+        );
+        assert!(summary.is_dirty());
+        // The rows list these files, so the scan has to hand them over rather
+        // than reducing them to counts and dropping them.
+        assert_eq!(summary.unstaged.len(), 2);
+        assert_eq!(summary.staged.len(), 1);
+        assert_eq!(summary.staged[0].path, PathBuf::from("gone.txt"));
+    }
+
+    /// The row is anchored by HEAD and labelled by branch, so the scan has to
+    /// carry both through; the repo's own worktree list is loaded lazily and
+    /// cannot be relied on.
+    #[test]
+    fn a_summary_carries_the_worktrees_identity() {
+        let summary = worktree_dirty_summary(worktree(), RepoStatus::default(), true);
+        assert_eq!(summary.path, PathBuf::from("/wt/side"));
+        assert_eq!(summary.head.as_ref().map(|id| id.as_ref()), Some("abc123"));
+        assert_eq!(summary.branch.as_deref(), Some("side"));
+        assert!(!summary.detached);
+        assert!(!summary.is_dirty(), "a clean tree must not be reported");
+    }
+
+    /// The scan's own workdir arrives canonicalized while git reports the path it
+    /// recorded, so the two spell the same directory differently whenever the repo
+    /// root is reached through a symlink. Missing that match scans this tab's own
+    /// worktree and renders its changes twice.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_repo_root_is_still_recognised_as_our_own_worktree() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).expect("create real worktree dir");
+        let linked = dir.path().join("linked");
+        std::os::unix::fs::symlink(&real, &linked).expect("symlink");
+
+        let own_workdir = canonicalize_or_original(linked.clone());
+        assert_ne!(
+            own_workdir, linked,
+            "fixture must actually produce two spellings of one directory"
+        );
+
+        assert!(
+            is_own_worktree(&linked, &own_workdir),
+            "the path git reports must still match our canonicalized workdir"
+        );
+        assert!(
+            is_own_worktree(&real, &own_workdir),
+            "and so must the resolved one"
+        );
+        assert!(
+            !is_own_worktree(&dir.path().join("other"), &own_workdir),
+            "a genuinely different worktree is still scanned"
+        );
+    }
+}
+
+#[cfg(test)]
+mod worktree_scan_handle_tests {
+    use super::*;
+
+    use crate::store::tests::DummyRepo;
+
+    /// Counts opens so the tests can tell a cache hit from a reopen.
+    struct CountingBackend {
+        opens: std::sync::atomic::AtomicUsize,
+    }
+
+    impl GitBackend for CountingBackend {
+        fn open(&self, workdir: &Path) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
+            self.opens
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            Ok(Arc::new(DummyRepo::new(&workdir.to_string_lossy())))
+        }
+    }
+
+    impl CountingBackend {
+        fn new() -> Self {
+            Self {
+                opens: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+
+        fn opens(&self) -> usize {
+            self.opens.load(std::sync::atomic::Ordering::Relaxed)
+        }
+    }
+
+    /// A map of this test's own. These used to share the process-wide static, and
+    /// the over-the-limit test below evicts sixteen entries as it runs — under
+    /// cargo's parallel harness it was evicting the *other* tests' entries, and
+    /// they failed on an open count one higher than they asked for.
+    fn handles() -> Mutex<WorktreeScanHandles> {
+        Mutex::new(WorktreeScanHandles::default())
+    }
+
+    /// Opening a repository is discovery plus config parsing, and the scan runs on
+    /// every git-state flush. A repo with more worktrees than the cache holds must
+    /// still keep its hottest ones: clearing the map wholesale at the limit made
+    /// exactly that case reopen nearly everything every scan.
+    #[test]
+    fn a_repo_over_the_handle_limit_keeps_its_hottest_worktrees() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let repo_id = RepoId(4_001);
+        let hot = PathBuf::from("/wt/hot-4001");
+        let paths: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
+            .map(|ix| PathBuf::from(format!("/wt/cold-4001-{ix}")))
+            .collect();
+
+        // The hot worktree is touched before and after every cold one. Eviction
+        // takes the entry the scan has just finished with, which is always the
+        // cold one -- touching `hot` again immediately afterwards makes it the
+        // most recent, but by then the slot has already been taken.
+        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
+        for path in &paths {
+            worktree_scan_handle(&handles, &backend, repo_id, path).expect("stub backend opens");
+            worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
+        }
+
+        let opens_before = backend.opens();
+        worktree_scan_handle(&handles, &backend, repo_id, &hot).expect("stub backend opens");
+        assert_eq!(
+            backend.opens(),
+            opens_before,
+            "the repeatedly used worktree must still be cached"
+        );
+    }
+
+    /// The access pattern this cache actually sees: every scan walks
+    /// `list_worktrees` in the same order, so a repo with more worktrees than the
+    /// limit revisits them cyclically. That is LRU's worst case — it evicts
+    /// precisely the entry the next scan reaches first, and every handle is
+    /// reopened on every pass, which is the behaviour the cache exists to prevent.
+    #[test]
+    fn repeated_scans_of_an_oversized_repo_do_not_reopen_everything() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let repo_id = RepoId(4_005);
+        let worktrees: Vec<PathBuf> = (0..WORKTREE_SCAN_HANDLE_LIMIT + 4)
+            .map(|ix| PathBuf::from(format!("/wt/seq-4005-{ix}")))
+            .collect();
+
+        let scan = || {
+            let before = backend.opens();
+            for path in &worktrees {
+                worktree_scan_handle(&handles, &backend, repo_id, path)
+                    .expect("stub backend opens");
+            }
+            backend.opens() - before
+        };
+
+        assert_eq!(
+            scan(),
+            worktrees.len(),
+            "the first scan has nothing cached and opens every worktree"
+        );
+
+        let second = scan();
+        let third = scan();
+        // Under LRU both of these were `worktrees.len()` -- a complete miss on
+        // every worktree, on every scan, forever.
+        assert!(
+            second < worktrees.len() && third < worktrees.len(),
+            "a cyclic rescan must keep hitting the cache, got {second} then {third} \
+             reopens of {} worktrees",
+            worktrees.len()
+        );
+        assert!(
+            third <= worktrees.len() - WORKTREE_SCAN_HANDLE_LIMIT + 1,
+            "all but the tail past the limit should stay cached, got {third} reopens"
+        );
+    }
+
+    /// Handles are pruned against the worktree list the scan actually walked, so a
+    /// removed worktree does not keep a repository open for the process lifetime.
+    #[test]
+    fn a_scan_drops_handles_for_worktrees_it_no_longer_lists() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let repo_id = RepoId(4_002);
+        let kept = PathBuf::from("/wt/kept-4002");
+        let removed = PathBuf::from("/wt/removed-4002");
+
+        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
+        assert_eq!(backend.opens(), 2);
+
+        retain_worktree_scan_handles(&handles, repo_id, std::slice::from_ref(&kept));
+
+        worktree_scan_handle(&handles, &backend, repo_id, &kept).expect("stub backend opens");
+        assert_eq!(
+            backend.opens(),
+            2,
+            "the worktree still in the list keeps its handle"
+        );
+        worktree_scan_handle(&handles, &backend, repo_id, &removed).expect("stub backend opens");
+        assert_eq!(
+            backend.opens(),
+            3,
+            "the worktree dropped from the list must have been released"
+        );
+    }
+
+    /// One repo's scan must not evict another's handles: the map is process-wide.
+    #[test]
+    fn pruning_one_repos_handles_leaves_another_repos_alone() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let mine = RepoId(4_003);
+        let theirs = RepoId(4_004);
+        let path = PathBuf::from("/wt/shared-4003");
+
+        worktree_scan_handle(&handles, &backend, mine, &path).expect("stub backend opens");
+        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
+        assert_eq!(backend.opens(), 2);
+
+        retain_worktree_scan_handles(&handles, mine, &[]);
+
+        worktree_scan_handle(&handles, &backend, theirs, &path).expect("stub backend opens");
+        assert_eq!(
+            backend.opens(),
+            2,
+            "the other repo's handle must survive this repo's prune"
+        );
+    }
+
+    /// The map is process-wide, and a rule that always spends the requester's own
+    /// budget freezes whatever split the tabs happened to open in: the repo that
+    /// scanned second is pinned to the leftovers forever and re-pays discovery
+    /// for the tail of its list on every flush.
+    #[test]
+    fn a_second_repo_takes_slots_from_the_larger_holder_rather_than_starving() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let first = RepoId(4_008);
+        let second = RepoId(4_009);
+        let paths = |repo: RepoId| -> Vec<PathBuf> {
+            (0..WORKTREE_SCAN_HANDLE_LIMIT)
+                .map(|ix| PathBuf::from(format!("/wt/share-{}-{ix}", repo.0)))
+                .collect()
+        };
+        let first_paths = paths(first);
+        let second_paths = paths(second);
+
+        // The first repo fills two thirds of the map, then the second arrives.
+        let first_share = WORKTREE_SCAN_HANDLE_LIMIT * 2 / 3;
+        for path in &first_paths[..first_share] {
+            worktree_scan_handle(&handles, &backend, first, path).expect("stub backend opens");
+        }
+
+        let held = |repo_id: RepoId| {
+            lock_worktree_scan_handles(&handles)
+                .entries
+                .keys()
+                .filter(|(entry_repo, _)| *entry_repo == repo_id)
+                .count()
+        };
+
+        // Several full scans by the second repo: under the old rule it evicted
+        // the entry it had just used and never grew past the leftovers.
+        for _ in 0..3 {
+            for path in &second_paths {
+                worktree_scan_handle(&handles, &backend, second, path).expect("stub backend opens");
+            }
+        }
+
+        let second_held = held(second);
+        assert!(
+            second_held > WORKTREE_SCAN_HANDLE_LIMIT - first_share,
+            "the second repo must grow past the leftovers, got {second_held} of \
+             {WORKTREE_SCAN_HANDLE_LIMIT}"
+        );
+        assert!(
+            held(first) > 0,
+            "and must not have cleared the first repo out either"
+        );
+    }
+
+    /// Closing a repo is the only thing that can release its handles: the per-scan
+    /// prune runs from that repo's own scan, and a closed repo never scans again.
+    /// Without this the handles sat there for the life of the process.
+    #[test]
+    fn closing_a_repo_releases_every_handle_it_held() {
+        let backend = CountingBackend::new();
+        let closed = RepoId(4_006);
+        let other = RepoId(4_007);
+        let paths = [
+            PathBuf::from("/wt/closing-4006-a"),
+            PathBuf::from("/wt/closing-4006-b"),
+        ];
+
+        // The release hook reaches the static directly -- it is called from the
+        // reducer, which has no map to hand it -- so this one test uses it, and
+        // cleans up after itself by releasing both repos.
+        let shared = worktree_scan_handles();
+        for path in &paths {
+            worktree_scan_handle(shared, &backend, closed, path).expect("stub backend opens");
+        }
+        worktree_scan_handle(shared, &backend, other, &paths[0]).expect("stub backend opens");
+
+        release_worktree_scan_handles(closed);
+
+        let held = |repo_id: RepoId| {
+            lock_worktree_scan_handles(shared)
+                .entries
+                .keys()
+                .filter(|(entry_repo, _)| *entry_repo == repo_id)
+                .count()
+        };
+        assert_eq!(held(closed), 0, "the closed repo must hold nothing");
+        assert_eq!(held(other), 1, "and must not have taken anyone else's");
+
+        release_worktree_scan_handles(other);
+    }
+}
+
+#[cfg(test)]
+mod worktree_dirty_files_tests {
+    use super::*;
+    use gitcomet_core::domain::{CommitId, FileStatus, FileStatusKind};
+
+    fn status(paths: &[&str]) -> RepoStatus {
+        RepoStatus {
+            staged: Vec::new(),
+            unstaged: paths
+                .iter()
+                .map(|path| FileStatus {
+                    path: PathBuf::from(path),
+                    kind: FileStatusKind::Modified,
+                    conflict: None,
+                })
+                .collect(),
+        }
+    }
+
+    fn worktree() -> Worktree {
+        Worktree {
+            path: PathBuf::from("/wt/side"),
+            head: Some(CommitId("abc123".into())),
+            branch: Some("side".into()),
+            detached: false,
+        }
+    }
+
+    /// The file lists are the expensive part of a summary -- an un-ignored build
+    /// directory puts tens of thousands of paths in them -- and only the selected
+    /// worktree's are ever rendered. The counts have to survive either way, since
+    /// every row shows them.
+    #[test]
+    fn only_the_selected_worktree_carries_its_files() {
+        let kept = worktree_dirty_summary(worktree(), status(&["a.rs", "b.rs"]), true);
+        assert_eq!((kept.added, kept.modified, kept.deleted), (0, 2, 0));
+        assert_eq!(
+            kept.unstaged.len(),
+            2,
+            "the selected worktree keeps its files"
+        );
+
+        let counted = worktree_dirty_summary(worktree(), status(&["a.rs", "b.rs"]), false);
+        assert_eq!(
+            (counted.added, counted.modified, counted.deleted),
+            (0, 2, 0),
+            "counts are derived before the lists are dropped"
+        );
+        assert!(
+            counted.unstaged.is_empty() && counted.staged.is_empty(),
+            "an unselected worktree carries counts alone"
+        );
+        assert!(
+            counted.is_dirty(),
+            "and still reports as dirty, or its row would disappear"
+        );
+    }
 }

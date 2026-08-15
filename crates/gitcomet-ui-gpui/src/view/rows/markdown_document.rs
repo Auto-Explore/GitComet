@@ -110,7 +110,7 @@ pub(in crate::view) fn render_markdown_document(
         return div()
             .w_full()
             .p(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
-            .text_color(context.theme.colors.text_muted)
+            .text_color(context.theme.colors.foreground.secondary)
             .child(TOO_MANY_ROWS_TO_RENDER_MESSAGE)
             .into_any_element();
     }
@@ -131,7 +131,7 @@ pub(in crate::view) fn render_markdown_document(
         .min_w(px(0.0))
         .pl(scaled(MARKDOWN_PREVIEW_CONTENT_PAD_X_PX, context))
         .text_size(scaled(MARKDOWN_PREVIEW_BASE_FONT_PX, context))
-        .text_color(context.theme.colors.text);
+        .text_color(context.theme.colors.foreground.primary);
 
     for (ix, block) in blocks.iter().enumerate() {
         column = column.child(render_block(document, block, ix == 0, context));
@@ -203,7 +203,7 @@ fn render_block(
             .into_any_element(),
         MarkdownBlock::ThematicBreak(_) => wrapper
             .child(div().w_full().h(px(1.0)).bg(with_alpha(
-                context.theme.colors.border,
+                context.theme.colors.stroke.default,
                 if context.theme.is_dark { 0.92 } else { 0.88 },
             )))
             .into_any_element(),
@@ -489,7 +489,7 @@ fn render_heading(
             .pb(scaled(4.0, context))
             .border_b_1()
             .border_color(with_alpha(
-                context.theme.colors.border,
+                context.theme.colors.stroke.default,
                 if context.theme.is_dark { 0.85 } else { 0.92 },
             ));
     }
@@ -512,7 +512,7 @@ fn render_list(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
                         .flex_none()
                         .min_w(scaled(MARKDOWN_PREVIEW_LIST_MARKER_MIN_WIDTH_PX, context))
                         .mr(scaled(MARKDOWN_PREVIEW_LIST_MARKER_GAP_PX, context))
-                        .text_color(context.theme.colors.text_muted)
+                        .text_color(context.theme.colors.foreground.secondary)
                         .child(marker),
                 )
                 .child(render_row_line(row_ix, row, context)),
@@ -530,7 +530,7 @@ fn render_blockquote(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> Any
         .map(|kind| crate::view::rows::markdown_preview_alert_bar_color(context.theme, kind))
         .unwrap_or_else(|| {
             with_alpha(
-                context.theme.colors.border,
+                context.theme.colors.stroke.default,
                 if context.theme.is_dark { 0.96 } else { 0.86 },
             )
         });
@@ -565,7 +565,7 @@ fn render_blockquote(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> Any
                 .bg(bar_color)
                 .rounded(scaled(2.0, context)),
         )
-        .child(body.text_color(context.theme.colors.text_muted))
+        .child(body.text_color(context.theme.colors.foreground.secondary))
         .into_any_element()
 }
 
@@ -601,12 +601,12 @@ fn render_code(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyElemen
                 .px(scaled(MARKDOWN_PREVIEW_SHELL_PAD_X_PX, context))
                 .py(scaled(CODE_BLOCK_PAD_Y_PX, context))
                 .bg(with_alpha(
-                    context.theme.colors.active_section,
+                    context.theme.colors.interaction.selected_background,
                     if context.theme.is_dark { 0.55 } else { 0.45 },
                 ))
                 .border_1()
                 .border_color(with_alpha(
-                    context.theme.colors.border,
+                    context.theme.colors.stroke.default,
                     if context.theme.is_dark { 0.90 } else { 0.80 },
                 ))
                 .rounded(scaled(4.0, context))
@@ -634,7 +634,7 @@ fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyEleme
         // The header band is the stronger of the two so the first row reads as
         // labels rather than data.
         let cell_background = with_alpha(
-            context.theme.colors.surface_bg_elevated,
+            context.theme.colors.surface.raised,
             match (is_header, context.theme.is_dark) {
                 (true, true) => 0.64,
                 (true, false) => 0.86,
@@ -651,7 +651,7 @@ fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyEleme
             line = line.font_weight(FontWeight::BOLD);
         }
         table = table.child(line.border_b_1().border_color(with_alpha(
-            context.theme.colors.border,
+            context.theme.colors.stroke.default,
             if context.theme.is_dark { 0.70 } else { 0.60 },
         )));
     }

@@ -139,12 +139,12 @@ pub(super) fn panel(
                 .child(
                     div()
                         .text_xs()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .line_height(scaled_px(14.0))
                         .child(
                             components::TruncatedText::path(title.clone())
                                 .id(("file_history_title_path", repo_id.0))
-                                .text_color(theme.colors.text_muted)
+                                .text_color(theme.colors.foreground.secondary)
                                 .full_text_tooltip(this.tooltip_host.clone())
                                 .render(cx),
                         ),
@@ -240,7 +240,7 @@ pub(super) fn panel(
             .flex_col()
             .w(width.preferred_px(ui_scale))
             .child(header)
-            .child(div().border_t_1().border_color(theme.colors.border))
+            .child(div().border_t_1().border_color(theme.colors.stroke.default))
             .child(body),
     )
 }

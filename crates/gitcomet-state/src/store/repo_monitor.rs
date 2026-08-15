@@ -1833,6 +1833,32 @@ mod tests {
             .expect("create unique tempdir")
     }
 
+    /// Discard everything a freshly established watch still owes us, returning once it has been
+    /// silent for `quiet` (or `budget` runs out).
+    ///
+    /// Linux may run a file's final `fput` — which is what emits `IN_CLOSE_WRITE` — after `close()`
+    /// has already returned to userspace, so a write performed *before* `watch()` can still be
+    /// delivered a few hundred microseconds *after* the watch is live. Tests that assert on what a
+    /// watch delivers must drain that setup residue first, or they flake under load.
+    #[cfg(target_os = "linux")]
+    fn drain_until_quiet(
+        rx: &mpsc::Receiver<notify::Event>,
+        quiet: Duration,
+        budget: Duration,
+    ) -> Vec<notify::Event> {
+        let deadline = Instant::now() + budget;
+        let mut drained = Vec::new();
+        while Instant::now() < deadline {
+            match rx.recv_timeout(quiet) {
+                Ok(event) => drained.push(event),
+                Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {
+                    break;
+                }
+            }
+        }
+        drained
+    }
+
     fn cache_key(rel: impl Into<PathBuf>, is_dir_hint: Option<bool>) -> IgnoreCacheKey {
         IgnoreCacheKey {
             rel: rel.into(),
@@ -2358,6 +2384,19 @@ mod tests {
         watcher
             .watch(&workdir, RecursiveMode::NonRecursive)
             .expect("watch workdir");
+        // The seed write closed its file before this watch existed, but its `IN_CLOSE_WRITE` can
+        // still land here (see `drain_until_quiet`). Start the read phase from a quiet watch so the
+        // assertion below only ever sees events the reads themselves caused.
+        let setup_residue =
+            drain_until_quiet(&rx, Duration::from_millis(300), Duration::from_secs(5));
+        assert!(
+            setup_residue
+                .iter()
+                .all(|event| event.paths == vec![file.clone()]
+                    && event.kind
+                        == notify::EventKind::Access(AccessKind::Close(AccessMode::Write))),
+            "only the seed write may show up before the read phase, got {setup_residue:?}"
+        );
 
         for _ in 0..50 {
             assert_eq!(fs::read(&file).expect("read file"), b"before");

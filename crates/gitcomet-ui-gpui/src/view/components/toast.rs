@@ -10,40 +10,28 @@ pub enum ToastKind {
 }
 
 pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div {
-    let (accent, bg, border) = match kind {
-        ToastKind::Success => (
-            theme.colors.success,
-            with_alpha(
-                theme.colors.surface_bg_elevated,
-                if theme.is_dark { 0.96 } else { 0.98 },
-            ),
-            with_alpha(
-                theme.colors.success,
-                if theme.is_dark { 0.55 } else { 0.45 },
-            ),
-        ),
-        ToastKind::Warning => (
-            theme.colors.warning,
-            with_alpha(
-                theme.colors.surface_bg_elevated,
-                if theme.is_dark { 0.96 } else { 0.98 },
-            ),
-            with_alpha(
-                theme.colors.warning,
-                if theme.is_dark { 0.55 } else { 0.45 },
-            ),
-        ),
-        ToastKind::Error => (
-            theme.colors.danger,
-            with_alpha(
-                theme.colors.surface_bg_elevated,
-                if theme.is_dark { 0.96 } else { 0.98 },
-            ),
-            with_alpha(theme.colors.danger, if theme.is_dark { 0.55 } else { 0.45 }),
-        ),
+    let status = match kind {
+        ToastKind::Success => theme.colors.status.success,
+        ToastKind::Warning => theme.colors.status.warning,
+        ToastKind::Error => theme.colors.status.danger,
     };
-
-    let accent = with_alpha(accent, if theme.is_dark { 0.85 } else { 0.75 });
+    // The status colour lives in the accent stripe and the border; the panel
+    // itself stays a neutral elevated surface. A status-tinted background reads
+    // as a coloured card rather than as a notification, and on the light theme
+    // `status.warning.background` is a distinctly orange one. Matches
+    // `render_progress_shell`, which is the same shell with a bar in it.
+    let bg = with_alpha(
+        theme.colors.surface.raised,
+        if theme.is_dark { 0.96 } else { 0.98 },
+    );
+    let (accent, border) = if theme.is_dark {
+        (
+            with_alpha(status.foreground, 0.85),
+            with_alpha(status.foreground, 0.55),
+        )
+    } else {
+        (status.foreground, status.border)
+    };
 
     div()
         .min_w(px(360.0))
@@ -57,7 +45,7 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
         .overflow_hidden()
         .shadow(crate::theme::shadow_popover(theme))
         .text_lg()
-        .text_color(theme.colors.text)
+        .text_color(theme.colors.foreground.primary)
         .child(div().w(px(5.0)).bg(accent).flex_shrink_0())
         .child(
             div()

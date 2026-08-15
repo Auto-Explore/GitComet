@@ -199,7 +199,7 @@ impl GitCometView {
             .justify_center()
             .child(svg_icon(
                 "icons/warning.svg",
-                theme.colors.warning,
+                theme.colors.status.warning.foreground,
                 scaled_px(36.0),
             ))
             .into_any_element()
@@ -334,7 +334,10 @@ impl GitCometView {
         content: impl IntoElement,
         theme: AppTheme,
     ) -> AnyElement {
-        let border_glow = with_alpha(theme.colors.border, if theme.is_dark { 0.86 } else { 0.74 });
+        let border_glow = with_alpha(
+            theme.colors.stroke.default,
+            if theme.is_dark { 0.86 } else { 0.74 },
+        );
 
         div()
             .id(id)
@@ -356,7 +359,7 @@ impl GitCometView {
                     .w_full()
                     .max_w(px(560.0))
                     .bg(with_alpha(
-                        theme.colors.surface_bg,
+                        theme.colors.surface.panel,
                         if theme.is_dark { 0.96 } else { 0.98 },
                     ))
                     .border_1()
@@ -419,11 +422,13 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let detail_bg = with_alpha(
-            theme.colors.window_bg,
+            theme.colors.surface.canvas,
             if theme.is_dark { 0.36 } else { 0.82 },
         );
-        let detail_border =
-            with_alpha(theme.colors.border, if theme.is_dark { 0.96 } else { 0.82 });
+        let detail_border = with_alpha(
+            theme.colors.stroke.default,
+            if theme.is_dark { 0.96 } else { 0.82 },
+        );
 
         div()
             .id("git_unavailable_card")
@@ -448,7 +453,7 @@ impl GitCometView {
                     .text_center()
                     .text_sm()
                     .line_height(px(22.0))
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(
                         "GitComet cannot open, refresh, or run repository actions until a Git executable is configured.",
                     ),
@@ -466,7 +471,7 @@ impl GitCometView {
                     .py_2()
                     .text_xs()
                     .line_height(px(18.0))
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(self.git_runtime_unavailable_detail_content()),
             )
             .child(
@@ -488,7 +493,10 @@ impl GitCometView {
 
     fn git_unavailable_overlay(&mut self, cx: &mut gpui::Context<Self>) -> AnyElement {
         let theme = self.theme;
-        let border_glow = with_alpha(theme.colors.border, if theme.is_dark { 0.86 } else { 0.74 });
+        let border_glow = with_alpha(
+            theme.colors.stroke.default,
+            if theme.is_dark { 0.86 } else { 0.74 },
+        );
 
         div()
             .id("git_unavailable_overlay")
@@ -499,7 +507,7 @@ impl GitCometView {
             .size_full()
             .overflow_hidden()
             .bg(with_alpha(
-                theme.colors.window_bg,
+                theme.colors.surface.canvas,
                 if theme.is_dark { 0.76 } else { 0.82 },
             ))
             .child(self.interstitial_backdrop())
@@ -517,7 +525,7 @@ impl GitCometView {
                             .w_full()
                             .max_w(px(560.0))
                             .bg(with_alpha(
-                                theme.colors.surface_bg,
+                                theme.colors.surface.panel,
                                 if theme.is_dark { 0.96 } else { 0.98 },
                             ))
                             .border_1()
@@ -560,7 +568,7 @@ impl GitCometView {
                 .child(
                     div()
                         .text_sm()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child("GitComet is opening your workspace."),
                 )
                 .child(
@@ -570,10 +578,10 @@ impl GitCometView {
                         .items_center()
                         .gap_1()
                         .text_sm()
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .child(svg_spinner(
                             ("repository_loading_spinner", 0u64),
-                            theme.colors.accent,
+                            theme.colors.accent.foreground,
                             scaled_px(16.0),
                         ))
                         .child("Please wait…"),
@@ -913,7 +921,7 @@ impl GitCometView {
         let scaled_px =
             |value: f32| crate::ui_scale::design_px_from_percent(value, ui_scale_percent);
         let active = self.sidebar_collapsed_popover;
-        let icon_muted = theme.colors.text_muted;
+        let icon_muted = theme.colors.foreground.secondary;
         let active_bg = theme.active_overlay();
         let hover_bg = theme.hover_overlay();
         let slot = scaled_px(28.0);
@@ -921,7 +929,7 @@ impl GitCometView {
         let icons = CollapsedSidebarSection::ALL.into_iter().map(|section| {
             let is_active = active == Some(section);
             let icon_color = if is_active {
-                theme.colors.text
+                theme.colors.foreground.primary
             } else {
                 icon_muted
             };
@@ -1003,8 +1011,8 @@ impl GitCometView {
             .min_h(px(0.0))
             .rounded(px(theme.radii.panel))
             .border_1()
-            .border_color(theme.colors.border)
-            .bg(theme.colors.surface_bg_elevated)
+            .border_color(theme.colors.stroke.default)
+            .bg(theme.colors.surface.raised)
             .shadow_lg()
             // Claim clicks anywhere on the panel so its empty regions don't fall
             // through to the dismiss scrim underneath.
@@ -1123,7 +1131,7 @@ impl GitCometView {
                         .flex_row()
                         .flex_1()
                         .min_h(px(0.0))
-                        .bg(theme.colors.sidebar_bg)
+                        .bg(theme.colors.surface.chrome)
                         .child(
                             div()
                                 .id("sidebar_pane")
@@ -1131,7 +1139,7 @@ impl GitCometView {
                                 .relative()
                                 .w(self.sidebar_render_width)
                                 .min_h(px(0.0))
-                                .bg(theme.colors.sidebar_bg)
+                                .bg(theme.colors.surface.chrome)
                                 .when(!self.sidebar_collapsed, |d| {
                                     d.child(self.sidebar_pane.clone())
                                 })
@@ -1157,9 +1165,9 @@ impl GitCometView {
                                 .relative()
                                 .rounded(px(main_content_card_radius(theme)))
                                 .border_1()
-                                .border_color(theme.colors.border)
+                                .border_color(theme.colors.stroke.default)
                                 .overflow_hidden()
-                                .bg(theme.colors.window_bg)
+                                .bg(theme.colors.surface.canvas)
                                 .child(
                                     div()
                                         .flex_1()
@@ -1192,7 +1200,7 @@ impl GitCometView {
                                         .when(self.details_collapsed, |d| {
                                             // The resize handle is hidden while collapsed, so
                                             // keep a hairline between main and the strip.
-                                            d.border_l_1().border_color(theme.colors.border_variant)
+                                            d.border_l_1().border_color(theme.colors.stroke.subtle)
                                         })
                                         .when(!self.details_collapsed, |d| {
                                             d.child(
@@ -1224,7 +1232,7 @@ impl GitCometView {
                                 )
                                 .child(card_corner_caps(
                                     px((main_content_card_radius(theme) - 1.0).max(0.0)),
-                                    theme.colors.sidebar_bg,
+                                    theme.colors.surface.chrome,
                                 )),
                         )
                         .child(

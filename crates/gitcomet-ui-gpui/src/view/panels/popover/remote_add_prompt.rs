@@ -14,7 +14,7 @@ pub(super) fn panel(
         .flex_col()
         .w(scaled_px(640.0))
         .child(popover_title("Add remote"))
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(input_label(theme, "Name"))
         .child(
             div()
@@ -33,7 +33,7 @@ pub(super) fn panel(
                 .min_w(px(0.0))
                 .child(this.remote_url_input.clone()),
         )
-        .child(div().border_t_1().border_color(theme.colors.border))
+        .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()

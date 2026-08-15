@@ -121,7 +121,7 @@ impl MainPaneView {
                     });
                     div()
                         .id("diff_file_image_error_scroll")
-                        .bg(theme.colors.window_bg)
+                        .bg(theme.colors.surface.canvas)
                         .font_family(editor_font_family.clone())
                         .flex()
                         .flex_col()
@@ -175,7 +175,7 @@ impl MainPaneView {
                             ui_scale_percent,
                         );
                         let cell = |id: &'static str, image: Option<CachedDiffImageSource>| {
-                            let muted = theme.colors.text_muted;
+                            let muted = theme.colors.foreground.secondary;
                             div()
                                 .id(id)
                                 .flex_1()
@@ -239,7 +239,7 @@ impl MainPaneView {
                                     }
                                     None => div()
                                         .text_sm()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .child("No image")
                                         .into_any_element(),
                                 })
@@ -260,7 +260,7 @@ impl MainPaneView {
                                 .min_h(px(0.0))
                                 .flex()
                                 .flex_col()
-                                .bg(theme.colors.window_bg)
+                                .bg(theme.colors.surface.canvas)
                                 .child(
                                     div()
                                         .flex_1()
@@ -285,7 +285,7 @@ impl MainPaneView {
                             .min_h(px(0.0))
                             .flex()
                             .flex_col()
-                            .bg(theme.colors.window_bg)
+                            .bg(theme.colors.surface.canvas)
                             .child(columns_header)
                             .child(
                                 div()
@@ -293,7 +293,9 @@ impl MainPaneView {
                                     .min_h(px(0.0))
                                     .flex()
                                     .child(cell("diff_image_left", old))
-                                    .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                                    .child(
+                                        div().w(px(1.0)).h_full().bg(theme.colors.stroke.default),
+                                    )
                                     .child(cell("diff_image_right", new)),
                             )
                             .into_any_element()
@@ -348,7 +350,7 @@ impl MainPaneView {
                         });
                         div()
                             .id("diff_file_error_scroll")
-                            .bg(theme.colors.window_bg)
+                            .bg(theme.colors.surface.canvas)
                             .font_family(editor_font_family.clone())
                             .flex()
                             .flex_col()
@@ -407,7 +409,7 @@ impl MainPaneView {
                         });
                         div()
                             .id("diff_file_error_scroll")
-                            .bg(theme.colors.window_bg)
+                            .bg(theme.colors.surface.canvas)
                             .font_family(editor_font_family.clone())
                             .flex()
                             .flex_col()
@@ -480,7 +482,7 @@ impl MainPaneView {
                                         .relative()
                                         .h_full()
                                         .min_h(px(0.0))
-                                        .bg(theme.colors.window_bg)
+                                        .bg(theme.colors.surface.canvas)
                                         .font_family(editor_font_family.clone())
                                         .child(
                                             div()
@@ -600,13 +602,13 @@ impl MainPaneView {
                                         left_label,
                                         collapsed_file_stat.map(|(_, removed)| removed),
                                         '-',
-                                        theme.colors.diff_remove_text,
+                                        theme.colors.diff.removed.foreground,
                                     );
                                     let right_header = Self::split_column_header_label(
                                         right_label,
                                         collapsed_file_stat.map(|(added, _)| added),
                                         '+',
-                                        theme.colors.diff_add_text,
+                                        theme.colors.diff.added.foreground,
                                     );
 
                                     // Built before `resize_handle` captures `cx`.
@@ -629,7 +631,7 @@ impl MainPaneView {
                                                 id,
                                                 components::ResizeGripAxis::Vertical,
                                                 split_dragging,
-                                                Some(theme.colors.border),
+                                                Some(theme.colors.stroke.default),
                                             ))
                                             .on_drag(
                                                 DiffSplitResizeHandle::Divider,
@@ -746,10 +748,10 @@ impl MainPaneView {
                                         .flex()
                                         .items_center()
                                         .text_xs()
-                                        .text_color(theme.colors.text_muted)
+                                        .text_color(theme.colors.foreground.secondary)
                                         .bg(crate::theme::content_header_bg(theme))
                                         .border_b_1()
-                                        .border_color(theme.colors.border)
+                                        .border_color(theme.colors.stroke.default)
                                         .child(
                                             div()
                                                 .w(left_w)
@@ -777,7 +779,7 @@ impl MainPaneView {
                                         .min_h(px(0.0))
                                         .flex()
                                         .flex_col()
-                                        .bg(theme.colors.window_bg)
+                                        .bg(theme.colors.surface.canvas)
                                         .font_family(editor_font_family.clone())
                                         .child(columns_header)
                                         .child(
@@ -949,7 +951,7 @@ impl MainPaneView {
                 .items_center()
                 .justify_center()
                 .text_sm()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child("Empty file.")
                 .into_any_element()
         };
@@ -1038,7 +1040,7 @@ impl MainPaneView {
                 .min_h(px(0.0))
                 .flex()
                 .flex_col()
-                .bg(theme.colors.window_bg)
+                .bg(theme.colors.surface.canvas)
                 .child(
                     div()
                         .id("diff_markdown_preview_inline_container")
@@ -1165,7 +1167,7 @@ impl MainPaneView {
             .min_h(px(0.0))
             .flex()
             .flex_col()
-            .bg(theme.colors.window_bg)
+            .bg(theme.colors.surface.canvas)
             .child(
                 div()
                     .pr(if vertical_sync_enabled {
@@ -1192,7 +1194,7 @@ impl MainPaneView {
                             .min_h(px(0.0))
                             .flex()
                             .child(left_column)
-                            .child(div().w(px(1.0)).h_full().bg(theme.colors.border))
+                            .child(div().w(px(1.0)).h_full().bg(theme.colors.stroke.default))
                             .child(right_column),
                     ),
             )

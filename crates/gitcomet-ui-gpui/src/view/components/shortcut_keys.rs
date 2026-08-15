@@ -28,7 +28,7 @@ pub fn shortcut_keys(label: &str, theme: AppTheme, scale: impl Into<UiScale>) ->
                 .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                 .text_xs()
                 .line_height(scale.px(14.0))
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .child(key.to_owned())
         }))
 }

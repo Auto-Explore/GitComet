@@ -2153,9 +2153,9 @@ impl PatchDiffSearchQueryUpdateFixture {
                     .and_then(|ranges| ranges.as_deref())
                     .unwrap_or(&[]);
                 let language = self.language_for_src_ix.get(src_ix).copied().flatten();
-                let word_color = match line.kind {
-                    DiffLineKind::Add => Some(self.theme.colors.success),
-                    DiffLineKind::Remove => Some(self.theme.colors.danger),
+                let word_kind = match line.kind {
+                    DiffLineKind::Add => Some(crate::theme::DiffColorKind::Added),
+                    DiffLineKind::Remove => Some(crate::theme::DiffColorKind::Removed),
                     _ => None,
                 };
 
@@ -2166,7 +2166,7 @@ impl PatchDiffSearchQueryUpdateFixture {
                     "",
                     language,
                     self.syntax_mode,
-                    word_color,
+                    word_kind,
                 )
             } else {
                 super::diff_text::build_cached_diff_styled_text(
