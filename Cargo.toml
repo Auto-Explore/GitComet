@@ -42,21 +42,20 @@ anyhow = "1"
 clap = { version = "4.6.6", features = ["derive"] }
 criterion = "0.8.2"
 fontdb = "0.24.0"
-futures = "0.3.33"
+futures = "0.3.34"
 gix = { version = "0.86.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
-gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "f5c044833b803206ebc5c91a10361ec28f389c3b" }
-gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "f5c044833b803206ebc5c91a10361ec28f389c3b", features = ["font-kit"] }
+gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "bd33290a612c700e008753ff9ae28f735c9cfa40" }
+gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "bd33290a612c700e008753ff9ae28f735c9cfa40", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
-libc = "0.2"
 log = "0.4.33"
 lru = "0.18"
 memchr = "2.8.3"
 mimalloc = "0.1.52"
-parking_lot = "0.12"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
+palette = "0.7.7"
 raw-window-handle = "0.6"
 regex = "1.13.1"
 resvg = { version = "0.48.1", default-features = false, features = ["text", "system-fonts", "raster-images"] }
@@ -86,7 +85,7 @@ tree-sitter-diff = "0.1.0"
 tree-sitter-fsharp = "0.3.11"
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
 tree-sitter-go = "0.25.0"
-tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a", package = "tree-sitter-gomod" }
+tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a" }
 tree-sitter-gowork = { git = "https://github.com/zed-industries/tree-sitter-go-work", rev = "acb0617bf7f4fda02c6217676cc64acb89536dc7" }
 tree-sitter-html = "0.23.2"
 tree-sitter-javascript = "0.25.0"
@@ -117,7 +116,6 @@ tree-sitter-zig = "1.1.2"
 unicode-segmentation = "1.13.3"
 ureq = { version = "3.4.0", default-features = false, features = ["rustls", "gzip"] }
 url = "2.5.8"
-windows = "0.62.2"
 wayland-client = "0.31.15"
 x11-clipboard = "0.9.3"
 

@@ -699,8 +699,8 @@ fn marker_colors(
     let mut add = theme.colors.diff.added.foreground;
     let mut rem = theme.colors.diff.removed.foreground;
     let alpha = if theme.is_dark { 0.70 } else { 0.55 };
-    add.a = alpha;
-    rem.a = alpha;
+    add.alpha = alpha;
+    rem.alpha = alpha;
 
     match kind {
         ScrollbarMarkerKind::Add => (Some(add), Some(add)),
@@ -878,7 +878,7 @@ mod tests {
                 theme.colors.scrollbar.thumb_hover,
                 theme.colors.scrollbar.thumb_pressed,
             ] {
-                assert!(c.a >= 0.0 && c.a <= 1.0);
+                assert!(c.alpha >= 0.0 && c.alpha <= 1.0);
             }
         }
     }

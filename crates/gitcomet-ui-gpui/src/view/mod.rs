@@ -361,17 +361,21 @@ pub(in crate::view) fn restrict_scroll_to_vertical_axis<E: Styled>(mut element: 
 
 // Only use these wrappers for views that remain mounted while their parent is mounted.
 // Parent-controlled mount/unmount boundaries, like collapsible panes, must rebuild their child.
-fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> AnyView {
+fn stable_cached_view<V: Render>(view: Entity<V>, style: StyleRefinement) -> AnyElement {
     let view = AnyView::from(view);
     // GPUI's cached mount path skips some test-only debug bounds and paint tracking.
-    if cfg!(test) { view } else { view.cached(style) }
+    if cfg!(test) {
+        view.into_any_element()
+    } else {
+        view.cached(style).into_any_element()
+    }
 }
 
-fn stable_cached_fill_view<V: Render>(view: Entity<V>) -> AnyView {
+fn stable_cached_fill_view<V: Render>(view: Entity<V>) -> AnyElement {
     stable_cached_view(view, StyleRefinement::default().size_full())
 }
 
-fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -> AnyView {
+fn stable_cached_fixed_height_view<V: Render>(view: Entity<V>, height: Pixels) -> AnyElement {
     stable_cached_view(
         view,
         StyleRefinement::default().w_full().h(height).flex_none(),

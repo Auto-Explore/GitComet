@@ -2543,7 +2543,7 @@ impl MainPaneView {
         let right = div()
             .id(("conflict_compare_split_theirs", row_ix))
             .w(right_col_w)
-            .flex_grow()
+            .flex_grow(1.)
             .min_w(px(0.0))
             .h(px(20.0))
             .px_2()

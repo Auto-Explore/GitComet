@@ -474,7 +474,7 @@ fn hash_visible_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) 
     let mut hasher = FxHasher::default();
     for (range, style) in highlights {
         range.hash(&mut hasher);
-        style.hash(&mut hasher);
+        crate::text_runs::hash_highlight_style(style, &mut hasher);
     }
     hasher.finish()
 }
@@ -919,6 +919,7 @@ pub(in crate::view) struct PreparedDiffSyntaxLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use palette::IntoColor;
 
     fn query_overlay_for_test(
         theme: AppTheme,
@@ -1271,11 +1272,11 @@ mod tests {
         );
         assert_eq!(
             highlights[0].1.background_color,
-            Some(theme.colors.diff.removed.word_background.into())
+            Some(theme.colors.diff.removed.word_background.into_color())
         );
         assert_eq!(
             highlights[0].1.color,
-            Some(theme.colors.diff.removed.foreground.into())
+            Some(theme.colors.diff.removed.foreground.into_color())
         );
 
         let query_segments = vec![CachedDiffTextSegment {
@@ -1287,11 +1288,11 @@ mod tests {
         let (_text, query_highlights) = styled_text_for_diff_segments(theme, &query_segments, None);
         assert_eq!(
             query_highlights[0].1.background_color,
-            Some(theme.colors.editor.search_match_background.into())
+            Some(theme.colors.editor.search_match_background.into_color())
         );
         assert_eq!(
             query_highlights[0].1.color,
-            Some(theme.colors.editor.search_match_foreground.into())
+            Some(theme.colors.editor.search_match_foreground.into_color())
         );
     }
 
@@ -1340,7 +1341,7 @@ mod tests {
         assert_eq!(highlights[0].0, 0..2);
         assert_ne!(
             highlights[0].1.color,
-            Some(theme.colors.accent.foreground.into())
+            Some(theme.colors.accent.foreground.into_color())
         );
     }
 
@@ -1596,19 +1597,19 @@ mod tests {
 
         let keyword = syntax_highlight_style(theme, SyntaxTokenKind::Keyword)
             .expect("keyword style should be present");
-        assert_eq!(keyword.color, Some(gpui::rgba(0x112233ff).into()));
+        assert_eq!(keyword.color, Some(gpui::rgba(0x112233ff).into_color()));
 
         let variable = syntax_highlight_style(theme, SyntaxTokenKind::Variable)
             .expect("variable style should be present when overridden");
-        assert_eq!(variable.color, Some(gpui::rgba(0x445566ff).into()));
+        assert_eq!(variable.color, Some(gpui::rgba(0x445566ff).into_color()));
 
         let diff_plus = syntax_highlight_style(theme, SyntaxTokenKind::DiffPlus)
             .expect("diff_plus style should be present");
-        assert_eq!(diff_plus.color, Some(gpui::rgba(0xabcdefff).into()));
+        assert_eq!(diff_plus.color, Some(gpui::rgba(0xabcdefff).into_color()));
 
         let label = syntax_highlight_style(theme, SyntaxTokenKind::Label)
             .expect("label style should be present when overridden");
-        assert_eq!(label.color, Some(gpui::rgba(0xfedcbaff).into()));
+        assert_eq!(label.color, Some(gpui::rgba(0xfedcbaff).into_color()));
     }
     #[test]
     fn syntax_highlight_style_kind_table_covers_new_token_kinds() {
@@ -1684,7 +1685,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("{kind:?} style should be present"));
             assert_eq!(
                 style.color,
-                Some(gpui::rgba(color).into()),
+                Some(gpui::rgba(color).into_color()),
                 "{kind:?} should use its explicit syntax override"
             );
         }
@@ -1975,12 +1976,12 @@ mod tests {
 
         assert_eq!(
             start_style(&multiline),
-            Some(theme.syntax.comment.into()),
+            Some(theme.syntax.comment.into_color()),
             "multiline continuation should keep comment highlighting from document context"
         );
         assert_ne!(
             start_style(&standalone),
-            Some(theme.syntax.comment.into()),
+            Some(theme.syntax.comment.into_color()),
             "standalone line should not reuse cached comment styling from another prepared document"
         );
     }
@@ -2021,8 +2022,8 @@ mod tests {
             .find(|(range, _)| *range == (0..3))
             .and_then(|(_, style)| style.color);
 
-        assert_eq!(dark_keyword, Some(dark_theme.syntax.keyword.into()));
-        assert_eq!(light_keyword, Some(light_theme.syntax.keyword.into()));
+        assert_eq!(dark_keyword, Some(dark_theme.syntax.keyword.into_color()));
+        assert_eq!(light_keyword, Some(light_theme.syntax.keyword.into_color()));
         assert_ne!(
             dark_keyword, light_keyword,
             "theme-specific syntax colors should not bleed across cached entries"
@@ -2056,7 +2057,7 @@ mod tests {
             highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.syntax.comment.into())
+                    && style.color == Some(theme.syntax.comment.into_color())
             }),
             "second line should retain comment highlighting from multiline document context"
         );
@@ -2087,7 +2088,7 @@ mod tests {
             !first.highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.syntax.comment.into())
+                    && style.color == Some(theme.syntax.comment.into_color())
             }),
             "heuristic fallback should not invent multiline comment state before the chunk is ready"
         );
@@ -2113,7 +2114,7 @@ mod tests {
             second.highlights.iter().any(|(range, style)| {
                 range.start <= second_line_start
                     && range.end > second_line_start
-                    && style.color == Some(theme.syntax.comment.into())
+                    && style.color == Some(theme.syntax.comment.into_color())
             }),
             "resolved output should upgrade to full document-aware comment highlighting"
         );
@@ -2562,7 +2563,7 @@ mod tests {
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let style = gpui::HighlightStyle {
-            color: Some(theme.colors.foreground.primary.into()),
+            color: Some(theme.colors.foreground.primary.into_color()),
             ..Default::default()
         };
         let base = CachedDiffStyledText {
@@ -2589,7 +2590,7 @@ mod tests {
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let style = gpui::HighlightStyle {
-            color: Some(theme.colors.status.warning.foreground.into()),
+            color: Some(theme.colors.status.warning.foreground.into_color()),
             ..Default::default()
         };
         let base = CachedDiffStyledText {
@@ -2604,7 +2605,7 @@ mod tests {
         assert_eq!(overlaid.highlights[1].0, 2..4);
         assert_eq!(
             overlaid.highlights[1].1.color,
-            Some(theme.colors.status.warning.foreground.into())
+            Some(theme.colors.status.warning.foreground.into_color())
         );
         assert!(overlaid.highlights[1].1.background_color.is_some());
         assert_ne!(overlaid.highlights_hash, base.highlights_hash);
@@ -2697,11 +2698,11 @@ mod tests {
         text.as_ref().hash(&mut text_hasher);
         let text_hash = text_hasher.finish();
         let left = gpui::HighlightStyle {
-            color: Some(theme.colors.status.warning.foreground.into()),
+            color: Some(theme.colors.status.warning.foreground.into_color()),
             ..Default::default()
         };
         let right = gpui::HighlightStyle {
-            color: Some(theme.colors.status.success.foreground.into()),
+            color: Some(theme.colors.status.success.foreground.into_color()),
             ..Default::default()
         };
         let base = CachedDiffStyledText {
@@ -2718,7 +2719,7 @@ mod tests {
         assert_eq!(overlaid.highlights[1].0, 2..3);
         assert_eq!(
             overlaid.highlights[1].1.color,
-            Some(theme.colors.status.warning.foreground.into())
+            Some(theme.colors.status.warning.foreground.into_color())
         );
         assert!(overlaid.highlights[1].1.background_color.is_some());
         assert_eq!(
@@ -2730,7 +2731,9 @@ mod tests {
                     // non-overlay builder uses. It used to be mixed from the
                     // accent here, which left `editor.search_match_background`
                     // unread on dark themes and painted the two paths differently.
-                    background_color: Some(theme.colors.editor.search_match_background.into()),
+                    background_color: Some(
+                        theme.colors.editor.search_match_background.into_color()
+                    ),
                     ..Default::default()
                 }
             )
@@ -2738,7 +2741,7 @@ mod tests {
         assert_eq!(overlaid.highlights[3].0, 5..7);
         assert_eq!(
             overlaid.highlights[3].1.color,
-            Some(theme.colors.status.success.foreground.into())
+            Some(theme.colors.status.success.foreground.into_color())
         );
         assert!(overlaid.highlights[3].1.background_color.is_some());
         assert_eq!(overlaid.highlights[4], (7..8, right));

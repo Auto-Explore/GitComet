@@ -653,12 +653,12 @@ fn uniform_list_should_stop_scroll_propagation(
 
 fn mix_color(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
     let t = t.clamp(0.0, 1.0);
-    gpui::Rgba {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: a.a + (b.a - a.a) * t,
-    }
+    gpui::Rgba::new(
+        a.red + (b.red - a.red) * t,
+        a.green + (b.green - a.green) * t,
+        a.blue + (b.blue - a.blue) * t,
+        a.alpha + (b.alpha - a.alpha) * t,
+    )
 }
 
 fn settings_row_separator_color(theme: AppTheme) -> gpui::Rgba {
@@ -5864,7 +5864,7 @@ mod tests {
     #[test]
     fn settings_dropdown_background_is_darker_than_card_surface() {
         fn brightness(color: gpui::Rgba) -> f32 {
-            color.r + color.g + color.b
+            color.red + color.green + color.blue
         }
 
         let dark = AppTheme::gitcomet_dark();

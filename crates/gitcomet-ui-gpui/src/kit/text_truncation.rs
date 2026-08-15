@@ -1,3 +1,4 @@
+use crate::text_runs;
 use gpui::{
     App, HighlightStyle, Hsla, Pixels, ShapedLine, SharedString, TextRun, TextStyle, Window,
 };
@@ -195,9 +196,15 @@ pub(crate) fn shape_truncated_line_cached_with_path_anchor(
         font_weight_bits: base_style.font_weight.0.to_bits(),
         font_style_hash: hash_value(&base_style.font_style),
         color_hash: hash_color(base_style.color),
-        background_hash: hash_value(&base_style.background_color),
-        underline_hash: hash_value(&base_style.underline),
-        strikethrough_hash: hash_value(&base_style.strikethrough),
+        background_hash: hash_with(|state| {
+            text_runs::hash_optional_hsla(&base_style.background_color, state)
+        }),
+        underline_hash: hash_with(|state| {
+            text_runs::hash_optional_underline(&base_style.underline, state)
+        }),
+        strikethrough_hash: hash_with(|state| {
+            text_runs::hash_optional_strikethrough(&base_style.strikethrough, state)
+        }),
         profile,
         highlights_hash: hash_highlights(highlights),
         focus_hash: hash_focus_range(normalized_focus_range.as_ref()),
@@ -352,19 +359,31 @@ fn width_cache_key(width: Pixels) -> u32 {
 }
 
 fn hash_value(value: &(impl Hash + ?Sized)) -> u64 {
+    hash_with(|hasher| value.hash(hasher))
+}
+
+/// Run `hash` against a fresh hasher and finish it. The gpui style types have
+/// no `Hash` impl of their own (see [`text_runs::hash_hsla`]), so their hashes
+/// are built by handing the hasher to a writer function instead.
+fn hash_with(hash: impl FnOnce(&mut FxHasher)) -> u64 {
     let mut hasher = FxHasher::default();
-    value.hash(&mut hasher);
+    hash(&mut hasher);
     hasher.finish()
 }
 
 fn hash_color(color: Hsla) -> u64 {
     let mut hasher = DefaultHasher::new();
-    color.hash(&mut hasher);
+    text_runs::hash_hsla(&color, &mut hasher);
     hasher.finish()
 }
 
 fn hash_highlights(highlights: &[(Range<usize>, HighlightStyle)]) -> u64 {
-    hash_value(&highlights)
+    hash_with(|hasher| {
+        for (range, style) in highlights {
+            range.hash(hasher);
+            text_runs::hash_highlight_style(style, hasher);
+        }
+    })
 }
 
 fn hash_focus_range(focus_range: Option<&Range<usize>>) -> u64 {

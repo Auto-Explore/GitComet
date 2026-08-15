@@ -3,6 +3,7 @@ use super::diff_text::*;
 use super::history_canvas;
 use super::*;
 use crate::view::caches::HistoryListRow;
+use palette::IntoColor;
 
 use crate::view::markdown_preview::{
     MarkdownAlertKind, MarkdownChangeHint, MarkdownInlineImage, MarkdownInlineStyle,
@@ -897,7 +898,7 @@ fn markdown_preview_row_element(
             })
             .child(
                 div()
-                    .flex_grow()
+                    .flex_grow(1.)
                     .min_w(px(0.0))
                     .w_full()
                     .h_full()
@@ -971,7 +972,7 @@ fn markdown_preview_row_element(
 
     let build_content_shell = || {
         let mut content_shell = div()
-            .flex_grow()
+            .flex_grow(1.)
             .min_w(px(0.0))
             .w_full()
             .h_full()
@@ -1075,7 +1076,7 @@ fn markdown_preview_row_element(
     } else {
         let mut content = div()
             .relative()
-            .flex_grow()
+            .flex_grow(1.)
             .min_w(px(0.0))
             .w_full()
             .h(px(typography.line_height))
@@ -1127,7 +1128,7 @@ fn markdown_preview_row_element(
 
         let body = match row.kind {
             MarkdownPreviewRowKind::ThematicBreak => div()
-                .flex_grow()
+                .flex_grow(1.)
                 .min_w(px(0.0))
                 .w_full()
                 .h_full()
@@ -1162,7 +1163,7 @@ fn markdown_preview_row_element(
                 };
 
                 let mut line = div()
-                    .flex_grow()
+                    .flex_grow(1.)
                     .min_w(px(0.0))
                     .w_full()
                     .h_full()
@@ -1259,7 +1260,7 @@ fn markdown_preview_row_element(
     // glyphs it is meant to cover and cut it short at the end of the line.
     let build_row_content = move || {
         let mut row_content = div()
-            .flex_grow()
+            .flex_grow(1.)
             .min_w(px(0.0))
             .w_full()
             .h_full()
@@ -2427,23 +2428,23 @@ fn markdown_preview_inline_highlight(
                     theme.colors.interaction.selected_background,
                     if theme.is_dark { 0.75 } else { 0.55 },
                 )
-                .into(),
+                .into_color(),
             ),
             ..gpui::HighlightStyle::default()
         },
         MarkdownInlineStyle::Strikethrough => gpui::HighlightStyle {
-            color: Some(theme.colors.foreground.secondary.into()),
+            color: Some(theme.colors.foreground.secondary.into_color()),
             strikethrough: Some(gpui::StrikethroughStyle {
                 thickness: px(1.0),
-                color: Some(theme.colors.foreground.secondary.into()),
+                color: Some(theme.colors.foreground.secondary.into_color()),
             }),
             ..gpui::HighlightStyle::default()
         },
         MarkdownInlineStyle::Link => gpui::HighlightStyle {
-            color: Some(theme.colors.accent.foreground.into()),
+            color: Some(theme.colors.accent.foreground.into_color()),
             underline: Some(gpui::UnderlineStyle {
                 thickness: px(1.0),
-                color: Some(theme.colors.accent.foreground.into()),
+                color: Some(theme.colors.accent.foreground.into_color()),
                 wavy: false,
             }),
             ..gpui::HighlightStyle::default()
@@ -2451,7 +2452,7 @@ fn markdown_preview_inline_highlight(
         MarkdownInlineStyle::Underline => gpui::HighlightStyle {
             underline: Some(gpui::UnderlineStyle {
                 thickness: px(1.0),
-                color: Some(theme.colors.foreground.primary.into()),
+                color: Some(theme.colors.foreground.primary.into_color()),
                 wavy: false,
             }),
             ..gpui::HighlightStyle::default()

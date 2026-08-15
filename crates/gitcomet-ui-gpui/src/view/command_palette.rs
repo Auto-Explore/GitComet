@@ -7,6 +7,7 @@ use gpui::{
     ScrollStrategy, SharedString, UniformListScrollHandle, WeakEntity, Window, div, px,
     uniform_list,
 };
+use palette::IntoColor;
 
 use super::shortcut_labels::Shortcut;
 use super::{GitCometView, components, restrict_scroll_to_vertical_axis};
@@ -817,7 +818,7 @@ impl CommandPaletteView {
         cx: &gpui::Context<Self>,
     ) -> AnyElement {
         let highlight = gpui::HighlightStyle {
-            color: Some(self.theme.colors.accent.foreground.into()),
+            color: Some(self.theme.colors.accent.foreground.into_color()),
             font_weight: Some(FontWeight::BOLD),
             ..gpui::HighlightStyle::default()
         };

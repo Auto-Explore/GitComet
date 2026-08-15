@@ -337,7 +337,7 @@ pub(super) fn text_run_for_style(
         underline = style.underline;
         strikethrough = style.strikethrough;
         if let Some(fade_out) = style.fade_out {
-            color.a *= (1.0 - fade_out).clamp(0.0, 1.0);
+            color.alpha *= (1.0 - fade_out).clamp(0.0, 1.0);
         }
     }
 
@@ -348,6 +348,7 @@ pub(super) fn text_run_for_style(
         background_color,
         underline,
         strikethrough,
+        letter_spacing: None,
     }
 }
 
@@ -391,7 +392,7 @@ pub(super) fn hash_text_runs_for_benchmark(runs: &[TextRun], hasher: &mut FxHash
     for run in runs {
         total = total.saturating_add(run.len);
         run.len.hash(hasher);
-        run.color.a.to_bits().hash(hasher);
+        run.color.alpha.to_bits().hash(hasher);
     }
     total.hash(hasher);
 }

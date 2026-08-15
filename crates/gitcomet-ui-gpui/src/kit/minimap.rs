@@ -225,7 +225,7 @@ fn band_color(theme: AppTheme, kind: MinimapRowKind) -> Option<gpui::Rgba> {
         MinimapRowKind::ResolvedConflict => (theme.colors.foreground.secondary, resolved_alpha),
         MinimapRowKind::Conflict => (theme.colors.status.danger.foreground, changed_alpha),
     };
-    color.a = alpha;
+    color.alpha = alpha;
     Some(color)
 }
 
@@ -280,13 +280,13 @@ fn paint_viewport_frame(
     let y1 = (y0 + frame_h).min(bounds.bottom());
     let width = bounds.size.width;
     let mut edge = theme.colors.foreground.primary;
-    edge.a = if theme.is_dark { 0.95 } else { 0.70 };
+    edge.alpha = if theme.is_dark { 0.95 } else { 0.70 };
     let thickness = px(1.0);
 
     // A 1px rectangle around the page, as kdiff3's `drawRect` does, plus a
     // faint wash so a page that is only a few pixels tall still reads.
     let mut shade = theme.colors.foreground.primary;
-    shade.a = if theme.is_dark { 0.14 } else { 0.09 };
+    shade.alpha = if theme.is_dark { 0.14 } else { 0.09 };
     window.paint_quad(fill(
         Bounds::new(point(bounds.left(), y0), size(width, y1 - y0)),
         shade,
@@ -386,12 +386,12 @@ mod tests {
             let open =
                 band_color(theme, MinimapRowKind::Conflict).expect("an open conflict paints");
             assert_ne!(
-                (resolved.r, resolved.g, resolved.b),
-                (open.r, open.g, open.b),
+                (resolved.red, resolved.green, resolved.blue),
+                (open.red, open.green, open.blue),
                 "a resolved conflict must not keep the open-conflict hue",
             );
             assert!(
-                resolved.a < open.a,
+                resolved.alpha < open.alpha,
                 "a resolved conflict should recede: {resolved:?} vs {open:?}",
             );
         }

@@ -10,6 +10,7 @@ use gpui::{
     GlobalElementId, HighlightStyle, InspectorElementId, IntoElement, LayoutId, Pixels, Rgba,
     SharedString, TextAlign, WeakEntity, Window, div, point, px, rems, size,
 };
+use palette::IntoColor;
 use std::cell::{Cell, RefCell};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -291,7 +292,7 @@ impl Element for TruncatedTextElement {
                 });
                 let mut base_style = window.text_style();
                 if let Some(text_color) = text_color {
-                    base_style.color = text_color.into();
+                    base_style.color = text_color.into_color();
                 }
                 if let Some(text_size) = text_size {
                     base_style.font_size = text_size;

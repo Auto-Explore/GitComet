@@ -1,4 +1,5 @@
 use super::*;
+use palette::IntoColor;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::OnceLock;
@@ -366,7 +367,7 @@ impl GitCometView {
                     .border_color(border_glow)
                     .rounded(px(theme.radii.panel))
                     .shadow(vec![gpui::BoxShadow {
-                        color: gpui::rgba(0x00000052).into(),
+                        color: gpui::rgba(0x00000052).into_color(),
                         offset: point(px(0.0), px(22.0)),
                         blur_radius: px(52.0),
                         spread_radius: px(0.0),
@@ -532,7 +533,7 @@ impl GitCometView {
                             .border_color(border_glow)
                             .rounded(px(theme.radii.panel))
                             .shadow(vec![gpui::BoxShadow {
-                                color: gpui::rgba(0x00000052).into(),
+                                color: gpui::rgba(0x00000052).into_color(),
                                 offset: point(px(0.0), px(22.0)),
                                 blur_radius: px(52.0),
                                 spread_radius: px(0.0),
@@ -747,7 +748,7 @@ impl GitCometView {
                             gpui::linear_color_stop(gpui::rgba(0x03081352), 1.0),
                         ))
                         .shadow(vec![gpui::BoxShadow {
-                            color: panel_shadow.into(),
+                            color: panel_shadow.into_color(),
                             offset: point(px(0.0), px(40.0)),
                             blur_radius: px(80.0),
                             spread_radius: px(0.0),

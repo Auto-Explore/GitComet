@@ -58,6 +58,6 @@ pub fn toast(theme: AppTheme, kind: ToastKind, message: impl IntoElement) -> Div
 }
 
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.a = alpha;
+    color.alpha = alpha;
     color
 }

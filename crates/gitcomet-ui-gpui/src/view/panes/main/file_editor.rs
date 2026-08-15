@@ -17,6 +17,7 @@ use super::*;
 use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
+use palette::IntoColor;
 use std::path::{Path, PathBuf};
 
 /// How long the buffer has to sit still before auto-save writes it.
@@ -1238,7 +1239,13 @@ impl MainPaneView {
             bracket_match.as_ref(),
         );
         let bracket_style = gpui::HighlightStyle {
-            background_color: Some(self.theme.colors.editor.bracket_match_background.into()),
+            background_color: Some(
+                self.theme
+                    .colors
+                    .editor
+                    .bracket_match_background
+                    .into_color(),
+            ),
             ..Default::default()
         };
         let provider = HighlightProvider::with_pending(

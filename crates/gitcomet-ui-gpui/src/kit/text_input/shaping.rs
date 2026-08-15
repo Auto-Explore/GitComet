@@ -188,7 +188,7 @@ pub(super) fn shape_wrapped_line(
 }
 
 pub(super) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
-    color.a = alpha;
+    color.alpha = alpha;
     color
 }
 

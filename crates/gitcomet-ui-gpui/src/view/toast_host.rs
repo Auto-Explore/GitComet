@@ -895,6 +895,7 @@ mod tests {
     use super::*;
     use crate::theme::with_alpha;
     use gitcomet_state::model::{CloneProgressMeter, CloneProgressStage};
+    use palette::IntoColor;
     use std::collections::VecDeque;
     use std::path::PathBuf;
     use std::sync::Arc;
@@ -1248,7 +1249,7 @@ mod tests {
             let input = host.toasts[0].input.clone();
             assert_eq!(
                 input.read(app).debug_text_color(),
-                light.colors.foreground.primary.into()
+                light.colors.foreground.primary.into_color()
             );
             input
         });
@@ -1260,7 +1261,7 @@ mod tests {
         cx.update(|app| {
             assert_eq!(
                 toast_input.read(app).debug_text_color(),
-                dark.colors.foreground.primary.into()
+                dark.colors.foreground.primary.into_color()
             );
         });
     }

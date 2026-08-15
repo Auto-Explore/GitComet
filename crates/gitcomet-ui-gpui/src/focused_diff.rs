@@ -373,7 +373,7 @@ impl Render for FocusedDiffView {
                             .text_size(scaled_px(14.0))
                             .child(SharedString::from(self.title.clone())),
                     )
-                    .child(div().flex_grow())
+                    .child(div().flex_grow(1.))
                     .child(
                         div()
                             .text_color(theme.colors.foreground.secondary)
@@ -404,7 +404,7 @@ impl Render for FocusedDiffView {
             .child(
                 div()
                     .id("diff-scroll")
-                    .flex_grow()
+                    .flex_grow(1.)
                     .overflow_y_scroll()
                     .track_scroll(&self.scroll_handle)
                     .font_family(self.editor_font_family.clone())
@@ -456,7 +456,7 @@ fn render_diff_line(
         )
         .child(
             div()
-                .flex_grow()
+                .flex_grow(1.)
                 .text_color(text_color)
                 .whitespace_nowrap()
                 .child(SharedString::from(line.content.clone())),

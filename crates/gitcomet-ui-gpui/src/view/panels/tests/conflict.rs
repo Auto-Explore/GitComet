@@ -1,4 +1,5 @@
 use super::*;
+use palette::IntoColor;
 
 #[gpui::test]
 fn large_conflict_bootstrap_trace_records_stage_counts(cx: &mut gpui::TestAppContext) {
@@ -3312,7 +3313,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
         let has_comment_highlight = styled_has_leading_color_highlight(
             styled,
             comment_prefix_end,
-            pane.theme.syntax.comment.into(),
+            pane.theme.syntax.comment.into_color(),
         );
         if has_comment_highlight {
             None
@@ -3358,7 +3359,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
                         && styled_has_leading_color_highlight(
                             styled,
                             comment_prefix_end,
-                            pane.theme.syntax.comment.into(),
+                            pane.theme.syntax.comment.into_color(),
                         )
                 })
         },
@@ -3389,7 +3390,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
             styled_has_leading_color_highlight(
                 styled,
                 comment_prefix_end,
-                pane.theme.syntax.comment.into(),
+                pane.theme.syntax.comment.into_color(),
             ),
             "prepared syntax should continue to drive split-row styling after background preparation",
         );
@@ -3430,7 +3431,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
             styled_has_leading_color_highlight(
                 styled,
                 comment_prefix_end,
-                pane.theme.syntax.comment.into(),
+                pane.theme.syntax.comment.into_color(),
             ),
             "prepared syntax should continue to drive three-way row styling after toggling from two-way",
         );
@@ -3468,7 +3469,7 @@ fn large_conflict_two_way_views_upgrade_to_prepared_document_syntax(cx: &mut gpu
             styled_has_leading_color_highlight(
                 styled,
                 comment_prefix_end,
-                pane.theme.syntax.comment.into(),
+                pane.theme.syntax.comment.into_color(),
             ),
             "prepared syntax should continue to drive split-row styling after toggling back from three-way",
         );
@@ -4990,7 +4991,7 @@ fn large_conflict_resolved_output_above_the_old_line_gate_is_highlighted(
                     highlights.iter().any(|(range, style)| {
                         range.start <= line_start
                             && range.end >= line_end
-                            && style.color == Some(comment_color.into())
+                            && style.color == Some(comment_color.into_color())
                     }),
                     "row {target_ix} continues a block comment and should be comment-coloured \
                      straight away: {highlights:?}"
@@ -5348,7 +5349,7 @@ fn edited_conflict_resolved_output_highlights_multiline_comment_on_the_keystroke
                     highlights.iter().any(|(range, style)| {
                         range.start <= line_start
                             && range.end >= line_end
-                            && style.color == Some(comment_color.into())
+                            && style.color == Some(comment_color.into_color())
                     }),
                     "the row inside the inserted block comment should be comment-coloured \
                      on the keystroke, not after a background upgrade: {highlights:?}"
@@ -7007,7 +7008,7 @@ fn the_resolved_output_wash_follows_conflict_navigation(cx: &mut gpui::TestAppCo
                             input.debug_effective_highlights_for_range(0..len)
                         })
                         .into_iter()
-                        .filter(|(_, style)| style.background_color == Some(wash.into()))
+                        .filter(|(_, style)| style.background_color == Some(wash.into_color()))
                         .map(|(range, _)| range)
                         .collect()
                 })
@@ -7551,7 +7552,7 @@ fn assert_resolved_output_carries_treesitter_classes(
             .and_then(|(_, style)| style.color);
         assert_eq!(
             found,
-            Some(expected.into()),
+            Some(expected.into_color()),
             "{needle:?} at {at} is a {class} and must carry its tree-sitter colour; \
              the heuristic tokenizer leaves it plain, so a mismatch here means the \
              resolved output never got a live document"

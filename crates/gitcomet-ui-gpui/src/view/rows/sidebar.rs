@@ -3,6 +3,7 @@ use crate::ui_scale;
 use crate::view::components::InteractiveRowExt as _;
 use gitcomet_core::domain::LogScope;
 use gitcomet_core::domain::SubmoduleStatus;
+use palette::IntoColor;
 use std::num::NonZeroU32;
 
 pub(in crate::view) const WORKTREE_ICON_PATH: &str = "icons/git_worktree.svg";
@@ -243,7 +244,7 @@ fn filtered_label_element<V: 'static>(
     {
         let range = start..start + query.len();
         let highlight = gpui::HighlightStyle {
-            color: Some(highlight_color.into()),
+            color: Some(highlight_color.into_color()),
             font_weight: Some(FontWeight::BOLD),
             ..Default::default()
         };

@@ -1201,7 +1201,7 @@ mod band_tests {
             "reusing the row dimming's mix keeps the two reading alike"
         );
         assert_eq!(
-            washed.a, 1.0,
+            washed.alpha, 1.0,
             "opaque on purpose: lanes are stroked over the graph fade wash"
         );
     }

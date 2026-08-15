@@ -158,7 +158,7 @@ fn repo_tab_close_button_fill(
         background,
         with_alpha(theme.colors.status.danger.foreground, amount),
     );
-    fill.a = 1.0;
+    fill.alpha = 1.0;
     fill
 }
 
@@ -1277,12 +1277,14 @@ mod tests {
             let pressed = repo_tab_close_button_fill(theme, background, true);
             let danger = theme.colors.status.danger.foreground;
             let distance_to_danger = |color: gpui::Rgba| {
-                (color.r - danger.r).abs() + (color.g - danger.g).abs() + (color.b - danger.b).abs()
+                (color.red - danger.red).abs()
+                    + (color.green - danger.green).abs()
+                    + (color.blue - danger.blue).abs()
             };
 
             // Opaque, because the button overlays repository label text.
-            assert_eq!(hover.a, 1.0, "hover background must be solid");
-            assert_eq!(pressed.a, 1.0, "pressed background must be solid");
+            assert_eq!(hover.alpha, 1.0, "hover background must be solid");
+            assert_eq!(pressed.alpha, 1.0, "pressed background must be solid");
             assert!(
                 distance_to_danger(hover) < distance_to_danger(background),
                 "hover plate must lean toward the danger colour, like the picker rows' remove button"

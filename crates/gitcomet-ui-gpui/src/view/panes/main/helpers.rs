@@ -3,6 +3,7 @@ use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
+use palette::IntoColor;
 
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
@@ -173,7 +174,7 @@ pub(super) fn resolved_output_heuristic_provider_binding_key(
 
 pub(super) fn resolved_output_unresolved_highlight_style(theme: AppTheme) -> gpui::HighlightStyle {
     gpui::HighlightStyle {
-        color: Some(theme.colors.status.danger.foreground.into()),
+        color: Some(theme.colors.status.danger.foreground.into_color()),
         ..gpui::HighlightStyle::default()
     }
 }
@@ -185,7 +186,7 @@ pub(super) fn resolved_output_active_unresolved_highlight_style(
     theme: AppTheme,
 ) -> gpui::HighlightStyle {
     gpui::HighlightStyle {
-        background_color: Some(resolved_output_active_conflict_background(theme).into()),
+        background_color: Some(resolved_output_active_conflict_background(theme).into_color()),
         ..resolved_output_unresolved_highlight_style(theme)
     }
 }

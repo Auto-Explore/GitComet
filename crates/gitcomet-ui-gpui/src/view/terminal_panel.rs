@@ -5,6 +5,7 @@ use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::grid::Scroll;
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags;
+use palette::IntoColor;
 use rustc_hash::FxHasher;
 #[cfg(unix)]
 use rustix::process::{Pid, Signal, kill_process_group};
@@ -3201,7 +3202,7 @@ where
     style.font_features = gpui::FontFeatures::disable_ligatures();
     style.font_weight = FontWeight::NORMAL;
     style.font_style = gpui::FontStyle::Normal;
-    style.color = terminal_default_foreground(theme).into();
+    style.color = terminal_default_foreground(theme).into_color();
     style.white_space = gpui::WhiteSpace::Nowrap;
     style.text_overflow = None;
     style

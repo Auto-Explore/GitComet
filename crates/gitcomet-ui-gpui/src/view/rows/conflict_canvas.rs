@@ -6,6 +6,7 @@ use gpui::{
     App, Bounds, ContentMask, DispatchPhase, HighlightStyle, Pixels, Styled, TextRun, TextStyle,
     Window, fill, point, px, size,
 };
+use palette::IntoColor;
 use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{Hash, Hasher};
@@ -881,17 +882,17 @@ fn paint_gutter_text(
         return;
     }
     let mut style = diff_text_style(window);
-    style.color = color.into();
+    style.color = color.into_color();
     let key = {
         let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
         metrics.font_size.hash(&mut hasher);
         style.font_family.hash(&mut hasher);
         style.font_weight.hash(&mut hasher);
-        color.r.to_bits().hash(&mut hasher);
-        color.g.to_bits().hash(&mut hasher);
-        color.b.to_bits().hash(&mut hasher);
-        color.a.to_bits().hash(&mut hasher);
+        color.red.to_bits().hash(&mut hasher);
+        color.green.to_bits().hash(&mut hasher);
+        color.blue.to_bits().hash(&mut hasher);
+        color.alpha.to_bits().hash(&mut hasher);
         hasher.finish()
     };
 
@@ -932,7 +933,7 @@ fn paint_conflict_text(
     }
 
     let mut base_style = diff_text_style(window);
-    base_style.color = fg.into();
+    base_style.color = fg.into_color();
     base_style.white_space = gpui::WhiteSpace::Nowrap;
     base_style.text_overflow = None;
 
@@ -1017,10 +1018,10 @@ fn conflict_layout_key(
     metrics.font_size.hash(&mut hasher);
     base_style.font_family.hash(&mut hasher);
     base_style.font_weight.hash(&mut hasher);
-    fg.r.to_bits().hash(&mut hasher);
-    fg.g.to_bits().hash(&mut hasher);
-    fg.b.to_bits().hash(&mut hasher);
-    fg.a.to_bits().hash(&mut hasher);
+    fg.red.to_bits().hash(&mut hasher);
+    fg.green.to_bits().hash(&mut hasher);
+    fg.blue.to_bits().hash(&mut hasher);
+    fg.alpha.to_bits().hash(&mut hasher);
     hasher.finish()
 }
 

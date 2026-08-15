@@ -8,6 +8,7 @@ use super::super::*;
 use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
 use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
+use palette::IntoColor;
 use rustc_hash::FxHasher;
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
@@ -2555,7 +2556,7 @@ impl SidebarPaneView {
                                 .text_sm();
                             if !highlight_ranges.is_empty() {
                                 let style = gpui::HighlightStyle {
-                                    color: Some(theme.colors.accent.foreground.into()),
+                                    color: Some(theme.colors.accent.foreground.into_color()),
                                     font_weight: Some(FontWeight::BOLD),
                                     ..gpui::HighlightStyle::default()
                                 };
