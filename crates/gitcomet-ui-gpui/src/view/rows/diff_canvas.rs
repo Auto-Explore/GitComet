@@ -1538,10 +1538,14 @@ fn hash_overlay_ranges(
     base_highlights_hash: u64,
     ranges: &[Range<usize>],
     background_color: gpui::Hsla,
+    foreground_color: Option<gpui::Hsla>,
 ) -> u64 {
     let mut hasher = FxHasher::default();
     base_highlights_hash.hash(&mut hasher);
     hash_rgba(&mut hasher, background_color.into());
+    if let Some(foreground_color) = foreground_color {
+        hash_rgba(&mut hasher, foreground_color.into());
+    }
     for range in ranges {
         range.start.hash(&mut hasher);
         range.end.hash(&mut hasher);
@@ -1549,10 +1553,18 @@ fn hash_overlay_ranges(
     hasher.finish()
 }
 
+/// Lays a semantic overlay -- the word-diff wash -- over already-styled text.
+///
+/// `foreground_color` is the text colour the wash pins under itself, and it is
+/// applied only where nothing has coloured the run already: light themes carry
+/// the wash opaque, which would drown a syntax colour, so the diff foreground
+/// takes over there and syntax keeps its own everywhere else. That is the rule
+/// the non-streamed builder follows, and both paths render the same hunk.
 fn overlay_background_ranges_on_styled_text(
     base: &CachedDiffStyledText,
     ranges: &[Range<usize>],
     background_color: gpui::Hsla,
+    foreground_color: Option<gpui::Hsla>,
 ) -> CachedDiffStyledText {
     if ranges.is_empty() || base.text.is_empty() {
         return base.clone();
@@ -1566,6 +1578,7 @@ fn overlay_background_ranges_on_styled_text(
                 &mut merged,
                 range,
                 HighlightStyle {
+                    color: foreground_color,
                     background_color: Some(background_color),
                     ..HighlightStyle::default()
                 },
@@ -1574,7 +1587,12 @@ fn overlay_background_ranges_on_styled_text(
         return CachedDiffStyledText {
             text: base.text.clone(),
             highlights: Arc::from(merged),
-            highlights_hash: hash_overlay_ranges(base.highlights_hash, ranges, background_color),
+            highlights_hash: hash_overlay_ranges(
+                base.highlights_hash,
+                ranges,
+                background_color,
+                foreground_color,
+            ),
             text_hash: base.text_hash,
         };
     }
@@ -1620,6 +1638,9 @@ fn overlay_background_ranges_on_styled_text(
         let mut style = active_base.map(|(_, style)| *style).unwrap_or_default();
         if active_range.is_some() {
             style.background_color = Some(background_color);
+            if style.color.is_none() {
+                style.color = foreground_color;
+            }
         }
 
         if style != default_style {
@@ -1632,7 +1653,12 @@ fn overlay_background_ranges_on_styled_text(
     CachedDiffStyledText {
         text: base.text.clone(),
         highlights: Arc::from(merged),
-        highlights_hash: hash_overlay_ranges(base.highlights_hash, ranges, background_color),
+        highlights_hash: hash_overlay_ranges(
+            base.highlights_hash,
+            ranges,
+            background_color,
+            foreground_color,
+        ),
         text_hash: base.text_hash,
     }
 }
@@ -1815,14 +1841,17 @@ fn build_streamed_diff_slice_styled_text(
     {
         let clipped = clip_ranges_to_slice(spec.word_ranges.as_ref(), &resolved_slice_range);
         if !clipped.is_empty() {
-            // The same resolver the non-streamed builder uses. Deriving the wash
-            // here instead gave a line past `STREAMED_DIFF_TEXT_MIN_BYTES` a
-            // different word-diff colour from its neighbours in the same diff.
-            let (background, _) = diff_text::word_highlight_colors(theme, word_kind);
+            // The same resolver the non-streamed builder uses, and both halves of
+            // what it returns. Deriving the wash here instead gave a line past
+            // `STREAMED_DIFF_TEXT_MIN_BYTES` a different word-diff colour from
+            // its neighbours in the same diff; dropping the foreground did the
+            // same to the text on light themes, which pin it under the wash.
+            let (background, foreground) = diff_text::word_highlight_colors(theme, word_kind);
             base = overlay_background_ranges_on_styled_text(
                 &base,
                 clipped.as_slice(),
                 background.into(),
+                foreground.map(Into::into),
             );
         }
     }

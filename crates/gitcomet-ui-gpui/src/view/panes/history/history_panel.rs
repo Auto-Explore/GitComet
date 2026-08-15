@@ -291,6 +291,15 @@ impl HistoryView {
             .and_then(|path| super::worktree_row_list_ix(&plan, self.active_repo(), path))
             .or(current_list_ix);
 
+        // A selected worktree with nothing to anchor to -- it went clean, its
+        // HEAD left the loaded page, or the scan has not answered yet -- leaves
+        // no row to step from. The `None` arms below mean "nothing is selected"
+        // and wrap to the far end of the list, which from a live selection reads
+        // as the log teleporting rather than moving by one.
+        if current_list_ix.is_none() && selected_worktree.is_some() {
+            return false;
+        }
+
         let next_list_ix = match (current_list_ix, direction.is_negative()) {
             (Some(current_list_ix), true) => current_list_ix.saturating_sub(1),
             (Some(current_list_ix), false) => {

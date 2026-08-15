@@ -206,10 +206,13 @@ const UNRELATED_LANE_COLOR_MIX: f32 = 0.75;
 ///
 /// `related_to_selection` is `None` when no single commit is selected, and only
 /// then does the row render as ordinary body text. While a commit *is* selected
-/// the column splits in two: the commit, everything it descends from and its
-/// direct children go to the theme's emphasis foreground, and everything else
-/// drops to muted -- so the selected commit's line of history reads as a
-/// continuous run.
+/// the column splits in two: every row the selected commit's own graph lane runs
+/// through goes to the theme's emphasis foreground, and everything else drops to
+/// muted -- so that lane reads as a continuous run down the list.
+///
+/// A lane, not an ancestry walk: a merge's second parent lives on a lane of its
+/// own and washes out with the rest, even though the commit is genuinely an
+/// ancestor. That is what the graph draws, so it is what the highlight follows.
 ///
 /// A row background tint was tried first and was far too intrusive: it washed
 /// most of the list and fought with the table's own shading for selection, HEAD

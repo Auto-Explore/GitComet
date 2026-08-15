@@ -3443,9 +3443,18 @@ fn working_tree_summary_history_row(
         ));
     }
 
-    // The history list's own surface, so the node's middle hides the lane
-    // running through its column.
-    let node_background = theme.colors.surface.canvas;
+    // What the row is *actually* painted over, so the node's opaque middle hides
+    // the lane running through its column without leaving an untinted disc
+    // punched into a selected row. Same compositing the linked-worktree band row
+    // does; the hover tint stays out of it, being the div's business here.
+    let node_background = if selected {
+        crate::theme::composite_over(
+            theme.colors.surface.canvas,
+            theme.colors.accent.subtle_background,
+        )
+    } else {
+        theme.colors.surface.canvas
+    };
     let circle = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, cx| {

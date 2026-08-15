@@ -742,6 +742,40 @@ pub(super) fn select_inline_submodule_diff(
     effects.into_vec()
 }
 
+/// Re-issues the loads for the inline diff already on screen, without moving the
+/// selection.
+///
+/// `select_inline_submodule_diff` is a no-op once its target is selected, which
+/// is right for a click and wrong for a rescan: a linked worktree's file can
+/// change contents without changing which entry it is, and no other trigger
+/// invalidates that patch -- the filesystem watcher covers the repo the user has
+/// open, not the other worktrees.
+///
+/// The load-plan state is deliberately left alone. Resetting `diff` to `Loading`
+/// would flash the pane empty on every scan; the reply is gated on `inline.rev`,
+/// so bumping it is enough to make the in-flight load stale and let the new one
+/// replace the contents when it lands.
+pub(super) fn refresh_inline_submodule_selected_diff(
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    let inline_rev = next_inline_submodule_diff_rev(repo_state);
+    let load_plan = {
+        let Some(inline) = repo_state.diff_state.inline_submodule_diff.as_mut() else {
+            return Vec::new();
+        };
+        inline.rev = inline_rev;
+        inline_submodule_selected_diff_load_plan(&inline.target)
+    };
+
+    let mut effects = SelectDiffEffects::new();
+    push_inline_submodule_diff_load_effects(repo_id, inline_rev, load_plan, &mut effects);
+    effects.into_vec()
+}
+
 pub(super) fn close_inline_submodule_diff(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();

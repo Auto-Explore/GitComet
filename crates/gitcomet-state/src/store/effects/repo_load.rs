@@ -972,12 +972,19 @@ pub(super) fn schedule_load_worktree_dirty(
                         retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &[]);
                     }
                 })
-                .map(|worktrees| {
+                .and_then(|worktrees| {
                     let mut summaries = Vec::new();
                     let mut scanned = Vec::with_capacity(worktrees.len());
                     for worktree in worktrees {
+                        // A scan that stops here has seen only a prefix of the
+                        // list, and the reducer commits an `Ok` as the complete
+                        // set of dirty worktrees: it would blank the rows for
+                        // everything unscanned and -- through
+                        // `selected_worktree_is_gone` -- drop the selection and
+                        // close the diff the user is reading. Cancellation is
+                        // the absence of an answer, so it surfaces as one.
                         if cancellation.is_cancelled() {
-                            break;
+                            return Err(Error::new(ErrorKind::Cancelled));
                         }
                         if is_own_worktree(&worktree.path, &own_workdir) {
                             continue;
@@ -999,7 +1006,9 @@ pub(super) fn schedule_load_worktree_dirty(
                             // switch, reload and completed action, so treating
                             // it as a broken handle would discard healthy ones
                             // routinely and pay full discovery to reopen them.
-                            Err(_) if cancellation.is_cancelled() => break,
+                            Err(_) if cancellation.is_cancelled() => {
+                                return Err(Error::new(ErrorKind::Cancelled));
+                            }
                             Err(_) => {
                                 // A handle that cannot report status is not
                                 // worth keeping: the worktree may have been
@@ -1020,12 +1029,12 @@ pub(super) fn schedule_load_worktree_dirty(
                             summaries.push(summary);
                         }
                     }
-                    // A cancelled scan saw only part of the list, so its `scanned`
-                    // set would prune handles that are still live.
-                    if !cancellation.is_cancelled() {
-                        retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &scanned);
-                    }
-                    summaries
+                    // Reaching here means the whole list was walked, so `scanned`
+                    // is complete and safe to prune against -- a cancellation
+                    // part-way returned above rather than falling through with a
+                    // partial set.
+                    retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &scanned);
+                    Ok(summaries)
                 });
             send_or_log(
                 &msg_tx,
@@ -1083,32 +1092,57 @@ impl WorktreeScanHandles {
 
     /// Frees a slot for a new entry belonging to `repo_id`.
     ///
-    /// The *most* recently used of that repo's own entries goes, not the coldest.
-    /// A scan walks `list_worktrees` in order and every scan walks the same list,
-    /// so the access pattern is a cycle -- LRU's textbook worst case. Under LRU a
-    /// repo with more worktrees than the limit evicts precisely the entry its next
-    /// scan reaches first, every time, and reopens all of them on every pass: the
-    /// same behaviour clearing the map wholesale had, which is the case this cache
-    /// exists for. Giving up the entry the scan has just finished with instead
-    /// leaves a stable prefix of the repo's worktrees cached and confines the
-    /// reopens to the tail.
+    /// The slot comes out of whichever repo holds the most, with the requester
+    /// winning ties. That first step is what keeps repos from starving each
+    /// other: the map is process-wide, and a rule that always spent the
+    /// requester's own budget froze whatever split the tabs happened to open in.
+    /// Two repos of ten worktrees each, the first to scan taking ten slots and
+    /// the second the remaining six, left the second pinned at six forever --
+    /// every scan re-paying discovery and config parsing for the tail of its
+    /// list, which is the cost this cache exists to avoid. Taking from the
+    /// largest holder walks that split down to an even one and then holds there.
     ///
-    /// A repo with nothing cached yet has nothing of its own to give up, so it
-    /// takes the globally coldest entry -- there LRU is right, because another
-    /// repo's oldest handle really is the least likely to be wanted next.
+    /// Within the requester's own entries the *most* recently used goes, not the
+    /// coldest. A scan walks `list_worktrees` in order and every scan walks the
+    /// same list, so the access pattern is a cycle -- LRU's textbook worst case.
+    /// Under LRU a repo with more worktrees than the limit evicts precisely the
+    /// entry its next scan reaches first, every time, and reopens all of them on
+    /// every pass: the same behaviour clearing the map wholesale had. Giving up
+    /// the entry the scan has just finished with instead leaves a stable prefix
+    /// cached and confines the reopens to the tail.
+    ///
+    /// Within *another* repo's entries the coldest goes: there LRU is right,
+    /// because another repo's oldest handle really is the least likely to be
+    /// wanted next, and nothing about this repo's cycle says which of theirs to
+    /// keep.
     fn evict_one_for(&mut self, repo_id: RepoId) -> bool {
-        let victim = self
+        let mut held: HashMap<RepoId, usize> = HashMap::new();
+        for (entry_repo, _) in self.entries.keys() {
+            *held.entry(*entry_repo).or_default() += 1;
+        }
+        let Some(largest) = held
+            .into_iter()
+            // The requester wins ties, so a single repo over the limit keeps the
+            // cyclic behaviour below and an even split stays put. `entry_repo`
+            // breaks the rest, only so the map's iteration order cannot make this
+            // vary between runs.
+            .max_by_key(|&(entry_repo, count)| (count, entry_repo == repo_id, entry_repo.0))
+            .map(|(entry_repo, _)| entry_repo)
+        else {
+            return false;
+        };
+
+        let of_largest = self
             .entries
             .iter()
-            .filter(|((entry_repo, _), _)| *entry_repo == repo_id)
-            .max_by_key(|(_, entry)| entry.last_used)
-            .map(|(key, _)| key.clone())
-            .or_else(|| {
-                self.entries
-                    .iter()
-                    .min_by_key(|(_, entry)| entry.last_used)
-                    .map(|(key, _)| key.clone())
-            });
+            .filter(|((entry_repo, _), _)| *entry_repo == largest);
+        let victim = if largest == repo_id {
+            of_largest.max_by_key(|(_, entry)| entry.last_used)
+        } else {
+            of_largest.min_by_key(|(_, entry)| entry.last_used)
+        }
+        .map(|(key, _)| key.clone());
+
         match victim {
             Some(victim) => {
                 self.entries.remove(&victim);
@@ -2452,6 +2486,58 @@ mod worktree_scan_handle_tests {
             backend.opens(),
             2,
             "the other repo's handle must survive this repo's prune"
+        );
+    }
+
+    /// The map is process-wide, and a rule that always spends the requester's own
+    /// budget freezes whatever split the tabs happened to open in: the repo that
+    /// scanned second is pinned to the leftovers forever and re-pays discovery
+    /// for the tail of its list on every flush.
+    #[test]
+    fn a_second_repo_takes_slots_from_the_larger_holder_rather_than_starving() {
+        let handles = handles();
+        let backend = CountingBackend::new();
+        let first = RepoId(4_008);
+        let second = RepoId(4_009);
+        let paths = |repo: RepoId| -> Vec<PathBuf> {
+            (0..WORKTREE_SCAN_HANDLE_LIMIT)
+                .map(|ix| PathBuf::from(format!("/wt/share-{}-{ix}", repo.0)))
+                .collect()
+        };
+        let first_paths = paths(first);
+        let second_paths = paths(second);
+
+        // The first repo fills two thirds of the map, then the second arrives.
+        let first_share = WORKTREE_SCAN_HANDLE_LIMIT * 2 / 3;
+        for path in &first_paths[..first_share] {
+            worktree_scan_handle(&handles, &backend, first, path).expect("stub backend opens");
+        }
+
+        let held = |repo_id: RepoId| {
+            lock_worktree_scan_handles(&handles)
+                .entries
+                .keys()
+                .filter(|(entry_repo, _)| *entry_repo == repo_id)
+                .count()
+        };
+
+        // Several full scans by the second repo: under the old rule it evicted
+        // the entry it had just used and never grew past the leftovers.
+        for _ in 0..3 {
+            for path in &second_paths {
+                worktree_scan_handle(&handles, &backend, second, path).expect("stub backend opens");
+            }
+        }
+
+        let second_held = held(second);
+        assert!(
+            second_held > WORKTREE_SCAN_HANDLE_LIMIT - first_share,
+            "the second repo must grow past the leftovers, got {second_held} of \
+             {WORKTREE_SCAN_HANDLE_LIMIT}"
+        );
+        assert!(
+            held(first) > 0,
+            "and must not have cleared the first repo out either"
         );
     }
 

@@ -539,7 +539,7 @@ pub(super) fn worktree_dirty_loaded(
     result: std::result::Result<Vec<WorktreeDirtySummary>, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
-    let mut reselect_inline_ix = None;
+    let mut inline_refresh = None;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         match result {
             Ok(v) => repo_state.set_worktree_dirty(Loadable::Ready(v)),
@@ -557,7 +557,17 @@ pub(super) fn worktree_dirty_loaded(
             // screen, and record the error only when there is nothing to keep.
             Err(e) => {
                 if !matches!(repo_state.worktree_dirty, Loadable::Ready(_)) {
-                    repo_state.set_worktree_dirty(Loadable::Error(e.to_string()));
+                    // A cancelled scan is not a failure worth showing: the load
+                    // it belonged to was abandoned deliberately, and the trigger
+                    // that abandoned it queues another. Anything else is a real
+                    // failure and the pane should say so rather than sit on
+                    // `Loading` forever.
+                    let next = if matches!(e.kind(), gitcomet_core::error::ErrorKind::Cancelled) {
+                        Loadable::NotLoaded
+                    } else {
+                        Loadable::Error(e.to_string())
+                    };
+                    repo_state.set_worktree_dirty(next);
                 }
             }
         }
@@ -579,7 +589,7 @@ pub(super) fn worktree_dirty_loaded(
         if selected_worktree_is_gone {
             repo_state.set_worktree_selection(None);
         }
-        reselect_inline_ix = refresh_worktree_inline_diff_entries(repo_state);
+        inline_refresh = refresh_worktree_inline_diff_entries(repo_state);
         if repo_state
             .loads_in_flight
             .finish(RepoLoadsInFlight::WORKTREE_DIRTY)
@@ -590,15 +600,35 @@ pub(super) fn worktree_dirty_loaded(
             effects.push(worktree_dirty_effect(repo_state));
         }
     }
-    // Outside the borrow above. A no-op when the file kept its place; when it
-    // changed sides (staged <-> unstaged) this reloads the diff for the target
-    // that now belongs to it.
-    if let Some(ix) = reselect_inline_ix {
-        effects.extend(super::diff_selection::select_inline_submodule_diff(
-            state, repo_id, ix,
-        ));
+    // Outside the borrow above.
+    match inline_refresh {
+        // The file changed sides (staged <-> unstaged): a different target, so
+        // the pane must drop what it is showing and load the new one.
+        Some(WorktreeInlineRefresh::Reselect(ix)) => {
+            effects.extend(super::diff_selection::select_inline_submodule_diff(
+                state, repo_id, ix,
+            ));
+        }
+        // The target did not move, but this scan is the only notice we get that
+        // the file behind it may have been edited -- nothing else invalidates a
+        // linked worktree's patch.
+        Some(WorktreeInlineRefresh::Reload) => {
+            effects.extend(
+                super::diff_selection::refresh_inline_submodule_selected_diff(state, repo_id),
+            );
+        }
+        None => {}
     }
     effects
+}
+
+/// What a landed scan asks of the linked-worktree diff that is open over it.
+enum WorktreeInlineRefresh {
+    /// The selected file now sits at another index, under another target.
+    Reselect(usize),
+    /// The selected row still points at the same target; only its contents can
+    /// have moved.
+    Reload,
 }
 
 /// Re-resolves an open linked-worktree inline diff against a scan that has just
@@ -611,12 +641,14 @@ pub(super) fn worktree_dirty_loaded(
 /// index, and steps to neighbours that may no longer be changed at all. Submodule
 /// inline diffs need none of this -- their entries come from a fixed commit.
 ///
-/// Returns the index the selection moved to, for the caller to re-select once the
-/// borrow ends. `None` when there is nothing to do -- and when the file the diff
-/// shows is no longer changed, in which case the diff is closed outright, the
-/// same way a vanished row retires one.
-fn refresh_worktree_inline_diff_entries(repo_state: &mut RepoState) -> Option<usize> {
-    let (entries, selected) = {
+/// Returns what the caller should do with the diff once the borrow ends. `None`
+/// when there is nothing open to refresh -- and when the file the diff shows is
+/// no longer changed, in which case the diff is closed outright, the same way a
+/// vanished row retires one.
+fn refresh_worktree_inline_diff_entries(
+    repo_state: &mut RepoState,
+) -> Option<WorktreeInlineRefresh> {
+    let (entries, selected, origin) = {
         let inline = repo_state.diff_state.inline_submodule_diff.as_ref()?;
         if !matches!(inline.origin, ForeignDiffOrigin::Worktree { .. }) {
             return None;
@@ -628,16 +660,27 @@ fn refresh_worktree_inline_diff_entries(repo_state: &mut RepoState) -> Option<us
             .iter()
             .find(|summary| summary.path == inline.submodule_repo_path)?;
         let entries = crate::model::worktree_inline_diff_entries(summary);
-        let selected = entries.iter().position(|entry| {
-            inline
-                .entries
-                .get(inline.selected_ix)
-                .is_some_and(|shown| shown.path == entry.path)
+        let selected = inline.entries.get(inline.selected_ix).and_then(|shown| {
+            // Matched on the whole target, not the path: a file that is staged
+            // *and* modified again appears twice, once per half, and a path-only
+            // match always resolves to the staged copy -- so the pane silently
+            // swapped sides under anyone reading the unstaged one.
+            entries
+                .iter()
+                .position(|entry| entry.target == shown.target)
+                // Only once the exact target is gone does the same path in the
+                // other half become the best answer: staging what is on screen
+                // retires its unstaged entry, and following the file there beats
+                // closing the diff.
+                .or_else(|| entries.iter().position(|entry| entry.path == shown.path))
         });
-        if selected == Some(inline.selected_ix) && entries == inline.entries {
-            return None;
-        }
-        (entries, selected)
+        // The chip labelling the diff reads `origin`, which was captured when the
+        // row was clicked. A checkout in that worktree moves the branch under it.
+        let origin = ForeignDiffOrigin::Worktree {
+            branch: summary.branch.clone(),
+            detached: summary.detached,
+        };
+        (entries, selected, origin)
     };
 
     let Some(selected) = selected else {
@@ -647,10 +690,20 @@ fn refresh_worktree_inline_diff_entries(repo_state: &mut RepoState) -> Option<us
     };
 
     let inline = repo_state.diff_state.inline_submodule_diff.as_mut()?;
+    let target_moved = entries[selected].target != inline.target;
+    let changed =
+        entries != inline.entries || selected != inline.selected_ix || origin != inline.origin;
     inline.entries = entries;
     inline.selected_ix = selected;
-    repo_state.bump_diff_state_rev();
-    Some(selected)
+    inline.origin = origin;
+    if changed {
+        repo_state.bump_diff_state_rev();
+    }
+    Some(if target_moved {
+        WorktreeInlineRefresh::Reselect(selected)
+    } else {
+        WorktreeInlineRefresh::Reload
+    })
 }
 
 pub(super) fn ref_metadata_loaded(

@@ -3666,6 +3666,246 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
     );
 }
 
+/// The scan is the only notice a linked worktree's files have changed -- the
+/// watcher covers the repo that is open, not the others -- and re-resolving an
+/// unmoved selection is a no-op inside `select_inline_submodule_diff`. Without a
+/// reload of its own the patch on screen kept its contents from the moment the
+/// row was clicked, however many times the file was edited afterwards.
+#[test]
+fn a_rescan_reloads_the_open_worktree_patch_even_when_nothing_moved() {
+    let (mut state, _) = worktree_inline_diff_fixture(&["a.rs"], 0, "side");
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![worktree_dirty_summary(&["a.rs"], "side")]),
+        }),
+    );
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadInlineSubmoduleSelectedDiff { .. })),
+        "an identical file list still has to re-read the patch, got {effects:?}"
+    );
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the diff stays open");
+    assert!(
+        matches!(inline.diff, Loadable::NotLoaded),
+        "a reload of the same target must leave what is on screen alone until \
+         the new payload lands, got {:?}",
+        inline.diff
+    );
+}
+
+/// A file that is staged *and* modified again has a row in each half of the
+/// list. Re-resolving by path alone always found the staged one, so every rescan
+/// silently moved a reader of the unstaged half onto the staged copy.
+#[test]
+fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
+    use gitcomet_core::domain::{DiffArea, FileStatus, WorktreeDirtySummary};
+
+    let worktree = PathBuf::from("/tmp/wt/a");
+    let file = FileStatus {
+        path: PathBuf::from("both.rs"),
+        kind: FileStatusKind::Modified,
+        conflict: None,
+    };
+    let summary = || WorktreeDirtySummary {
+        path: worktree.clone(),
+        head: Some(CommitId("tip".into())),
+        branch: Some("side".to_string()),
+        detached: false,
+        added: 0,
+        modified: 1,
+        deleted: 0,
+        staged: vec![file.clone()],
+        unstaged: vec![file.clone()],
+    };
+
+    let entries = crate::model::worktree_inline_diff_entries(&summary());
+    assert_eq!(entries.len(), 2, "the file has a row in each half");
+    let unstaged_ix = 1;
+    let target = entries[unstaged_ix].target.clone();
+    assert!(matches!(
+        &target,
+        gitcomet_core::domain::DiffTarget::WorkingTree {
+            area: DiffArea::Unstaged,
+            ..
+        }
+    ));
+
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_worktree_dirty(Loadable::Ready(vec![summary()]));
+    repo_state.history_state.worktree_selection = Some(worktree.clone());
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Worktree {
+            branch: Some("side".to_string()),
+            detached: false,
+        },
+        submodule_repo_path: worktree.clone(),
+        parent_submodule_path: worktree.clone(),
+        entries,
+        selected_ix: unstaged_ix,
+        target,
+        rev: 1,
+        diff_rev: 1,
+        diff: Loadable::NotLoaded,
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![summary()]),
+        }),
+    );
+
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the diff stays open");
+    assert_eq!(inline.selected_ix, unstaged_ix);
+    assert!(
+        matches!(
+            &inline.target,
+            gitcomet_core::domain::DiffTarget::WorkingTree {
+                area: DiffArea::Unstaged,
+                ..
+            }
+        ),
+        "the rescan must not swap the reader onto the staged copy, got {:?}",
+        inline.target
+    );
+}
+
+/// The chip over the diff is labelled from `origin`, captured when the row was
+/// clicked. A checkout inside that worktree moves the branch under it, and with
+/// an unchanged file set nothing else in the refresh runs at all.
+#[test]
+fn a_rescan_refreshes_the_branch_the_worktree_diff_is_labelled_with() {
+    let (mut state, _) = worktree_inline_diff_fixture(&["a.rs"], 0, "side");
+
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(2);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::WorktreeDirtyLoaded {
+            repo_id: RepoId(1),
+            result: Ok(vec![worktree_dirty_summary(&["a.rs"], "other")]),
+        }),
+    );
+
+    let inline = state.repos[0]
+        .diff_state
+        .inline_submodule_diff
+        .as_ref()
+        .expect("the diff stays open");
+    assert_eq!(
+        inline.origin,
+        crate::model::ForeignDiffOrigin::Worktree {
+            branch: Some("other".to_string()),
+            detached: false,
+        },
+        "the chip must name the branch the worktree is on now"
+    );
+}
+
+fn worktree_dirty_summary(
+    files: &[&str],
+    branch: &str,
+) -> gitcomet_core::domain::WorktreeDirtySummary {
+    use gitcomet_core::domain::{FileStatus, WorktreeDirtySummary};
+
+    WorktreeDirtySummary {
+        path: PathBuf::from("/tmp/wt/a"),
+        head: Some(CommitId("tip".into())),
+        branch: Some(branch.to_string()),
+        detached: false,
+        added: 0,
+        modified: files.len(),
+        deleted: 0,
+        staged: Vec::new(),
+        unstaged: files
+            .iter()
+            .map(|name| FileStatus {
+                path: PathBuf::from(name),
+                kind: FileStatusKind::Modified,
+                conflict: None,
+            })
+            .collect(),
+    }
+}
+
+/// A repo with one linked worktree, its row selected and one of its files open
+/// in the inline diff.
+fn worktree_inline_diff_fixture(
+    files: &[&str],
+    selected_ix: usize,
+    branch: &str,
+) -> (AppState, PathBuf) {
+    let worktree = PathBuf::from("/tmp/wt/a");
+    let summary = worktree_dirty_summary(files, branch);
+    let entries = crate::model::worktree_inline_diff_entries(&summary);
+    let target = entries[selected_ix].target.clone();
+
+    let mut state = AppState::default();
+    let mut repo_state = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo_state.set_worktree_dirty(Loadable::Ready(vec![summary]));
+    repo_state.history_state.worktree_selection = Some(worktree.clone());
+    repo_state.diff_state.inline_submodule_diff = Some(crate::model::InlineSubmoduleDiffState {
+        origin: crate::model::ForeignDiffOrigin::Worktree {
+            branch: Some(branch.to_string()),
+            detached: false,
+        },
+        submodule_repo_path: worktree.clone(),
+        parent_submodule_path: worktree.clone(),
+        entries,
+        selected_ix,
+        target,
+        rev: 1,
+        diff_rev: 1,
+        diff: Loadable::NotLoaded,
+        diff_file_rev: 1,
+        diff_file: Loadable::NotLoaded,
+        diff_file_image: Loadable::NotLoaded,
+    });
+    state.repos.push(repo_state);
+    state.active_repo = Some(RepoId(1));
+    (state, worktree)
+}
+
 /// A pending history reveal re-drives on every render of the history panel, so
 /// this message arrives once per frame until pagination reaches its target.
 /// Re-running the body each time bumped `commit_details_rev` -- which the details

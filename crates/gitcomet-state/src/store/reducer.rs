@@ -103,6 +103,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::CompareWithWorkingTree { .. }
             | Msg::SelectDiff { .. }
             | Msg::SelectConflictDiff { .. }
+            | Msg::SelectWorktreeUncommitted { .. }
             | Msg::LoadStashes { .. }
             | Msg::LoadConflictFile { .. }
             | Msg::LoadReflog { .. }

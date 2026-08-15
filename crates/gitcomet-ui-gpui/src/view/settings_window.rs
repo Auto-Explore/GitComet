@@ -706,15 +706,34 @@ fn settings_dropdown_height(
     )
 }
 
-fn settings_theme_modes() -> Vec<ThemeMode> {
-    let mut modes = Vec::with_capacity(crate::theme::available_themes().len() + 1);
-    modes.push(ThemeMode::Automatic);
-    modes.extend(
-        crate::theme::available_themes()
+/// The theme rows, labels included, from a single pass over the theme list.
+///
+/// `ThemeMode::label` resolves a key by re-reading the user theme directory --
+/// a `create_dir_all`, a `read_dir`, and a `metadata` per file, all of it ahead
+/// of the memo that is supposed to make it cheap -- and the row processor below
+/// runs on every layout pass while the dropdown is open. Taking the label off
+/// the same `ThemeOption` the mode is built from spends that once per render
+/// instead of once per visible row per frame.
+fn settings_theme_mode_options() -> Vec<(ThemeMode, SharedString)> {
+    let themes = crate::theme::available_themes();
+    let mut options = Vec::with_capacity(themes.len() + 1);
+    options.push((
+        ThemeMode::Automatic,
+        SharedString::from(ThemeMode::Automatic.label()),
+    ));
+    options.extend(
+        themes
             .into_iter()
-            .map(|theme| ThemeMode::Named(theme.key.to_string())),
+            .map(|theme| (ThemeMode::Named(theme.key), SharedString::from(theme.label))),
     );
-    modes
+    options
+}
+
+fn settings_theme_modes() -> Vec<ThemeMode> {
+    settings_theme_mode_options()
+        .into_iter()
+        .map(|(mode, _)| mode)
+        .collect()
 }
 
 fn history_columns_settings_label(
@@ -2559,6 +2578,65 @@ impl SettingsWindowView {
             )
     }
 
+    /// One row per theme file the loader refused, named and with its reason.
+    ///
+    /// A rejected file is otherwise silent: it simply is not in the picker, the
+    /// app falls back to a bundled theme, and the account of why only ever
+    /// reaches stderr. After a schema break every custom theme in the folder is
+    /// rejected at once, and "my theme is gone" has to be answerable from here.
+    fn rejected_theme_rows(&self, theme: AppTheme) -> Vec<AnyElement> {
+        crate::theme::runtime_theme_issues()
+            .iter()
+            .enumerate()
+            .map(|(ix, issue)| {
+                let name: SharedString = issue
+                    .path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| issue.path.display().to_string())
+                    .into();
+                let message: SharedString = issue.message.clone().into();
+                div()
+                    .debug_selector(move || format!("settings_window_theme_rejected_{ix}"))
+                    .w_full()
+                    .min_w(px(0.0))
+                    .px_2()
+                    .pt_1()
+                    .pb_3()
+                    .flex()
+                    .flex_col()
+                    .items_stretch()
+                    .gap_0p5()
+                    .border_b_1()
+                    .border_color(settings_row_separator_color(theme))
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .text_sm()
+                            .child(svg_icon(
+                                "icons/warning.svg",
+                                theme.colors.status.warning.foreground,
+                                px(13.0),
+                            ))
+                            .child(div().flex_1().min_w(px(0.0)).child(name)),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .min_w(px(0.0))
+                            .text_sm()
+                            .text_color(theme.colors.foreground.secondary)
+                            .child(message),
+                    )
+                    .into_any_element()
+            })
+            .collect()
+    }
+
     fn git_runtime_row(&self, theme: AppTheme) -> Stateful<gpui::Div> {
         let min_git_version = format!("{MIN_GIT_MAJOR}.{MIN_GIT_MINOR}");
         let (git_icon_path, git_icon_color, git_status_text): (
@@ -2802,13 +2880,13 @@ impl SettingsWindowView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let theme = this.theme;
-        let modes = settings_theme_modes();
+        let modes = settings_theme_mode_options();
         range
             .filter_map(|ix| modes.get(ix).cloned())
-            .map(|mode| {
+            .map(|(mode, label)| {
                 this.option_row(
                     format!("settings_window_theme_{}", mode.key()),
-                    mode.label(),
+                    label,
                     None,
                     this.theme_mode == mode,
                     theme,
@@ -3688,10 +3766,14 @@ impl Render for SettingsWindowView {
                             this.toggle_section(SettingsSection::GitLogColumns, cx);
                         }));
 
-    let highlight_commit_chain_row = self
+                    // "Lane", not "chain": what this dims is every lane but the
+                    // selected commit's own. A merge's second parent sits on a
+                    // lane of its own and washes out with the rest, so the old
+                    // label promised an ancestry walk the graph no longer does.
+                    let highlight_commit_chain_row = self
                         .toggle_row(
                             "settings_window_git_log_highlight_commit_chain",
-                            "Highlight selected commit chain",
+                            "Highlight selected commit lane",
                             self.history_highlight_commit_chain,
                             theme,
                         )
@@ -3788,6 +3870,10 @@ impl Render for SettingsWindowView {
                         ));
                         general_card = general_card.child(
                             self.detail_container("settings_window_theme_links_container", theme)
+                                // Above the folder link, so a theme that is
+                                // missing from the list above is explained right
+                                // next to the way to go and fix it.
+                                .children(self.rejected_theme_rows(theme))
                                 .child(
                                     self.link_row(
                                         "settings_window_theme_custom_folder",

@@ -810,7 +810,10 @@ enum WorktreeRevealTarget {
     /// The pinned row at the top -- only this tab's own changes live there.
     WorkingTreeSummaryRow,
     /// A linked worktree's own uncommitted-changes row.
-    WorktreeRow { head: CommitId },
+    WorktreeRow {
+        head: CommitId,
+        fallback_scope: Option<LogScope>,
+    },
     Commit {
         head: CommitId,
         fallback_scope: Option<LogScope>,
@@ -822,10 +825,18 @@ enum WorktreeRevealTarget {
 /// One rule for every worktree row: its changes if it has any, otherwise the
 /// commit it sits on. Where "its changes" live differs -- this tab's are pinned
 /// at the top of the log, every other worktree's are a row of their own.
+///
+/// `worktree_is_dirty` is `None` while the scan has not answered for this
+/// worktree yet, which is not the same as answering that it is clean: aiming at
+/// the commit on an unknown commits to a row set that is about to grow, and the
+/// first scan reply then shifts the log under the user. Aiming at the row
+/// instead costs nothing when the guess is wrong -- the reveal keeps the commit
+/// as its scroll target until the row exists, and a worktree that turns out
+/// clean has its selection dropped by the reducer.
 fn worktree_reveal_target(
     is_current: bool,
     current_has_changes: bool,
-    worktree_is_dirty: bool,
+    worktree_is_dirty: Option<bool>,
     head: Option<CommitId>,
 ) -> WorktreeRevealTarget {
     if is_current && current_has_changes {
@@ -834,14 +845,21 @@ fn worktree_reveal_target(
     let Some(head) = head else {
         return WorktreeRevealTarget::Nothing;
     };
-    if !is_current && worktree_is_dirty {
-        return WorktreeRevealTarget::WorktreeRow { head };
+    // A linked worktree's branch need not be in the current scope -- the same
+    // reason a non-HEAD branch row falls back to all branches. It applies to the
+    // row as much as to the commit: the row is anchored to the same commit, and
+    // without the fallback a dirty worktree on an out-of-scope branch had
+    // nothing to scroll to.
+    let fallback_scope = (!is_current).then_some(LogScope::AllBranches);
+    if !is_current && worktree_is_dirty != Some(false) {
+        return WorktreeRevealTarget::WorktreeRow {
+            head,
+            fallback_scope,
+        };
     }
     WorktreeRevealTarget::Commit {
         head,
-        // A clean linked worktree's branch need not be in the current scope --
-        // the same reason a non-HEAD branch row falls back to all branches.
-        fallback_scope: (!is_current).then_some(LogScope::AllBranches),
+        fallback_scope,
     }
 }
 
@@ -1407,20 +1425,22 @@ impl HistoryView {
         cx: &mut gpui::Context<Self>,
     ) {
         let current_has_changes = self.ensure_history_worktree_summary_cache().0;
+        // `None` while the scan has not answered -- see `worktree_reveal_target`.
         let worktree_is_dirty = self
             .active_repo()
-            .is_some_and(|repo| match &repo.worktree_dirty {
-                Loadable::Ready(dirty) => dirty.iter().any(|summary| summary.path == path),
-                _ => false,
+            .and_then(|repo| match &repo.worktree_dirty {
+                Loadable::Ready(dirty) => Some(dirty.iter().any(|summary| summary.path == path)),
+                _ => None,
             });
 
         match worktree_reveal_target(is_current, current_has_changes, worktree_is_dirty, head) {
             WorktreeRevealTarget::WorkingTreeSummaryRow => {
                 self.select_working_tree_summary_row(repo_id, cx)
             }
-            WorktreeRevealTarget::WorktreeRow { head } => {
-                self.request_reveal_worktree(repo_id, head, path, cx)
-            }
+            WorktreeRevealTarget::WorktreeRow {
+                head,
+                fallback_scope,
+            } => self.request_reveal_worktree(repo_id, head, fallback_scope, path, cx),
             WorktreeRevealTarget::Commit {
                 head,
                 fallback_scope,
@@ -1449,6 +1469,7 @@ impl HistoryView {
         &mut self,
         repo_id: RepoId,
         commit_id: CommitId,
+        fallback_scope: Option<LogScope>,
         worktree_path: PathBuf,
         cx: &mut gpui::Context<Self>,
     ) {
@@ -1456,7 +1477,13 @@ impl HistoryView {
             repo_id,
             path: worktree_path.clone(),
         });
-        self.request_reveal_commit_inner(repo_id, commit_id, None, Some(worktree_path), cx);
+        self.request_reveal_commit_inner(
+            repo_id,
+            commit_id,
+            fallback_scope,
+            Some(worktree_path),
+            cx,
+        );
     }
 
     fn request_reveal_commit_inner(
@@ -3851,13 +3878,13 @@ mod tests {
 
         // This tab's own changes are the pinned row at the top of the log.
         assert_eq!(
-            worktree_reveal_target(true, true, false, Some(head.clone())),
+            worktree_reveal_target(true, true, Some(false), Some(head.clone())),
             WorktreeRevealTarget::WorkingTreeSummaryRow
         );
         // Clean, so there is no row -- land on what it is checked out at. No
         // fallback scope: the current worktree's HEAD is in scope by definition.
         assert_eq!(
-            worktree_reveal_target(true, false, false, Some(head.clone())),
+            worktree_reveal_target(true, false, Some(false), Some(head.clone())),
             WorktreeRevealTarget::Commit {
                 head: head.clone(),
                 fallback_scope: None,
@@ -3865,14 +3892,32 @@ mod tests {
         );
         // A linked worktree's changes live in a row of their own.
         assert_eq!(
-            worktree_reveal_target(false, false, true, Some(head.clone())),
-            WorktreeRevealTarget::WorktreeRow { head: head.clone() }
+            worktree_reveal_target(false, false, Some(true), Some(head.clone())),
+            WorktreeRevealTarget::WorktreeRow {
+                head: head.clone(),
+                fallback_scope: Some(LogScope::AllBranches),
+            }
         );
         // Clean linked worktree: its branch may sit outside the current scope.
         assert_eq!(
-            worktree_reveal_target(false, false, false, Some(head.clone())),
+            worktree_reveal_target(false, false, Some(false), Some(head.clone())),
             WorktreeRevealTarget::Commit {
                 head: head.clone(),
+                fallback_scope: Some(LogScope::AllBranches),
+            }
+        );
+    }
+
+    /// The first scan has not replied when a repo opens, and "no answer yet" is
+    /// not the answer that the worktree is clean. Aiming at the commit on an
+    /// unknown fixes the reveal against a row set that is about to grow.
+    #[test]
+    fn an_unscanned_worktree_is_revealed_as_a_row_not_as_its_commit() {
+        let head = CommitId("head-sha".into());
+        assert_eq!(
+            worktree_reveal_target(false, false, None, Some(head.clone())),
+            WorktreeRevealTarget::WorktreeRow {
+                head,
                 fallback_scope: Some(LogScope::AllBranches),
             }
         );
@@ -3884,7 +3929,7 @@ mod tests {
     fn the_current_worktree_ignores_other_worktrees_dirt() {
         let head = CommitId("head-sha".into());
         assert_eq!(
-            worktree_reveal_target(true, true, true, Some(head)),
+            worktree_reveal_target(true, true, Some(true), Some(head)),
             WorktreeRevealTarget::WorkingTreeSummaryRow
         );
     }
@@ -3892,12 +3937,12 @@ mod tests {
     #[test]
     fn a_clean_worktree_with_no_resolvable_head_focuses_nothing() {
         assert_eq!(
-            worktree_reveal_target(false, false, false, None),
+            worktree_reveal_target(false, false, Some(false), None),
             WorktreeRevealTarget::Nothing
         );
         // Even a dirty one: its row is anchored by that same HEAD.
         assert_eq!(
-            worktree_reveal_target(false, false, true, None),
+            worktree_reveal_target(false, false, Some(true), None),
             WorktreeRevealTarget::Nothing
         );
     }
@@ -4593,6 +4638,91 @@ mod tests {
                 assert_eq!(
                     cache.list_ix, commit_row_ix,
                     "the cache is keyed on the commit, so it holds the commit's row"
+                );
+            });
+        });
+    }
+
+    /// `list_ix_for_worktree` returns `None` once the worktree goes clean or its
+    /// HEAD leaves the loaded page, and a selected row with no index is not the
+    /// same as nothing being selected. Falling through to the no-selection arms
+    /// wrapped the selection to the far end of the log instead of moving it by
+    /// one, and the user lost their place.
+    #[gpui::test]
+    fn arrowing_off_a_worktree_row_with_no_index_does_not_jump_to_the_end(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let repo_id = RepoId(1);
+        let worktree_path = PathBuf::from("/tmp/history-worktree-nav/linked");
+        let page = Arc::new(log_page(
+            vec![commit("tip", &["base"], "tip"), commit("base", &[], "base")],
+            None,
+        ));
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-worktree-nav"),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.head_branch = Loadable::Ready("main".to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("main", "tip")]));
+        repo.branches_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(page);
+        repo.history_state.log_rev = 1;
+        // Selected, but with no row: the scan that would list it has not landed,
+        // which is exactly the state the reducer refuses to read as "clean".
+        repo.history_state.worktree_selection = Some(worktree_path.clone());
+        repo.worktree_dirty = Loadable::Ready(Arc::new(Vec::new()));
+        repo.worktree_dirty_rev = 1;
+
+        let state = Arc::new(AppState {
+            repos: vec![repo],
+            active_repo: Some(repo_id),
+            ..Default::default()
+        });
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state);
+        wait_until(cx, "history cache for the worktree nav", |cx| {
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view
+                    .read(app)
+                    .history_cache
+                    .as_ref()
+                    .is_some_and(|cache| cache.base.row_vms.len() == 2)
+            })
+        });
+
+        cx.update(|_window, app| {
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, cx| {
+                let plan = history.ensure_history_list_plan();
+                assert!(
+                    worktree_row_list_ix(&plan, history.active_repo(), &worktree_path).is_none(),
+                    "fixture must leave the selected worktree without a row"
+                );
+
+                assert!(
+                    !history.history_select_adjacent_commit(-1, cx),
+                    "there is nothing to step from, so the key is not handled"
+                );
+                assert!(
+                    history
+                        .active_repo()
+                        .is_none_or(|repo| repo.history_state.selected_commit.is_none()),
+                    "and nothing at the far end of the log may be selected in its place"
                 );
             });
         });

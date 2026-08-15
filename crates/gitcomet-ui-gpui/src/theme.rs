@@ -1249,9 +1249,30 @@ fn runtime_themes() -> Arc<HashMap<String, RuntimeThemeSpec>> {
 /// without a restart, so the cache is validated against a cheap stat of the
 /// directory rather than held forever.
 fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<HashMap<String, RuntimeThemeSpec>> {
-    let Some(dir) = resolved_runtime_themes_dir(runtime_dir) else {
-        return Arc::new(HashMap::default());
-    };
+    runtime_theme_cache_entry(runtime_dir)
+        .map(|entry| entry.themes)
+        .unwrap_or_default()
+}
+
+/// Why the themes that are *not* in the picker were left out.
+///
+/// A rejected file is otherwise invisible: it disappears from the list, the app
+/// falls back to a bundled theme, and the only account of it goes to stderr,
+/// which nobody running a windowed build ever sees. That matters most right
+/// after a schema break -- every v1 custom theme in the folder is rejected at
+/// once, and "my theme is gone" needs to be answerable without a terminal.
+pub(crate) fn runtime_theme_issues() -> Arc<[RuntimeThemeIssue]> {
+    runtime_theme_issues_with_dir(None)
+}
+
+fn runtime_theme_issues_with_dir(runtime_dir: Option<&Path>) -> Arc<[RuntimeThemeIssue]> {
+    runtime_theme_cache_entry(runtime_dir)
+        .map(|entry| entry.issues)
+        .unwrap_or_else(|| Arc::from(Vec::new()))
+}
+
+fn runtime_theme_cache_entry(runtime_dir: Option<&Path>) -> Option<RuntimeThemeCache> {
+    let dir = resolved_runtime_themes_dir(runtime_dir)?;
 
     let signature = runtime_themes_dir_signature(&dir);
     let cache = RUNTIME_THEME_CACHE.get_or_init(|| Mutex::new(HashMap::default()));
@@ -1262,11 +1283,16 @@ fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<HashMap<String, Ru
         if let Some(cached) = cached.get(&dir)
             && cached.signature == signature
         {
-            return Arc::clone(&cached.themes);
+            return Some(cached.clone());
         }
     }
 
-    let themes = Arc::new(load_runtime_themes_from_dir(&dir));
+    let (themes, issues) = load_runtime_themes_from_dir(&dir);
+    let entry = RuntimeThemeCache {
+        signature,
+        themes: Arc::new(themes),
+        issues: Arc::from(issues),
+    };
     let mut cached = cache
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
@@ -1276,19 +1302,22 @@ fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<HashMap<String, Ru
     if cached.len() >= MAX_CACHED_RUNTIME_THEME_DIRS && !cached.contains_key(&dir) {
         cached.clear();
     }
-    cached.insert(
-        dir,
-        RuntimeThemeCache {
-            signature,
-            themes: Arc::clone(&themes),
-        },
-    );
-    themes
+    cached.insert(dir, entry.clone());
+    Some(entry)
 }
 
+/// A theme file the loader refused, named so the picker can say so.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct RuntimeThemeIssue {
+    pub path: PathBuf,
+    pub message: String,
+}
+
+#[derive(Clone)]
 struct RuntimeThemeCache {
     signature: u64,
     themes: Arc<HashMap<String, RuntimeThemeSpec>>,
+    issues: Arc<[RuntimeThemeIssue]>,
 }
 
 /// One entry per theme directory, rather than a single slot: a single slot is
@@ -1346,9 +1375,11 @@ fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>) -> Option<PathBuf> {
     Some(dir)
 }
 
-fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec> {
+fn load_runtime_themes_from_dir(
+    dir: &Path,
+) -> (HashMap<String, RuntimeThemeSpec>, Vec<RuntimeThemeIssue>) {
     let Ok(entries) = fs::read_dir(dir) else {
-        return HashMap::default();
+        return (HashMap::default(), Vec::new());
     };
 
     let mut files = entries
@@ -1359,21 +1390,26 @@ fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec>
     files.sort();
 
     let mut themes = HashMap::default();
+    let mut issues = Vec::new();
+    let reject = |issues: &mut Vec<RuntimeThemeIssue>, path: &Path, message: String| {
+        eprintln!("Ignoring custom theme {}: {message}", path.display());
+        issues.push(RuntimeThemeIssue {
+            path: path.to_path_buf(),
+            message,
+        });
+    };
     for path in files {
         let json = match fs::read_to_string(&path) {
             Ok(json) => json,
             Err(error) => {
-                eprintln!(
-                    "Ignoring custom theme {}: failed to read file: {error}",
-                    path.display()
-                );
+                reject(&mut issues, &path, format!("failed to read file: {error}"));
                 continue;
             }
         };
         let specs = match load_runtime_theme_specs_from_json(&json) {
             Ok(specs) => specs,
             Err(error) => {
-                eprintln!("Ignoring custom theme {}: {error}", path.display());
+                reject(&mut issues, &path, error.to_string());
                 continue;
             }
         };
@@ -1383,7 +1419,7 @@ fn load_runtime_themes_from_dir(dir: &Path) -> HashMap<String, RuntimeThemeSpec>
         }
     }
 
-    themes
+    (themes, issues)
 }
 
 fn load_theme_specs_from_json(json: &str) -> Result<Vec<RuntimeThemeSpec>, ThemeParseError> {
