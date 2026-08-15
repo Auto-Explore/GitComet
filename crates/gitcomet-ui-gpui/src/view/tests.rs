@@ -3506,7 +3506,7 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
     );
     assert_eq!(
         repo_tab_bounds.size.width,
-        px(102.0),
+        px(components::Tab::MIN_WIDTH_PX),
         "expected a short repository label to fit the 18px status mark at the compact width"
     );
     cx.simulate_mouse_move(repo_tab_center, None, gpui::Modifiers::default());

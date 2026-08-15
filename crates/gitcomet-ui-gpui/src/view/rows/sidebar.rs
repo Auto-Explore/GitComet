@@ -396,20 +396,17 @@ impl SidebarPaneView {
         const BRANCH_BADGE_GAP_PX: f32 = 3.0;
         /// Widest a branch row's worktree pill may grow before its label starts
         /// truncating. Wide enough for the folder names worktrees usually carry,
-        /// narrow enough that the pill plus the trailing slot always fit the
-        /// pane — which is what keeps every row's badge on one right edge.
+        /// narrow enough that the pill always fits the pane — which is what
+        /// keeps every row's badge on one right edge.
         const BRANCH_WORKTREE_BADGE_MAX_W_PX: f32 = 140.0;
-        /// How much of the row's shared child gap the `⋮` slot claws back, so
-        /// the button sits tight against the badge before it. Bounded by
-        /// `BRANCH_TREE_GAP_PX`: pulling the whole gap would butt the two
-        /// together.
-        const BRANCH_MENU_DOTS_PULL_PX: f32 = 3.0;
-        /// Width of the trailing `⋮` slot, and with it how far every trailing
-        /// badge sits from the pane's right edge — the slot is reserved in the
-        /// row layout even while the button is hidden. Kept at the button's own
-        /// size so it adds no slack of its own; the button already centers a
-        /// 16px icon in 20px.
-        const BRANCH_MENU_DOTS_SLOT_PX: f32 = 20.0;
+        /// Gap between a row's trailing badge and the row's right edge, shared
+        /// by every row (headers included) so the badges land on one edge.
+        /// This is as tight as the badges can sit: the list insets its rows by
+        /// `ROW_HIGHLIGHT_INSET_PX` while the overlay scrollbar's thumb paints
+        /// 4..10px in from the *pane* edge, which puts the thumb's leading edge
+        /// exactly 4px inside the row. Any less and a visible thumb would paint
+        /// over the badge.
+        const BRANCH_ROW_TRAILING_PAD_PX: f32 = 4.0;
         let ui_scale_percent = ui_scale::current(cx).percent;
         let scaled_px = |value: f32| ui_scale::design_px_from_percent(value, ui_scale_percent);
 
@@ -524,82 +521,6 @@ impl SidebarPaneView {
                 .bg(color)
         };
 
-        // A `⋮` overflow button that mirrors the row's right-click context menu.
-        // It stays hidden until the row is hovered (or its menu is open), and is
-        // absolutely positioned at the trailing edge so it overlays any trailing
-        // badges without shifting the row layout.
-        let menu_dots_accessory = |ix: usize,
-                                   id: &'static str,
-                                   row_group: SharedString,
-                                   invoker: SharedString,
-                                   popover: PopoverKind,
-                                   menu_active: bool,
-                                   cx: &mut gpui::Context<Self>|
-         -> AnyElement {
-            // Muted at rest (or while its row is hovered); the primary text
-            // color when the button itself is hovered or its menu is open —
-            // which resolves to near-white on dark themes and near-black on
-            // light ones. The color must be set on the svg element directly:
-            // gpui only paints an svg when its own `text.color` is set, and it
-            // does not inherit the ambient text color from ancestors.
-            let rest_color = if menu_active {
-                theme.colors.foreground.primary
-            } else {
-                theme.colors.foreground.secondary
-            };
-            let btn_group: SharedString = format!("{id}_btn_{ix}").into();
-            let button = div()
-                .id((id, ix))
-                .debug_selector(move || format!("{id}_{ix}"))
-                .group(btn_group.clone())
-                .flex()
-                .items_center()
-                .justify_center()
-                .size(scaled_px(20.0))
-                .cursor(CursorStyle::PointingHand)
-                .child(
-                    gpui::svg()
-                        .path("icons/more_vertical.svg")
-                        .w(scaled_px(16.0))
-                        .h(scaled_px(16.0))
-                        .flex_shrink_0()
-                        .text_color(rest_color)
-                        .group_hover(btn_group.clone(), move |s| {
-                            s.text_color(theme.colors.foreground.primary)
-                        }),
-                )
-                .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
-                    if !e.standard_click() {
-                        return;
-                    }
-                    cx.stop_propagation();
-                    this.activate_context_menu_invoker(invoker.clone(), cx);
-                    this.open_popover_at(popover.clone(), e.position(), window, cx);
-                    cx.notify();
-                }));
-
-            // A fixed-width trailing slot reserved in the row layout (rather than
-            // an absolute overlay), so the button sits to the right of any
-            // trailing badges instead of covering them. The slot keeps its width
-            // while hidden, so revealing the button on hover never shifts the row.
-            let mut slot = div()
-                .flex_none()
-                .w(scaled_px(BRANCH_MENU_DOTS_SLOT_PX))
-                // The row spaces its children evenly, which is right for the
-                // tree columns but leaves the `⋮` drifting off the trailing
-                // badge. Pull it back so the pair reads as one trailing
-                // cluster; the button keeps its full width, so this costs no
-                // hit area.
-                .ml(scaled_px(-BRANCH_MENU_DOTS_PULL_PX))
-                .flex()
-                .items_center()
-                .justify_center();
-            if !menu_active {
-                slot = slot.invisible().group_hover(row_group, |d| d.visible());
-            }
-            slot.child(button).into_any_element()
-        };
-
         range
             .filter_map(|ix| rows.get(ix).cloned().map(|r| (ix, r)))
             .map(|(ix, row)| match row {
@@ -613,8 +534,6 @@ impl SidebarPaneView {
                         BranchSection::Local => ("Pinned Local Branches".into(), "local"),
                         BranchSection::Remote => ("Pinned Remote Branches".into(), "remote"),
                     };
-                    let row_group: SharedString =
-                        format!("pinned_section_row_{}_{}", repo_id.0, ix).into();
                     let context_menu_invoker: SharedString =
                         format!("pinned_section_menu_{}_{selector_suffix}", repo_id.0).into();
                     let context_menu_active =
@@ -625,12 +544,11 @@ impl SidebarPaneView {
                     div()
                         .id(("pinned_section", ix))
                         .debug_selector(move || format!("pinned_section_{selector_suffix}"))
-                        .group(row_group.clone())
                         .relative()
                         .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr_2()
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -677,15 +595,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "pinned_section_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            menu_kind,
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::SectionHeader {
@@ -708,8 +617,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let row_group: SharedString =
-                        format!("branch_section_row_{}_{}", repo_id.0, section_key).into();
                     let row_state =
                         components::InteractiveRowState::default().open(context_menu_active);
 
@@ -719,8 +626,7 @@ impl SidebarPaneView {
                         .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr_2()
-                        .group(row_group.clone())
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -764,15 +670,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "branch_section_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::BranchSectionMenu { repo_id, section },
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::FilterGroupHeader { section } => {
@@ -792,7 +689,7 @@ impl SidebarPaneView {
                         .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr_2()
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -830,7 +727,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let row_group: SharedString = format!("stash_section_row_{}", repo_id.0).into();
                     let row_state =
                         components::InteractiveRowState::default().open(context_menu_active);
 
@@ -841,8 +737,7 @@ impl SidebarPaneView {
                         .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr_2()
-                        .group(row_group.clone())
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -897,15 +792,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "stash_section_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::StashPrompt,
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::StashPlaceholder { message } => div()
@@ -944,7 +830,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr_2()
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .h(scaled_px(24.0))
                         .w_full()
                         .interactive_row(row_style, row_state)
@@ -989,19 +875,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "stash_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::StashMenu {
-                                repo_id,
-                                index,
-                                message: stash_message_for_menu.clone(),
-                            },
-                            context_menu_active,
-                            cx,
-                        ))
                         .gitcomet_tooltip(theme, tooltip.clone())
                         .into_any_element()
                 }
@@ -1032,8 +905,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let row_group: SharedString =
-                        format!("worktrees_section_row_{}", repo_id.0).into();
                     let row_state =
                         components::InteractiveRowState::default().open(context_menu_active);
 
@@ -1044,8 +915,7 @@ impl SidebarPaneView {
                         .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr_2()
-                        .group(row_group.clone())
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -1105,15 +975,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "worktrees_section_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::worktree(repo_id, WorktreePopoverKind::SectionMenu),
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::WorktreePlaceholder { message } => div()
@@ -1167,12 +1028,11 @@ impl SidebarPaneView {
                         .relative()
                         .h(scaled_px(22.0))
                         .w_full()
-                        .group(row_group.clone())
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr(px(0.0))
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot(WORKTREE_ICON_PATH, icon_primary, 12.0))
@@ -1307,21 +1167,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "worktree_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::worktree(
-                                repo_id,
-                                WorktreePopoverKind::Menu {
-                                    path: path.clone(),
-                                    branch: branch.as_ref().map(|name| name.to_string()),
-                                },
-                            ),
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulesHeader {
@@ -1337,8 +1182,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let row_group: SharedString =
-                        format!("submodules_section_row_{}", repo_id.0).into();
                     let row_state =
                         components::InteractiveRowState::default().open(context_menu_active);
 
@@ -1349,8 +1192,7 @@ impl SidebarPaneView {
                         .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr_2()
-                        .group(row_group.clone())
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
@@ -1410,15 +1252,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "submodules_section_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::submodule(repo_id, SubmodulePopoverKind::SectionMenu),
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::SubmodulePlaceholder { message, can_load } => div()
@@ -1528,8 +1361,6 @@ impl SidebarPaneView {
                     let context_menu_active =
                         this.active_context_menu_invoker.as_ref() == Some(&context_menu_invoker);
                     let context_menu_invoker_for_right_click = context_menu_invoker.clone();
-                    let row_group: SharedString =
-                        format!("submodule_row_{}_{}", repo_id.0, ix).into();
                     let row_state =
                         components::InteractiveRowState::default().open(context_menu_active);
 
@@ -1538,12 +1369,11 @@ impl SidebarPaneView {
                         .relative()
                         .h(scaled_px(22.0))
                         .w_full()
-                        .group(row_group.clone())
                         .flex()
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(0))
-                        .pr(px(0.0))
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .child(tree_toggle_slot(None))
                         .child(tree_icon_slot("icons/box.svg", icon_color, 12.0))
@@ -1619,18 +1449,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "submodule_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::submodule(
-                                repo_id,
-                                SubmodulePopoverKind::Menu { path: path.clone() },
-                            ),
-                            context_menu_active,
-                            cx,
-                        ))
                         .gitcomet_tooltip(theme, tooltip.clone())
                         .into_any_element()
                 }
@@ -1658,7 +1476,7 @@ impl SidebarPaneView {
                         .h(scaled_px(24.0))
                         .w_full()
                         .pl(indent_px(0))
-                        .pr_2()
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .group(row_group.clone())
                         .flex()
                         .items_center()
@@ -1712,20 +1530,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "remote_header_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::remote(
-                                repo_id,
-                                RemotePopoverKind::Menu {
-                                    name: remote_name.clone(),
-                                },
-                            ),
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::GroupHeader {
@@ -1774,7 +1578,7 @@ impl SidebarPaneView {
                         .h(scaled_px(22.0))
                         .w_full()
                         .pl(indent_px(usize::from(depth)))
-                        .pr_2()
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .group(row_group.clone())
                         .flex()
                         .items_center()
@@ -1831,15 +1635,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "branch_group_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            menu_kind,
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::Branch {
@@ -1991,7 +1786,7 @@ impl SidebarPaneView {
                         .items_center()
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .pl(indent_px(usize::from(depth)))
-                        .pr(px(0.0))
+                        .pr(scaled_px(BRANCH_ROW_TRAILING_PAD_PX))
                         .interactive_row(row_style, row_state)
                         .text_color(branch_text_color)
                         .child(tree_toggle_slot(None))
@@ -2107,13 +1902,11 @@ impl SidebarPaneView {
                             .text_color(badge_colors.text)
                             .cursor(CursorStyle::PointingHand)
                             // A worktree folder can outrun the pane. Cap and
-                            // truncate the pill rather than let it grow past
-                            // the trailing slot, which would shove this row's
-                            // badge right of every other row's and break the
-                            // shared right edge. An absolute cap, not a
-                            // percentage: the pill's containing block is the
-                            // accessory run, which is itself sized by this
-                            // pill.
+                            // truncate the pill rather than let it push the
+                            // row's other badges off the trailing edge. An
+                            // absolute cap, not a percentage: the pill's
+                            // containing block is the accessory run, which is
+                            // itself sized by this pill.
                             .max_w(scaled_px(BRANCH_WORKTREE_BADGE_MAX_W_PX))
                             .overflow_hidden()
                             .child(svg_icon(WORKTREE_ICON_PATH, badge_colors.text, 9.0))
@@ -2204,20 +1997,6 @@ impl SidebarPaneView {
                     if show_branch_badges {
                         row = row.child(end_accessories);
                     }
-
-                    row = row.child(menu_dots_accessory(
-                        ix,
-                        "branch_dots",
-                        row_group.clone(),
-                        context_menu_invoker.clone(),
-                        PopoverKind::BranchMenu {
-                            repo_id,
-                            section,
-                            name: full_name_for_menu.as_ref().to_owned(),
-                        },
-                        context_menu_active,
-                        cx,
-                    ));
 
                     row = row
                         .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -3775,6 +3554,19 @@ mod tests {
             .expect("expected feature branch row");
         let feature_row_center = feature_row_bounds.center();
         let feature_dots_selector = leak_selector(format!("branch_dots_{feature_ix}"));
+        assert!(
+            cx.debug_bounds(feature_dots_selector).is_none(),
+            "expected the trailing `⋮` slot to be gone from branch rows"
+        );
+        // The row keeps only the trailing padding to the right of its badges,
+        // so the worktree badge lands on the row's right edge.
+        assert!(
+            (feature_row_bounds.right() - feature_badge_before.right() - px(4.0)).abs() <= px(1.0),
+            "expected the worktree badge to sit one trailing pad off the row's right edge, \
+             row right {:?} badge right {:?}",
+            feature_row_bounds.right(),
+            feature_badge_before.right()
+        );
         cx.simulate_mouse_move(feature_row_center, None, gpui::Modifiers::default());
         crate::view::test_support::redraw(cx);
         let feature_badge_after = cx
@@ -3786,14 +3578,11 @@ mod tests {
         let feature_push_badge_after = cx
             .debug_bounds(feature_push_badge_selector)
             .expect("expected push count badge after hover");
-        // The trailing menu-dots slot is reserved in the row layout, so the
-        // worktree badge sits to its left rather than overlapping it.
-        let feature_dots_after = cx
-            .debug_bounds(feature_dots_selector)
-            .expect("expected the reserved menu dots slot after hover");
+        // Hover reveals nothing in the trailing run any more, so the badges
+        // keep the exact geometry they had at rest.
         assert!(
-            feature_badge_after.right() <= feature_dots_after.left(),
-            "expected the worktree badge to sit left of the menu dots slot, not overlap it"
+            cx.debug_bounds(feature_dots_selector).is_none(),
+            "expected no `⋮` slot to appear on row hover"
         );
         assert_eq!(
             feature_badge_before.left(),
@@ -3816,8 +3605,8 @@ mod tests {
             "expected the push badge to stay fixed on row hover"
         );
         // Right-click over the label (near the row's leading edge) rather than
-        // the center: the trailing area now holds the worktree badge and the
-        // reserved menu-dots slot, which open their own menus.
+        // the center: the trailing area holds the worktree badge, which opens
+        // its own menu.
         let feature_row_label_point =
             gpui::point(feature_row_bounds.left() + px(48.0), feature_row_center.y);
         cx.simulate_mouse_down(

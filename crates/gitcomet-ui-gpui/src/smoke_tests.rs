@@ -2316,18 +2316,24 @@ fn branch_worktree_badge_aligns_to_edge_and_branch_menu_opens_on_right_click(
     cx.run_until_parked();
     sync_view_for_tests(cx, &view);
 
-    // The trailing menu-dots slot is reserved in the row layout, so the worktree
-    // badge sits to its left rather than overlapping it.
-    let dots_bounds = cx
-        .debug_bounds(debug_selector("branch_dots", badge_ix))
-        .expect("expected the reserved branch menu dots slot");
+    // Nothing is revealed on hover at the trailing edge any more: the `⋮` button
+    // is gone, so the worktree badge owns the row's right edge, one trailing pad
+    // in from it.
     assert!(
-        badge_bounds.right() <= dots_bounds.left(),
-        "expected branch worktree badge to sit left of the menu dots slot"
+        cx.debug_bounds(debug_selector("branch_dots", badge_ix))
+            .is_none(),
+        "expected the branch row's `⋮` slot to be gone"
+    );
+    assert!(
+        (row_bounds.right() - badge_bounds.right() - px(4.0)).abs() <= px(1.0),
+        "expected branch worktree badge to sit one trailing pad off the row's right edge, \
+         row right {:?} badge right {:?}",
+        row_bounds.right(),
+        badge_bounds.right()
     );
 
     // Right-click over the label (near the leading edge) rather than the center:
-    // the trailing area holds the worktree badge and menu-dots slot.
+    // the trailing area holds the worktree badge, which opens its own menu.
     let row_label_point = gpui::point(row_bounds.left() + px(48.0), row_center.y);
     cx.simulate_mouse_down(row_label_point, MouseButton::Right, Modifiers::default());
     cx.run_until_parked();
@@ -4224,7 +4230,9 @@ fn repository_tabs_shrink_long_names_before_short_names(cx: &mut gpui::TestAppCo
     // Keep the cap between the medium and long natural widths: only the long
     // tab should have to yield at this pressure level.
     let long_only_cap = (natural[1] + natural[2]) / 2.0;
-    let outer_chrome = px(36.0 + 6.0 * repo_ids.len() as f32);
+    // The strip viewport holds only the tabs, so the sole extra width to fund
+    // is each tab's gutter on both sides.
+    let outer_chrome = px(components::Tab::HORIZONTAL_MARGIN_PX * 2.0 * repo_ids.len() as f32);
     resize_repo_tab_strip_to(
         cx,
         &view,
@@ -4251,9 +4259,9 @@ fn repository_tabs_shrink_long_names_before_short_names(cx: &mut gpui::TestAppCo
         "the longest tab should fade first"
     );
 
-    // Push the common cap below the shortest natural tab but above the 102px
-    // floor. At this threshold all three tabs should shrink together.
-    let all_tabs_cap = (px(102.0) + natural[0]) / 2.0;
+    // Push the common cap below the shortest natural tab but above the minimum
+    // width floor. At this threshold all three tabs should shrink together.
+    let all_tabs_cap = (px(components::Tab::MIN_WIDTH_PX) + natural[0]) / 2.0;
     resize_repo_tab_strip_to(
         cx,
         &view,
