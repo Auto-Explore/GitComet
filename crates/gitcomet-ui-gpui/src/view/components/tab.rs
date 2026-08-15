@@ -156,8 +156,9 @@ impl Tab {
     /// side. Kept at the full gutter width so the curve lands exactly on the
     /// neighbouring tab's edge instead of stopping short or running under it.
     const TAB_BOTTOM_CURVE_RADIUS_PX: f32 = Self::HORIZONTAL_MARGIN_PX * 2.0;
-    /// Tabs shrink no further than this before the strip scrolls.
-    const TAB_MIN_WIDTH_PX: f32 = 102.0;
+    /// Tabs shrink no further than this before the strip scrolls. Public so
+    /// tests can pin the floor without restating the number.
+    pub const MIN_WIDTH_PX: f32 = 126.0;
 
     /// Overlay an idle tab picks up on hover. Exposed so anything painted on
     /// top of a tab (the label fade) can flatten it into a matching color.
@@ -223,7 +224,7 @@ impl Tab {
         let chrome = horizontal_padding * 2.0
             // Left and right borders are physical one-pixel rules.
             + px(2.0);
-        (content_width + chrome).max(ui_scale.px(Self::TAB_MIN_WIDTH_PX))
+        (content_width + chrome).max(ui_scale.px(Self::MIN_WIDTH_PX))
     }
 
     pub fn end_slot(mut self, slot: impl IntoElement) -> Self {
@@ -284,7 +285,7 @@ impl Tab {
             .div
             .group("tab")
             .h(scaled_px(TAB_HEIGHT_PX))
-            .min_w(scaled_px(Self::TAB_MIN_WIDTH_PX))
+            .min_w(scaled_px(Self::MIN_WIDTH_PX))
             .mx(scaled_px(Self::HORIZONTAL_MARGIN_PX))
             .px(horizontal_padding)
             .pt(scaled_px(Self::TAB_TOP_PADDING_PX))
