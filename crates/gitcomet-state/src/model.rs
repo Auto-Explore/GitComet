@@ -431,6 +431,12 @@ pub struct MainViewSnapshot {
     /// snapshot that omitted it would restore a target and selection that the
     /// pane never gets around to showing.
     pub range_selection: Option<RangeSelection>,
+    /// The linked-worktree row whose uncommitted changes the details pane is
+    /// showing, if any. A third kind of history selection alongside a commit and
+    /// a comparison, and mutually exclusive with both -- each setter clears the
+    /// others. Without it, selecting a worktree row reads as "selection cleared"
+    /// and back/forward can neither leave the row nor return to it.
+    pub worktree_selection: Option<PathBuf>,
 }
 
 /// Browser-style back/forward stack. `cursor` indexes the currently shown entry
@@ -983,6 +989,37 @@ pub struct InlineSubmoduleDiffEntry {
     pub kind: FileStatusKind,
     pub target: DiffTarget,
     pub section: InlineSubmoduleDiffSection,
+}
+
+/// The inline-diff entries for a linked worktree's changed files, in the order
+/// the rows are rendered: staged first, then unstaged, the same order the
+/// working-tree pane uses.
+///
+/// One builder rather than two, because the indices have to agree. The rows are
+/// rebuilt from every scan while the open diff carries the list it was opened
+/// with, so the reducer re-resolves that list against each new scan
+/// (`refresh_worktree_inline_diff_entries`) -- and a second, separately written
+/// ordering in the view would silently desynchronize the two.
+pub fn worktree_inline_diff_entries(
+    summary: &WorktreeDirtySummary,
+) -> Vec<InlineSubmoduleDiffEntry> {
+    let staged = summary.staged.iter().map(|f| (f, DiffArea::Staged));
+    let unstaged = summary.unstaged.iter().map(|f| (f, DiffArea::Unstaged));
+    staged
+        .chain(unstaged)
+        .map(|(file, area)| InlineSubmoduleDiffEntry {
+            path: file.path.clone(),
+            kind: file.kind,
+            target: DiffTarget::WorkingTree {
+                path: file.path.clone(),
+                area,
+            },
+            section: match area {
+                DiffArea::Staged => InlineSubmoduleDiffSection::LiveStaged,
+                _ => InlineSubmoduleDiffSection::LiveUnstaged,
+            },
+        })
+        .collect()
 }
 
 /// Which foreign repository the inline diff is showing, and therefore how the
@@ -1974,6 +2011,7 @@ impl RepoState {
             edit_mode: self.diff_state.edit_mode,
             selected_commit: self.history_state.selected_commit.clone(),
             range_selection: self.history_state.range_selection.clone(),
+            worktree_selection: self.history_state.worktree_selection.clone(),
         }
     }
 
@@ -1986,6 +2024,7 @@ impl RepoState {
             && self.diff_state.edit_mode == other.edit_mode
             && self.history_state.selected_commit == other.selected_commit
             && self.history_state.range_selection == other.range_selection
+            && self.history_state.worktree_selection == other.worktree_selection
     }
 
     pub(crate) fn set_diff_target(&mut self, target: Option<DiffTarget>) {
@@ -2069,6 +2108,7 @@ mod tests {
             edit_mode: false,
             selected_commit: None,
             range_selection: None,
+            worktree_selection: None,
         };
         let commit_view = MainViewSnapshot {
             diff_target: None,
@@ -2076,6 +2116,7 @@ mod tests {
             edit_mode: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
+            worktree_selection: None,
         };
         let file_view = MainViewSnapshot {
             diff_target: Some(DiffTarget::Commit {
@@ -2086,6 +2127,7 @@ mod tests {
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
+            worktree_selection: None,
         };
 
         let mut h: NavStack<MainViewSnapshot> = NavStack::default();
@@ -2267,6 +2309,7 @@ mod tests {
             edit_mode: false,
             selected_commit: None,
             range_selection: None,
+            worktree_selection: None,
         };
         let commit_view = MainViewSnapshot {
             diff_target: None,
@@ -2274,6 +2317,7 @@ mod tests {
             edit_mode: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
+            worktree_selection: None,
         };
         let file_diff = MainViewSnapshot {
             diff_target: Some(DiffTarget::Commit {
@@ -2284,6 +2328,7 @@ mod tests {
             content_preview: false,
             selected_commit: Some(CommitId("aaa".into())),
             range_selection: None,
+            worktree_selection: None,
         };
 
         let mut h: NavStack<MainViewSnapshot> = NavStack::default();
@@ -2317,6 +2362,7 @@ mod tests {
             content_preview: false,
             selected_commit: None,
             range_selection: None,
+            worktree_selection: None,
         };
         let view_b = MainViewSnapshot {
             diff_target: Some(DiffTarget::WorkingTree {
@@ -2327,6 +2373,7 @@ mod tests {
             content_preview: false,
             selected_commit: None,
             range_selection: None,
+            worktree_selection: None,
         };
 
         let mut h: NavStack<MainViewSnapshot> = NavStack::default();
@@ -2336,6 +2383,7 @@ mod tests {
             edit_mode: false,
             selected_commit: None,
             range_selection: None,
+            worktree_selection: None,
         };
         h.reconcile(empty.clone(), false);
         h.reconcile(view_a.clone(), true);

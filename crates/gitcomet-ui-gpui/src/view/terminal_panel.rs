@@ -2823,7 +2823,7 @@ impl GitCometView {
                 theme.colors.surface.panel
             };
             let text_color = if is_active {
-                theme.colors.foreground.primary
+                theme.colors.interaction.selected_foreground
             } else {
                 theme.colors.foreground.secondary
             };

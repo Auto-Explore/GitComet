@@ -959,6 +959,19 @@ pub(super) fn schedule_load_worktree_dirty(
             let own_workdir = canonicalize_or_original(own_workdir);
             let result = repo
                 .list_worktrees_cancellable(&cancellation)
+                .inspect_err(|_| {
+                    // The listing is what names the live worktrees, so a failed
+                    // one leaves nothing to prune against -- and its causes (a
+                    // concurrent `git worktree prune`, a permissions blip, an
+                    // unmounted volume) are exactly when stale handles pile up.
+                    // Drop this repo's cache outright: it is only a cache, and
+                    // the next scan reopens whatever it still needs. A cancelled
+                    // listing is not evidence of anything, so it keeps its
+                    // handles.
+                    if !cancellation.is_cancelled() {
+                        retain_worktree_scan_handles(worktree_scan_handles(), repo_id, &[]);
+                    }
+                })
                 .map(|worktrees| {
                     let mut summaries = Vec::new();
                     let mut scanned = Vec::with_capacity(worktrees.len());
@@ -978,16 +991,26 @@ pub(super) fn schedule_load_worktree_dirty(
                         ) else {
                             continue;
                         };
-                        let Ok(status) = handle.status_cancellable(&cancellation) else {
-                            // A handle that cannot report status is not worth
-                            // keeping: the worktree may have been removed or
-                            // replaced underneath it.
-                            forget_worktree_scan_handle(
-                                worktree_scan_handles(),
-                                repo_id,
-                                &worktree.path,
-                            );
-                            continue;
+                        let status = match handle.status_cancellable(&cancellation) {
+                            Ok(status) => status,
+                            // Cancellation surfaces as an `Err` here like any
+                            // other failure, and it says nothing about the
+                            // handle. `CancelRepoLoads` fires on every tab
+                            // switch, reload and completed action, so treating
+                            // it as a broken handle would discard healthy ones
+                            // routinely and pay full discovery to reopen them.
+                            Err(_) if cancellation.is_cancelled() => break,
+                            Err(_) => {
+                                // A handle that cannot report status is not
+                                // worth keeping: the worktree may have been
+                                // removed or replaced underneath it.
+                                forget_worktree_scan_handle(
+                                    worktree_scan_handles(),
+                                    repo_id,
+                                    &worktree.path,
+                                );
+                                continue;
+                            }
                         };
                         // Only the selected worktree's files are carried back;
                         // see `WorktreeDirtySummary`.

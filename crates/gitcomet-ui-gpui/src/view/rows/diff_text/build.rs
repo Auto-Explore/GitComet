@@ -417,41 +417,35 @@ pub(super) fn styled_text_to_cached_from_buf(
 pub(super) fn segments_to_cached_styled_text(
     theme: AppTheme,
     segments: &[CachedDiffTextSegment],
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
-    let (expanded_text, highlights) = styled_text_for_diff_segments(theme, segments, word_color);
+    let (expanded_text, highlights) = styled_text_for_diff_segments(theme, segments, word_kind);
     styled_text_to_cached(expanded_text, highlights)
 }
 
-fn word_highlight_colors(
+/// The wash behind a word-diff run, and the text colour to pin under it.
+///
+/// Both come from the theme's own `diff.*.word_background` token, so a theme can
+/// tune the wash and every renderer follows -- including the streamed one, which
+/// used to derive its own and gave a long line a different word-diff colour from
+/// a short one in the same diff.
+///
+/// Dark themes carry that token as an alpha over the row and leave the text in
+/// its syntax colour; light themes carry it opaque, which would drown syntax
+/// colours, so the diff foreground is pinned instead.
+pub(in crate::view::rows) fn word_highlight_colors(
     theme: AppTheme,
-    foreground: gpui::Rgba,
+    kind: crate::theme::DiffColorKind,
 ) -> (gpui::Rgba, Option<gpui::Rgba>) {
-    if theme.is_dark {
-        return (with_alpha(foreground, 0.22), None);
-    }
-
-    for set in [
-        theme.colors.diff.added,
-        theme.colors.diff.removed,
-        theme.colors.diff.modified,
-    ] {
-        if foreground == set.foreground {
-            return (set.word_background, Some(set.foreground));
-        }
-    }
-    (with_alpha(foreground, 0.16), Some(foreground))
+    let set = theme.colors.diff.set(kind);
+    let foreground = (!theme.is_dark).then_some(set.foreground);
+    (set.word_background, foreground)
 }
 
+/// Same shape for the search-match highlight, off `editor.search_match_*`.
 fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
-    if theme.is_dark {
-        (with_alpha(theme.colors.accent.foreground, 0.22), None)
-    } else {
-        (
-            theme.colors.editor.search_match_background,
-            Some(theme.colors.editor.search_match_foreground),
-        )
-    }
+    let foreground = (!theme.is_dark).then_some(theme.colors.editor.search_match_foreground);
+    (theme.colors.editor.search_match_background, foreground)
 }
 
 /// Fused version of `build_diff_text_segments` + `segments_to_cached_styled_text`.
@@ -466,7 +460,7 @@ pub(super) fn build_styled_text_fused(
     let text = request.build.text;
     let word_ranges = request.build.word_ranges;
     let query = request.build.query;
-    let word_color = request.build.word_color;
+    let word_kind = request.build.word_kind;
     let DiffSyntaxConfig {
         language,
         mode: syntax_mode,
@@ -587,7 +581,7 @@ pub(super) fn build_styled_text_fused(
             let mut style = gpui::HighlightStyle::default();
 
             let mut semantic_word_foreground = None;
-            if in_word && let Some(c) = word_color {
+            if in_word && let Some(c) = word_kind {
                 let (background, foreground) = word_highlight_colors(theme, c);
                 style.background_color = Some(background.into());
                 semantic_word_foreground = foreground;
@@ -657,7 +651,7 @@ pub(in super::super) fn build_cached_diff_styled_text(
     query: &str,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     build_cached_diff_styled_text_with_optional_palette(
         theme,
@@ -670,7 +664,7 @@ pub(in super::super) fn build_cached_diff_styled_text(
                 language,
                 mode: syntax_mode,
             },
-            word_color,
+            word_kind,
         },
         None,
     )
@@ -684,7 +678,7 @@ pub(in super::super) fn build_cached_diff_styled_text_with_source_identity(
     query: &str,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     build_cached_diff_styled_text_with_optional_palette(
         theme,
@@ -697,7 +691,7 @@ pub(in super::super) fn build_cached_diff_styled_text_with_source_identity(
                 language,
                 mode: syntax_mode,
             },
-            word_color,
+            word_kind,
         },
         source_identity,
     )
@@ -798,7 +792,7 @@ fn build_cached_diff_styled_text_with_optional_palette(
 
     if highlight_palette.is_none()
         && query.is_empty()
-        && request.word_color.is_none()
+        && request.word_kind.is_none()
         && !word_ranges.is_empty()
         && should_cache_single_line_styled_text(text)
     {
@@ -1357,7 +1351,7 @@ pub(in crate::view) fn syntax_highlights_for_line(
 pub(super) fn styled_text_for_diff_segments(
     theme: AppTheme,
     segments: &[CachedDiffTextSegment],
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> (SharedString, Vec<(Range<usize>, gpui::HighlightStyle)>) {
     let combined_len: usize = segments.iter().map(|s| s.text.len()).sum();
     let mut combined = String::with_capacity(combined_len);
@@ -1373,7 +1367,7 @@ pub(super) fn styled_text_for_diff_segments(
 
         let mut semantic_word_foreground = None;
         if seg.in_word
-            && let Some(c) = word_color
+            && let Some(c) = word_kind
         {
             let (background, foreground) = word_highlight_colors(theme, c);
             style.background_color = Some(background.into());

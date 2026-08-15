@@ -15,7 +15,7 @@ fn build_conflict_cached_diff_styled_text(
     query: &str,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     build_conflict_cached_diff_styled_text_with_source_identity(
         theme,
@@ -25,7 +25,7 @@ fn build_conflict_cached_diff_styled_text(
         query,
         language,
         syntax_mode,
-        word_color,
+        word_kind,
     )
 }
 
@@ -37,7 +37,7 @@ fn build_conflict_cached_diff_styled_text_with_source_identity(
     query: &str,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     let _perf_scope = perf::span(ViewPerfSpan::StyledTextBuild);
     build_cached_diff_styled_text_with_source_identity(
@@ -48,7 +48,7 @@ fn build_conflict_cached_diff_styled_text_with_source_identity(
         query,
         language,
         syntax_mode,
-        word_color,
+        word_kind,
     )
 }
 
@@ -380,7 +380,10 @@ impl MainPaneView {
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let show_ws = this.reveal_whitespace_chars;
-        let word_hl_color = Some(theme.colors.status.warning.foreground);
+        // A three-way conflict column marks changed words, so it takes the
+        // "modified" diff palette -- the same amber every bundled theme also
+        // uses for status.warning, but themeable as the diff token it is.
+        let word_hl_kind = Some(crate::theme::DiffColorKind::Modified);
         let syntax_lang = this.conflict_row_syntax_language();
         let prepared_docs = &this.conflict_three_way_prepared_syntax_documents;
 
@@ -444,7 +447,7 @@ impl MainPaneView {
                     word_ranges,
                     "",
                     syntax_config,
-                    word_hl_color,
+                    word_hl_kind,
                     prepared_line,
                 );
                 let (styled, is_pending) = result.into_parts();
@@ -463,7 +466,7 @@ impl MainPaneView {
                     "",
                     syntax_lang,
                     DiffSyntaxMode::Auto,
-                    word_hl_color,
+                    word_hl_kind,
                 );
                 this.conflict_three_way_segments_cache
                     .insert((ix, column), styled);

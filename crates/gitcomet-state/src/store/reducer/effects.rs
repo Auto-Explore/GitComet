@@ -539,15 +539,28 @@ pub(super) fn worktree_dirty_loaded(
     result: std::result::Result<Vec<WorktreeDirtySummary>, Error>,
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
+    let mut reselect_inline_ix = None;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let worktree_dirty = match result {
-            Ok(v) => Loadable::Ready(v),
+        match result {
+            Ok(v) => repo_state.set_worktree_dirty(Loadable::Ready(v)),
             // A worktree that cannot be opened (removed, on an unmounted
             // volume) is a routine condition, not something worth a diagnostic
-            // banner -- the scan simply reports nothing for it.
-            Err(e) => Loadable::Error(e.to_string()),
-        };
-        repo_state.set_worktree_dirty(worktree_dirty);
+            // banner -- the scan simply reports nothing for it, per worktree,
+            // inside the scan.
+            //
+            // A failure of the whole reply is a different thing: it means the
+            // scan never ran (cancelled load, repo handle gone, git runtime
+            // unavailable), not that the worktrees are clean. Overwriting a good
+            // list with it would blank every row and -- through
+            // `selected_worktree_is_gone` below -- drop the selection and close
+            // the inline diff the user is reading. Keep the last known counts on
+            // screen, and record the error only when there is nothing to keep.
+            Err(e) => {
+                if !matches!(repo_state.worktree_dirty, Loadable::Ready(_)) {
+                    repo_state.set_worktree_dirty(Loadable::Error(e.to_string()));
+                }
+            }
+        }
         // A selected worktree row only exists while that worktree has changes.
         // Once it goes clean -- committed, stashed, reverted -- or drops out of a
         // failed scan, its row is gone, and a selection pointing at a row nothing
@@ -558,11 +571,15 @@ pub(super) fn worktree_dirty_loaded(
             .as_ref()
             .is_some_and(|selected| match &repo_state.worktree_dirty {
                 Loadable::Ready(dirty) => !dirty.iter().any(|summary| &summary.path == selected),
-                _ => true,
+                // Anything else is the absence of an answer, not the answer that
+                // the row is gone. Dropping the selection on it would close the
+                // user's open diff every time a scan is cancelled.
+                _ => false,
             });
         if selected_worktree_is_gone {
             repo_state.set_worktree_selection(None);
         }
+        reselect_inline_ix = refresh_worktree_inline_diff_entries(repo_state);
         if repo_state
             .loads_in_flight
             .finish(RepoLoadsInFlight::WORKTREE_DIRTY)
@@ -573,7 +590,67 @@ pub(super) fn worktree_dirty_loaded(
             effects.push(worktree_dirty_effect(repo_state));
         }
     }
+    // Outside the borrow above. A no-op when the file kept its place; when it
+    // changed sides (staged <-> unstaged) this reloads the diff for the target
+    // that now belongs to it.
+    if let Some(ix) = reselect_inline_ix {
+        effects.extend(super::diff_selection::select_inline_submodule_diff(
+            state, repo_id, ix,
+        ));
+    }
     effects
+}
+
+/// Re-resolves an open linked-worktree inline diff against a scan that has just
+/// landed.
+///
+/// The entry list is a snapshot of the worktree's changed files taken when a row
+/// was clicked, while the rows themselves are rebuilt from every scan. Left
+/// alone, a rescan that adds or removes a file shifts the row indices out from
+/// under `selected_ix`: the pane highlights whichever file now sits at that
+/// index, and steps to neighbours that may no longer be changed at all. Submodule
+/// inline diffs need none of this -- their entries come from a fixed commit.
+///
+/// Returns the index the selection moved to, for the caller to re-select once the
+/// borrow ends. `None` when there is nothing to do -- and when the file the diff
+/// shows is no longer changed, in which case the diff is closed outright, the
+/// same way a vanished row retires one.
+fn refresh_worktree_inline_diff_entries(repo_state: &mut RepoState) -> Option<usize> {
+    let (entries, selected) = {
+        let inline = repo_state.diff_state.inline_submodule_diff.as_ref()?;
+        if !matches!(inline.origin, ForeignDiffOrigin::Worktree { .. }) {
+            return None;
+        }
+        let Loadable::Ready(dirty) = &repo_state.worktree_dirty else {
+            return None;
+        };
+        let summary = dirty
+            .iter()
+            .find(|summary| summary.path == inline.submodule_repo_path)?;
+        let entries = crate::model::worktree_inline_diff_entries(summary);
+        let selected = entries.iter().position(|entry| {
+            inline
+                .entries
+                .get(inline.selected_ix)
+                .is_some_and(|shown| shown.path == entry.path)
+        });
+        if selected == Some(inline.selected_ix) && entries == inline.entries {
+            return None;
+        }
+        (entries, selected)
+    };
+
+    let Some(selected) = selected else {
+        repo_state.diff_state.inline_submodule_diff = None;
+        repo_state.bump_diff_state_rev();
+        return None;
+    };
+
+    let inline = repo_state.diff_state.inline_submodule_diff.as_mut()?;
+    inline.entries = entries;
+    inline.selected_ix = selected;
+    repo_state.bump_diff_state_rev();
+    Some(selected)
 }
 
 pub(super) fn ref_metadata_loaded(
@@ -1093,6 +1170,15 @@ pub(super) fn select_worktree_uncommitted(
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+    // Idempotent on purpose. A pending history reveal re-drives on every render
+    // of the history panel, so this message arrives once per frame for as long
+    // as pagination takes to reach the target. Re-running the body each time
+    // would bump `commit_details_rev` -- which the details pane hashes, so the
+    // repaint drives the next render -- and re-arm a full `git status` walk
+    // across every linked worktree.
+    if repo_state.history_state.worktree_selection.as_deref() == Some(path.as_path()) {
+        return Vec::new();
+    }
     // Whatever this displaces -- another worktree's open diff, say -- is retired
     // by `retire_orphaned_worktree_diffs` once the reducer settles.
     repo_state.set_worktree_selection(Some(path));

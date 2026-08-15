@@ -116,10 +116,6 @@ fn collapsed_hunk_header_bg(theme: AppTheme) -> gpui::Rgba {
     )
 }
 
-fn focused_diff_row_alpha(theme: AppTheme) -> f32 {
-    if theme.is_dark { 0.30 } else { 0.20 }
-}
-
 fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
     with_alpha(
         theme.colors.foreground.secondary,
@@ -127,16 +123,17 @@ fn focused_diff_neutral_row_bg(theme: AppTheme) -> gpui::Rgba {
     )
 }
 
+/// The focused row sits inside the diff body, so it takes the diff palette's own
+/// focused token rather than a tint derived from the status palette: those are
+/// two different greens and reds in every theme, and deriving it here made
+/// focusing a row shift its hue and left `diff.*.focused_background` with no
+/// effect at all.
+///
+/// A context/header/hunk row belongs to no diff kind and keeps the neutral wash.
 fn focused_diff_line_bg(theme: AppTheme, kind: DiffLineKind) -> gpui::Rgba {
     match kind {
-        DiffLineKind::Add => with_alpha(
-            theme.colors.status.success.foreground,
-            focused_diff_row_alpha(theme),
-        ),
-        DiffLineKind::Remove => with_alpha(
-            theme.colors.status.danger.foreground,
-            focused_diff_row_alpha(theme),
-        ),
+        DiffLineKind::Add => theme.colors.diff.added.focused_background,
+        DiffLineKind::Remove => theme.colors.diff.removed.focused_background,
         DiffLineKind::Context | DiffLineKind::Header | DiffLineKind::Hunk => {
             focused_diff_neutral_row_bg(theme)
         }
@@ -304,27 +301,26 @@ impl gpui::Element for ScrollPinnedHunkShell {
     }
 }
 
-/// Returns the word-highlight color for a diff line kind.
-fn diff_line_word_color(kind: DiffLineKind, theme: AppTheme) -> Option<gpui::Rgba> {
+/// Which diff palette a line's word highlights come from.
+fn diff_line_word_kind(kind: DiffLineKind) -> Option<crate::theme::DiffColorKind> {
     match kind {
-        DiffLineKind::Add => Some(theme.colors.diff.added.foreground),
-        DiffLineKind::Remove => Some(theme.colors.diff.removed.foreground),
+        DiffLineKind::Add => Some(crate::theme::DiffColorKind::Added),
+        DiffLineKind::Remove => Some(crate::theme::DiffColorKind::Removed),
         _ => None,
     }
 }
 
-/// Returns the word-highlight color for a file diff split column.
+/// Same, for a file diff split column.
 /// Left highlights Remove/Modify; Right highlights Add/Modify.
-fn file_diff_split_word_color(
+fn file_diff_split_word_kind(
     column: PatchSplitColumn,
     kind: FileDiffRowKind,
-    theme: AppTheme,
-) -> Option<gpui::Rgba> {
+) -> Option<crate::theme::DiffColorKind> {
     match column {
         PatchSplitColumn::Left => matches!(kind, FileDiffRowKind::Remove | FileDiffRowKind::Modify)
-            .then_some(theme.colors.diff.removed.foreground),
+            .then_some(crate::theme::DiffColorKind::Removed),
         PatchSplitColumn::Right => matches!(kind, FileDiffRowKind::Add | FileDiffRowKind::Modify)
-            .then_some(theme.colors.diff.added.foreground),
+            .then_some(crate::theme::DiffColorKind::Added),
     }
 }
 
@@ -349,7 +345,7 @@ fn streamed_diff_text_spec_with_syntax(
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     syntax: diff_canvas::StreamedDiffTextSyntaxSource,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
     diff_canvas::is_streamable_diff_text(&raw_text).then(|| {
@@ -359,7 +355,7 @@ fn streamed_diff_text_spec_with_syntax(
             query_options,
             query_matcher,
             word_ranges: Arc::from(word_ranges),
-            word_color,
+            word_kind,
             syntax,
         }
     })
@@ -371,7 +367,7 @@ fn heuristic_streamed_diff_text_spec(
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     mode: rows::DiffSyntaxMode,
 ) -> Option<diff_canvas::StreamedDiffTextPaintSpec> {
@@ -385,7 +381,7 @@ fn heuristic_streamed_diff_text_spec(
         query_options,
         query_matcher,
         word_ranges,
-        word_color,
+        word_kind,
         syntax,
     )
 }
@@ -397,7 +393,7 @@ fn prepared_streamed_diff_text_spec(
     query_options: DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
     word_ranges: Vec<Range<usize>>,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     language: Option<rows::DiffSyntaxLanguage>,
     fallback_mode: rows::DiffSyntaxMode,
     document_text: Arc<str>,
@@ -424,7 +420,7 @@ fn prepared_streamed_diff_text_spec(
         query_options,
         query_matcher,
         word_ranges,
-        word_color,
+        word_kind,
         syntax,
     )
 }
@@ -436,7 +432,7 @@ fn build_file_diff_cached_styled_text(
     context_prefix: &str,
     language: Option<DiffSyntaxLanguage>,
     syntax_mode: DiffSyntaxMode,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
 ) -> CachedDiffStyledText {
     if should_truncate_file_diff_display(raw_text) {
         let display = file_diff_display_text(raw_text);
@@ -458,7 +454,7 @@ fn build_file_diff_cached_styled_text(
         context_prefix,
         language,
         syntax_mode,
-        word_color,
+        word_kind,
     )
 }
 
@@ -469,7 +465,7 @@ fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
     word_ranges: &[Range<usize>],
     context_prefix: &str,
     syntax: DiffSyntaxConfig,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     projected: rows::PreparedDiffSyntaxLine,
 ) -> (CachedDiffStyledText, bool) {
     if should_truncate_file_diff_display(raw_text) {
@@ -494,7 +490,7 @@ fn build_file_diff_cached_styled_text_for_prepared_line_nonblocking(
         word_ranges,
         context_prefix,
         syntax,
-        word_color,
+        word_kind,
         projected,
     )
     .into_parts()
@@ -1065,7 +1061,7 @@ impl MainPaneView {
                                 )
                                 .then_some(language)
                                 .flatten();
-                                let word_color = diff_line_word_color(visual_kind, theme);
+                                let word_kind = diff_line_word_kind(visual_kind);
                                 let prepared_line = match row.kind {
                                     DiffLineKind::Remove => {
                                         rows::prepared_diff_syntax_line_for_one_based_line(
@@ -1110,7 +1106,7 @@ impl MainPaneView {
                                     query_options,
                                     query_matcher.clone(),
                                     row_word_ranges.clone(),
-                                    word_color,
+                                    word_kind,
                                     line_language,
                                     syntax_mode,
                                     document_text,
@@ -1128,7 +1124,7 @@ impl MainPaneView {
                                     .diff_text_segments_cache_get(row_ix, cache_epoch)
                                     .is_none()
                                 {
-                                    let word_color = diff_line_word_color(visual_kind, theme);
+                                    let word_kind = diff_line_word_kind(visual_kind);
                                     let is_content_line = matches!(
                                         line.kind,
                                         DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -1147,7 +1143,7 @@ impl MainPaneView {
                                                 language: line_language,
                                                 mode: syntax_mode,
                                             },
-                                            word_color,
+                                            word_kind,
                                             projected,
                                         );
                                     if is_pending {
@@ -1322,7 +1318,7 @@ impl MainPaneView {
                         )
                         .then_some(language)
                         .flatten();
-                        let word_color = diff_line_word_color(visual_kind, theme);
+                        let word_kind = diff_line_word_kind(visual_kind);
                         let prepared_line = match row.kind {
                             DiffLineKind::Remove => rows::prepared_diff_syntax_line_for_one_based_line(
                                 this.file_diff_split_prepared_syntax_document(
@@ -1363,7 +1359,7 @@ impl MainPaneView {
                             query_options,
                             query_matcher.clone(),
                             row_word_ranges.clone(),
-                            word_color,
+                            word_kind,
                             line_language,
                             syntax_mode,
                             document_text,
@@ -1385,7 +1381,7 @@ impl MainPaneView {
                                 .diff_text_segments_cache_get(inline_ix, cache_epoch)
                                 .is_none()
                             {
-                                let word_color = diff_line_word_color(visual_kind, theme);
+                                let word_kind = diff_line_word_kind(visual_kind);
                                 let is_content_line = matches!(
                                     line.kind,
                                     DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -1403,7 +1399,7 @@ impl MainPaneView {
                                             language: line_language,
                                             mode: syntax_mode,
                                         },
-                                        word_color,
+                                        word_kind,
                                         projected,
                                     );
                                 if is_pending {
@@ -1439,7 +1435,7 @@ impl MainPaneView {
                             .diff_text_segments_cache_get(inline_ix, cache_epoch)
                             .is_none()
                         {
-                            let word_color = diff_line_word_color(visual_kind, theme);
+                            let word_kind = diff_line_word_kind(visual_kind);
                             let is_content_line = matches!(
                                 line.kind,
                                 DiffLineKind::Add | DiffLineKind::Remove | DiffLineKind::Context
@@ -1457,7 +1453,7 @@ impl MainPaneView {
                                         language: line_language,
                                         mode: syntax_mode,
                                     },
-                                    word_color,
+                                    word_kind,
                                     projected,
                                 )
                                 .into_parts();
@@ -1564,7 +1560,7 @@ impl MainPaneView {
                             query_options,
                             query_matcher.clone(),
                             word_ranges.to_vec(),
-                            diff_line_word_color(visual_kind, theme),
+                            diff_line_word_kind(visual_kind),
                             language,
                             syntax_mode,
                         )
@@ -1579,7 +1575,7 @@ impl MainPaneView {
                         .is_none()
                 {
                     let computed = if matches!(click_kind, DiffClickKind::Line) {
-                        let word_color = diff_line_word_color(visual_kind, theme);
+                        let word_kind = diff_line_word_kind(visual_kind);
                         let content_text = diff_content_text(&line);
 
                         build_cached_diff_styled_text_with_source_identity(
@@ -1590,7 +1586,7 @@ impl MainPaneView {
                             "",
                             language,
                             syntax_mode,
-                            word_color,
+                            word_kind,
                         )
                     } else {
                         let display =
@@ -1848,8 +1844,8 @@ impl MainPaneView {
                             let visual_kind = this.file_diff_split_visual_kind(row_ix);
                             let row_word_ranges =
                                 this.file_diff_split_word_ranges(row_ix, region);
-                            let row_word_color =
-                                file_diff_split_word_color(column, visual_kind, theme);
+                            let row_word_kind =
+                                file_diff_split_word_kind(column, visual_kind);
                             let streamed_spec =
                                 file_diff_split_side_text_owned(&row, is_left).and_then(
                                     |raw_text| {
@@ -1859,7 +1855,7 @@ impl MainPaneView {
                                             query_options,
                                             query_matcher.clone(),
                                             row_word_ranges.clone(),
-                                            row_word_color,
+                                            row_word_kind,
                                             language,
                                             syntax_mode,
                                             Arc::clone(&document_text),
@@ -1888,7 +1884,7 @@ impl MainPaneView {
                                                 language,
                                                 mode: syntax_mode,
                                             },
-                                            row_word_color,
+                                            row_word_kind,
                                             rows::prepared_diff_syntax_line_for_one_based_line(
                                                 syntax_document,
                                                 file_diff_split_side_line(&row, is_left),
@@ -1984,7 +1980,7 @@ impl MainPaneView {
                     };
                     let visual_kind = this.file_diff_split_visual_kind(row_ix);
                     let row_word_ranges = this.file_diff_split_word_ranges(row_ix, region);
-                    let row_word_color = file_diff_split_word_color(column, visual_kind, theme);
+                    let row_word_kind = file_diff_split_word_kind(column, visual_kind);
                     let streamed_spec = file_diff_split_side_text_owned(&row, is_left).and_then(
                         |raw_text| {
                             prepared_streamed_diff_text_spec(
@@ -1993,7 +1989,7 @@ impl MainPaneView {
                                 query_options,
                                 query_matcher.clone(),
                                 row_word_ranges.clone(),
-                                row_word_color,
+                                row_word_kind,
                                 language,
                                 syntax_mode,
                                 Arc::clone(&document_text),
@@ -2021,7 +2017,7 @@ impl MainPaneView {
                                     language,
                                     mode: syntax_mode,
                                 },
-                                row_word_color,
+                                row_word_kind,
                                 rows::prepared_diff_syntax_line_for_one_based_line(
                                     syntax_document,
                                     file_diff_split_side_line(&row, is_left),
@@ -2135,8 +2131,8 @@ impl MainPaneView {
                                 .get(src_ix)
                                 .and_then(|r| r.as_ref().cloned())
                                 .unwrap_or_default();
-                            let word_color =
-                                diff_line_word_color(this.patch_visual_line_kind(src_ix), theme);
+                            let word_kind =
+                                diff_line_word_kind(this.patch_visual_line_kind(src_ix));
                             let streamed_spec = file_diff_split_side_text_owned(&row, is_left)
                                 .and_then(|raw_text| {
                                     heuristic_streamed_diff_text_spec(
@@ -2145,7 +2141,7 @@ impl MainPaneView {
                                         query_options,
                                         query_matcher.clone(),
                                         word_ranges.clone(),
-                                        word_color,
+                                        word_kind,
                                         language,
                                         syntax_mode,
                                     )
@@ -2165,7 +2161,7 @@ impl MainPaneView {
                                         "",
                                         language,
                                         syntax_mode,
-                                        word_color,
+                                        word_kind,
                                     )
                                 } else {
                                     build_cached_diff_styled_text(
@@ -2175,7 +2171,7 @@ impl MainPaneView {
                                         "",
                                         language,
                                         syntax_mode,
-                                        word_color,
+                                        word_kind,
                                     )
                                 };
                                 this.diff_text_segments_cache_set(src_ix, cache_epoch, computed);
@@ -3786,16 +3782,17 @@ mod tests {
             let (remove_bg, _, _) = diff_line_colors(theme, DiffLineKind::Remove);
             let (context_bg, _, _) = diff_line_colors(theme, DiffLineKind::Context);
 
+            // The focused row is the diff palette's own token, not a tint mixed
+            // from the status palette: those greens and reds differ in every
+            // bundled theme, so deriving it there shifted the row's hue the
+            // moment it took focus.
+            assert_eq!(add_focus, theme.colors.diff.added.focused_background);
+            assert_eq!(remove_focus, theme.colors.diff.removed.focused_background);
+
             assert_ne!(add_focus, text_selection_bg);
             assert_ne!(remove_focus, text_selection_bg);
             assert_ne!(neutral_focus, text_selection_bg);
-            assert_ne!(
-                neutral_focus,
-                with_alpha(
-                    theme.colors.status.warning.foreground,
-                    focused_diff_row_alpha(theme)
-                )
-            );
+            assert_ne!(neutral_focus, theme.colors.diff.modified.focused_background);
             assert_ne!(add_focus, add_bg);
             assert_ne!(remove_focus, remove_bg);
             assert_ne!(neutral_focus, context_bg);
@@ -3809,13 +3806,9 @@ mod tests {
                 if theme.is_dark { 0.22 } else { 0.16 },
             );
             assert_eq!(collapsed_focus, expected_collapsed_focus);
-            assert_ne!(
-                collapsed_focus,
-                with_alpha(
-                    theme.colors.accent.foreground,
-                    focused_diff_row_alpha(theme)
-                )
-            );
+            assert_ne!(collapsed_focus, add_focus);
+            assert_ne!(collapsed_focus, remove_focus);
+            assert_ne!(collapsed_focus, neutral_focus);
             assert_ne!(collapsed_focus, text_selection_bg);
             assert_eq!(
                 focused_collapsed_hunk_bg(theme, Some(collapsed_hunk(false, true))),

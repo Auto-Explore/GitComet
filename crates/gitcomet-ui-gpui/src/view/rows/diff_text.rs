@@ -18,6 +18,7 @@ pub(in crate::view) use build::PreparedDocumentByteRangeHighlights;
 pub(super) use build::build_cached_diff_styled_text_with_palette;
 pub(in crate::view::rows) use build::hash_rgba_bits;
 pub(in crate::view) use build::syntax_highlights_for_line;
+pub(in crate::view::rows) use build::word_highlight_colors;
 pub(super) use build::{
     build_cached_diff_query_overlay_styled_text, build_cached_diff_styled_text,
     build_cached_diff_styled_text_from_relative_highlights,
@@ -883,7 +884,7 @@ pub(super) struct DiffTextBuildRequest<'a> {
     pub(super) word_ranges: &'a [Range<usize>],
     pub(super) query: &'a str,
     pub(super) syntax: DiffSyntaxConfig,
-    pub(super) word_color: Option<gpui::Rgba>,
+    pub(super) word_kind: Option<crate::theme::DiffColorKind>,
 }
 
 #[derive(Clone, Copy)]
@@ -1247,7 +1248,7 @@ mod tests {
         let (text, highlights) = styled_text_for_diff_segments(
             theme,
             &segments,
-            Some(theme.colors.diff.removed.foreground),
+            Some(crate::theme::DiffColorKind::Removed),
         );
         assert_eq!(text.as_ref(), "x");
         assert_eq!(highlights.len(), 1);
@@ -1266,7 +1267,7 @@ mod tests {
         let (_text, highlights) = styled_text_for_diff_segments(
             theme,
             &segments,
-            Some(theme.colors.diff.removed.foreground),
+            Some(crate::theme::DiffColorKind::Removed),
         );
         assert_eq!(
             highlights[0].1.background_color,
@@ -1292,6 +1293,36 @@ mod tests {
             query_highlights[0].1.color,
             Some(theme.colors.editor.search_match_foreground.into())
         );
+    }
+
+    /// The word wash is the theme's own token in both appearances, and it is
+    /// resolved from the diff kind the caller already knows rather than by
+    /// recognising a colour it was handed. Deriving it per renderer gave a line
+    /// past `STREAMED_DIFF_TEXT_MIN_BYTES` a different colour from its
+    /// neighbours; recognising it by colour paints removed words with the added
+    /// wash in any theme that reuses one hue for two kinds.
+    #[test]
+    fn word_highlights_come_from_the_diff_palettes_own_token() {
+        use crate::theme::DiffColorKind;
+
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            for (kind, set) in [
+                (DiffColorKind::Added, theme.colors.diff.added),
+                (DiffColorKind::Removed, theme.colors.diff.removed),
+                (DiffColorKind::Modified, theme.colors.diff.modified),
+            ] {
+                let (background, foreground) = word_highlight_colors(theme, kind);
+                assert_eq!(background, set.word_background, "{kind:?}");
+                // Dark carries the token as an alpha over the row and leaves the
+                // syntax colour alone; light carries it opaque, which would
+                // drown syntax colours, so the diff foreground is pinned.
+                assert_eq!(
+                    foreground,
+                    (!theme.is_dark).then_some(set.foreground),
+                    "{kind:?}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1828,7 +1859,7 @@ mod tests {
                     language: Some(DiffSyntaxLanguage::Rust),
                     mode: DiffSyntaxMode::Auto,
                 },
-                word_color: None,
+                word_kind: None,
             },
             prepared_line: PreparedDiffSyntaxLine {
                 document: Some(document),
@@ -1917,7 +1948,7 @@ mod tests {
                             language: Some(DiffSyntaxLanguage::Rust),
                             mode: DiffSyntaxMode::Auto,
                         },
-                        word_color: None,
+                        word_kind: None,
                     },
                     prepared_line: PreparedDiffSyntaxLine {
                         document: Some(document),
@@ -2695,13 +2726,11 @@ mod tests {
             (
                 3..5,
                 gpui::HighlightStyle {
-                    background_color: Some(
-                        with_alpha(
-                            theme.colors.accent.foreground,
-                            if theme.is_dark { 0.22 } else { 0.16 }
-                        )
-                        .into()
-                    ),
+                    // The theme's own search-match token, the same one the
+                    // non-overlay builder uses. It used to be mixed from the
+                    // accent here, which left `editor.search_match_background`
+                    // unread on dark themes and painted the two paths differently.
+                    background_color: Some(theme.colors.editor.search_match_background.into()),
                     ..Default::default()
                 }
             )

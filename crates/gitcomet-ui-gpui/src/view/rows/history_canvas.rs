@@ -132,8 +132,12 @@ fn history_chip_visual(theme: AppTheme, kind: HistoryChipStyleKind) -> HistoryCh
         // already a solid accent fill reads as a rendering artifact, not as a
         // selection. Selecting the checked-out branch is left unmarked here.
         HistoryChipStyleKind::Head => HistoryChipVisual {
-            border: with_alpha(theme.colors.accent.foreground, 0.90),
-            bg: with_alpha(theme.colors.accent.foreground, 0.90),
+            // `accent.solid`, not a near-opaque `accent.foreground`: this is the
+            // one solid-accent surface in the app, and the theme asserts 4.5:1
+            // of `on_solid` against `solid`. Mixing the fill from a different
+            // token let a theme pass that gate and still ship an unreadable chip.
+            border: theme.colors.accent.solid,
+            bg: theme.colors.accent.solid,
             text: theme.colors.accent.on_solid,
         },
         // The branch picked in the sidebar is tinted rather than merely
@@ -358,6 +362,12 @@ pub(super) fn history_commit_row_canvas(
     summary: HistoryTextVm,
     when: HistoryTextVm,
     short_sha: HistoryTextVm,
+    // The background the row's own `div` carries (selection, HEAD, open context
+    // menu), and the one it swaps in while hovered. Mirrored rather than painted
+    // again: the graph's icon nodes knock their glyphs out in the row background,
+    // so the canvas has to know what the row is actually showing.
+    row_bg_overlay: Option<gpui::Rgba>,
+    hover_bg_overlay: gpui::Rgba,
 ) -> AnyElement {
     super::canvas::keyed_canvas(
         ("history_commit_row_canvas", row_id),
@@ -377,8 +387,18 @@ pub(super) fn history_commit_row_canvas(
             let Some(graph_row) = graph_rows.get(graph_row_ix) else {
                 return;
             };
-            if hitbox.is_hovered(window) {
-                window.paint_quad(fill(bounds, theme.colors.interaction.hover_background));
+            // What the row is painted over, flattened as it is built up, so the
+            // graph's icon nodes can knock their glyphs out in it. The row's own
+            // `div` already paints the hover tint (or `row_bg_overlay` when not
+            // hovered) behind this canvas, so that one is only accounted for
+            // here, never painted a second time.
+            let mut row_background = theme.colors.surface.canvas;
+            if let Some(overlay) = if hitbox.is_hovered(window) {
+                Some(hover_bg_overlay)
+            } else {
+                row_bg_overlay
+            } {
+                row_background = crate::theme::composite_over(row_background, overlay);
             }
             // Purple highlight on the commit currently being browsed historically.
             if view
@@ -386,10 +406,10 @@ pub(super) fn history_commit_row_canvas(
                 .active_repo()
                 .is_some_and(|repo| repo.browsing_commit() == Some(&commit_id))
             {
-                window.paint_quad(fill(
-                    bounds,
-                    crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22),
-                ));
+                let tint =
+                    crate::theme::with_alpha(crate::theme::historical_outline(theme.is_dark), 0.22);
+                window.paint_quad(fill(bounds, tint));
+                row_background = crate::theme::composite_over(row_background, tint);
             }
             window.set_cursor_style(CursorStyle::PointingHand, &hitbox);
 
@@ -526,6 +546,7 @@ pub(super) fn history_commit_row_canvas(
                                 connect_from_top_col,
                                 is_stash_node,
                                 selected_lane,
+                                row_background,
                                 graph_bounds,
                                 window,
                                 cx,

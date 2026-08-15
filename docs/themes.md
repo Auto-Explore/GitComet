@@ -80,19 +80,12 @@ Each theme file is a bundle with a bundle name and one or more themes. The examp
           "foreground": "#edf1f7ff",
           "gutter_background": "#10131aff",
           "line_number": "#9ea7b8ff",
-          "line_number_active": "#edf1f7ff",
           "cursor": "#edf1f7c7",
           "selection_background": "#59b7ff47",
-          "selection_foreground": "#edf1f7ff",
-          "inactive_selection_background": "#59b7ff2e",
-          "current_line_background": "#1d2230ff",
           "search_match_background": "#3b2d1bff",
           "search_match_foreground": "#ffc06aff",
-          "search_match_border": "#98713eff",
           "bracket_match_background": "#ffffff26",
-          "whitespace": "#9ea7b8b8",
-          "indent_guide": "#ffffff14",
-          "indent_guide_active": "#556176ff"
+          "indent_guide": "#ffffff14"
         },
         "diff": {
           "added": { "foreground": "#b9f2c0ff", "background": "#163322ff", "word_background": "#b9f2c038", "focused_background": "#b9f2c033" },
@@ -219,12 +212,8 @@ you misspell is still an error — the file is rejected rather than half-applied
 - `status`: `info`, `success`, `warning`, `danger`; each contains
   `foreground`, `background`, and `border`
 - `editor`: `background`, `foreground`, `gutter_background`, `line_number`,
-  `line_number_active`, `cursor`, `selection_background`,
-  `selection_foreground`, `inactive_selection_background`,
-  `current_line_background`, `search_match_background`,
-  `search_match_foreground`, `search_match_border`,
-  `bracket_match_background`, `whitespace`, `indent_guide`,
-  `indent_guide_active`
+  `cursor`, `selection_background`, `search_match_background`,
+  `search_match_foreground`, `bracket_match_background`, `indent_guide`
 - `diff`: `added`, `removed`, `modified`; each contains `foreground`,
   `background`, `word_background`, and `focused_background`
 - `tooltip`: `background`, `foreground`

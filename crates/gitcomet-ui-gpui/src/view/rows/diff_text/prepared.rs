@@ -268,7 +268,7 @@ pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line
     word_ranges: &[Range<usize>],
     query: &str,
     syntax: DiffSyntaxConfig,
-    word_color: Option<gpui::Rgba>,
+    word_kind: Option<crate::theme::DiffColorKind>,
     prepared_line: PreparedDiffSyntaxLine,
 ) -> PreparedDocumentLineStyledText {
     build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_optional_palette(
@@ -280,7 +280,7 @@ pub(in super::super) fn build_cached_diff_styled_text_for_prepared_document_line
                 word_ranges,
                 query,
                 syntax,
-                word_color,
+                word_kind,
             },
             prepared_line,
         },
@@ -307,14 +307,14 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
     let text = request.build.text;
     let word_ranges = request.build.word_ranges;
     let query = request.build.query;
-    let word_color = request.build.word_color;
+    let word_kind = request.build.word_kind;
     let prepared_line = request.prepared_line;
     let DiffSyntaxConfig {
         language,
         mode: syntax_mode,
     } = request.build.syntax;
     let fallback = |mode| {
-        build_cached_diff_styled_text(theme, text, word_ranges, query, language, mode, word_color)
+        build_cached_diff_styled_text(theme, text, word_ranges, query, language, mode, word_kind)
     };
 
     if language.is_none() {
@@ -392,7 +392,7 @@ fn build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_opt
                                 language: None,
                                 mode: DiffSyntaxMode::HeuristicOnly,
                             },
-                            word_color,
+                            word_kind,
                         },
                         syntax_tokens_override: Some(&tokens),
                     },

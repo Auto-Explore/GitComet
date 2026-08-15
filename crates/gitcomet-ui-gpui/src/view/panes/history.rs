@@ -1070,6 +1070,11 @@ impl HistoryView {
             repo.stashes_rev.hash(&mut hasher);
             repo.history_state.selected_commit_rev.hash(&mut hasher);
             repo.file_browser.file_browser_rev.hash(&mut hasher);
+            // The linked-worktree rows live in this table: their badge counts come
+            // from the dirty scan and the selected row from the worktree selection,
+            // so both revs have to move the fingerprint or the rows never repaint.
+            repo.worktree_dirty_rev.hash(&mut hasher);
+            repo.history_state.worktree_selection_rev.hash(&mut hasher);
             repo.worktree_status_cache_rev().hash(&mut hasher);
             repo.staged_status_cache_rev().hash(&mut hasher);
         }
@@ -1872,10 +1877,22 @@ impl HistoryView {
         }
 
         match (&pending.worktree_path, decision.select_commit) {
-            (Some(path), _) => self.store.dispatch(Msg::SelectWorktreeUncommitted {
-                repo_id: pending.repo_id,
-                path: path.clone(),
-            }),
+            // A reveal aimed at a worktree row selects the row, not the commit
+            // that located it -- and only when the row is not already selected.
+            // This runs on every render of the history panel and the reveal
+            // stays pending for as long as pagination takes, so dispatching
+            // unconditionally would ask for the same selection every frame.
+            (Some(path), _) => {
+                let already_selected = self.active_repo().is_some_and(|repo| {
+                    repo.history_state.worktree_selection.as_deref() == Some(path.as_path())
+                });
+                if !already_selected {
+                    self.store.dispatch(Msg::SelectWorktreeUncommitted {
+                        repo_id: pending.repo_id,
+                        path: path.clone(),
+                    });
+                }
+            }
             (None, Some(commit_id)) => self.store.dispatch(Msg::SelectCommit {
                 repo_id: pending.repo_id,
                 commit_id,
@@ -2917,6 +2934,46 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::Arc;
     use std::time::{Duration, Instant, SystemTime};
+
+    /// The linked-worktree rows live in this table, so the two revs behind them
+    /// have to move the fingerprint. Without them a finished scan -- or a row
+    /// being selected -- changed nothing the pane hashed, and the rows sat stale
+    /// until some unrelated rev happened to move. Not reachable from a
+    /// `#[gpui::test]`: `stable_cached_view` returns the uncached view under
+    /// `cfg!(test)`, so the missed repaint is invisible there.
+    #[test]
+    fn the_history_fingerprint_tracks_the_worktree_revs() {
+        let mut state = AppState::default();
+        state
+            .repos
+            .push(gitcomet_state::model::RepoState::new_opening(
+                gitcomet_state::model::RepoId(1),
+                RepoSpec {
+                    workdir: PathBuf::from("/tmp/repo"),
+                },
+            ));
+        state.active_repo = Some(gitcomet_state::model::RepoId(1));
+
+        let fingerprint = |state: &AppState| HistoryView::notify_fingerprint_for(state, false);
+        let before = fingerprint(&state);
+
+        // The revs stand in for the writes that bump them: those setters are
+        // `pub(crate)` to `gitcomet-state`, and what is being asserted here is
+        // that the fingerprint reads them at all.
+        state.repos[0].worktree_dirty_rev += 1;
+        let after_scan = fingerprint(&state);
+        assert_ne!(
+            before, after_scan,
+            "a finished worktree scan must repaint the rows it feeds"
+        );
+
+        state.repos[0].history_state.worktree_selection_rev += 1;
+        assert_ne!(
+            after_scan,
+            fingerprint(&state),
+            "selecting a worktree row must repaint the row that shows it"
+        );
+    }
 
     struct BlockingBackend;
 

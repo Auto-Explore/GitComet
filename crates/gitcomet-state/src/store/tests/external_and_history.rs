@@ -1281,6 +1281,7 @@ fn reload_repo_clears_stale_navigation_history() {
         edit_mode: false,
         selected_commit: Some(c.clone()),
         range_selection: None,
+        worktree_selection: None,
     };
     state.repos[0].nav_history.record(snap(&commit_a));
     state.repos[0].nav_history.record(snap(&commit_b));

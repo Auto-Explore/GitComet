@@ -1168,7 +1168,7 @@ impl WorktreePreviewRenderFixture {
                             language: self.language,
                             mode: self.syntax_mode,
                         },
-                        word_color: None,
+                        word_kind: None,
                     },
                     prepared_line: super::diff_text::PreparedDiffSyntaxLine {
                         document: prepared_document,

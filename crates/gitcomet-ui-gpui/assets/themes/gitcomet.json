@@ -84,19 +84,12 @@
           "foreground": "#111827ff",
           "gutter_background": "#ffffffff",
           "line_number": "#465166ff",
-          "line_number_active": "#111827ff",
           "cursor": "#365bb7ff",
           "selection_background": "#d6e3f8ff",
-          "selection_foreground": "#111827ff",
-          "inactive_selection_background": "#e4ebf5ff",
-          "current_line_background": "#f8fafcff",
           "search_match_background": "#f8edcfff",
           "search_match_foreground": "#76510fff",
-          "search_match_border": "#96701eff",
           "bracket_match_background": "#e7effcff",
-          "whitespace": "#687386ff",
-          "indent_guide": "#d3d9e2ff",
-          "indent_guide_active": "#687386ff"
+          "indent_guide": "#d3d9e2ff"
         },
         "diff": {
           "added": {
@@ -371,7 +364,6 @@
           "foreground": "#f2f4f8ff",
           "gutter_background": "#17191eff",
           "line_number": "#a4acb9ff",
-          "line_number_active": "#f2f4f8ff",
           "cursor": {
             "hex": "#f2f4f8ff",
             "alpha": 0.78
@@ -380,28 +372,13 @@
             "hex": "#4f8ef7ff",
             "alpha": 0.28
           },
-          "selection_foreground": "#f2f4f8ff",
-          "inactive_selection_background": {
-            "hex": "#4f8ef7ff",
-            "alpha": 0.18
-          },
-          "current_line_background": "#242831ff",
           "search_match_background": {
             "hex": "#f2a53aff",
             "alpha": 0.22
           },
           "search_match_foreground": "#f2a53aff",
-          "search_match_border": {
-            "hex": "#f2a53aff",
-            "alpha": 0.70
-          },
           "bracket_match_background": "#ffffff26",
-          "whitespace": {
-            "hex": "#a4acb9ff",
-            "alpha": 0.72
-          },
-          "indent_guide": "#ffffff0d",
-          "indent_guide_active": "#323844ff"
+          "indent_guide": "#ffffff0d"
         },
         "diff": {
           "added": {

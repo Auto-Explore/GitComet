@@ -127,19 +127,12 @@ pub struct EditorColors {
     pub foreground: Rgba,
     pub gutter_background: Rgba,
     pub line_number: Rgba,
-    pub line_number_active: Rgba,
     pub cursor: Rgba,
     pub selection_background: Rgba,
-    pub selection_foreground: Rgba,
-    pub inactive_selection_background: Rgba,
-    pub current_line_background: Rgba,
     pub search_match_background: Rgba,
     pub search_match_foreground: Rgba,
-    pub search_match_border: Rgba,
     pub bracket_match_background: Rgba,
-    pub whitespace: Rgba,
     pub indent_guide: Rgba,
-    pub indent_guide_active: Rgba,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,6 +140,11 @@ pub struct DiffColorSet {
     pub foreground: Rgba,
     pub background: Rgba,
     pub word_background: Rgba,
+    /// The row under the keyboard focus. `modified` has no reader: a diff row is
+    /// an add or a remove, and the split view draws a modification as one of
+    /// each. It stays here because the three sets are one shape -- a schema with
+    /// a hole in exactly one of them costs an author more than an unused token
+    /// does.
     pub focused_background: Rgba,
 }
 
@@ -155,6 +153,30 @@ pub struct DiffColors {
     pub added: DiffColorSet,
     pub removed: DiffColorSet,
     pub modified: DiffColorSet,
+}
+
+/// Which of the three diff palettes a piece of diff decoration belongs to.
+///
+/// Carried alongside the decoration instead of one colour out of the set, so a
+/// renderer that needs a second colour from the same palette (the word wash, the
+/// focused-row background) can ask for it rather than trying to recognise the
+/// set from a colour it was handed -- a theme is free to paint two of the three
+/// kinds the same hue, and then recognising it is guesswork.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum DiffColorKind {
+    Added,
+    Removed,
+    Modified,
+}
+
+impl DiffColors {
+    pub fn set(self, kind: DiffColorKind) -> DiffColorSet {
+        match kind {
+            DiffColorKind::Added => self.added,
+            DiffColorKind::Removed => self.removed,
+            DiffColorKind::Modified => self.modified,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -526,7 +548,11 @@ impl Error for ThemeParseError {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ThemeBundleFile {
-    schema_version: u32,
+    /// Declared here only so `deny_unknown_fields` accepts the key. The value is
+    /// read off the raw JSON in [`parse_theme_bundle`], before this struct is
+    /// built -- see there for why it cannot wait until afterwards.
+    #[serde(rename = "schema_version")]
+    _schema_version: u32,
     #[serde(rename = "name")]
     _name: String,
     #[serde(rename = "author", default)]
@@ -679,19 +705,12 @@ struct ThemeFileEditorColors {
     foreground: ThemeColor,
     gutter_background: ThemeColor,
     line_number: ThemeColor,
-    line_number_active: ThemeColor,
     cursor: ThemeColor,
     selection_background: ThemeColor,
-    selection_foreground: ThemeColor,
-    inactive_selection_background: ThemeColor,
-    current_line_background: ThemeColor,
     search_match_background: ThemeColor,
     search_match_foreground: ThemeColor,
-    search_match_border: ThemeColor,
     bracket_match_background: ThemeColor,
-    whitespace: ThemeColor,
     indent_guide: ThemeColor,
-    indent_guide_active: ThemeColor,
 }
 
 #[derive(Deserialize)]
@@ -917,19 +936,12 @@ impl From<ThemeFile> for AppTheme {
                 foreground: editor.foreground.into_rgba(),
                 gutter_background: editor.gutter_background.into_rgba(),
                 line_number: editor.line_number.into_rgba(),
-                line_number_active: editor.line_number_active.into_rgba(),
                 cursor: editor.cursor.into_rgba(),
                 selection_background: editor.selection_background.into_rgba(),
-                selection_foreground: editor.selection_foreground.into_rgba(),
-                inactive_selection_background: editor.inactive_selection_background.into_rgba(),
-                current_line_background: editor.current_line_background.into_rgba(),
                 search_match_background: editor.search_match_background.into_rgba(),
                 search_match_foreground: editor.search_match_foreground.into_rgba(),
-                search_match_border: editor.search_match_border.into_rgba(),
                 bracket_match_background: editor.bracket_match_background.into_rgba(),
-                whitespace: editor.whitespace.into_rgba(),
                 indent_guide: editor.indent_guide.into_rgba(),
-                indent_guide_active: editor.indent_guide_active.into_rgba(),
             },
             diff: DiffColors {
                 added: diff_set(diff.added),
@@ -1561,15 +1573,29 @@ fn fill_missing_json_fields(
 fn parse_theme_bundle(json: &str) -> Result<ThemeBundleFile, ThemeParseError> {
     let mut value: serde_json::Value =
         serde_json::from_str(json).map_err(ThemeParseError::Parse)?;
-    fill_missing_color_tokens(&mut value);
-    let bundle: ThemeBundleFile = serde_json::from_value(value).map_err(ThemeParseError::Parse)?;
-    if bundle.schema_version != THEME_SCHEMA_VERSION {
-        return Err(ThemeParseError::Invalid(format!(
-            "unsupported theme schema version {}; expected {}",
-            bundle.schema_version, THEME_SCHEMA_VERSION
-        )));
+    // Checked here, off the raw value, rather than after deserializing into
+    // `ThemeBundleFile`. The structural parse is strict -- `deny_unknown_fields`
+    // throughout, and the colour groups changed shape between schema versions --
+    // so a file from an older schema dies inside it with something like
+    // `invalid type: string "#59b7ffff", expected struct ThemeFileAccentColors`,
+    // and the one message that tells the author what actually happened never
+    // gets a chance to run.
+    let schema_version = value.get("schema_version").and_then(|value| value.as_u64());
+    match schema_version {
+        Some(version) if version == u64::from(THEME_SCHEMA_VERSION) => {}
+        Some(version) => {
+            return Err(ThemeParseError::Invalid(format!(
+                "unsupported theme schema version {version}; expected {THEME_SCHEMA_VERSION}"
+            )));
+        }
+        None => {
+            return Err(ThemeParseError::Invalid(format!(
+                "missing schema_version; expected {THEME_SCHEMA_VERSION}"
+            )));
+        }
     }
-    Ok(bundle)
+    fill_missing_color_tokens(&mut value);
+    serde_json::from_value(value).map_err(ThemeParseError::Parse)
 }
 
 pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
@@ -1718,7 +1744,7 @@ mod tests {
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
         GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, Rgba, THEME_SCHEMA_VERSION, ThemeColor,
         UNFILLED_COLOR_TOKENS, available_themes, content_header_bg, derived_syntax_color,
-        has_theme_key, load_theme_specs_from_json, merged_theme_options,
+        fill_missing_color_tokens, has_theme_key, load_theme_specs_from_json, merged_theme_options,
         resolved_runtime_themes_dir, runtime_themes_with_dir, test_theme_bundle_value,
         test_theme_json_with_syntax, theme_label, with_alpha,
     };
@@ -1908,7 +1934,15 @@ mod tests {
 
     #[test]
     fn rejects_theme_bundle_without_schema_version() {
-        let error = load_theme_specs_from_json(r#"{"name":"Missing version","themes":[]}"#)
+        // Carries a real theme, not `"themes": []`: an empty bundle parses
+        // structurally whatever the schema, so it cannot tell whether the
+        // version was checked before the structure or after it.
+        let json = serde_json::to_string(&serde_json::json!({
+            "name": "Missing version",
+            "themes": [test_theme_entry(DEFAULT_DARK_THEME_KEY)],
+        }))
+        .expect("theme fixture should serialize");
+        let error = load_theme_specs_from_json(&json)
             .err()
             .expect("a theme bundle without schema_version must be rejected");
 
@@ -1920,14 +1954,47 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_theme_schema_versions() {
-        let error =
-            load_theme_specs_from_json(r#"{"schema_version":999,"name":"Future","themes":[]}"#)
-                .err()
-                .expect("unsupported schema version must be rejected");
+        let json = serde_json::to_string(&serde_json::json!({
+            "schema_version": 999,
+            "name": "Future",
+            "themes": [test_theme_entry(DEFAULT_DARK_THEME_KEY)],
+        }))
+        .expect("theme fixture should serialize");
+        let error = load_theme_specs_from_json(&json)
+            .err()
+            .expect("unsupported schema version must be rejected");
 
         assert_eq!(
             error.to_string(),
             format!("unsupported theme schema version 999; expected {THEME_SCHEMA_VERSION}")
+        );
+    }
+
+    /// The v1 -> v2 break reshaped the colour groups, and every struct in the
+    /// chain is `deny_unknown_fields`. A v1 file therefore fails the structural
+    /// parse first unless the version is read off the raw JSON, and the author
+    /// gets `invalid type: string ..., expected struct ThemeFileAccentColors`
+    /// instead of being told which version their file is.
+    #[test]
+    fn a_v1_theme_reports_its_version_rather_than_a_type_error() {
+        let error = load_theme_specs_from_json(
+            r##"{
+                "schema_version": 1,
+                "name": "Old",
+                "themes": [{
+                    "key": "old",
+                    "name": "Old",
+                    "appearance": "dark",
+                    "colors": { "accent": "#59b7ffff", "background": "#101014ff" }
+                }]
+            }"##,
+        )
+        .err()
+        .expect("a v1 theme must be rejected");
+
+        assert_eq!(
+            error.to_string(),
+            format!("unsupported theme schema version 1; expected {THEME_SCHEMA_VERSION}")
         );
     }
 
@@ -2695,25 +2762,16 @@ mod tests {
             );
 
             for (token, color) in syntax_foregrounds(theme) {
-                for (surface_name, surface) in [
-                    ("editor", colors.editor.background),
-                    ("editor.current_line", colors.editor.current_line_background),
-                ] {
-                    assert_min_contrast(
-                        key,
-                        &format!("syntax.{token}/{surface_name}"),
-                        color,
-                        surface,
-                        7.0,
-                    );
-                }
+                assert_min_contrast(
+                    key,
+                    &format!("syntax.{token}/editor"),
+                    color,
+                    colors.editor.background,
+                    7.0,
+                );
 
                 for (surface_name, surface) in [
                     ("editor.selection", colors.editor.selection_background),
-                    (
-                        "editor.inactive_selection",
-                        colors.editor.inactive_selection_background,
-                    ),
                     ("editor.search_match", colors.editor.search_match_background),
                     (
                         "editor.bracket_match",
@@ -2808,6 +2866,80 @@ mod tests {
                     "embedded theme file {} should explicitly define {}",
                     file.stem,
                     key
+                );
+            }
+        }
+    }
+
+    /// Dotted paths of every token `filled` gained over `original`.
+    fn collect_filled_token_paths(
+        original: &serde_json::Value,
+        filled: &serde_json::Value,
+        path: &mut String,
+        out: &mut Vec<String>,
+    ) {
+        let Some(filled) = filled.as_object() else {
+            return;
+        };
+        for (key, filled_value) in filled {
+            let original_value = original.get(key);
+            let len = path.len();
+            if !path.is_empty() {
+                path.push('.');
+            }
+            path.push_str(key);
+            match original_value {
+                None => out.push(path.clone()),
+                Some(original_value) => {
+                    collect_filled_token_paths(original_value, filled_value, path, out)
+                }
+            }
+            path.truncate(len);
+        }
+    }
+
+    /// The colour-token counterpart of the syntax-key guard above.
+    ///
+    /// Before `fill_missing_color_tokens` existed, a bundled theme missing a
+    /// colour token was a parse error that `embedded_theme_cache` panicked on, so
+    /// an incomplete one could not ship. The fill exists for *custom* themes
+    /// written against an older token set; applied to the bundled themes it
+    /// quietly hands them colours tuned against a different palette. Asserting
+    /// the fill is a no-op restores the startup guarantee without exempting them
+    /// from it.
+    #[test]
+    fn bundled_themes_explicitly_define_every_color_token() {
+        for file in EMBEDDED_THEME_FILES {
+            let bundle: serde_json::Value = serde_json::from_str(file.json).unwrap_or_else(|err| {
+                panic!("embedded theme file {} is not JSON: {err}", file.stem)
+            });
+            let themes = bundle["themes"]
+                .as_array()
+                .unwrap_or_else(|| panic!("embedded theme file {} has no themes", file.stem));
+
+            for theme in themes {
+                let key = theme["key"].as_str().unwrap_or("<unnamed>").to_string();
+                let before = theme["colors"].clone();
+                let mut filled = serde_json::json!({ "themes": [theme.clone()] });
+                fill_missing_color_tokens(&mut filled);
+
+                // Reported as paths rather than by diffing the two objects: the
+                // palettes are large enough that an `assert_eq!` dump buries the
+                // one token that is actually missing.
+                let mut missing = Vec::new();
+                collect_filled_token_paths(
+                    &before,
+                    &filled["themes"][0]["colors"],
+                    &mut String::new(),
+                    &mut missing,
+                );
+
+                assert!(
+                    missing.is_empty(),
+                    "bundled theme {key} in {} inherits {} from another theme; define them \
+                     explicitly",
+                    file.stem,
+                    missing.join(", ")
                 );
             }
         }

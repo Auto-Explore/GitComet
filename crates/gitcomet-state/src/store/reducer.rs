@@ -763,6 +763,9 @@ fn is_view_navigation(msg: &Msg) -> bool {
         Msg::SelectDiff { .. }
             | Msg::SelectConflictDiff { .. }
             | Msg::SelectCommit { .. }
+            // Selecting a linked-worktree row is a destination like any other
+            // history selection; it just is not a commit.
+            | Msg::SelectWorktreeUncommitted { .. }
             | Msg::CompareCommitRange { .. }
             | Msg::CompareWithMarked { .. }
             | Msg::CompareWithWorkingTree { .. }
@@ -2406,6 +2409,58 @@ mod nav_history_tests {
             "partial-watch warning should mention the unwatched count: {}",
             note.message
         );
+    }
+
+    /// A linked-worktree row is a third kind of history selection, and selecting
+    /// one clears the commit selection. Left out of the navigation machinery it
+    /// read as "the view went back to the log": the entry for the commit the user
+    /// came from was overwritten in place, so Back skipped it, and no snapshot
+    /// could reproduce the worktree row on the way forward.
+    #[test]
+    fn selecting_a_worktree_row_is_a_navigation_step_of_its_own() {
+        let repo_id = RepoId(1);
+        let mut state = available_state_with_repo(repo_id);
+        let commit = CommitId("abc".into());
+        let worktree = std::path::PathBuf::from("/tmp/wt/a");
+
+        dispatch(
+            &mut state,
+            Msg::SelectCommit {
+                repo_id,
+                commit_id: commit.clone(),
+            },
+        );
+        dispatch(
+            &mut state,
+            Msg::SelectWorktreeUncommitted {
+                repo_id,
+                path: worktree.clone(),
+            },
+        );
+        assert_eq!(
+            repo(&state, repo_id).history_state.selected_commit,
+            None,
+            "the worktree row displaces the commit selection"
+        );
+
+        dispatch(&mut state, Msg::GlobalNavBack { repo_id });
+        assert_eq!(
+            repo(&state, repo_id).history_state.selected_commit.as_ref(),
+            Some(&commit),
+            "back must return to the commit the worktree row was selected from"
+        );
+        assert_eq!(repo(&state, repo_id).history_state.worktree_selection, None);
+
+        dispatch(&mut state, Msg::GlobalNavForward { repo_id });
+        assert_eq!(
+            repo(&state, repo_id)
+                .history_state
+                .worktree_selection
+                .as_ref(),
+            Some(&worktree),
+            "forward must reproduce the worktree row, not just clear the commit"
+        );
+        assert_eq!(repo(&state, repo_id).history_state.selected_commit, None);
     }
 
     #[test]

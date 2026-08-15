@@ -453,6 +453,25 @@ pub(super) fn global_nav(
         }
     }
 
+    // Restore (or clear) a linked-worktree row selection. It is mutually
+    // exclusive with the commit selection -- each setter clears the other -- so
+    // it runs after the commit restore and only has the last word when the
+    // snapshot actually named a worktree.
+    {
+        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+            return effects;
+        };
+        if repo_state.history_state.worktree_selection != snapshot.worktree_selection {
+            repo_state.set_worktree_selection(snapshot.worktree_selection.clone());
+            if snapshot.worktree_selection.is_some() {
+                repo_state.set_commit_details(Loadable::NotLoaded);
+                // Only the selected worktree's changed files are carried in
+                // state, so the restored row needs a scan to fetch its own.
+                effects.extend(super::effects::request_worktree_dirty_effect(repo_state));
+            }
+        }
+    }
+
     // Restore the two-point comparison. This has to run before the diff-target
     // restore below: entering a comparison clears the diff pane, so doing it
     // afterwards would wipe the very target this step is meant to show.

@@ -64,7 +64,7 @@ fn worktree_preview_streamed_spec(
             query_options,
             query_matcher,
             word_ranges: Arc::from([]),
-            word_color: None,
+            word_kind: None,
             syntax,
         }
     })
@@ -212,7 +212,7 @@ impl MainPaneView {
                                         language,
                                         mode: syntax_mode,
                                     },
-                                    word_color: None,
+                                    word_kind: None,
                                 },
                                 prepared_line: PreparedDiffSyntaxLine {
                                     document: syntax_document,
@@ -3013,6 +3013,22 @@ fn history_table_row(
     let context_menu_invoker: SharedString =
         format!("history_commit_menu_{}_{}", repo_id.0, commit.id.as_ref()).into();
     let context_menu_active = active_context_menu_invoker == Some(&context_menu_invoker);
+    // The row's background as one value rather than three `.bg()` calls that
+    // overwrite each other, because the graph canvas needs to know it: its icon
+    // nodes knock their glyphs out in the colour the row is actually painted,
+    // and a knockout in the untinted surface leaves a visible patch inside a
+    // tinted row. The hover tint is the canvas's business -- it owns the hitbox
+    // -- so it is not folded in here.
+    let row_bg_overlay = if context_menu_active {
+        Some(theme.colors.interaction.pressed_background)
+    } else if selected {
+        Some(theme.colors.accent.subtle_background)
+    } else if is_head {
+        // A quiet tint keeps HEAD findable without competing with selection.
+        Some(with_alpha(theme.colors.accent.foreground, 0.06))
+    } else {
+        None
+    };
     let commit_row = history_canvas::history_commit_row_canvas(
         theme,
         cx.entity(),
@@ -3042,6 +3058,12 @@ fn history_table_row(
         summary,
         when,
         short_sha,
+        row_bg_overlay,
+        if context_menu_active {
+            theme.colors.interaction.pressed_background
+        } else {
+            theme.colors.interaction.hover_background
+        },
     );
 
     let commit_id = commit.id.clone();
@@ -3090,15 +3112,8 @@ fn history_table_row(
             }),
         );
 
-    if is_head && !selected && !context_menu_active {
-        // A quiet tint keeps HEAD findable without competing with selection.
-        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.06));
-    }
-    if selected {
-        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.15));
-    }
-    if context_menu_active {
-        row = row.bg(theme.colors.interaction.pressed_background);
+    if let Some(overlay) = row_bg_overlay {
+        row = row.bg(overlay);
     }
 
     if is_head {
@@ -3177,6 +3192,16 @@ fn worktree_uncommitted_history_row(
     // painted here, so the band carries the lanes alone rather than a row-shaped
     // copy of them.
     let band_lanes = graph_row.lanes_now.clone();
+    // The node's middle is opaque, so it has to be filled in what the row is
+    // painted over rather than in the list's bare surface.
+    let row_background = if selected {
+        crate::theme::composite_over(
+            theme.colors.surface.canvas,
+            theme.colors.accent.subtle_background,
+        )
+    } else {
+        theme.colors.surface.canvas
+    };
     let graph = gpui::canvas(
         |_, _, _| (),
         move |bounds, _, window, cx| {
@@ -3192,6 +3217,7 @@ fn worktree_uncommitted_history_row(
                     exit_col: node_exit_col,
                 },
                 show_graph_color_marker,
+                row_background,
                 bounds,
                 window,
                 cx,
@@ -3342,7 +3368,7 @@ fn worktree_uncommitted_history_row(
         .when(show_sha, |row| row.child(div().w(col_sha)));
 
     if selected {
-        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.15));
+        row = row.bg(theme.colors.accent.subtle_background);
     }
 
     row.into_any_element()
@@ -3550,7 +3576,7 @@ fn working_tree_summary_history_row(
         }));
 
     if selected {
-        row = row.bg(with_alpha(theme.colors.accent.foreground, 0.15));
+        row = row.bg(theme.colors.accent.subtle_background);
     }
 
     row.into_any_element()

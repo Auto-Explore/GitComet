@@ -1007,7 +1007,7 @@ pub(super) struct StreamedDiffTextPaintSpec {
     pub(super) query_options: DiffSearchOptions,
     pub(super) query_matcher: Option<Arc<DiffSearchMatcher>>,
     pub(super) word_ranges: Arc<[Range<usize>]>,
-    pub(super) word_color: Option<gpui::Rgba>,
+    pub(super) word_kind: Option<crate::theme::DiffColorKind>,
     pub(super) syntax: StreamedDiffTextSyntaxSource,
 }
 
@@ -1505,9 +1505,7 @@ fn streamed_diff_text_highlights_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
     for range in spec.word_ranges.iter() {
         hash_range(&mut hasher, range);
     }
-    if let Some(color) = spec.word_color {
-        hash_rgba(&mut hasher, color);
-    }
+    spec.word_kind.hash(&mut hasher);
     match &spec.syntax {
         StreamedDiffTextSyntaxSource::None => {
             0u8.hash(&mut hasher);
@@ -1813,13 +1811,19 @@ fn build_streamed_diff_slice_styled_text(
     };
 
     if !spec.word_ranges.is_empty()
-        && let Some(mut color) = spec.word_color
+        && let Some(word_kind) = spec.word_kind
     {
         let clipped = clip_ranges_to_slice(spec.word_ranges.as_ref(), &resolved_slice_range);
         if !clipped.is_empty() {
-            color.a = if theme.is_dark { 0.22 } else { 0.16 };
-            base =
-                overlay_background_ranges_on_styled_text(&base, clipped.as_slice(), color.into());
+            // The same resolver the non-streamed builder uses. Deriving the wash
+            // here instead gave a line past `STREAMED_DIFF_TEXT_MIN_BYTES` a
+            // different word-diff colour from its neighbours in the same diff.
+            let (background, _) = diff_text::word_highlight_colors(theme, word_kind);
+            base = overlay_background_ranges_on_styled_text(
+                &base,
+                clipped.as_slice(),
+                background.into(),
+            );
         }
     }
 
@@ -3932,7 +3936,7 @@ mod tests {
             query_matcher: (!query.is_empty())
                 .then(|| Arc::new(DiffSearchMatcher::new(query, query_options))),
             word_ranges: Arc::from(Vec::<Range<usize>>::new()),
-            word_color: None,
+            word_kind: None,
             syntax: StreamedDiffTextSyntaxSource::None,
         }
     }

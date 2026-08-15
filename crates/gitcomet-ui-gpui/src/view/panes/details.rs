@@ -929,36 +929,21 @@ impl DetailsPaneView {
             return Arc::clone(inputs);
         }
 
-        // Staged first, then unstaged: the same order the working-tree pane uses.
-        let staged = summary.staged.iter().map(|f| (f, DiffArea::Staged));
-        let unstaged = summary.unstaged.iter().map(|f| (f, DiffArea::Unstaged));
-        let mut files = Vec::with_capacity(summary.staged.len() + summary.unstaged.len());
-        let mut entries = Vec::with_capacity(summary.staged.len() + summary.unstaged.len());
-        for (file, area) in staged.chain(unstaged) {
-            files.push(gitcomet_core::domain::CommitFileChange {
-                path: file.path.clone(),
-                kind: file.kind,
+        // Every file is an entry so the diff view can step between them with the
+        // same navigation submodule diffs get. Built by the shared builder rather
+        // than here: the reducer re-resolves an open diff's entries against each
+        // new scan, and it has to arrive at the same order these rows are in.
+        let entries = gitcomet_state::model::worktree_inline_diff_entries(summary);
+        let files = entries
+            .iter()
+            .map(|entry| gitcomet_core::domain::CommitFileChange {
+                path: entry.path.clone(),
+                kind: entry.kind,
                 is_submodule: false,
                 additions: None,
                 deletions: None,
-            });
-            // Every file is an entry so the diff view can step between them with
-            // the same navigation submodule diffs get.
-            entries.push(gitcomet_state::model::InlineSubmoduleDiffEntry {
-                path: file.path.clone(),
-                kind: file.kind,
-                target: gitcomet_core::domain::DiffTarget::WorkingTree {
-                    path: file.path.clone(),
-                    area,
-                },
-                section: match area {
-                    DiffArea::Staged => {
-                        gitcomet_state::model::InlineSubmoduleDiffSection::LiveStaged
-                    }
-                    _ => gitcomet_state::model::InlineSubmoduleDiffSection::LiveUnstaged,
-                },
-            });
-        }
+            })
+            .collect();
 
         let inputs = Arc::new(WorktreeFileListInputs { files, entries });
         *cache = Some((

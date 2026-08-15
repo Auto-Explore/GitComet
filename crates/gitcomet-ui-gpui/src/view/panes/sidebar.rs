@@ -1462,7 +1462,7 @@ impl SidebarPaneView {
             .border_color(gpui::transparent_black())
             .when(mode == SidebarMode::Branches, |d| {
                 d.bg(theme.colors.interaction.selected_background)
-                    .text_color(theme.colors.foreground.primary)
+                    .text_color(theme.colors.interaction.selected_foreground)
             })
             .when(mode != SidebarMode::Branches, |d| {
                 d.bg(gpui::transparent_black())
@@ -1510,7 +1510,7 @@ impl SidebarPaneView {
                 } else {
                     theme.colors.interaction.selected_background
                 })
-                .text_color(theme.colors.foreground.primary)
+                .text_color(theme.colors.interaction.selected_foreground)
             })
             .when(mode != SidebarMode::Files, |d| {
                 d.bg(gpui::transparent_black())

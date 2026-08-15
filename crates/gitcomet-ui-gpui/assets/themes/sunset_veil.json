@@ -84,19 +84,12 @@
           "foreground": "#211a14ff",
           "gutter_background": "#fff7edff",
           "line_number": "#56473aff",
-          "line_number_active": "#211a14ff",
           "cursor": "#854718ff",
           "selection_background": "#f0dac1ff",
-          "selection_foreground": "#211a14ff",
-          "inactive_selection_background": "#f6e8d8ff",
-          "current_line_background": "#fcf3e8ff",
           "search_match_background": "#f8ecd0ff",
           "search_match_foreground": "#76500fff",
-          "search_match_border": "#956f24ff",
           "bracket_match_background": "#f4e4d2ff",
-          "whitespace": "#766552ff",
-          "indent_guide": "#e2d6c9ff",
-          "indent_guide_active": "#766552ff"
+          "indent_guide": "#e2d6c9ff"
         },
         "diff": {
           "added": {

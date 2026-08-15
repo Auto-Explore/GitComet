@@ -2,6 +2,7 @@ use super::*;
 use gpui::{App, Bounds, Pixels, Window, fill, point, px, size};
 use smallvec::SmallVec;
 
+#[allow(clippy::too_many_arguments)]
 pub(super) fn paint_history_graph(
     theme: AppTheme,
     row: &history_graph::GraphRow,
@@ -15,6 +16,10 @@ pub(super) fn paint_history_graph(
     // every other lane recedes along its whole run -- a property of the lane, not
     // of which rows happen to connect to the selection.
     selected_lane: Option<SelectedLane>,
+    // What the row is actually painted over, tints included. The icon nodes knock
+    // their glyphs out in it, and the list's untinted surface is the wrong answer
+    // on any row carrying a hover, selection or browse tint.
+    row_background: gpui::Rgba,
     bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -178,7 +183,7 @@ pub(super) fn paint_history_graph(
                 bounds.left() + node_x,
                 y_center,
                 icons::GIT_STASH_NODE_ICON_PATH,
-                theme.colors.surface.canvas,
+                row_background,
                 node_color,
                 window,
                 cx,
@@ -188,7 +193,7 @@ pub(super) fn paint_history_graph(
                 bounds.left() + node_x,
                 y_center,
                 icons::GIT_MERGE_ICON_PATH,
-                theme.colors.surface.canvas,
+                row_background,
                 node_color,
                 window,
                 cx,
@@ -317,6 +322,14 @@ impl SelectedLane {
 
 /// The lane `color_ix` occupies on `row`, whether it is carried into the row or
 /// starts at its node. Live lanes hold distinct colours, so this is exact.
+///
+/// `lanes_next` is consulted first because it is the column the lane *continues*
+/// in, and continuing is what [`selected_lane_at`] walks. `lanes_now` can hold
+/// the same colour in a paint-only column: a branch head that has fallen behind
+/// gets a fork whisker beside its node (`adopt_fork_color`), which exists on that
+/// one row and carries the same colour as the real lane starting below it.
+/// Resolving to the whisker collapsed the span to the anchor row alone, and every
+/// row of the branch the highlight was meant to light washed out instead.
 fn lane_col_for_color(
     row: &history_graph::GraphRow,
     color_ix: history_graph::LaneColorIx,
@@ -326,7 +339,7 @@ fn lane_col_for_color(
             .iter()
             .position(|lane| lane.is_active() && lane.color_ix == color_ix)
     };
-    matching(&row.lanes_now).or_else(|| matching(&row.lanes_next))
+    matching(&row.lanes_next).or_else(|| matching(&row.lanes_now))
 }
 
 /// Resolves the lane drawn in `color_ix` at `anchor_row` to its full row span.
@@ -539,6 +552,11 @@ pub(super) fn paint_history_graph_band(
     selected_lane: Option<SelectedLane>,
     node: BandNodePaint,
     show_graph_color_marker: bool,
+    // What the row is painted over, so the node's middle -- which has to be
+    // opaque, or the lane through its column shows inside it -- matches. The
+    // band's hover tint comes from a `div().hover()` the canvas cannot observe,
+    // so this covers the row's persistent state (selection) only.
+    row_background: gpui::Rgba,
     bounds: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut App,
@@ -614,7 +632,18 @@ pub(super) fn paint_history_graph_band(
         paint_node_to_lane(
             left,
             node_x_offset,
-            x_for_col(usize::from(exit_col)),
+            // Both endpoints, not just the node. `paint_node_to_lane` takes the
+            // elbow's direction from the sign of `x_to - x_from`, so holding the
+            // node back while the target keeps its full offset turns a leftward
+            // connector rightward, into the `overflow_hidden` edge -- deleting
+            // the connector, which is the case the clamp exists to prevent. Held
+            // inside the cell as well, a target that no longer fits collapses to
+            // the same x and the connector degenerates to a straight drop.
+            clamp_x_into_cell(
+                x_for_col(usize::from(exit_col)),
+                margin_x,
+                bounds.size.width,
+            ),
             y_center,
             y_bottom,
             elbow_radius,
@@ -638,7 +667,7 @@ pub(super) fn paint_history_graph_band(
             y_center,
             icons::UNCOMMITTED_NODE_ICON_PATH,
             node.color,
-            theme.colors.surface.canvas,
+            row_background,
             window,
             cx,
         );
@@ -654,8 +683,13 @@ pub(super) fn paint_history_graph_band(
 /// trusted -- a node past the edge is invisible, and the cell clips rather than
 /// overflows.
 fn band_node_x_offset(col: u16, margin_x: Pixels, col_gap: Pixels, width: Pixels) -> Pixels {
-    let natural = margin_x + col_gap * (f32::from(col));
-    natural.min((width - margin_x).max(margin_x))
+    clamp_x_into_cell(margin_x + col_gap * (f32::from(col)), margin_x, width)
+}
+
+/// Holds an x-offset inside the graph cell, so what is drawn at it survives the
+/// cell's `overflow_hidden`. See [`band_node_x_offset`] for why that matters.
+fn clamp_x_into_cell(x: Pixels, margin_x: Pixels, width: Pixels) -> Pixels {
+    x.min((width - margin_x).max(margin_x))
 }
 
 /// Control-point ratio for approximating a circular quarter-arc with a cubic
@@ -801,9 +835,9 @@ pub(super) fn paint_icon_node(
 /// solid, over an opaque middle.
 ///
 /// The middle is filled rather than left transparent so the lane running through
-/// the node's column does not show through the hole. `background` is the history
-/// list's own surface; a row that paints a tint over it (hover, selection, the
-/// browsing-commit highlight) will not match exactly.
+/// the node's column does not show through the hole. `background` must therefore
+/// be what the row is actually painted over, tints included -- the list's own
+/// surface is only right on an untinted row.
 pub(super) fn paint_ring_icon_node(
     x_center: Pixels,
     y_center: Pixels,
@@ -914,6 +948,51 @@ mod band_tests {
             highlighted, row.node_color_ix,
             "the commit's lane belongs to whatever descends from it"
         );
+    }
+
+    /// The fork whisker beside a behind-branch's node carries the branch's colour
+    /// on that row alone, while the lane the colour really belongs to starts one
+    /// column over in `lanes_next`. Resolving the highlight to the whisker pinned
+    /// it to a single row, so `covers` said no for every row below and the whole
+    /// branch washed out -- the failure `SelectedLane` exists to prevent.
+    #[test]
+    fn a_fork_whisker_does_not_collapse_the_highlight_to_one_row() {
+        let theme = AppTheme::gitcomet_dark();
+        // The head commit: its own lane (colour 1) runs on to its descendant,
+        // the branch's new lane (colour 7) is born at the node in that same
+        // column, and the whisker marking the head sits beside it.
+        let anchor = GraphRow {
+            lanes_now: [incoming(1), born(7)].into_iter().collect(),
+            lanes_next: [LanePaint::lane(7, false, true)].into_iter().collect(),
+            joins_in: [edge(1, 0, 7)].into_iter().collect(),
+            edges_out: Default::default(),
+            node_col: 0,
+            node_color_ix: 7,
+            is_merge: false,
+        };
+        let below = || GraphRow {
+            lanes_now: [incoming(7)].into_iter().collect(),
+            lanes_next: [incoming(7)].into_iter().collect(),
+            joins_in: Default::default(),
+            edges_out: Default::default(),
+            node_col: 0,
+            node_color_ix: 7,
+            is_merge: false,
+        };
+        let rows = [anchor, below(), below()];
+
+        let selected = selected_lane_at(&rows, 0, 7).expect("the lane resolves");
+        assert_eq!(
+            (selected.first_row, selected.last_row),
+            (1, 2),
+            "the span must follow the continuing lane, not the one-row whisker"
+        );
+        for row_ix in 0..rows.len() {
+            assert!(
+                selected.covers(theme, row_ix, 7),
+                "row {row_ix} is on the selected branch and must stay lit"
+            );
+        }
     }
 
     /// A branch with commits of its own owns the lane its head is drawn on, so
@@ -1369,6 +1448,36 @@ mod tests {
         // offset rather than a negative one.
         let offset = band_node_x_offset(3, margin, gap, px(4.0));
         assert!(offset >= px(0.0), "got {offset:?}");
+    }
+
+    /// The connector's far end is clamped like the node's, or the elbow -- whose
+    /// direction is the sign of `x_to - x_from` -- turns away from the lane and
+    /// leaves through the clipped edge, deleting the only thing joining the band
+    /// to the commit below.
+    #[test]
+    fn a_narrow_column_clamps_the_connector_as_well_as_the_node() {
+        let margin = px(HISTORY_GRAPH_MARGIN_X_PX);
+        let gap = px(HISTORY_GRAPH_COL_GAP_PX);
+        let x_for_col = |col: usize| margin + gap * (col as f32);
+
+        // Wide enough for both: the node sits right of its exit lane, so the
+        // connector runs leftwards into it.
+        let wide = px(400.0);
+        let node_x = band_node_x_offset(6, margin, gap, wide);
+        let exit_x = clamp_x_into_cell(x_for_col(2), margin, wide);
+        assert!(
+            exit_x < node_x,
+            "the connector should still run left, got {exit_x:?} vs {node_x:?}"
+        );
+
+        // Narrower than one margin: both ends land on the same drawable x, which
+        // `paint_node_to_lane` renders as a straight drop rather than an elbow
+        // aimed off-screen.
+        let narrow = px(4.0);
+        let node_x = band_node_x_offset(6, margin, gap, narrow);
+        let exit_x = clamp_x_into_cell(x_for_col(2), margin, narrow);
+        assert_eq!(exit_x, node_x);
+        assert!((exit_x - node_x).abs() < px(0.5), "must not turn at all");
     }
 
     #[test]
