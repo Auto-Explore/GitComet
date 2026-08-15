@@ -1,4 +1,5 @@
 use super::*;
+use palette::IntoColor;
 
 #[gpui::test]
 fn worktree_preview_ready_rows_preserve_trailing_empty_line(cx: &mut gpui::TestAppContext) {
@@ -764,7 +765,7 @@ fn untracked_json_file_preview_keeps_underscored_string_value_highlighted(
         &view,
         "JSON preview string value syntax render",
         |pane| {
-            let string_color = pane.theme.syntax.string.into();
+            let string_color = pane.theme.syntax.string.into_color();
             pane.is_file_preview_active()
                 && pane.worktree_preview_path.as_ref() == Some(&preview_abs_path)
                 && pane.worktree_preview_syntax_language == Some(rows::DiffSyntaxLanguage::Json)
@@ -1805,7 +1806,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
                         styled.highlights.iter().any(|(range, style)| {
                             range.start == 0
                                 && range.end == comment_line.len()
-                                && style.color == Some(pane.theme.syntax.comment.into())
+                                && style.color == Some(pane.theme.syntax.comment.into_color())
                         })
                     })
         },
@@ -1835,7 +1836,7 @@ fn large_file_preview_renders_plain_text_then_upgrades_after_background_syntax(
             styled.highlights.iter().any(|(range, style)| {
                 range.start == 0
                     && range.end == comment_line.len()
-                    && style.color == Some(pane.theme.syntax.comment.into())
+                    && style.color == Some(pane.theme.syntax.comment.into_color())
             }),
             "multiline comment row should upgrade to comment highlighting after background parsing"
         );

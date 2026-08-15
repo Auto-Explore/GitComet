@@ -9,6 +9,7 @@ use gpui::{
     ClickEvent, CursorStyle, Div, Entity, FontWeight, HighlightStyle, MouseButton, MouseDownEvent,
     MouseMoveEvent, Pixels, ScrollHandle, SharedString, WeakEntity, Window, div, px,
 };
+use palette::IntoColor;
 use std::collections::BTreeSet;
 use std::ops::Range;
 use std::rc::Rc;
@@ -1532,7 +1533,7 @@ fn picker_item_line<V: 'static>(
     cx: &gpui::Context<V>,
 ) -> Div {
     let match_highlight = HighlightStyle {
-        color: Some(theme.colors.accent.foreground.into()),
+        color: Some(theme.colors.accent.foreground.into_color()),
         font_weight: Some(FontWeight::BOLD),
         ..HighlightStyle::default()
     };
@@ -1673,7 +1674,7 @@ fn remove_row_button<V: 'static>(
 }
 
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.a = alpha;
+    color.alpha = alpha;
     color
 }
 

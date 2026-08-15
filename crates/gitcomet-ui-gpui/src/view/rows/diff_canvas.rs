@@ -12,9 +12,10 @@ use crate::view::panes::main::DiffHorizontalScrollColumn;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
 use gitcomet_core::domain::{DiffArea, DiffLineKind};
 use gpui::{
-    App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Hsla, Pixels,
+    App, Bounds, CursorStyle, DispatchPhase, HighlightStyle, Hitbox, HitboxBehavior, Pixels,
     Styled, TextRun, TextStyle, TransformationMatrix, TruncateFrom, Window, fill, point, px, size,
 };
+use palette::IntoColor;
 use rustc_hash::{FxHashMap, FxHasher};
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -255,7 +256,7 @@ fn paint_truncated_text(
         return;
     }
     let mut style = diff_text_style(window);
-    style.color = color.into();
+    style.color = color.into_color();
     let runs = vec![style.to_run(text.len())];
     let mut wrapper = window
         .text_system()
@@ -438,7 +439,7 @@ pub(super) fn paint_centered_svg_icon(
         path.into(),
         None,
         TransformationMatrix::unit(),
-        Hsla::from(color),
+        color.into_color(),
         cx,
     );
 }
@@ -1542,9 +1543,9 @@ fn hash_overlay_ranges(
 ) -> u64 {
     let mut hasher = FxHasher::default();
     base_highlights_hash.hash(&mut hasher);
-    hash_rgba(&mut hasher, background_color.into());
+    hash_rgba(&mut hasher, background_color.into_color());
     if let Some(foreground_color) = foreground_color {
-        hash_rgba(&mut hasher, foreground_color.into());
+        hash_rgba(&mut hasher, foreground_color.into_color());
     }
     for range in ranges {
         range.start.hash(&mut hasher);
@@ -1850,8 +1851,8 @@ fn build_streamed_diff_slice_styled_text(
             base = overlay_background_ranges_on_styled_text(
                 &base,
                 clipped.as_slice(),
-                background.into(),
-                foreground.map(Into::into),
+                background.into_color(),
+                foreground.map(IntoColor::into_color),
             );
         }
     }
@@ -3527,17 +3528,17 @@ fn shaped_gutter_line(
     window: &mut Window,
 ) -> gpui::ShapedLine {
     let mut style = diff_text_style(window);
-    style.color = color.into();
+    style.color = color.into_color();
     let key = {
         let mut hasher = FxHasher::default();
         text.as_ref().hash(&mut hasher);
         metrics.font_size.hash(&mut hasher);
         style.font_family.hash(&mut hasher);
         style.font_weight.hash(&mut hasher);
-        color.r.to_bits().hash(&mut hasher);
-        color.g.to_bits().hash(&mut hasher);
-        color.b.to_bits().hash(&mut hasher);
-        color.a.to_bits().hash(&mut hasher);
+        color.red.to_bits().hash(&mut hasher);
+        color.green.to_bits().hash(&mut hasher);
+        color.blue.to_bits().hash(&mut hasher);
+        color.alpha.to_bits().hash(&mut hasher);
         hasher.finish()
     };
 
@@ -3581,7 +3582,7 @@ fn paint_selectable_diff_text(
     cx: &mut App,
 ) {
     let mut base_style = diff_text_style(window);
-    base_style.color = base_fg.into();
+    base_style.color = base_fg.into_color();
     base_style.white_space = gpui::WhiteSpace::Nowrap;
     base_style.text_overflow = None;
 
@@ -3831,10 +3832,10 @@ fn diff_layout_base_key(
     metrics.font_size.hash(&mut hasher);
     base_style.font_family.hash(&mut hasher);
     base_style.font_weight.hash(&mut hasher);
-    base_fg.r.to_bits().hash(&mut hasher);
-    base_fg.g.to_bits().hash(&mut hasher);
-    base_fg.b.to_bits().hash(&mut hasher);
-    base_fg.a.to_bits().hash(&mut hasher);
+    base_fg.red.to_bits().hash(&mut hasher);
+    base_fg.green.to_bits().hash(&mut hasher);
+    base_fg.blue.to_bits().hash(&mut hasher);
+    base_fg.alpha.to_bits().hash(&mut hasher);
     hasher.finish()
 }
 
@@ -3899,7 +3900,7 @@ mod tests {
     use super::*;
 
     fn rgba(r: f32, g: f32, b: f32) -> gpui::Rgba {
-        gpui::Rgba { r, g, b, a: 1.0 }
+        gpui::Rgba::new(r, g, b, 1.0)
     }
 
     /// `gpui` shapes a line by splitting the text at each run boundary, so a

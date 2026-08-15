@@ -1,5 +1,7 @@
+use gpui::Hsla;
 use gpui::Rgba;
 use gpui::WindowAppearance;
+use palette::IntoColor;
 use serde::Deserialize;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::error::Error;
@@ -246,17 +248,12 @@ pub struct GraphLanePalette {
 
 impl GraphLanePalette {
     fn generated(is_dark: bool) -> Self {
-        let mut colors = [Rgba {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,
-        }; GRAPH_LANE_PALETTE_SIZE];
+        let mut colors = [Rgba::new(0.0, 0.0, 0.0, 0.0); GRAPH_LANE_PALETTE_SIZE];
         for (i, color) in colors.iter_mut().enumerate() {
             let hue = (i as f32 * 0.13) % 1.0;
             let sat = 0.75;
             let light = if is_dark { 0.62 } else { 0.33 };
-            *color = gpui::hsla(hue, sat, light, 1.0).into();
+            *color = hsla_from_hue_fraction(hue, sat, light, 1.0).into_color();
         }
         Self {
             colors,
@@ -283,7 +280,7 @@ impl GraphLanePalette {
             let light = if is_dark { 0.62 } else { 0.33 };
             let colors = hues
                 .into_iter()
-                .map(|hue| gpui::hsla(hue.rem_euclid(1.0), sat, light, 1.0).into())
+                .map(|hue| hsla_from_hue_fraction(hue, sat, light, 1.0).into_color())
                 .collect::<Vec<_>>();
             return Self::from_rgba_slice(&colors);
         }
@@ -292,12 +289,7 @@ impl GraphLanePalette {
     }
 
     fn from_rgba_slice(colors: &[Rgba]) -> Self {
-        let mut out = [Rgba {
-            r: 0.0,
-            g: 0.0,
-            b: 0.0,
-            a: 0.0,
-        }; GRAPH_LANE_PALETTE_SIZE];
+        let mut out = [Rgba::new(0.0, 0.0, 0.0, 0.0); GRAPH_LANE_PALETTE_SIZE];
         let len = colors.len().min(GRAPH_LANE_PALETTE_SIZE);
         for (slot, color) in out.iter_mut().zip(colors.iter().take(len)) {
             *slot = *color;
@@ -834,18 +826,76 @@ struct ThemeFileSyntaxColors {
     lifetime: Option<ThemeColor>,
 }
 
+/// An `Rgba` written as a CSS-style hex string in a theme file.
+///
+/// `gpui::Rgba` is a `palette` re-export, and its `Deserialize` reads a
+/// `{"red":…,"green":…,"blue":…,"alpha":…}` object, not the `"#rrggbbaa"`
+/// strings every theme file — shipped and user-authored alike — is written in.
+/// `palette`'s own `FromStr` is closer but only accepts the two forms that
+/// carry alpha, so the four-form parser lives here.
+#[derive(Clone, Copy)]
+struct HexColor(Rgba);
+
+impl HexColor {
+    /// Accepts `#rgb`, `#rgba`, `#rrggbb` and `#rrggbbaa`, with the short forms
+    /// expanding each digit (`#f0c` is `#ff00cc`) and alpha defaulting to
+    /// opaque. Anything else is an error rather than a silent black.
+    fn parse(value: &str) -> Result<Self, String> {
+        let hex = value.trim().strip_prefix('#').ok_or_else(|| {
+            format!("invalid hex color {value:?}: expected #rgb, #rgba, #rrggbb, or #rrggbbaa")
+        })?;
+
+        let digit = |ix: usize| -> Result<u8, String> {
+            u8::from_str_radix(&hex[ix..ix + 1], 16)
+                .map_err(|err| format!("invalid hex color {value:?}: {err}"))
+        };
+        let pair = |ix: usize| -> Result<u8, String> {
+            u8::from_str_radix(&hex[ix..ix + 2], 16)
+                .map_err(|err| format!("invalid hex color {value:?}: {err}"))
+        };
+
+        let components = match hex.len() {
+            len @ (3 | 4) if hex.is_ascii() => {
+                let alpha = if len == 4 { digit(3)? } else { 0xf };
+                // `#abc` means `#aabbcc`, so each digit is duplicated rather
+                // than shifted — `0xa` widens to `0xaa`, not `0xa0`.
+                [digit(0)?, digit(1)?, digit(2)?, alpha].map(|d| (d << 4) | d)
+            }
+            len @ (6 | 8) if hex.is_ascii() => {
+                let alpha = if len == 8 { pair(6)? } else { 0xff };
+                [pair(0)?, pair(2)?, pair(4)?, alpha]
+            }
+            _ => {
+                return Err(format!(
+                    "invalid hex color {value:?}: expected #rgb, #rgba, #rrggbb, or #rrggbbaa"
+                ));
+            }
+        };
+
+        let [r, g, b, a] = components.map(|c| f32::from(c) / 255.0);
+        Ok(Self(Rgba::new(r, g, b, a)))
+    }
+}
+
+impl<'de> Deserialize<'de> for HexColor {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = <std::borrow::Cow<'_, str>>::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
 #[derive(Clone, Copy, Deserialize)]
 #[serde(untagged)]
 enum ThemeColor {
-    Hex(Rgba),
-    HexWithAlpha { hex: Rgba, alpha: f32 },
+    Hex(HexColor),
+    HexWithAlpha { hex: HexColor, alpha: f32 },
 }
 
 impl ThemeColor {
     fn into_rgba(self) -> Rgba {
         match self {
-            Self::Hex(color) => color,
-            Self::HexWithAlpha { hex, alpha } => with_alpha(hex, alpha),
+            Self::Hex(color) => color.0,
+            Self::HexWithAlpha { hex, alpha } => with_alpha(hex.0, alpha),
         }
     }
 }
@@ -1008,21 +1058,21 @@ fn intern_lane_palette(palette: GraphLanePalette) -> &'static GraphLanePalette {
 fn lane_palettes_are_identical(a: &GraphLanePalette, b: &GraphLanePalette) -> bool {
     a.as_slice().len() == b.as_slice().len()
         && a.as_slice().iter().zip(b.as_slice()).all(|(a, b)| {
-            a.r.to_bits() == b.r.to_bits()
-                && a.g.to_bits() == b.g.to_bits()
-                && a.b.to_bits() == b.b.to_bits()
-                && a.a.to_bits() == b.a.to_bits()
+            a.red.to_bits() == b.red.to_bits()
+                && a.green.to_bits() == b.green.to_bits()
+                && a.blue.to_bits() == b.blue.to_bits()
+                && a.alpha.to_bits() == b.alpha.to_bits()
         })
 }
 
 pub(crate) fn mix_colors(a: Rgba, b: Rgba, t: f32) -> Rgba {
     let t = t.clamp(0.0, 1.0);
-    Rgba {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: 1.0,
-    }
+    Rgba::new(
+        a.red + (b.red - a.red) * t,
+        a.green + (b.green - a.green) * t,
+        a.blue + (b.blue - a.blue) * t,
+        1.0,
+    )
 }
 
 fn derived_syntax_color(is_dark: bool, colors: &Colors, token: Rgba) -> Rgba {
@@ -1153,7 +1203,7 @@ fn resolve_syntax_colors(
 
 fn shadow_layer(base: Rgba, alpha: f32, y: f32, blur: f32) -> gpui::BoxShadow {
     gpui::BoxShadow {
-        color: with_alpha(base, alpha).into(),
+        color: with_alpha(base, alpha).into_color(),
         offset: gpui::point(gpui::px(0.0), gpui::px(y)),
         blur_radius: gpui::px(blur),
         spread_radius: gpui::px(0.0),
@@ -1634,8 +1684,35 @@ fn parse_theme_bundle(json: &str) -> Result<ThemeBundleFile, ThemeParseError> {
     serde_json::from_value(value).map_err(ThemeParseError::Parse)
 }
 
+/// Build an [`Hsla`] from a hue given as a 0..1 fraction of the colour wheel.
+///
+/// Not `gpui::hsla`, which cannot express this: it clamps its hue argument to
+/// `0..=1` and stores the result in a `palette::RgbHue`, which is measured in
+/// **degrees**. Every fraction therefore lands within one degree of red, and
+/// scaling by 360 at the call site is clamped straight back off. Everything
+/// downstream reads the hue as degrees — `SceneHsla::from` divides it by 360 on
+/// the way to the renderer, and palette's `into_color` agrees — so the scaling
+/// has to happen where the `RgbHue` is built. `RgbHue` normalizes cyclically,
+/// so hues outside 0..1 wrap rather than clamp.
+///
+/// Revisit this if gpui's `hsla` ever scales its argument itself; the two would
+/// then compound.
+pub(crate) fn hsla_from_hue_fraction(
+    hue: f32,
+    saturation: f32,
+    lightness: f32,
+    alpha: f32,
+) -> Hsla {
+    Hsla::new(
+        hue * 360.0,
+        saturation.clamp(0.0, 1.0),
+        lightness.clamp(0.0, 1.0),
+        alpha.clamp(0.0, 1.0),
+    )
+}
+
 pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
-    color.a = alpha;
+    color.alpha = alpha;
     color
 }
 
@@ -1644,13 +1721,13 @@ pub(crate) fn with_alpha(mut color: Rgba, alpha: f32) -> Rgba {
 /// surface it doesn't paint itself — a label fade over a hovered row, say —
 /// needs this rather than the overlay color alone.
 pub(crate) fn composite_over(base: Rgba, overlay: Rgba) -> Rgba {
-    let t = overlay.a.clamp(0.0, 1.0);
-    Rgba {
-        r: base.r + (overlay.r - base.r) * t,
-        g: base.g + (overlay.g - base.g) * t,
-        b: base.b + (overlay.b - base.b) * t,
-        a: base.a,
-    }
+    let t = overlay.alpha.clamp(0.0, 1.0);
+    Rgba::new(
+        base.red + (overlay.red - base.red) * t,
+        base.green + (overlay.green - base.green) * t,
+        base.blue + (overlay.blue - base.blue) * t,
+        base.alpha,
+    )
 }
 
 /// A fixed, deliberately-distinct purple flagging that the user is browsing a
@@ -1778,12 +1855,14 @@ pub(crate) fn test_theme_json_with_syntax(base_key: &str, syntax_json: &str) -> 
 mod tests {
     use super::{
         AppTheme, DEFAULT_DARK_THEME_KEY, DEFAULT_LIGHT_THEME_KEY, EMBEDDED_THEME_FILES,
-        GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, Rgba, THEME_SCHEMA_VERSION, ThemeColor,
-        UNFILLED_COLOR_TOKENS, available_themes, content_header_bg, derived_syntax_color,
-        fill_missing_color_tokens, has_theme_key, load_theme_specs_from_json, merged_theme_options,
-        resolved_runtime_themes_dir, runtime_themes_with_dir, test_theme_bundle_value,
-        test_theme_json_with_syntax, theme_label, with_alpha,
+        GRAPH_LANE_PALETTE_SIZE, GraphLanePalette, HexColor, Hsla, Rgba, THEME_SCHEMA_VERSION,
+        ThemeColor, UNFILLED_COLOR_TOKENS, available_themes, content_header_bg,
+        derived_syntax_color, fill_missing_color_tokens, has_theme_key, hsla_from_hue_fraction,
+        load_theme_specs_from_json, merged_theme_options, resolved_runtime_themes_dir,
+        runtime_themes_with_dir, test_theme_bundle_value, test_theme_json_with_syntax, theme_label,
+        with_alpha,
     };
+    use palette::IntoColor;
     use std::{fs, path::PathBuf};
     use tempfile::tempdir;
 
@@ -1872,9 +1951,9 @@ mod tests {
             }
         }
 
-        0.2126 * linear_channel(color.r)
-            + 0.7152 * linear_channel(color.g)
-            + 0.0722 * linear_channel(color.b)
+        0.2126 * linear_channel(color.red)
+            + 0.7152 * linear_channel(color.green)
+            + 0.0722 * linear_channel(color.blue)
     }
 
     fn contrast_ratio(a: Rgba, b: Rgba) -> f32 {
@@ -1953,19 +2032,14 @@ mod tests {
 
     #[test]
     fn with_alpha_preserves_rgb_and_overwrites_alpha() {
-        let color = Rgba {
-            r: 0.1,
-            g: 0.2,
-            b: 0.3,
-            a: 0.4,
-        };
+        let color = Rgba::new(0.1, 0.2, 0.3, 0.4);
 
         let adjusted = with_alpha(color, 0.75);
 
-        assert_eq!(adjusted.r, color.r);
-        assert_eq!(adjusted.g, color.g);
-        assert_eq!(adjusted.b, color.b);
-        assert_eq!(adjusted.a, 0.75);
+        assert_eq!(adjusted.red, color.red);
+        assert_eq!(adjusted.green, color.green);
+        assert_eq!(adjusted.blue, color.blue);
+        assert_eq!(adjusted.alpha, 0.75);
     }
 
     #[test]
@@ -2154,7 +2228,7 @@ mod tests {
                 .graph_lane_palette
                 .as_slice()
                 .iter()
-                .any(|color| color.r.is_nan() || color.g.is_nan() || color.b.is_nan()),
+                .any(|color| color.red.is_nan() || color.green.is_nan() || color.blue.is_nan()),
             "fixture must actually produce a non-finite channel"
         );
         assert!(
@@ -2311,7 +2385,7 @@ mod tests {
         assert_eq!(theme.graph_lane_palette.as_slice().len(), 2);
         assert_eq!(
             theme.graph_lane_palette.as_slice()[0],
-            gpui::hsla(0.25, 0.75, 0.62, 1.0).into()
+            hsla_from_hue_fraction(0.25, 0.75, 0.62, 1.0).into_color()
         );
         assert_eq!(theme.syntax.comment, theme.colors.foreground.secondary);
         assert_eq!(
@@ -2327,9 +2401,9 @@ mod tests {
         let palette = GraphLanePalette::from_theme_colors(
             true,
             Some(vec![
-                ThemeColor::Hex(gpui::rgba(0x112233ff)),
-                ThemeColor::Hex(gpui::rgba(0x445566ff)),
-                ThemeColor::Hex(gpui::rgba(0x778899ff)),
+                ThemeColor::Hex(HexColor(gpui::rgba(0x112233ff))),
+                ThemeColor::Hex(HexColor(gpui::rgba(0x445566ff))),
+                ThemeColor::Hex(HexColor(gpui::rgba(0x778899ff))),
             ]),
             None,
         );
@@ -2341,7 +2415,7 @@ mod tests {
         for ix in 0..(GRAPH_LANE_PALETTE_SIZE as u8) {
             let color = palette.color_at(ix);
             assert_eq!(color, palette.as_slice()[usize::from(ix) % 3]);
-            assert!(color.a > 0.0, "lane {ix} would be invisible");
+            assert!(color.alpha > 0.0, "lane {ix} would be invisible");
         }
     }
 
@@ -2356,10 +2430,72 @@ mod tests {
                 let hue = (f32::from(ix) * 0.13) % 1.0;
                 assert_eq!(
                     palette.color_at(ix),
-                    gpui::hsla(hue, 0.75, light, 1.0).into(),
+                    hsla_from_hue_fraction(hue, 0.75, light, 1.0).into_color(),
                     "lane {ix} (is_dark={is_dark})"
                 );
             }
+        }
+    }
+
+    /// The ramp tests above compare [`hsla_from_hue_fraction`] against itself,
+    /// so they hold just as well when every lane is the same colour. This pins
+    /// the mapping itself: a hue fraction has to reach the primary it names.
+    ///
+    /// `gpui::hsla` fails this — it clamps the fraction and then reads it as
+    /// degrees, so 1/3 and 2/3 both come back red.
+    #[test]
+    fn hue_fractions_reach_the_primaries_they_name() {
+        let cases = [
+            (0.0 / 3.0, [1.0, 0.0, 0.0]),
+            (1.0 / 3.0, [0.0, 1.0, 0.0]),
+            (2.0 / 3.0, [0.0, 0.0, 1.0]),
+            // A hue is cyclic, so a full turn is the same red it started on.
+            (3.0 / 3.0, [1.0, 0.0, 0.0]),
+        ];
+
+        for (hue, [r, g, b]) in cases {
+            let color: Rgba = hsla_from_hue_fraction(hue, 1.0, 0.5, 1.0).into_color();
+            let actual = [color.red, color.green, color.blue];
+            for (channel, (actual, expected)) in actual.iter().zip([r, g, b]).enumerate() {
+                assert!(
+                    (actual - expected).abs() < 1e-4,
+                    "hue {hue}: channel {channel} was {actual}, expected {expected} \
+                     (got {actual:?} for the whole colour)"
+                );
+            }
+        }
+    }
+
+    /// Distinct authors must land on distinct hues, not four shades of one.
+    #[test]
+    fn author_colors_spread_across_the_hue_wheel() {
+        let theme = AppTheme::gitcomet_dark();
+        let names = [
+            "Ada Lovelace",
+            "Grace Hopper",
+            "Alan Turing",
+            "Barbara Liskov",
+        ];
+        let mut hues = names.map(|name| {
+            let color: Hsla = crate::view::components::author_color(theme, name).into_color();
+            color.hue.into_positive_degrees()
+        });
+        hues.sort_by(f32::total_cmp);
+
+        // Under the bug this guards, every hue lands under one degree, so the
+        // whole spread collapses and adjacent authors become indistinguishable.
+        let spread = hues[hues.len() - 1] - hues[0];
+        assert!(
+            spread > 90.0,
+            "author hues span only {spread}°, so they have collapsed onto one colour: {hues:?}"
+        );
+        for pair in hues.windows(2) {
+            assert!(
+                pair[1] - pair[0] > 1.0,
+                "author hues {:?} and {:?} are within a degree of each other: {hues:?}",
+                pair[0],
+                pair[1]
+            );
         }
     }
 

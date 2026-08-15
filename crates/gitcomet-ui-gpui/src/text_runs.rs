@@ -11,7 +11,8 @@
 //! inline spans, truncation projections), so the boundary is enforced here,
 //! once, on the way into shaping.
 
-use gpui::{TextRun, TextStyle};
+use gpui::{HighlightStyle, Hsla, StrikethroughStyle, TextRun, TextStyle, UnderlineStyle};
+use std::hash::{Hash, Hasher};
 use std::ops::Range;
 
 /// Clamp `range` to `text` and widen it onto the surrounding character
@@ -135,6 +136,75 @@ pub(crate) fn text_runs_for_highlights(
         runs.push(default_style.clone().to_run(text.len() - ix));
     }
     runs
+}
+
+/// Feed an [`Hsla`] into `state`.
+///
+/// `gpui`'s colour and text-style types are `palette` re-exports, and `palette`
+/// deliberately does not implement [`Hash`] for them — its floats have no total
+/// order and `-0.0`/`NaN` would hash inconsistently with `PartialEq`. Every
+/// shaped-line cache in this crate keys on a style, so the hashes are written
+/// out by hand here instead: field-for-field over the raw bits, alongside a
+/// discriminant byte for each `Option` so `None` can never collide with a
+/// `Some` whose fields happen to hash to zero.
+///
+/// These are cache keys, not identity: two colours that are equal must hash
+/// equal, which `to_bits` gives us for every value the UI actually produces.
+pub(crate) fn hash_hsla<H: Hasher>(color: &Hsla, state: &mut H) {
+    color.hue.into_positive_degrees().to_bits().hash(state);
+    color.saturation.to_bits().hash(state);
+    color.lightness.to_bits().hash(state);
+    color.alpha.to_bits().hash(state);
+}
+
+fn hash_option<T, H: Hasher>(value: &Option<T>, state: &mut H, hash_some: impl FnOnce(&T, &mut H)) {
+    match value {
+        Some(value) => {
+            1u8.hash(state);
+            hash_some(value, state);
+        }
+        None => 0u8.hash(state),
+    }
+}
+
+/// Feed an `Option<Hsla>` into `state`. See [`hash_hsla`].
+pub(crate) fn hash_optional_hsla<H: Hasher>(color: &Option<Hsla>, state: &mut H) {
+    hash_option(color, state, hash_hsla);
+}
+
+/// Feed an `Option<UnderlineStyle>` into `state`. See [`hash_hsla`].
+pub(crate) fn hash_optional_underline<H: Hasher>(style: &Option<UnderlineStyle>, state: &mut H) {
+    hash_option(style, state, |style, state| {
+        f32::from(style.thickness).to_bits().hash(state);
+        hash_optional_hsla(&style.color, state);
+        style.wavy.hash(state);
+    });
+}
+
+/// Feed an `Option<StrikethroughStyle>` into `state`. See [`hash_hsla`].
+pub(crate) fn hash_optional_strikethrough<H: Hasher>(
+    style: &Option<StrikethroughStyle>,
+    state: &mut H,
+) {
+    hash_option(style, state, |style, state| {
+        f32::from(style.thickness).to_bits().hash(state);
+        hash_optional_hsla(&style.color, state);
+    });
+}
+
+/// Feed a [`HighlightStyle`] into `state`. See [`hash_hsla`].
+pub(crate) fn hash_highlight_style<H: Hasher>(style: &HighlightStyle, state: &mut H) {
+    hash_optional_hsla(&style.color, state);
+    hash_option(&style.font_weight, state, |weight, state| {
+        weight.0.to_bits().hash(state)
+    });
+    style.font_style.hash(state);
+    hash_optional_hsla(&style.background_color, state);
+    hash_optional_underline(&style.underline, state);
+    hash_optional_strikethrough(&style.strikethrough, state);
+    hash_option(&style.fade_out, state, |fade, state| {
+        fade.to_bits().hash(state)
+    });
 }
 
 #[cfg(test)]

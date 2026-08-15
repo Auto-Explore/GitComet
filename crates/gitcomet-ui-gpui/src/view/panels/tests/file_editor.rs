@@ -3,6 +3,7 @@ use crate::view::panes::main::{
     apply_file_editor_bracket_highlights, file_editor_blame_line_for_editor_line,
     file_editor_provider_binding_key,
 };
+use palette::IntoColor;
 
 /// A repo whose working tree holds `file_rel` with `contents`, already showing
 /// that file in the editor.
@@ -253,11 +254,11 @@ async fn file_editor_refuses_a_non_utf8_file(cx: &mut gpui::TestAppContext) {
 fn bracket_overlay_paints_both_delimiters_over_the_syntax_runs() {
     let text = "fn f() {}";
     let keyword = gpui::HighlightStyle {
-        color: Some(gpui::rgb(0x112233).into()),
+        color: Some(gpui::rgb(0x112233).into_color()),
         ..Default::default()
     };
     let bracket = gpui::HighlightStyle {
-        background_color: Some(gpui::rgba(0xffffff26).into()),
+        background_color: Some(gpui::rgba(0xffffff26).into_color()),
         ..Default::default()
     };
     let open = text.find('{').expect("open brace");

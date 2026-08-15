@@ -1815,12 +1815,7 @@ fn focused_truncated_line_hit_testing_snaps_both_ellipsis_segments_to_hidden_bou
     });
 }
 
-const TOKEN_COLOR: gpui::Hsla = gpui::Hsla {
-    h: 0.33,
-    s: 1.0,
-    l: 0.5,
-    a: 1.0,
-};
+const TOKEN_COLOR: gpui::Hsla = gpui::hsla(0.33, 1.0, 0.5, 1.0);
 
 /// A provider shaped like a real syntax one: it answers in the coordinates of
 /// the text it was built over, not of whatever the buffer holds now.

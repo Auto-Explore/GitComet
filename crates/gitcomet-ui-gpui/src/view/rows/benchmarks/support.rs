@@ -1,4 +1,5 @@
 use super::*;
+use palette::IntoColor;
 
 pub(crate) fn empty_history_graph_heads<'a>() -> HashSet<&'a str> {
     HashSet::default()
@@ -1272,15 +1273,15 @@ pub(crate) fn build_text_input_streamed_highlights(
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
     let theme = AppTheme::gitcomet_dark();
     let style_primary = gpui::HighlightStyle {
-        color: Some(theme.colors.accent.foreground.into()),
+        color: Some(theme.colors.accent.foreground.into_color()),
         ..gpui::HighlightStyle::default()
     };
     let style_secondary = gpui::HighlightStyle {
-        color: Some(theme.colors.status.warning.foreground.into()),
+        color: Some(theme.colors.status.warning.foreground.into_color()),
         ..gpui::HighlightStyle::default()
     };
     let style_overlay = gpui::HighlightStyle {
-        color: Some(theme.colors.status.success.foreground.into()),
+        color: Some(theme.colors.status.success.foreground.into_color()),
         ..gpui::HighlightStyle::default()
     };
 

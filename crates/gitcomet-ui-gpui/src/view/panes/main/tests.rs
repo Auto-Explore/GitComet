@@ -33,6 +33,7 @@ use crate::view::rows;
 use crate::view::{ConflictResolverUiState, GitCometViewMode};
 use gitcomet_core::domain::{CommitId, DiffTarget, FileSource, RepoSpec};
 use gitcomet_state::model::{ConflictFile, Loadable, RepoId, RepoState};
+use palette::IntoColor;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -2427,7 +2428,7 @@ fn live_resolved_output_masks_placeholders_and_keeps_syntax_after_them() {
     assert_eq!(placeholder_highlights[0].0, placeholder_range);
     assert_eq!(
         placeholder_highlights[0].1.color,
-        Some(theme.colors.status.danger.foreground.into())
+        Some(theme.colors.status.danger.foreground.into_color())
     );
     assert_eq!(
         placeholder_highlights[0].1.background_color, None,
@@ -2468,7 +2469,7 @@ fn resolved_output_without_a_language_still_marks_unresolved_rows() {
     assert_eq!(highlights[0].0, placeholder_range);
     assert_eq!(
         highlights[0].1.color,
-        Some(theme.colors.status.danger.foreground.into())
+        Some(theme.colors.status.danger.foreground.into_color())
     );
 }
 
@@ -2508,11 +2509,11 @@ fn the_active_conflicts_row_is_washed_yellow_and_the_others_are_not() {
     assert_eq!(style_for(&first_range).background_color, None);
     assert_eq!(
         style_for(&second_range).background_color,
-        Some(resolved_output_active_conflict_background(theme).into())
+        Some(resolved_output_active_conflict_background(theme).into_color())
     );
     assert_eq!(
         style_for(&second_range).color,
-        Some(theme.colors.status.danger.foreground.into()),
+        Some(theme.colors.status.danger.foreground.into_color()),
         "the wash marks the selection; the row is still an unresolved one"
     );
 }

@@ -1,5 +1,6 @@
 use super::shaping::with_alpha;
 use super::*;
+use palette::IntoColor;
 
 // Text or display-mode changes always clear shaped-row caches, so cache keys
 // only need the line index.
@@ -516,8 +517,8 @@ impl TextInputStyle {
             hover_border,
             focus_border,
             radius: theme.radii.control,
-            text: theme.colors.editor.foreground.into(),
-            placeholder: theme.colors.foreground.placeholder.into(),
+            text: theme.colors.editor.foreground.into_color(),
+            placeholder: theme.colors.foreground.placeholder.into_color(),
             cursor: theme.colors.editor.cursor,
             selection: theme.colors.editor.selection_background,
         }

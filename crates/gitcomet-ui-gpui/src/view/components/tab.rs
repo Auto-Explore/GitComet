@@ -172,12 +172,12 @@ impl Tab {
         let amount = if theme.is_dark { 0.18 } else { 0.14 };
         let border = theme.colors.stroke.default;
         let text = theme.colors.foreground.primary;
-        gpui::Rgba {
-            r: border.r + (text.r - border.r) * amount,
-            g: border.g + (text.g - border.g) * amount,
-            b: border.b + (text.b - border.b) * amount,
-            a: border.a + (text.a - border.a) * amount,
-        }
+        gpui::Rgba::new(
+            border.red + (text.red - border.red) * amount,
+            border.green + (text.green - border.green) * amount,
+            border.blue + (text.blue - border.blue) * amount,
+            border.alpha + (text.alpha - border.alpha) * amount,
+        )
     }
 
     pub fn new(id: impl Into<ElementId>) -> Self {

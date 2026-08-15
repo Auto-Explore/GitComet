@@ -1,7 +1,8 @@
-use crate::theme::{AppTheme, with_alpha};
+use crate::theme::{AppTheme, hsla_from_hue_fraction, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{Div, FontWeight, Pixels, Rgba, TextRun, div, px};
+use palette::IntoColor;
 
 /// Deterministic identity color for an author name. Uses the same hue recipe
 /// as the history graph lanes (hash-driven hue, fixed saturation,
@@ -12,7 +13,7 @@ pub fn author_color(theme: AppTheme, name: &str) -> Rgba {
     name.hash(&mut hasher);
     let hue = (hasher.finish() % 360) as f32 / 360.0;
     let light = if theme.is_dark { 0.62 } else { 0.34 };
-    gpui::hsla(hue, 0.60, light, 1.0).into()
+    hsla_from_hue_fraction(hue, 0.60, light, 1.0).into_color()
 }
 
 /// Up to two uppercase initials for an author display name: first letters of
@@ -89,10 +90,11 @@ pub fn author_avatar(theme: AppTheme, scale: impl Into<UiScale>, name: &str) -> 
                     let run = TextRun {
                         len: initials.len(),
                         font,
-                        color: color.into(),
+                        color: color.into_color(),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
+                        letter_spacing: None,
                     };
                     let shaped =
                         window

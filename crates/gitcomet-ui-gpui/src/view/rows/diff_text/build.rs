@@ -1,5 +1,6 @@
 use super::*;
 use crate::view::panes::main::diff_search::{DiffSearchMatcher, normalize_diff_search_query};
+use palette::IntoColor;
 
 fn maybe_expand_tabs(s: &str) -> SharedString {
     if !s.contains('\t') {
@@ -264,10 +265,10 @@ pub(super) fn hash_text_content(text: &str) -> u64 {
 }
 
 pub(in crate::view::rows) fn hash_rgba_bits(hasher: &mut FxHasher, rgba: gpui::Rgba) {
-    rgba.r.to_bits().hash(hasher);
-    rgba.g.to_bits().hash(hasher);
-    rgba.b.to_bits().hash(hasher);
-    rgba.a.to_bits().hash(hasher);
+    rgba.red.to_bits().hash(hasher);
+    rgba.green.to_bits().hash(hasher);
+    rgba.blue.to_bits().hash(hasher);
+    rgba.alpha.to_bits().hash(hasher);
 }
 
 pub(super) fn syntax_theme_signature(theme: AppTheme) -> u64 {
@@ -583,28 +584,28 @@ pub(super) fn build_styled_text_fused(
             let mut semantic_word_foreground = None;
             if in_word && let Some(c) = word_kind {
                 let (background, foreground) = word_highlight_colors(theme, c);
-                style.background_color = Some(background.into());
+                style.background_color = Some(background.into_color());
                 semantic_word_foreground = foreground;
             }
 
             let mut semantic_query_foreground = None;
             if in_query {
                 let (background, foreground) = query_highlight_colors(theme);
-                style.background_color = Some(background.into());
+                style.background_color = Some(background.into_color());
                 semantic_query_foreground = foreground;
             }
 
             let syntax_fg = syntax_highlight_color(theme, syntax);
             if let Some(fg) = syntax_fg {
-                style.color = Some(fg.into());
+                style.color = Some(fg.into_color());
             }
             if syntax_fg.is_none()
                 && let Some(foreground) = semantic_word_foreground
             {
-                style.color = Some(foreground.into());
+                style.color = Some(foreground.into_color());
             }
             if let Some(foreground) = semantic_query_foreground {
-                style.color = Some(foreground.into());
+                style.color = Some(foreground.into_color());
             }
 
             if style != gpui::HighlightStyle::default() && offset < next_offset {
@@ -858,8 +859,8 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
 
         let base_highlights = base.highlights.as_ref();
         let (query_bg, query_fg) = query_highlight_colors(theme);
-        let query_bg: gpui::Hsla = query_bg.into();
-        let query_fg: Option<gpui::Hsla> = query_fg.map(Into::into);
+        let query_bg: gpui::Hsla = query_bg.into_color();
+        let query_fg: Option<gpui::Hsla> = query_fg.map(IntoColor::into_color);
         if base_highlights.is_empty() {
             let mut merged = Vec::with_capacity(query_ranges.len());
             for range in query_ranges.iter().cloned() {
@@ -981,7 +982,7 @@ fn hash_highlights(highlights: &[(Range<usize>, gpui::HighlightStyle)]) -> u64 {
     let mut hasher = FxHasher::default();
     for (range, style) in highlights {
         range.hash(&mut hasher);
-        style.hash(&mut hasher);
+        crate::text_runs::hash_highlight_style(style, &mut hasher);
     }
     hasher.finish()
 }
@@ -993,7 +994,7 @@ fn hash_query_overlay_highlights(
 ) -> u64 {
     let mut hasher = FxHasher::default();
     base_highlights_hash.hash(&mut hasher);
-    query_bg.hash(&mut hasher);
+    crate::text_runs::hash_hsla(&query_bg, &mut hasher);
     for range in query_ranges {
         range.hash(&mut hasher);
     }
@@ -1062,7 +1063,7 @@ pub(super) fn syntax_highlight_style(
 ) -> Option<gpui::HighlightStyle> {
     let fg = syntax_highlight_color(theme, kind)?;
     let mut style = gpui::HighlightStyle {
-        color: Some(fg.into()),
+        color: Some(fg.into_color()),
         ..gpui::HighlightStyle::default()
     };
     match kind {
@@ -1370,28 +1371,28 @@ pub(super) fn styled_text_for_diff_segments(
             && let Some(c) = word_kind
         {
             let (background, foreground) = word_highlight_colors(theme, c);
-            style.background_color = Some(background.into());
+            style.background_color = Some(background.into_color());
             semantic_word_foreground = foreground;
         }
 
         let mut semantic_query_foreground = None;
         if seg.in_query {
             let (background, foreground) = query_highlight_colors(theme);
-            style.background_color = Some(background.into());
+            style.background_color = Some(background.into_color());
             semantic_query_foreground = foreground;
         }
 
         let syntax_fg = syntax_highlight_color(theme, seg.syntax);
         if let Some(fg) = syntax_fg {
-            style.color = Some(fg.into());
+            style.color = Some(fg.into_color());
         }
         if syntax_fg.is_none()
             && let Some(foreground) = semantic_word_foreground
         {
-            style.color = Some(foreground.into());
+            style.color = Some(foreground.into_color());
         }
         if let Some(foreground) = semantic_query_foreground {
-            style.color = Some(foreground.into());
+            style.color = Some(foreground.into_color());
         }
 
         if style != gpui::HighlightStyle::default() && offset < next_offset {

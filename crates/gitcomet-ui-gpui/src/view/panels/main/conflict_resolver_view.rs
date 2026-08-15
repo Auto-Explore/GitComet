@@ -1094,7 +1094,7 @@ impl MainPaneView {
                                     .child(
                                         div()
                                             .w(col_c_w)
-                                            .flex_grow()
+                                            .flex_grow(1.)
                                             .min_w(px(0.0))
                                             .px_2()
                                             .flex()
@@ -1129,7 +1129,7 @@ impl MainPaneView {
                                     .child(
                                         div()
                                             .w(right_w)
-                                            .flex_grow()
+                                            .flex_grow(1.)
                                             .min_w(px(0.0))
                                             .px_2()
                                             .flex()
@@ -1374,7 +1374,7 @@ impl MainPaneView {
                                                         div()
                                                             .relative()
                                                             .w(col_c_w)
-                                                            .flex_grow()
+                                                            .flex_grow(1.)
                                                             .min_w(px(0.0))
                                                             .h_full()
                                                             .child(
@@ -1559,7 +1559,7 @@ impl MainPaneView {
                                                         div()
                                                             .relative()
                                                             .w(right_w)
-                                                            .flex_grow()
+                                                            .flex_grow(1.)
                                                             .min_w(px(0.0))
                                                             .h_full()
                                                             .child(

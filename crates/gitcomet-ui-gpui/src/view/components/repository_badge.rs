@@ -2,6 +2,7 @@ use crate::theme::{AppTheme, with_alpha};
 use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{Div, FontWeight, SharedString, TextRun, div, point, px};
+use palette::IntoColor;
 
 pub const REPOSITORY_BADGE_SIZE_PX: f32 = 18.0;
 const REPOSITORY_BADGE_FONT_SIZE_PX: f32 = 8.5;
@@ -109,10 +110,11 @@ pub fn repository_initials_box(
                     let run = TextRun {
                         len: initials.len(),
                         font,
-                        color: foreground.into(),
+                        color: foreground.into_color(),
                         background_color: None,
                         underline: None,
                         strikethrough: None,
+                        letter_spacing: None,
                     };
                     let shaped =
                         window

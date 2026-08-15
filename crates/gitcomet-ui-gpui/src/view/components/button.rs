@@ -5,6 +5,7 @@ use gpui::{
     AnyElement, Bounds, ClickEvent, CursorStyle, Div, FocusHandle, IntoElement, Pixels,
     SharedString, Stateful, Window, div, px,
 };
+use palette::IntoColor;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -458,7 +459,7 @@ impl Button {
                 .active(move |s| s.bg(selected_bg));
             if !theme.is_dark {
                 base = base.shadow(vec![gpui::BoxShadow {
-                    color: theme.colors.interaction.selected_indicator.into(),
+                    color: theme.colors.interaction.selected_indicator.into_color(),
                     offset: gpui::point(px(0.0), px(0.0)),
                     blur_radius: px(0.0),
                     spread_radius: px(1.0),
@@ -486,16 +487,16 @@ fn looks_like_icon_button(label: &str) -> bool {
 }
 
 fn with_alpha(mut color: gpui::Rgba, alpha: f32) -> gpui::Rgba {
-    color.a = alpha;
+    color.alpha = alpha;
     color
 }
 
 fn mix(a: gpui::Rgba, b: gpui::Rgba, t: f32) -> gpui::Rgba {
     let t = t.clamp(0.0, 1.0);
-    gpui::Rgba {
-        r: a.r + (b.r - a.r) * t,
-        g: a.g + (b.g - a.g) * t,
-        b: a.b + (b.b - a.b) * t,
-        a: a.a + (b.a - a.a) * t,
-    }
+    gpui::Rgba::new(
+        a.red + (b.red - a.red) * t,
+        a.green + (b.green - a.green) * t,
+        a.blue + (b.blue - a.blue) * t,
+        a.alpha + (b.alpha - a.alpha) * t,
+    )
 }

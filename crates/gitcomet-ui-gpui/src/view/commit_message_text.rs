@@ -6,6 +6,7 @@
 //! [`commit_message_highlights`].
 
 use super::*;
+use palette::IntoColor;
 
 pub(in crate::view) type TextHighlight = (std::ops::Range<usize>, gpui::HighlightStyle);
 pub(in crate::view) type TextHighlights = Vec<TextHighlight>;
@@ -13,10 +14,10 @@ pub(in crate::view) type TextHighlights = Vec<TextHighlight>;
 /// Accent + underline for a SHA or URL inside a commit message.
 pub(in crate::view) fn commit_link_style(theme: AppTheme) -> gpui::HighlightStyle {
     gpui::HighlightStyle {
-        color: Some(theme.colors.accent.foreground.into()),
+        color: Some(theme.colors.accent.foreground.into_color()),
         underline: Some(gpui::UnderlineStyle {
             thickness: px(1.0),
-            color: Some(theme.colors.accent.foreground.into()),
+            color: Some(theme.colors.accent.foreground.into_color()),
             wavy: false,
         }),
         ..gpui::HighlightStyle::default()
@@ -36,7 +37,7 @@ pub(in crate::view) fn commit_message_summary_highlights(
         return Vec::new();
     }
     let style = gpui::HighlightStyle {
-        color: Some(theme.colors.foreground.emphasis.into()),
+        color: Some(theme.colors.foreground.emphasis.into_color()),
         font_weight: Some(FontWeight::SEMIBOLD),
         ..gpui::HighlightStyle::default()
     };

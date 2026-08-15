@@ -277,6 +277,7 @@ impl Element for DiffTextSelectionOverlay {
                     background_color: None,
                     underline: None,
                     strikethrough: None,
+                    letter_spacing: style.letter_spacing,
                 };
                 let layout =
                     window

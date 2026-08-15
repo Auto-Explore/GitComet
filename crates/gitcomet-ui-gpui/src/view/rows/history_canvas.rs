@@ -4,6 +4,7 @@ use gpui::{
     Bounds, ContentMask, CursorStyle, DispatchPhase, HitboxBehavior, MouseButton, TruncateFrom,
     fill, point, px, size,
 };
+use palette::IntoColor;
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;
 use std::cell::RefCell;
@@ -65,10 +66,10 @@ fn shape_truncated_line_cached_from(
         font_family
             .unwrap_or_else(|| base_style.font_family.as_ref())
             .hash(&mut hasher);
-        color.r.to_bits().hash(&mut hasher);
-        color.g.to_bits().hash(&mut hasher);
-        color.b.to_bits().hash(&mut hasher);
-        color.a.to_bits().hash(&mut hasher);
+        color.red.to_bits().hash(&mut hasher);
+        color.green.to_bits().hash(&mut hasher);
+        color.blue.to_bits().hash(&mut hasher);
+        color.alpha.to_bits().hash(&mut hasher);
         matches!(truncate_from, TruncateFrom::Start).hash(&mut hasher);
         hasher.finish()
     };
@@ -80,7 +81,7 @@ fn shape_truncated_line_cached_from(
     }
 
     let mut style = base_style.clone();
-    style.color = color.into();
+    style.color = color.into_color();
     if let Some(family) = font_family {
         style.font_family = family.into();
     }
@@ -1336,11 +1337,17 @@ mod tests {
     fn commits_related_to_the_selection_go_to_full_contrast() {
         let dark = AppTheme::gitcomet_dark();
         let on_chain = history_summary_color(dark, false, Some(true));
-        assert_eq!((on_chain.r, on_chain.g, on_chain.b), (1.0, 1.0, 1.0));
+        assert_eq!(
+            (on_chain.red, on_chain.green, on_chain.blue),
+            (1.0, 1.0, 1.0)
+        );
 
         let light = AppTheme::gitcomet_light();
         let on_chain = history_summary_color(light, false, Some(true));
-        assert_eq!((on_chain.r, on_chain.g, on_chain.b), (0.0, 0.0, 0.0));
+        assert_eq!(
+            (on_chain.red, on_chain.green, on_chain.blue),
+            (0.0, 0.0, 0.0)
+        );
 
         for theme in [dark, light] {
             let on_chain = history_summary_color(theme, false, Some(true));
@@ -1411,8 +1418,8 @@ mod tests {
             let plain = history_summary_color(theme, false, None);
             let tip = history_summary_color(theme, true, None);
             assert_ne!(
-                (plain.r, plain.g, plain.b, plain.a),
-                (tip.r, tip.g, tip.b, tip.a),
+                (plain.red, plain.green, plain.blue, plain.alpha),
+                (tip.red, tip.green, tip.blue, tip.alpha),
                 "the revealed branch tip's summary must not reuse the body text color"
             );
             // Dark themes lift toward white, light themes toward black; either
@@ -1428,7 +1435,7 @@ mod tests {
     #[test]
     fn selected_chips_are_visibly_apart_from_their_unselected_form() {
         for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
-            let rgba = |c: gpui::Rgba| (c.r, c.g, c.b, c.a);
+            let rgba = |c: gpui::Rgba| (c.red, c.green, c.blue, c.alpha);
             let sel = history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: true });
             let plain =
                 history_chip_visual(theme, HistoryChipStyleKind::Branch { selected: false });

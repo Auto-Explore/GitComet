@@ -9,6 +9,7 @@ use alacritty_terminal::term::{
     cell::{Cell as AlacCell, Flags},
 };
 use alacritty_terminal::tty;
+use palette::IntoColor;
 use std::borrow::Cow;
 use std::sync::Arc;
 
@@ -501,7 +502,7 @@ pub(super) fn alacritty_cell_style(
     }
 
     if flags.contains(Flags::DIM) {
-        fg.a *= 0.7;
+        fg.alpha *= 0.7;
     }
 
     // Determine default-ness from the *effective* background, i.e. after the
@@ -567,12 +568,12 @@ fn color_to_rgba(
             NamedColor::BrightForeground => palette.foreground,
             NamedColor::DimForeground => palette.foreground,
         },
-        Color::Spec(rgb) => gpui::Rgba {
-            r: rgb.r as f32 / 255.0,
-            g: rgb.g as f32 / 255.0,
-            b: rgb.b as f32 / 255.0,
-            a: 1.0,
-        },
+        Color::Spec(rgb) => gpui::Rgba::new(
+            rgb.r as f32 / 255.0,
+            rgb.g as f32 / 255.0,
+            rgb.b as f32 / 255.0,
+            1.0,
+        ),
         Color::Indexed(i) => get_color_at_index(i as usize, palette),
     }
 }
@@ -600,34 +601,19 @@ fn get_color_at_index(index: usize, palette: &TerminalAnsiPalette) -> gpui::Rgba
         },
         16..=231 => {
             let (r, g, b) = rgb_for_index((index - 16) as u8);
-            gpui::Rgba {
-                r: if r == 0 {
+            let cube_level = |c: u8| {
+                if c == 0 {
                     0.0
                 } else {
-                    (r * 40 + 55) as f32 / 255.0
-                },
-                g: if g == 0 {
-                    0.0
-                } else {
-                    (g * 40 + 55) as f32 / 255.0
-                },
-                b: if b == 0 {
-                    0.0
-                } else {
-                    (b * 40 + 55) as f32 / 255.0
-                },
-                a: 1.0,
-            }
+                    (c * 40 + 55) as f32 / 255.0
+                }
+            };
+            gpui::Rgba::new(cube_level(r), cube_level(g), cube_level(b), 1.0)
         }
         232..=255 => {
             let i = (index - 232) as u8;
             let v = (i as f32 * 10.0 + 8.0) / 255.0;
-            gpui::Rgba {
-                r: v,
-                g: v,
-                b: v,
-                a: 1.0,
-            }
+            gpui::Rgba::new(v, v, v, 1.0)
         }
         256 => palette.foreground,
         257 => palette.background,
@@ -1081,7 +1067,7 @@ pub(super) fn terminal_text_run(
     len: usize,
 ) -> TextRun {
     let mut text_style = base_style.clone();
-    text_style.color = style.fg.into();
+    text_style.color = style.fg.into_color();
     if style.bold {
         text_style.font_weight = gpui::FontWeight::BOLD;
     }
@@ -1091,7 +1077,7 @@ pub(super) fn terminal_text_run(
     if style.underline {
         text_style.underline = Some(gpui::UnderlineStyle {
             thickness: px(1.0),
-            color: Some(style.fg.into()),
+            color: Some(style.fg.into_color()),
             ..Default::default()
         });
     }
@@ -1102,6 +1088,7 @@ pub(super) fn terminal_text_run(
         background_color: None,
         underline: text_style.underline,
         strikethrough: None,
+        letter_spacing: text_style.letter_spacing,
     }
 }
 
@@ -1692,6 +1679,8 @@ mod tests {
             line_clamp: None,
             text_align: gpui::TextAlign::Left,
             text_overflow: Default::default(),
+            letter_spacing: None,
+            text_transform: None,
         }
     }
 
@@ -1945,9 +1934,9 @@ mod tests {
             &palette,
             fg,
         );
-        assert!((spec.r - 100.0 / 255.0).abs() < 0.01);
-        assert!((spec.g - 150.0 / 255.0).abs() < 0.01);
-        assert!((spec.b - 200.0 / 255.0).abs() < 0.01);
+        assert!((spec.red - 100.0 / 255.0).abs() < 0.01);
+        assert!((spec.green - 150.0 / 255.0).abs() < 0.01);
+        assert!((spec.blue - 200.0 / 255.0).abs() < 0.01);
     }
 
     #[test]
@@ -1960,14 +1949,14 @@ mod tests {
         assert_eq!(get_color_at_index(15, &palette), palette.bright_white);
         // 256-color cube: index 16 is first entry
         let cube_color = get_color_at_index(16, &palette);
-        assert_eq!(cube_color.r, 0.0);
-        assert_eq!(cube_color.g, 0.0);
-        assert_eq!(cube_color.b, 0.0);
+        assert_eq!(cube_color.red, 0.0);
+        assert_eq!(cube_color.green, 0.0);
+        assert_eq!(cube_color.blue, 0.0);
         // Index 232 is first grayscale
         let gray = get_color_at_index(232, &palette);
-        assert!((gray.r - 8.0 / 255.0).abs() < 0.01);
-        assert_eq!(gray.r, gray.g);
-        assert_eq!(gray.g, gray.b);
+        assert!((gray.red - 8.0 / 255.0).abs() < 0.01);
+        assert_eq!(gray.red, gray.green);
+        assert_eq!(gray.green, gray.blue);
     }
 
     #[test]
@@ -2037,7 +2026,7 @@ mod tests {
             extra: None,
         };
         let style = alacritty_cell_style(&cell, &palette);
-        assert!(style.fg.a < 1.0, "dim must reduce foreground alpha");
+        assert!(style.fg.alpha < 1.0, "dim must reduce foreground alpha");
     }
 
     #[test]
@@ -2076,7 +2065,8 @@ mod tests {
             run.background_color.is_none(),
             "TextRun must never set background_color"
         );
-        assert_eq!(run.color, gpui::Hsla::from(style.fg));
+        let expected_color: gpui::Hsla = style.fg.into_color();
+        assert_eq!(run.color, expected_color);
     }
 
     #[test]
