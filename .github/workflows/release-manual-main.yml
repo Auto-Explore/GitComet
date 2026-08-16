@@ -246,6 +246,7 @@ jobs:
       package_base_url: "https://apt.gitcomet.dev/windows"
       product_id: ${{ vars.MICROSOFT_STORE_PRODUCT_ID }}
       package_languages: ${{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}
+      store_listing_languages: ${{ vars.MICROSOFT_STORE_LISTING_LANGUAGES }}
       dry_run: false
     secrets: inherit
 
