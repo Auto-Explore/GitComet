@@ -2244,7 +2244,7 @@ checksum = "e629b9b98ef3dd8afe6ca2bd0f89306cec16d43d907889945bc5d6687f2f13c7"
 
 [[package]]
 name = "gitcomet"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "clap",
  "embed-resource",
@@ -2267,7 +2267,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-core"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "memchr",
  "regex",
@@ -2280,14 +2280,14 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-git"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "gitcomet-core",
 ]
 
 [[package]]
 name = "gitcomet-git-gix"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "gitcomet-core",
  "gix",
@@ -2298,7 +2298,7 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-state"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "gitcomet-core",
  "gix",
@@ -2313,14 +2313,14 @@ dependencies = [
 
 [[package]]
 name = "gitcomet-tree-sitter-alloc"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "tree-sitter",
 ]
 
 [[package]]
 name = "gitcomet-ui-gpui"
-version = "0.1.16"
+version = "0.2.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
