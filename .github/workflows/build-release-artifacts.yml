@@ -399,7 +399,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build release binary
-        run: cargo build -p gitcomet --release --locked --features ui-gpui,gix
+        run: cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
 
       - name: Normalize desktop entry metadata
         run: |

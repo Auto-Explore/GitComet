@@ -127,7 +127,7 @@ if [[ $build -eq 1 && ! -x "$bin_src" ]]; then
     if [[ "$mode" == "release" ]]; then
       set -- "$@" --release
     fi
-    set -- "$@" -p gitcomet --locked --features ui-gpui,gix --bins
+    set -- "$@" -p gitcomet --locked --features ui-gpui,gix --bin gitcomet
     cargo build "$@"
   )
 fi
