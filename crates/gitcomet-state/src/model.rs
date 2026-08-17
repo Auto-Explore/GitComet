@@ -122,6 +122,9 @@ impl RepoLoadsInFlight {
     pub const SUBMODULES: u32 = 1 << 15;
     pub const REF_METADATA: u32 = 1 << 16;
     pub const WORKTREE_DIRTY: u32 = 1 << 17;
+    /// Deliberately outside `PRIMARY_REFRESH_FLAGS`: the live listing is a
+    /// worktree walk, far costlier than the other loads.
+    pub const FILE_BROWSER: u32 = 1 << 18;
     const PRIMARY_REFRESH_FLAGS: u32 = Self::HEAD_BRANCH
         | Self::UPSTREAM_DIVERGENCE
         | Self::REBASE_STATE
@@ -369,6 +372,10 @@ pub struct FileBrowserState {
     pub expanded_dirs: HashSet<Arc<PathBuf>>,
     pub search_query: String,
     pub file_browser_rev: u64,
+    /// The worktree moved under a listing nobody is looking at. Deferring the
+    /// re-walk keeps the rendered rows on screen instead of flashing back to
+    /// "Loading files...".
+    pub stale: bool,
 }
 
 impl Default for FileBrowserState {
@@ -379,6 +386,7 @@ impl Default for FileBrowserState {
             expanded_dirs: HashSet::new(),
             search_query: String::new(),
             file_browser_rev: 0,
+            stale: false,
         }
     }
 }
@@ -386,6 +394,10 @@ impl Default for FileBrowserState {
 impl FileBrowserState {
     pub fn bump_rev(&mut self) {
         self.file_browser_rev = self.file_browser_rev.wrapping_add(1);
+    }
+
+    pub fn needs_load(&self) -> bool {
+        self.stale || matches!(self.entries, Loadable::NotLoaded | Loadable::Error(_))
     }
 }
 

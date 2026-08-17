@@ -1202,9 +1202,10 @@ pub trait GitRepository: Send + Sync {
         Ok(submodules)
     }
 
-    fn list_tree_files(&self) -> Result<Vec<FileEntry>> {
+    /// The working directory as it is on disk, not `HEAD`'s tree.
+    fn list_worktree_files(&self) -> Result<Vec<FileEntry>> {
         Err(Error::new(ErrorKind::Unsupported(
-            "tree file listing is not implemented for this backend",
+            "worktree file listing is not implemented for this backend",
         )))
     }
 

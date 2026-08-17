@@ -3326,3 +3326,227 @@ fn an_index_only_change_does_not_rescan_the_other_worktrees() {
     );
     settle(&mut repos, &mut state, &id_alloc);
 }
+
+use crate::model::SidebarMode;
+use gitcomet_core::domain::{FileEntry, FileSource};
+
+fn state_with_loaded_file_browser(sidebar_mode: SidebarMode) -> (AppState, RepoId) {
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.sidebar_mode = sidebar_mode;
+    state.repos[0].set_open(Loadable::Ready(()));
+    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus::default())));
+    state.repos[0].file_browser.entries = Loadable::Ready(Arc::new(vec![FileEntry {
+        name: "src".to_string(),
+        path: Arc::new(PathBuf::from("src")),
+        kind: gitcomet_core::domain::FileEntryKind::Directory,
+        depth: 0,
+    }]));
+    state.repos[0]
+        .file_browser
+        .expanded_dirs
+        .insert(Arc::new(PathBuf::from("src")));
+    (state, repo_id)
+}
+
+fn file_browser_loads(effects: &[Effect]) -> usize {
+    effects
+        .iter()
+        .filter(|e| matches!(e, Effect::LoadFileBrowser { .. }))
+        .count()
+}
+
+#[test]
+fn worktree_change_refreshes_the_visible_file_browser_without_blanking_it() {
+    // The reported bug's second half: a new folder has to reach the tree already
+    // on screen, without discarding the rows or their expansion on the way.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+
+    assert_eq!(file_browser_loads(&effects), 1);
+    assert!(
+        matches!(state.repos[0].file_browser.entries, Loadable::Ready(_)),
+        "the rows must stay on screen until the new listing arrives"
+    );
+    assert!(
+        state.repos[0]
+            .file_browser
+            .expanded_dirs
+            .contains(&Arc::new(PathBuf::from("src"))),
+        "a refresh must not collapse the tree"
+    );
+    assert!(!state.repos[0].file_browser.stale);
+}
+
+#[test]
+fn worktree_change_only_marks_the_hidden_file_browser_stale() {
+    // Walking the working directory is far costlier than the other loads, so it
+    // must not run for every disk event while the sidebar shows branches.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Branches);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+
+    assert_eq!(file_browser_loads(&effects), 0);
+    assert!(state.repos[0].file_browser.stale);
+
+    // ...and the deferred work happens on the way back in.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetSidebarMode {
+            mode: SidebarMode::Files,
+        },
+    );
+    assert_eq!(file_browser_loads(&effects), 1);
+}
+
+#[test]
+fn commit_browsing_ignores_worktree_changes() {
+    // A commit's tree is immutable, so a disk event says nothing about it.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
+    state.repos[0].file_browser.source =
+        FileSource::Commit(CommitId("1111111111111111111111111111111111111111".into()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::all(),
+        },
+    );
+
+    assert_eq!(file_browser_loads(&effects), 0);
+    assert!(!state.repos[0].file_browser.stale);
+}
+
+#[test]
+fn a_burst_of_worktree_changes_coalesces_into_one_walk_at_a_time() {
+    // Events arrive back to back; none may stack a second walk on the first.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
+
+    let mut change = || {
+        reduce(
+            &mut repos,
+            &id_alloc,
+            &mut state,
+            Msg::RepoExternallyChanged {
+                repo_id,
+                change: crate::msg::RepoExternalChange::Worktree,
+            },
+        )
+    };
+
+    assert_eq!(file_browser_loads(&change()), 1);
+    assert_eq!(file_browser_loads(&change()), 0);
+    assert_eq!(file_browser_loads(&change()), 0);
+
+    // The reply releases the lane and dispatches the request queued behind it, so
+    // the changes that arrived mid-walk are not lost.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert_eq!(file_browser_loads(&effects), 1);
+}
+
+#[test]
+fn a_reply_for_an_abandoned_source_still_releases_the_lane() {
+    // Browsing to a commit mid-walk means the reply is for a source nobody wants
+    // any more. It still has to end that walk, or the new listing never runs.
+    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id,
+            change: crate::msg::RepoExternalChange::Worktree,
+        },
+    );
+    assert_eq!(file_browser_loads(&effects), 1);
+
+    let commit_id = CommitId("1111111111111111111111111111111111111111".into());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetFileBrowserSource {
+            repo_id,
+            source: FileSource::Commit(commit_id.clone()),
+        },
+    );
+    assert_eq!(
+        file_browser_loads(&effects),
+        0,
+        "the live walk still holds the lane"
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::FileBrowserLoaded {
+            repo_id,
+            source: FileSource::WorkingDirectory,
+            result: Ok(Vec::new()),
+        }),
+    );
+    assert!(
+        effects.iter().any(|e| matches!(
+            e,
+            Effect::LoadFileBrowser {
+                source: FileSource::Commit(_),
+                ..
+            }
+        )),
+        "the queued commit listing must dispatch once the live walk ends"
+    );
+    assert!(
+        matches!(state.repos[0].file_browser.entries, Loadable::NotLoaded),
+        "the stale live rows must not be adopted as the commit's tree"
+    );
+}
