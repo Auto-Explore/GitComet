@@ -1943,3 +1943,84 @@ fn xml_file_preview_renders_syntax_highlights_from_real_document(cx: &mut gpui::
 
     std::fs::remove_dir_all(&workdir).expect("cleanup XML preview fixture");
 }
+
+#[gpui::test]
+fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::TestAppContext) {
+    // The read-only content view drew the annotation column but mounted no drag
+    // handle, so only the diff view could resize it.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(954);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_annotate_resize",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_annotate.rs");
+    let lines = Arc::new(vec!["fn main() {}".to_string(), "fn other() {}".to_string()]);
+    let preview_text = lines.join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create annotate preview workdir");
+    std::fs::write(workdir.join(&file_rel), &preview_text).expect("write annotate preview fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = workdir.join(&file_rel);
+            let lines = Arc::clone(&lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(pane, preview_abs_path, lines, preview_text.len(), cx);
+                pane.set_annotate_enabled(true, cx);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    let handle = cx
+        .debug_bounds("annotate_resize_handle")
+        .expect("the file content view must mount the annotate resize handle");
+    let container = cx
+        .debug_bounds("worktree_preview_scroll_container")
+        .expect("expected `worktree_preview_scroll_container` bounds");
+    let column_width = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .annotate_column_width_px(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
+    });
+    let offset = handle.center().x - container.left();
+    assert!(
+        (f32::from(offset) - f32::from(column_width)).abs() <= 1.0,
+        "the handle must straddle the annotation column's right edge, got {offset:?} for a \
+         {column_width:?} column"
+    );
+
+    cx.update(|_window, app| {
+        view.read(app).main_pane.clone().update(app, |pane, cx| {
+            pane.set_annotate_enabled(false, cx);
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("annotate_resize_handle").is_none(),
+        "with annotate off there is no column to resize"
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup annotate preview fixture");
+}
