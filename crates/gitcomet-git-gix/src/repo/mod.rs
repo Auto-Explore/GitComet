@@ -992,8 +992,8 @@ impl GitRepository for GixRepo {
         self.list_submodules_cancellable_impl(cancellation)
     }
 
-    fn list_tree_files(&self) -> Result<Vec<FileEntry>> {
-        self.list_tree_files_impl()
+    fn list_worktree_files(&self) -> Result<Vec<FileEntry>> {
+        self.list_worktree_files_impl()
     }
 
     fn list_tree_files_at_commit(&self, commit_id: &CommitId) -> Result<Vec<FileEntry>> {

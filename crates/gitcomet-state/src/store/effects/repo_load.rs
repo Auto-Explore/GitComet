@@ -1359,7 +1359,7 @@ pub(super) fn schedule_load_file_browser(
         msg_tx,
         move |repo, msg_tx| {
             let result = match &source {
-                gitcomet_core::domain::FileSource::WorkingDirectory => repo.list_tree_files(),
+                gitcomet_core::domain::FileSource::WorkingDirectory => repo.list_worktree_files(),
                 gitcomet_core::domain::FileSource::Commit(commit_id) => {
                     repo.list_tree_files_at_commit(commit_id)
                 }

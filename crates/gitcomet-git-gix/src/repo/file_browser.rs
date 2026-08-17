@@ -1,22 +1,47 @@
 use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use super::GixRepo;
 
 impl GixRepo {
-    pub(super) fn list_tree_files_impl(&self) -> Result<Vec<FileEntry>> {
+    pub(super) fn list_worktree_files_impl(&self) -> Result<Vec<FileEntry>> {
         let repo = self._repo.to_thread_local();
-        let head = repo
-            .head_commit()
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix head_commit: {e}"))))?;
-        let tree_id = head
-            .tree_id()
-            .map(|id| id.detach())
-            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree_id: {e}"))))?;
-        list_tree_files_at_oid(&repo, tree_id)
+        let index = repo
+            .index_or_empty()
+            .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
+        let options = repo
+            .dirwalk_options()
+            .map_err(|e| {
+                Error::new(ErrorKind::Backend(format!(
+                    "gix file browser dirwalk options: {e}"
+                )))
+            })?
+            // Tracked entries are hidden by default.
+            .emit_tracked(true)
+            // `CollapseDirectory` would fold a wholly-untracked folder into one row
+            // and hide its contents.
+            .emit_untracked(gix::dir::walk::EmissionMode::Matching)
+            .emit_ignored(None)
+            .emit_pruned(false)
+            .emit_empty_directories(true)
+            .recurse_repositories(false);
+
+        let mut delegate = CollectWorktreePaths::default();
+        repo.dirwalk(
+            &index,
+            Vec::<gix::bstr::BString>::new(),
+            &AtomicBool::default(),
+            options,
+            &mut delegate,
+        )
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix dirwalk: {e}"))))?;
+
+        Ok(flatten_worktree_paths(delegate.paths))
     }
 
     pub(super) fn list_tree_files_at_commit_impl(
@@ -34,6 +59,104 @@ impl GixRepo {
             .map(|id| id.detach())
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix tree_id: {e}"))))?;
         list_tree_files_at_oid(&repo, tree_id)
+    }
+}
+
+/// `can_recurse` is deliberately left at its default: it already declines to
+/// descend into ignored directories and into nested repositories, which is the
+/// pruning this listing depends on.
+#[derive(Default)]
+struct CollectWorktreePaths {
+    paths: Vec<(String, bool)>,
+}
+
+impl gix::dir::walk::Delegate for CollectWorktreePaths {
+    fn emit(
+        &mut self,
+        entry: gix::dir::EntryRef<'_>,
+        _collapsed_directory_status: Option<gix::dir::entry::Status>,
+    ) -> gix::dir::walk::Action {
+        use gix::dir::entry::Kind;
+
+        let is_directory = match entry.disk_kind {
+            // `Repository` is a submodule: a folder we never descend into.
+            Some(Kind::Directory | Kind::Repository) => true,
+            Some(Kind::File | Kind::Symlink) => false,
+            // FIFOs, sockets and devices cannot be tracked or opened.
+            Some(Kind::Untrackable) | None => return gix::dir::walk::Action::Continue(()),
+        };
+
+        let path = entry.rela_path.to_string();
+        if !path.is_empty() {
+            self.paths.push((path, is_directory));
+        }
+        gix::dir::walk::Action::Continue(())
+    }
+}
+
+#[derive(Default)]
+struct WorktreeDir {
+    dirs: BTreeMap<String, WorktreeDir>,
+    files: BTreeSet<String>,
+}
+
+/// The walk emits leaves only, in readdir order, so intermediate directories are
+/// synthesized from path components and the result re-sorted to match
+/// [`collect_tree_entries`]. Both sources must agree on ordering and path form,
+/// or expansion state and reveal-by-path stop matching when switching between the
+/// live tree and a commit's tree.
+fn flatten_worktree_paths(paths: Vec<(String, bool)>) -> Vec<FileEntry> {
+    let mut root = WorktreeDir::default();
+
+    for (path, is_directory) in paths {
+        let mut node = &mut root;
+        let mut components = path.split('/').filter(|c| !c.is_empty()).peekable();
+        while let Some(component) = components.next() {
+            if components.peek().is_some() || is_directory {
+                node = node.dirs.entry(component.to_string()).or_default();
+            } else {
+                node.files.insert(component.to_string());
+            }
+        }
+    }
+
+    let mut out = Vec::new();
+    flatten_worktree_dir(&root, String::new(), 0, &mut out);
+    out
+}
+
+fn flatten_worktree_dir(
+    dir: &WorktreeDir,
+    parent_path: String,
+    depth: usize,
+    out: &mut Vec<FileEntry>,
+) {
+    let join = |name: &str| {
+        if parent_path.is_empty() {
+            name.to_string()
+        } else {
+            format!("{parent_path}/{name}")
+        }
+    };
+
+    for (name, child) in &dir.dirs {
+        let path = join(name);
+        out.push(FileEntry {
+            name: name.clone(),
+            path: Arc::new(PathBuf::from(&path)),
+            kind: FileEntryKind::Directory,
+            depth,
+        });
+        flatten_worktree_dir(child, path, depth + 1, out);
+    }
+
+    for name in &dir.files {
+        out.push(FileEntry {
+            name: name.clone(),
+            path: Arc::new(PathBuf::from(join(name))),
+            kind: FileEntryKind::File,
+            depth,
+        });
     }
 }
 
@@ -119,10 +242,17 @@ fn collect_tree_entries(
 #[cfg(test)]
 mod tests {
     use super::GixRepo;
-    use gitcomet_core::domain::{CommitId, FileEntryKind};
+    use gitcomet_core::domain::{CommitId, FileEntry, FileEntryKind};
     use std::fs;
     use std::path::Path;
     use std::process::Command;
+
+    fn paths_of(entries: &[FileEntry]) -> Vec<String> {
+        entries
+            .iter()
+            .map(|e| e.path.to_string_lossy().into_owned())
+            .collect()
+    }
 
     fn git_success(workdir: &Path, args: &[&str]) {
         let output = Command::new("git")
@@ -170,7 +300,7 @@ mod tests {
     }
 
     #[test]
-    fn list_tree_files_returns_flat_files_correctly() {
+    fn list_worktree_files_returns_flat_files_correctly() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let workdir = tmp.path();
         init_test_repo(workdir);
@@ -179,7 +309,7 @@ mod tests {
         commit_file(workdir, "main.rs", "fn main() {}", "second");
 
         let repo = open_repo(workdir);
-        let entries = repo.list_tree_files_impl().expect("list tree files");
+        let entries = repo.list_worktree_files_impl().expect("list tree files");
 
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].name, "README.md");
@@ -191,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn list_tree_files_sorts_directories_before_files() {
+    fn list_worktree_files_sorts_directories_before_files() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let workdir = tmp.path();
         init_test_repo(workdir);
@@ -200,7 +330,7 @@ mod tests {
         commit_file(workdir, "a_dir/nested.txt", "nested", "second");
 
         let repo = open_repo(workdir);
-        let entries = repo.list_tree_files_impl().expect("list tree files");
+        let entries = repo.list_worktree_files_impl().expect("list tree files");
 
         assert_eq!(entries.len(), 3);
         assert_eq!(entries[0].name, "a_dir");
@@ -215,7 +345,7 @@ mod tests {
     }
 
     #[test]
-    fn list_tree_files_nested_directories_have_correct_depth() {
+    fn list_worktree_files_nested_directories_have_correct_depth() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let workdir = tmp.path();
         init_test_repo(workdir);
@@ -229,7 +359,7 @@ mod tests {
         );
 
         let repo = open_repo(workdir);
-        let entries = repo.list_tree_files_impl().expect("list tree files");
+        let entries = repo.list_worktree_files_impl().expect("list tree files");
 
         assert_eq!(entries.len(), 4);
 
@@ -250,18 +380,21 @@ mod tests {
         assert_eq!(entries[3].depth, 1);
     }
 
+    /// Expansion state and reveal-by-path are keyed by path across both sources,
+    /// so a divergence here collapses the tree when browsing a commit and back.
     #[test]
-    fn list_tree_files_at_commit_returns_same_tree_as_head() {
+    fn worktree_and_commit_listings_agree_on_a_clean_tree() {
         let tmp = tempfile::tempdir().expect("tempdir");
         let workdir = tmp.path();
         init_test_repo(workdir);
 
         commit_file(workdir, "alpha.txt", "alpha", "first commit");
         commit_file(workdir, "beta.txt", "beta", "second commit");
+        commit_file(workdir, "src/nested/deep.txt", "deep", "third commit");
 
         let repo = open_repo(workdir);
 
-        let head_entries = repo.list_tree_files_impl().expect("head tree");
+        let head_entries = repo.list_worktree_files_impl().expect("head tree");
 
         let output = Command::new("git")
             .arg("-C")
@@ -318,5 +451,210 @@ mod tests {
 
         assert_eq!(first_entries.len(), 1);
         assert_eq!(first_entries[0].name, "only_in_first.txt");
+    }
+
+    /// The reported bug: the listing came from `HEAD`'s tree, so a new folder of
+    /// untracked files was invisible.
+    #[test]
+    fn list_worktree_files_includes_untracked_files_in_a_new_folder() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, "committed.txt", "committed", "first");
+        write_file(workdir, "newfolder/a.txt", "a");
+        write_file(workdir, "newfolder/b.txt", "b");
+        write_file(workdir, "newfolder/c.txt", "c");
+
+        let repo = open_repo(workdir);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        assert_eq!(
+            paths_of(&entries),
+            vec![
+                "newfolder",
+                "newfolder/a.txt",
+                "newfolder/b.txt",
+                "newfolder/c.txt",
+                "committed.txt",
+            ]
+        );
+        assert_eq!(entries[0].kind, FileEntryKind::Directory);
+        assert_eq!(entries[0].depth, 0);
+        assert_eq!(entries[1].kind, FileEntryKind::File);
+        assert_eq!(entries[1].depth, 1);
+    }
+
+    #[test]
+    fn list_worktree_files_includes_staged_but_uncommitted_files() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, "committed.txt", "committed", "first");
+        write_file(workdir, "staged/new.txt", "staged");
+        git_success(workdir, &["add", "staged/new.txt"]);
+
+        let repo = open_repo(workdir);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        assert_eq!(
+            paths_of(&entries),
+            vec!["staged", "staged/new.txt", "committed.txt"]
+        );
+    }
+
+    #[test]
+    fn list_worktree_files_omits_files_deleted_from_disk() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, "kept.txt", "kept", "first");
+        commit_file(workdir, "removed.txt", "removed", "second");
+        fs::remove_file(workdir.join("removed.txt")).expect("remove file");
+
+        let repo = open_repo(workdir);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        assert_eq!(paths_of(&entries), vec!["kept.txt"]);
+    }
+
+    #[test]
+    fn list_worktree_files_omits_ignored_entries() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, ".gitignore", "target/\n*.log\n", "add ignores");
+        write_file(workdir, "target/debug/huge.bin", "binary");
+        write_file(workdir, "noisy.log", "log");
+        write_file(workdir, "kept.txt", "kept");
+
+        let repo = open_repo(workdir);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        assert_eq!(paths_of(&entries), vec![".gitignore", "kept.txt"]);
+    }
+
+    #[test]
+    fn list_worktree_files_includes_empty_directories() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, "file.txt", "file", "first");
+        fs::create_dir_all(workdir.join("empty_dir")).expect("create dir");
+
+        let repo = open_repo(workdir);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        assert_eq!(paths_of(&entries), vec!["empty_dir", "file.txt"]);
+        assert_eq!(entries[0].kind, FileEntryKind::Directory);
+    }
+
+    /// An unborn HEAD used to fail `head_commit()`, so every freshly-initialized
+    /// repository showed "Error loading files."
+    #[test]
+    fn list_worktree_files_works_without_any_commit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        write_file(workdir, "src/main.rs", "fn main() {}");
+
+        let repo = open_repo(workdir);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        assert_eq!(paths_of(&entries), vec!["src", "src/main.rs"]);
+    }
+
+    #[test]
+    fn list_worktree_files_sorts_directories_first_then_alphabetically() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        write_file(workdir, "z_file.txt", "z");
+        write_file(workdir, "a_file.txt", "a");
+        write_file(workdir, "z_dir/inner.txt", "inner");
+        write_file(workdir, "a_dir/inner.txt", "inner");
+
+        let repo = open_repo(workdir);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        assert_eq!(
+            paths_of(&entries),
+            vec![
+                "a_dir",
+                "a_dir/inner.txt",
+                "z_dir",
+                "z_dir/inner.txt",
+                "a_file.txt",
+                "z_file.txt",
+            ]
+        );
+    }
+
+    /// The tree walk drops gitlinks outright (mode `160000` is neither tree, blob,
+    /// nor link), so submodules used to be missing entirely.
+    #[test]
+    fn list_worktree_files_lists_a_submodule_as_a_directory() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let outer = tmp.path().join("outer");
+        let inner = tmp.path().join("inner");
+        fs::create_dir_all(&outer).expect("create outer");
+        fs::create_dir_all(&inner).expect("create inner");
+
+        init_test_repo(&inner);
+        commit_file(&inner, "inner.txt", "inner", "inner commit");
+
+        init_test_repo(&outer);
+        commit_file(&outer, "outer.txt", "outer", "outer commit");
+        git_success(
+            &outer,
+            &[
+                "-c",
+                "protocol.file.allow=always",
+                "submodule",
+                "add",
+                inner.to_str().expect("utf8 path"),
+                "sub",
+            ],
+        );
+
+        let repo = open_repo(&outer);
+        let entries = repo
+            .list_worktree_files_impl()
+            .expect("list worktree files");
+
+        let sub = entries
+            .iter()
+            .find(|e| e.name == "sub")
+            .expect("submodule listed");
+        assert_eq!(sub.kind, FileEntryKind::Directory);
+        // `Path::starts_with` compares whole components, so the `sub` row itself
+        // matches `sub/` and has to be excluded by depth.
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.depth > 0 && e.path.starts_with("sub")),
+            "submodule contents leaked into the parent listing: {:?}",
+            paths_of(&entries)
+        );
     }
 }
