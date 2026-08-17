@@ -1960,7 +1960,10 @@ fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::T
         std::process::id()
     ));
     let file_rel = std::path::PathBuf::from("preview_annotate.rs");
-    let lines = Arc::new(vec!["fn main() {}".to_string(), "fn other() {}".to_string()]);
+    let lines = Arc::new(vec![
+        "fn main() {}".to_string(),
+        "fn other() {}".to_string(),
+    ]);
     let preview_text = lines.join("\n");
 
     let _ = std::fs::remove_dir_all(&workdir);

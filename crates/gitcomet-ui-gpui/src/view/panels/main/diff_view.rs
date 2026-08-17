@@ -3089,9 +3089,9 @@ impl MainPaneView {
                                 scroll_handle.clone(),
                                 components::ScrollbarAxis::Vertical,
                             );
-                            let annotate_handle = self.annotate_enabled.then(|| {
-                                self.annotate_resize_handle(ui_scale_percent, theme, cx)
-                            });
+                            let annotate_handle = self
+                                .annotate_enabled
+                                .then(|| self.annotate_resize_handle(ui_scale_percent, theme, cx));
                             div()
                                 .id("worktree_preview_scroll_container")
                                 .debug_selector(|| "worktree_preview_scroll_container".to_string())
