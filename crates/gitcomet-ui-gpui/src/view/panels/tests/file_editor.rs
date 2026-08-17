@@ -748,16 +748,16 @@ async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppCon
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
-/// Left offset of the annotate resize handle within the editor, and the width
-/// the annotation column is currently drawn at. Panics if the handle is absent.
-fn editor_annotate_handle_offset(cx: &mut gpui::VisualTestContext) -> (Pixels, Pixels) {
+/// Left offset of the annotate resize handle within the editor. Panics if the
+/// handle is absent.
+fn editor_annotate_handle_offset(cx: &mut gpui::VisualTestContext) -> Pixels {
     let handle = cx
         .debug_bounds("annotate_resize_handle")
         .expect("edit mode must mount the annotate resize handle");
     let editor = cx
         .debug_bounds("file_editor")
         .expect("expected `file_editor` bounds");
-    (handle.center().x - editor.left(), handle.size.width)
+    handle.center().x - editor.left()
 }
 
 /// Press the handle and drag it `dx` to the right. Two moves: gpui starts the
@@ -812,7 +812,7 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
     open_annotated_editor(cx, &view, repo_id, &workdir, &file_rel);
     draw_and_drain_test_window(cx);
 
-    let (offset, handle_width) = editor_annotate_handle_offset(cx);
+    let offset = editor_annotate_handle_offset(cx);
     let column_width = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         pane.annotate_column_width_px(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
@@ -837,11 +837,7 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
         );
     });
 
-    let (widened_offset, widened_handle_width) = editor_annotate_handle_offset(cx);
-    assert_eq!(
-        widened_handle_width, handle_width,
-        "only the column changes width, not the handle"
-    );
+    let widened_offset = editor_annotate_handle_offset(cx);
     assert!(
         f32::from(widened_offset) - f32::from(offset) > 55.0,
         "the handle must follow the column it resized, moved {:?}",
@@ -872,9 +868,10 @@ async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContex
 }
 
 #[gpui::test]
-async fn annotate_resize_handle_is_absent_while_editing_without_blame(
-    cx: &mut gpui::TestAppContext,
-) {
+async fn annotate_resize_handle_waits_for_the_column_it_resizes(cx: &mut gpui::TestAppContext) {
+    // The editor reserves the annotation column only once blame resolves, so
+    // the handle has to follow the column rather than the toggle: gated on
+    // `annotation_active()` it would sit at x=0 over a column nobody drew.
     let _visual_guard = lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) = cx.add_window_view(|window, cx| {
@@ -882,23 +879,46 @@ async fn annotate_resize_handle_is_absent_while_editing_without_blame(
     });
 
     let repo_id = gitcomet_state::model::RepoId(953);
-    let workdir = unique_workdir("file_editor_annotate_off");
+    let workdir = unique_workdir("file_editor_annotate_no_blame");
     let file_rel = std::path::PathBuf::from("main.rs");
-    std::fs::write(workdir.join(&file_rel), "fn main() {}\n").expect("write fixture");
+    std::fs::write(workdir.join(&file_rel), "fn main() {}\nfn other() {}\n")
+        .expect("write fixture");
 
+    // Annotate on, but no blame ever loads — `TestBackend` opens no repository.
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
             push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
-            this.main_pane
-                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+            this.main_pane.update(cx, |pane, cx| {
+                pane.set_annotate_enabled(true, cx);
+                pane.ensure_file_editor_loaded(cx);
+            });
         });
     });
     cx.run_until_parked();
     draw_and_drain_test_window(cx);
 
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.annotation_active(),
+            "the toggle is on and the target is blameable"
+        );
+        assert!(
+            pane.blame_render_ctx_for_test().is_none(),
+            "no blame resolved, so the editor draws no annotation column"
+        );
+    });
     assert!(
         cx.debug_bounds("annotate_resize_handle").is_none(),
-        "with no annotation column there is nothing to resize"
+        "a handle without a column would drag nothing"
+    );
+
+    // Blame arrives: the column appears, and the handle with it.
+    open_annotated_editor(cx, &view, repo_id, &workdir, &file_rel);
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("annotate_resize_handle").is_some(),
+        "the handle must appear once there is a column to resize"
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
