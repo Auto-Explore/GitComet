@@ -18,6 +18,7 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
+      - "scripts/microsoft-store-listing-metadata.sh"
   push:
     branches: ["main", "dev"]
     paths:
@@ -35,6 +36,7 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
+      - "scripts/microsoft-store-listing-metadata.sh"
   workflow_dispatch:
 
 permissions:
@@ -60,6 +62,7 @@ jobs:
           bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+          bash -n scripts/microsoft-store-listing-metadata.sh
 
       - name: Validate Windows PowerShell helper syntax
         run: |
@@ -124,8 +127,13 @@ jobs:
           grep -Fq 'gh release view' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission update' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission updateMetadata' .github/workflows/deploy-microsoft-store.yml
-          grep -Fq 'msstore submission commit' .github/workflows/deploy-microsoft-store.yml
-          grep -Fq 'ReleaseNotes' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'msstore submission publish' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq -e '--module listings' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'scripts/microsoft-store-listing-metadata.sh' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'vars.MICROSOFT_STORE_LISTING_LANGUAGES' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'WhatsNew' scripts/microsoft-store-listing-metadata.sh
+          ! grep -Fq 'msstore submission commit' .github/workflows/deploy-microsoft-store.yml
+          ! grep -Fq 'ReleaseNotes' .github/workflows/deploy-microsoft-store.yml
           grep -Fq '"X64"' .github/workflows/deploy-microsoft-store.yml
           grep -Fq '"Arm64"' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'storage_container: "$web"' .github/workflows/release-manual-main.yml
@@ -133,6 +141,7 @@ jobs:
           grep -Fq 'package_base_url: "https://apt.gitcomet.dev/windows"' .github/workflows/release-manual-main.yml
           grep -Fq 'product_id: $''{{ vars.MICROSOFT_STORE_PRODUCT_ID }}' .github/workflows/release-manual-main.yml
           grep -Fq 'package_languages: $''{{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}' .github/workflows/release-manual-main.yml
+          grep -Fq 'store_listing_languages: $''{{ vars.MICROSOFT_STORE_LISTING_LANGUAGES }}' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
@@ -151,6 +160,92 @@ jobs:
           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
+
+      - name: Generate Microsoft Store listing metadata from synthetic draft
+        run: |
+          set -euo pipefail
+          mkdir -p dist/deployment-ci/microsoft-store
+          store_dir="dist/deployment-ci/microsoft-store"
+          release_url="https://github.com/Auto-Explore/GitComet/releases/tag/v0.0.0-ci"
+
+          cat > "$store_dir/listings.json" <<'JSON'
+          {
+            "Listings": [
+              {
+                "Language": "en-us",
+                "Description": "GitComet is a fast Git client.",
+                "WhatsNew": "stale notes from the previous release",
+                "ShortDescription": "Fast Git client",
+                "SearchTerms": ["git", "vcs"],
+                "AdditionalLicenseTerms": "MIT",
+                "Requirements": null
+              },
+              {
+                "Language": "en-gb",
+                "Description": "GitComet is a fast Git client.",
+                "AdditionalLicenseTerms": "MIT"
+              }
+            ]
+          }
+          JSON
+
+          {
+            echo '## New Visuals'
+            echo '<img width="1987" src="https://example.invalid/screenshot.png" />'
+            echo
+            echo "## What's Changed"
+            echo '* Fix/repo ends with dot git by @quakj in https://github.com/Auto-Explore/GitComet/pull/276'
+            for pr in $(seq 300 400); do
+              echo "* Change number ${pr} with a deliberately long title by @someone in https://github.com/Auto-Explore/GitComet/pull/${pr}"
+            done
+            echo '**Full Changelog**: https://github.com/Auto-Explore/GitComet/compare/v0.1.0...v0.2.0'
+          } > "$store_dir/release-notes.txt"
+
+          scripts/microsoft-store-listing-metadata.sh \
+            --listings-json "$store_dir/listings.json" \
+            --release-notes "$store_dir/release-notes.txt" \
+            --release-url "$release_url" \
+            --output-dir "$store_dir/payloads" \
+            > "$store_dir/payloads.txt"
+
+          test "$(wc -l < "$store_dir/payloads.txt")" -eq 2
+
+          expected_languages=("en-us" "en-gb")
+          index=0
+          while read -r payload; do
+            test -f "$payload"
+            # The metadata endpoint is a PUT, so every field of the draft listing has to
+            # survive the round trip; only WhatsNew may change.
+            test "$(jq -r 'keys | join(",")' "$payload")" = "Listings"
+            test "$(jq -r '.Listings.Language' "$payload")" = "${expected_languages[$index]}"
+            test "$(jq -r '.Listings.Description' "$payload")" = "GitComet is a fast Git client."
+            test "$(jq -r '.Listings.AdditionalLicenseTerms' "$payload")" = "MIT"
+
+            whats_new="$(jq -r '.Listings.WhatsNew' "$payload")"
+            test "$(jq -r '.Listings.WhatsNew | length' "$payload")" -le 1500
+            printf '%s' "$whats_new" | grep -Fq "$release_url"
+            printf '%s' "$whats_new" | grep -Fq '(#276)'
+            ! printf '%s' "$whats_new" | grep -Fq '<img'
+            ! printf '%s' "$whats_new" | grep -Fq '](http'
+            ! printf '%s' "$whats_new" | grep -Fq 'Full Changelog'
+            ! printf '%s' "$whats_new" | grep -Fq 'stale notes'
+
+            index=$((index + 1))
+          done < "$store_dir/payloads.txt"
+
+          # The v0.2.0 release failed because the packages payload was fetched instead of
+          # the listings module; that must be a loud failure, not an empty submission.
+          echo '{"Packages":[{"PackageUrl":"https://example.invalid/gitcomet.msi"}]}' \
+            > "$store_dir/packages.json"
+          if scripts/microsoft-store-listing-metadata.sh \
+            --listings-json "$store_dir/packages.json" \
+            --release-notes "$store_dir/release-notes.txt" \
+            --release-url "$release_url" \
+            --output-dir "$store_dir/payloads-invalid" \
+            > /dev/null 2>&1; then
+            echo "Expected listing metadata generation to fail when the draft has no listings."
+            exit 1
+          fi
 
       - name: Generate Homebrew cask from synthetic artifacts
         run: |
