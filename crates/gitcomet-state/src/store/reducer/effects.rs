@@ -1731,10 +1731,15 @@ pub(super) fn load_file_browser(
     if !matches!(repo_state.open, Loadable::Ready(())) {
         return Vec::new();
     }
-    repo_state.file_browser.source = source.clone();
-    repo_state.file_browser.entries = Loadable::Loading;
+    let source_changed = repo_state.file_browser.source != source;
+    repo_state.file_browser.source = source;
+    // Blank the tree only when there is nothing worth keeping: rows from another
+    // source would be actively wrong, but a same-source refresh can leave them up.
+    if source_changed || !matches!(repo_state.file_browser.entries, Loadable::Ready(_)) {
+        repo_state.file_browser.entries = Loadable::Loading;
+    }
     repo_state.file_browser.bump_rev();
-    vec![Effect::LoadFileBrowser { repo_id, source }]
+    request_file_browser_load(repo_state).into_iter().collect()
 }
 
 /// Expand every directory on the way to `path` so the file explorer can show it.
@@ -1911,6 +1916,16 @@ pub(super) fn set_file_browser_search(
     Vec::new()
 }
 
+pub(super) fn request_file_browser_load(repo_state: &mut RepoState) -> Option<Effect> {
+    repo_state
+        .loads_in_flight
+        .request(RepoLoadsInFlight::FILE_BROWSER)
+        .then(|| Effect::LoadFileBrowser {
+            repo_id: repo_state.id,
+            source: repo_state.file_browser.source.clone(),
+        })
+}
+
 pub(super) fn set_file_browser_source(
     state: &mut AppState,
     repo_id: RepoId,
@@ -1919,12 +1934,13 @@ pub(super) fn set_file_browser_source(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && repo_state.file_browser.source != source
     {
-        repo_state.file_browser.source = source.clone();
+        repo_state.file_browser.source = source;
         repo_state.file_browser.entries = Loadable::NotLoaded;
         repo_state.file_browser.expanded_dirs.clear();
         repo_state.file_browser.search_query.clear();
+        repo_state.file_browser.stale = false;
         repo_state.file_browser.bump_rev();
-        return vec![Effect::LoadFileBrowser { repo_id, source }];
+        return request_file_browser_load(repo_state).into_iter().collect();
     }
     Vec::new()
 }
@@ -1936,13 +1952,9 @@ pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<E
         if mode == SidebarMode::Files
             && let Some(repo_id) = state.active_repo
             && let Some(repo) = state.repos.iter_mut().find(|r| r.id == repo_id)
-            && matches!(
-                repo.file_browser.entries,
-                Loadable::NotLoaded | Loadable::Error(_)
-            )
+            && repo.file_browser.needs_load()
         {
-            let source = repo.file_browser.source.clone();
-            return vec![Effect::LoadFileBrowser { repo_id, source }];
+            return request_file_browser_load(repo).into_iter().collect();
         }
     }
     Vec::new()
@@ -2023,10 +2035,18 @@ pub(super) fn file_browser_loaded(
     source: FileSource,
     result: std::result::Result<Vec<FileEntry>, gitcomet_core::error::Error>,
 ) -> Vec<Effect> {
-    if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        if repo_state.file_browser.source != source {
-            return Vec::new();
-        }
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+
+    // Release the lane before the stale-source guard: a reply for a source the
+    // user has already navigated away from still ends the walk that was running,
+    // and the request queued behind it is the one that matters now.
+    let has_pending = repo_state
+        .loads_in_flight
+        .finish(RepoLoadsInFlight::FILE_BROWSER);
+
+    if repo_state.file_browser.source == source {
         repo_state.file_browser.entries = match result {
             Ok(v) => Loadable::Ready(Arc::new(v)),
             Err(e) => {
@@ -2034,7 +2054,15 @@ pub(super) fn file_browser_loaded(
                 Loadable::Error(e.to_string())
             }
         };
+        repo_state.file_browser.stale = false;
         repo_state.file_browser.bump_rev();
+    }
+
+    if has_pending {
+        return vec![Effect::LoadFileBrowser {
+            repo_id,
+            source: repo_state.file_browser.source.clone(),
+        }];
     }
     Vec::new()
 }
@@ -4560,7 +4588,19 @@ mod tests {
                 .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
         );
 
-        repo_mut(&mut state, repo_id).file_browser.entries = Loadable::Ready(Arc::new(Vec::new()));
+        // Each phase has to deliver its reply the way the executor does, or the
+        // in-flight lane coalesces the next request away.
+        file_browser_loaded(
+            &mut state,
+            repo_id,
+            FileSource::WorkingDirectory,
+            Ok(Vec::new()),
+        );
+        assert!(matches!(
+            repo_mut(&mut state, repo_id).file_browser.entries,
+            Loadable::Ready(_)
+        ));
+
         set_sidebar_mode(&mut state, SidebarMode::Branches);
         let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
         assert!(
@@ -4569,7 +4609,14 @@ mod tests {
                 .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
         );
 
-        repo_mut(&mut state, repo_id).file_browser.entries = Loadable::Error("fail".to_string());
+        file_browser_loaded(
+            &mut state,
+            repo_id,
+            FileSource::WorkingDirectory,
+            Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("fail".to_string()),
+            )),
+        );
         set_sidebar_mode(&mut state, SidebarMode::Branches);
         let effects = set_sidebar_mode(&mut state, SidebarMode::Files);
         assert!(

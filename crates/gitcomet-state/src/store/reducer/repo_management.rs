@@ -682,14 +682,11 @@ fn file_browser_load_for_active_files_mode(
     sidebar_mode: SidebarMode,
     repo_state: &RepoState,
 ) -> Option<Effect> {
-    (sidebar_mode == SidebarMode::Files
-        && matches!(
-            repo_state.file_browser.entries,
-            Loadable::NotLoaded | Loadable::Error(_)
-        ))
-    .then(|| Effect::LoadFileBrowser {
-        repo_id: repo_state.id,
-        source: repo_state.file_browser.source.clone(),
+    (sidebar_mode == SidebarMode::Files && repo_state.file_browser.needs_load()).then(|| {
+        Effect::LoadFileBrowser {
+            repo_id: repo_state.id,
+            source: repo_state.file_browser.source.clone(),
+        }
     })
 }
 

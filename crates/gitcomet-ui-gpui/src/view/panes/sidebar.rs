@@ -1398,10 +1398,7 @@ impl SidebarPaneView {
                 });
             }
             CollapsedSidebarSection::Files => {
-                if matches!(
-                    repo.file_browser.entries,
-                    Loadable::NotLoaded | Loadable::Error(_)
-                ) {
+                if repo.file_browser.needs_load() {
                     let source = repo.file_browser.source.clone();
                     self.store
                         .dispatch(Msg::LoadFileBrowser { repo_id, source });

@@ -10,7 +10,9 @@ use super::util::{
     push_diagnostic, refresh_full_effects, refresh_primary_effects, selected_conflict_target,
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
-use crate::model::{AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight};
+use crate::model::{
+    AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight, SidebarMode,
+};
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
@@ -113,14 +115,42 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     effects
 }
 
+/// Keep the live Files tree in step with the disk. Commit browsing is immutable
+/// and left alone. A refresh costs a full walk, so it runs eagerly only while the
+/// user is looking at the tree, and is deferred as `stale` otherwise.
+fn file_browser_refresh_for_external_change(
+    repo_state: &mut crate::model::RepoState,
+    change: RepoExternalChange,
+    sidebar_shows_this_files_tree: bool,
+) -> Option<Effect> {
+    if !(change.worktree || change.index || change.git_state) {
+        return None;
+    }
+    if repo_state.file_browser.source != gitcomet_core::domain::FileSource::WorkingDirectory {
+        return None;
+    }
+    if !sidebar_shows_this_files_tree {
+        repo_state.file_browser.stale = true;
+        return None;
+    }
+    // Deliberately no `entries = Loading` and no `expanded_dirs.clear()`: the rows
+    // stay put, expansion included, until the new listing replaces them.
+    super::effects::request_file_browser_load(repo_state)
+}
+
 pub(super) fn repo_externally_changed(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     change: RepoExternalChange,
 ) -> Vec<Effect> {
+    let sidebar_shows_this_files_tree =
+        state.sidebar_mode == SidebarMode::Files && state.active_repo == Some(repo_id);
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
+
+    let file_browser_effect =
+        file_browser_refresh_for_external_change(repo_state, change, sidebar_shows_this_files_tree);
 
     // Coalesce refreshes while a refresh is already in flight.
     let mut effects = if change.git_state {
@@ -163,6 +193,8 @@ pub(super) fn repo_externally_changed(
         }
         effects
     };
+
+    effects.extend(file_browser_effect);
 
     // Tag reloads are driven by the `tags` flag alone, independent of
     // `git_state`, so any change that sets `tags` refreshes them regardless of
