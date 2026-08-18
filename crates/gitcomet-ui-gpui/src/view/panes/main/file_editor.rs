@@ -1331,6 +1331,9 @@ impl MainPaneView {
         // the element rebuilds its y-offsets from the same array just as often.
         let gutter_rows = self.rebuild_file_editor_wrap_row_starts(line_count, cx);
 
+        let annotate_handle = (blame_width > px(0.0))
+            .then(|| self.annotate_resize_handle(ui_scale_percent, theme, cx));
+
         let gutter = uniform_list(
             "file_editor_gutter_list",
             gutter_rows,
@@ -1384,6 +1387,7 @@ impl MainPaneView {
             })
             .id("file_editor")
             .debug_selector(|| "file_editor".to_string())
+            .relative()
             .flex()
             .flex_1()
             .h_full()
@@ -1456,6 +1460,7 @@ impl MainPaneView {
                     // GPUI applies the content offset to the scrollbar itself.
                     .child(editor_scrollbar.render(theme)),
             )
+            .when_some(annotate_handle, |row, handle| row.child(handle))
             .into_any_element()
     }
 

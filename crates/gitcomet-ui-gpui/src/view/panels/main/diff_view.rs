@@ -181,6 +181,7 @@ impl MainPaneView {
         let handle_w = px(7.0);
         div()
             .id("annotate_resize_handle")
+            .debug_selector(|| "annotate_resize_handle".to_string())
             .group("annotate_resize_handle")
             .absolute()
             .left((annot_w - handle_w / 2.0).max(px(0.0)))
@@ -3088,6 +3089,9 @@ impl MainPaneView {
                                 scroll_handle.clone(),
                                 components::ScrollbarAxis::Vertical,
                             );
+                            let annotate_handle = self
+                                .annotate_enabled
+                                .then(|| self.annotate_resize_handle(ui_scale_percent, theme, cx));
                             div()
                                 .id("worktree_preview_scroll_container")
                                 .debug_selector(|| "worktree_preview_scroll_container".to_string())
@@ -3121,6 +3125,9 @@ impl MainPaneView {
                                         .always_visible()
                                         .render(theme),
                                     )
+                                })
+                                .when_some(annotate_handle, |container, handle| {
+                                    container.child(handle)
                                 })
                                 .into_any_element()
                         }

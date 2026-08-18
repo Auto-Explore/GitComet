@@ -656,23 +656,9 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
-#[gpui::test]
-async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppContext) {
-    // The editor used to leave Blame inert: the toggle was reachable but the
-    // buffer had no annotation column, so turning it on did nothing visible.
-    let _visual_guard = lock_visual_test();
-    let (store, events) = AppStore::new(Arc::new(TestBackend));
-    let (view, cx) = cx.add_window_view(|window, cx| {
-        super::super::GitCometView::new(store, events, None, window, cx)
-    });
-
-    let repo_id = gitcomet_state::model::RepoId(950);
-    let workdir = unique_workdir("file_editor_blame");
-    let file_rel = std::path::PathBuf::from("main.rs");
-    let contents = "fn main() {}\nfn other() {}\n";
-    std::fs::write(workdir.join(&file_rel), contents).expect("write fixture");
-
-    let blame_lines = vec![
+/// Two lines of blame for the `open_annotated_editor` fixture file.
+fn editor_blame_lines() -> Vec<gitcomet_core::services::BlameLine> {
+    vec![
         gitcomet_core::services::BlameLine {
             commit_id: std::sync::Arc::from("abcdef1"),
             author: "Sampo Kivistö".into(),
@@ -695,19 +681,29 @@ async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppCon
             source_path: None,
             prior_commit: None,
         },
-    ];
+    ]
+}
 
+/// Show `file_rel` in the editor with annotate on and blame already loaded for
+/// it, so the gutter has a populated annotation column.
+fn open_annotated_editor(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<super::super::GitCometView>,
+    repo_id: gitcomet_state::model::RepoId,
+    workdir: &Path,
+    file_rel: &Path,
+) {
     cx.update(|_window, app| {
         view.update(app, |this, cx| {
-            let mut state = editor_state(repo_id, &workdir, &file_rel);
+            let mut state = editor_state(repo_id, workdir, file_rel);
             let repo = &mut Arc::make_mut(&mut state).repos[0];
-            repo.history_state.blame_path = Some(file_rel.clone());
+            repo.history_state.blame_path = Some(file_rel.to_path_buf());
             repo.history_state.blame_source =
                 Some(gitcomet_core::domain::BlameSource::WorkingTree(
                     gitcomet_core::domain::DiffArea::Unstaged,
                 ));
             repo.history_state.blame =
-                gitcomet_state::model::Loadable::Ready(std::sync::Arc::new(blame_lines));
+                gitcomet_state::model::Loadable::Ready(std::sync::Arc::new(editor_blame_lines()));
             push_test_state(this, state, cx);
             this.main_pane.update(cx, |pane, cx| {
                 pane.set_annotate_enabled(true, cx);
@@ -716,6 +712,25 @@ async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppCon
         });
     });
     cx.run_until_parked();
+}
+
+#[gpui::test]
+async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppContext) {
+    // The editor used to leave Blame inert: the toggle was reachable but the
+    // buffer had no annotation column, so turning it on did nothing visible.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(950);
+    let workdir = unique_workdir("file_editor_blame");
+    let file_rel = std::path::PathBuf::from("main.rs");
+    let contents = "fn main() {}\nfn other() {}\n";
+    std::fs::write(workdir.join(&file_rel), contents).expect("write fixture");
+
+    open_annotated_editor(cx, &view, repo_id, &workdir, &file_rel);
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
@@ -729,6 +744,182 @@ async fn blame_is_available_and_rendered_while_editing(cx: &mut gpui::TestAppCon
             "the editor must resolve a blame context so its gutter has something to draw"
         );
     });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// Left offset of the annotate resize handle within the editor. Panics if the
+/// handle is absent.
+fn editor_annotate_handle_offset(cx: &mut gpui::VisualTestContext) -> Pixels {
+    let handle = cx
+        .debug_bounds("annotate_resize_handle")
+        .expect("edit mode must mount the annotate resize handle");
+    let editor = cx
+        .debug_bounds("file_editor")
+        .expect("expected `file_editor` bounds");
+    handle.center().x - editor.left()
+}
+
+/// Press the handle and drag it `dx` to the right. Two moves: gpui starts the
+/// drag on the first button-held move and only delivers `DragMoveEvent` on the
+/// ones after it.
+fn drag_annotate_handle(cx: &mut gpui::VisualTestContext, dx: f32) {
+    let start = cx
+        .debug_bounds("annotate_resize_handle")
+        .expect("expected the annotate resize handle")
+        .center();
+    cx.simulate_mouse_move(start, None, Modifiers::default());
+    cx.simulate_event(MouseDownEvent {
+        position: start,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 1,
+        first_mouse: false,
+    });
+    cx.simulate_mouse_move(
+        point(start.x + px(dx.signum() * 8.0), start.y),
+        Some(MouseButton::Left),
+        Modifiers::default(),
+    );
+    draw_and_drain_test_window(cx);
+    let end = point(start.x + px(dx), start.y);
+    cx.simulate_mouse_move(end, Some(MouseButton::Left), Modifiers::default());
+    cx.simulate_event(MouseUpEvent {
+        position: end,
+        modifiers: Modifiers::default(),
+        button: MouseButton::Left,
+        click_count: 1,
+    });
+    draw_and_drain_test_window(cx);
+}
+
+#[gpui::test]
+async fn annotate_column_is_resizable_while_editing(cx: &mut gpui::TestAppContext) {
+    // The editor drew the annotation column but mounted no drag handle, so the
+    // column was stuck at whatever width the diff view had last left it at.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(952);
+    let workdir = unique_workdir("file_editor_annotate_resize");
+    let file_rel = std::path::PathBuf::from("main.rs");
+    std::fs::write(workdir.join(&file_rel), "fn main() {}\nfn other() {}\n")
+        .expect("write fixture");
+
+    open_annotated_editor(cx, &view, repo_id, &workdir, &file_rel);
+    draw_and_drain_test_window(cx);
+
+    let offset = editor_annotate_handle_offset(cx);
+    let column_width = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.annotate_column_width_px(crate::ui_scale::DEFAULT_UI_SCALE_PERCENT)
+    });
+    assert!(
+        (f32::from(offset) - f32::from(column_width)).abs() <= 1.0,
+        "the handle must straddle the annotation column's right edge, got {offset:?} for a \
+         {column_width:?} column"
+    );
+
+    drag_annotate_handle(cx, 60.0);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.annotate_column_width, 360.0,
+            "dragging 60px right at 100% ui scale must widen the column by 60"
+        );
+        assert!(
+            pane.annotate_resize.is_none(),
+            "the release must end the drag"
+        );
+    });
+
+    let widened_offset = editor_annotate_handle_offset(cx);
+    assert!(
+        f32::from(widened_offset) - f32::from(offset) > 55.0,
+        "the handle must follow the column it resized, moved {:?}",
+        widened_offset - offset
+    );
+
+    // Past the maximum the clamp takes over rather than the column running on.
+    drag_annotate_handle(cx, 1_000.0);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).annotate_column_width,
+            crate::view::rows::DIFF_ANNOTATION_MAX_WIDTH_PX,
+            "the drag must clamp at the maximum column width"
+        );
+    });
+
+    // ...and the minimum on the way back.
+    drag_annotate_handle(cx, -1_000.0);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app).main_pane.read(app).annotate_column_width,
+            crate::view::rows::DIFF_ANNOTATION_MIN_WIDTH_PX,
+            "the drag must clamp at the minimum column width"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn annotate_resize_handle_waits_for_the_column_it_resizes(cx: &mut gpui::TestAppContext) {
+    // The editor reserves the annotation column only once blame resolves, so
+    // the handle has to follow the column rather than the toggle: gated on
+    // `annotation_active()` it would sit at x=0 over a column nobody drew.
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(953);
+    let workdir = unique_workdir("file_editor_annotate_no_blame");
+    let file_rel = std::path::PathBuf::from("main.rs");
+    std::fs::write(workdir.join(&file_rel), "fn main() {}\nfn other() {}\n")
+        .expect("write fixture");
+
+    // Annotate on, but no blame ever loads — `TestBackend` opens no repository.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.set_annotate_enabled(true, cx);
+                pane.ensure_file_editor_loaded(cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.annotation_active(),
+            "the toggle is on and the target is blameable"
+        );
+        assert!(
+            pane.blame_render_ctx_for_test().is_none(),
+            "no blame resolved, so the editor draws no annotation column"
+        );
+    });
+    assert!(
+        cx.debug_bounds("annotate_resize_handle").is_none(),
+        "a handle without a column would drag nothing"
+    );
+
+    // Blame arrives: the column appears, and the handle with it.
+    open_annotated_editor(cx, &view, repo_id, &workdir, &file_rel);
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("annotate_resize_handle").is_some(),
+        "the handle must appear once there is a column to resize"
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
