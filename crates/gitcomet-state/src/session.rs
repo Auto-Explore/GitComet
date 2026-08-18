@@ -267,11 +267,7 @@ impl From<&VirtualBranchSessionFile> for gitcomet_core::domain::VirtualBranch {
         VirtualBranch {
             id: file.id,
             name: file.name.clone().into(),
-            paths: file
-                .paths
-                .iter()
-                .map(std::path::PathBuf::from)
-                .collect(),
+            paths: file.paths.iter().map(std::path::PathBuf::from).collect(),
             applied: file.applied,
             stored_patch: file.stored_patch.clone().map(Into::into),
             // Restored branches are never mid-operation.

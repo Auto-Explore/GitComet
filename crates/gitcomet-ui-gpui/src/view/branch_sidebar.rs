@@ -726,7 +726,11 @@ fn branch_sidebar_virtual_branches_source_hash(repo: &RepoState) -> u64 {
         for path in branch.paths.iter() {
             path.hash(&mut hasher);
         }
-        branch.stored_patch.as_ref().map(|p| p.len()).hash(&mut hasher);
+        branch
+            .stored_patch
+            .as_ref()
+            .map(|p| p.len())
+            .hash(&mut hasher);
     }
     hasher.finish()
 }

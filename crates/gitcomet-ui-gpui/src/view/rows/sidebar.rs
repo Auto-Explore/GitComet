@@ -907,7 +907,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .interactive_row(row_style, row_state)
                         .when(top_border, |d| {
-                            d.child(top_divider(theme.colors.border_variant))
+                            d.child(top_divider(theme.colors.stroke.subtle))
                         })
                         .child(tree_toggle_slot(Some(collapsed)))
                         .child(tree_icon_slot("icons/git_branch.svg", icon_primary, 14.0))
@@ -919,7 +919,7 @@ impl SidebarPaneView {
                                 .line_clamp(1)
                                 .whitespace_nowrap()
                                 .font_weight(FontWeight::BOLD)
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child("Virtual Branches"),
                         )
                         .gitcomet_tooltip(
@@ -948,15 +948,6 @@ impl SidebarPaneView {
                                 );
                             }),
                         )
-                        .child(menu_dots_accessory(
-                            ix,
-                            "virtual_branches_section_dots",
-                            row_group.clone(),
-                            context_menu_invoker.clone(),
-                            PopoverKind::VirtualBranchesPrompt { repo_id },
-                            context_menu_active,
-                            cx,
-                        ))
                         .into_any_element()
                 }
                 BranchSidebarRow::VirtualBranchItem {
@@ -974,9 +965,9 @@ impl SidebarPaneView {
                         "unapplied"
                     };
                     let status_color = if applied {
-                        theme.colors.success
+                        theme.colors.status.success.foreground
                     } else {
-                        theme.colors.text_muted
+                        theme.colors.foreground.secondary
                     };
                     // Drop target for files dragged from the Changes panel:
                     // assigning the file to this virtual branch. Highlight while
@@ -995,7 +986,7 @@ impl SidebarPaneView {
                         .gap(scaled_px(BRANCH_TREE_GAP_PX))
                         .when(drop_hover, |d| {
                             d.bg(with_alpha(
-                                theme.colors.accent,
+                                theme.colors.accent.foreground,
                                 if theme.is_dark { 0.28 } else { 0.20 },
                             ))
                         })
@@ -1007,7 +998,7 @@ impl SidebarPaneView {
                                 .text_sm()
                                 .line_clamp(1)
                                 .whitespace_nowrap()
-                                .text_color(theme.colors.text)
+                                .text_color(theme.colors.foreground.primary)
                                 .child(name.clone()),
                         )
                         .child(
@@ -1021,16 +1012,21 @@ impl SidebarPaneView {
                             format!("{name} — click to open the Virtual Branches workspace").into(),
                         )
                         .can_drop(move |dragged, _window, _cx| {
-                            dragged.downcast_ref::<crate::view::dnd::StatusFileDrag>().is_some()
+                            dragged
+                                .downcast_ref::<crate::view::dnd::StatusFileDrag>()
+                                .is_some()
                         })
-                        .on_drag_move(cx.listener(move |this, _e: &gpui::DragMoveEvent<
-                            crate::view::dnd::StatusFileDrag,
-                        >, _w, cx| {
-                            if this.virtual_branch_drop_hover != Some(branch_id) {
-                                this.virtual_branch_drop_hover = Some(branch_id);
-                                cx.notify();
-                            }
-                        }))
+                        .on_drag_move(cx.listener(
+                            move |this,
+                                  _e: &gpui::DragMoveEvent<crate::view::dnd::StatusFileDrag>,
+                                  _w,
+                                  cx| {
+                                if this.virtual_branch_drop_hover != Some(branch_id) {
+                                    this.virtual_branch_drop_hover = Some(branch_id);
+                                    cx.notify();
+                                }
+                            },
+                        ))
                         .on_drop(cx.listener(
                             move |this, drag: &crate::view::dnd::StatusFileDrag, _w, cx| {
                                 this.virtual_branch_drop_hover = None;

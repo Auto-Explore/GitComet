@@ -4,8 +4,13 @@ use super::*;
 /// context menu) or move a hunk's patch into it (diff hunk context menu).
 #[derive(Clone)]
 enum BranchPick {
-    Assign { path: std::path::PathBuf },
-    Move { patch: String, path: std::path::PathBuf },
+    Assign {
+        path: std::path::PathBuf,
+    },
+    Move {
+        patch: String,
+        path: std::path::PathBuf,
+    },
 }
 
 fn branch_list(
@@ -59,13 +64,13 @@ fn branch_list(
                     .text_sm()
                     .whitespace_nowrap()
                     .line_clamp(1)
-                    .text_color(theme.colors.text)
+                    .text_color(theme.colors.foreground.primary)
                     .child(name),
             )
             .child(
                 div()
                     .text_xs()
-                    .text_color(theme.colors.text_muted)
+                    .text_color(theme.colors.foreground.secondary)
                     .child(format!("{count} file(s)")),
             )
             .on_click(cx.listener(move |this, _e: &ClickEvent, _w, cx| {
@@ -128,7 +133,7 @@ fn picker_shell(
             .flex_col()
             .w(width.preferred_px(ui_scale))
             .child(header)
-            .child(div().border_t_1().border_color(theme.colors.border))
+            .child(div().border_t_1().border_color(theme.colors.stroke.default))
             .child(body),
     )
 }
@@ -158,12 +163,12 @@ pub(super) fn panel(
         .child(
             div()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .line_height(scaled_px(14.0))
                 .child(
                     components::TruncatedText::path(path.display().to_string())
                         .id(("vb_picker_path", repo_id.0))
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .full_text_tooltip(this.tooltip_host.clone())
                         .render(cx),
                 ),
@@ -208,7 +213,7 @@ pub(super) fn move_panel(
                 .child(
                     components::TruncatedText::path(path.display().to_string())
                         .id(("vb_move_picker_path", repo_id.0))
-                        .text_color(theme.colors.text_muted)
+                        .text_color(theme.colors.foreground.secondary)
                         .full_text_tooltip(this.tooltip_host.clone())
                         .render(cx),
                 )
@@ -216,26 +221,34 @@ pub(super) fn move_panel(
                     div()
                         .text_xs()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                        .text_color(theme.colors.success)
+                        .text_color(theme.colors.status.success.foreground)
                         .child(format!("+{additions}")),
                 )
                 .child(
                     div()
                         .text_xs()
                         .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
-                        .text_color(theme.colors.danger)
+                        .text_color(theme.colors.status.danger.foreground)
                         .child(format!("-{deletions}")),
                 ),
         )
         .child(
             div()
                 .text_xs()
-                .text_color(theme.colors.text_muted)
+                .text_color(theme.colors.foreground.secondary)
                 .line_height(scaled_px(14.0))
-                .child("The hunk leaves the worktree and is parked in the branch until you apply it."),
+                .child(
+                    "The hunk leaves the worktree and is parked in the branch until you apply it.",
+                ),
         );
 
-    let body = branch_list(this, repo_id, scaled_px, BranchPick::Move { patch, path }, cx);
+    let body = branch_list(
+        this,
+        repo_id,
+        scaled_px,
+        BranchPick::Move { patch, path },
+        cx,
+    );
     picker_shell(this, header, body, cx)
 }
 
@@ -263,6 +276,9 @@ index 123..456 100644
     #[test]
     fn change_stats_ignores_binary_and_empty_patches() {
         assert_eq!(hunk_change_stats(""), (0, 0));
-        assert_eq!(hunk_change_stats("+++ b/x\n--- a/x\n@@ -0,0 +1 @@\n"), (0, 0));
+        assert_eq!(
+            hunk_change_stats("+++ b/x\n--- a/x\n@@ -0,0 +1 @@\n"),
+            (0, 0)
+        );
     }
 }

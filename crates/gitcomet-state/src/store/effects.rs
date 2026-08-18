@@ -349,9 +349,7 @@ fn send_unavailable_git_effect_result(
             }))
         }
         Effect::UnapplyVirtualBranch {
-            repo_id,
-            branch_id,
-            ..
+            repo_id, branch_id, ..
         } => send(Msg::Internal(
             crate::msg::InternalMsg::VirtualBranchUnapplied {
                 repo_id,
@@ -360,25 +358,27 @@ fn send_unavailable_git_effect_result(
             },
         )),
         Effect::ApplyVirtualBranch {
-            repo_id,
-            branch_id,
-            ..
-        } => send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchApplied {
-            repo_id,
-            branch_id,
-            result: Err(git_unavailable_error(runtime)),
-        })),
+            repo_id, branch_id, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchApplied {
+                repo_id,
+                branch_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::MoveHunkToVirtualBranch {
             repo_id,
             branch_id,
             path,
             ..
-        } => send(Msg::Internal(crate::msg::InternalMsg::VirtualBranchHunkMoved {
-            repo_id,
-            branch_id,
-            path: path.clone(),
-            result: Err(git_unavailable_error(runtime)),
-        })),
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchHunkMoved {
+                repo_id,
+                branch_id,
+                path: path.clone(),
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadRecentCommitMessages {
             repo_id,
             request_rev,
@@ -1502,11 +1502,9 @@ pub(super) fn schedule_effect(
                 return;
             };
             session_persist_executor.spawn(move || {
-                if let Err(error) = session::persist_virtual_branches_to_path(
-                    &workdir,
-                    &data,
-                    &session_file_path,
-                ) {
+                if let Err(error) =
+                    session::persist_virtual_branches_to_path(&workdir, &data, &session_file_path)
+                {
                     util::send_or_log(
                         &msg_tx,
                         Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
@@ -1751,12 +1749,7 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_unapply_virtual_branch(
-                    executor,
-                    repos,
-                    msg_tx,
-                    repo_id,
-                    branch_id,
-                    paths,
+                    executor, repos, msg_tx, repo_id, branch_id, paths,
                 );
             }
         }
@@ -1769,12 +1762,7 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_apply_virtual_branch(
-                    executor,
-                    repos,
-                    msg_tx,
-                    repo_id,
-                    branch_id,
-                    patch,
+                    executor, repos, msg_tx, repo_id, branch_id, patch,
                 );
             }
         }
@@ -1788,13 +1776,7 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_move_hunk_to_virtual_branch(
-                    executor,
-                    repos,
-                    msg_tx,
-                    repo_id,
-                    branch_id,
-                    patch,
-                    path,
+                    executor, repos, msg_tx, repo_id, branch_id, patch, path,
                 );
             }
         }

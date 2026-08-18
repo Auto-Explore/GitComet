@@ -22,9 +22,9 @@ mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod force_remove_worktree_confirm;
 mod merge_abort_confirm;
-mod prune_virtual_branches_confirm;
 mod picker_nav;
 mod picker_row_menu;
+mod prune_virtual_branches_confirm;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_onto_confirm;
@@ -1521,7 +1521,12 @@ impl PopoverHost {
             &virtual_branch_create_input,
             window,
             cx,
-            |this| matches!(this.popover, Some(PopoverKind::VirtualBranchesPrompt { .. })),
+            |this| {
+                matches!(
+                    this.popover,
+                    Some(PopoverKind::VirtualBranchesPrompt { .. })
+                )
+            },
             |this, _window, cx| this.submit_create_virtual_branch(cx),
         ));
         prompt_input_subscriptions.push(Self::prompt_enter_subscription(
@@ -2272,7 +2277,8 @@ impl PopoverHost {
         if name.is_empty() {
             return;
         }
-        self.store.dispatch(Msg::CreateVirtualBranch { repo_id, name });
+        self.store
+            .dispatch(Msg::CreateVirtualBranch { repo_id, name });
         self.virtual_branch_create_input.update(cx, |input, cx| {
             input.set_text("", cx);
         });

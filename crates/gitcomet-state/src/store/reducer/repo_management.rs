@@ -91,11 +91,7 @@ fn restore_virtual_branches_from_session(
     let Some(data) = session_preferences.virtual_branches.get(workdir_key) else {
         return;
     };
-    repo_state.virtual_branches = data
-        .branches
-        .iter()
-        .map(Into::into)
-        .collect::<Vec<_>>();
+    repo_state.virtual_branches = data.branches.iter().map(Into::into).collect::<Vec<_>>();
     repo_state.next_virtual_branch_id = data.next_id.max(
         repo_state
             .virtual_branches
@@ -504,7 +500,11 @@ pub(super) fn restore_session(
             {
                 repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
             }
-            restore_virtual_branches_from_session(&mut repo_state, &session_preferences, &workdir_key);
+            restore_virtual_branches_from_session(
+                &mut repo_state,
+                &session_preferences,
+                &workdir_key,
+            );
             repo_state
         };
         repo_state.set_open(Loadable::NotLoaded);

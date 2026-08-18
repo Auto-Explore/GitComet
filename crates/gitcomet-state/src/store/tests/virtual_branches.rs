@@ -1,6 +1,11 @@
 use super::*;
 
-fn fixture_repo() -> (HashMap<RepoId, Arc<dyn GitRepository>>, AtomicU64, AppState, RepoId) {
+fn fixture_repo() -> (
+    HashMap<RepoId, Arc<dyn GitRepository>>,
+    AtomicU64,
+    AppState,
+    RepoId,
+) {
     let repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
@@ -17,7 +22,11 @@ fn fixture_repo() -> (HashMap<RepoId, Arc<dyn GitRepository>>, AtomicU64, AppSta
 }
 
 fn branch_ids(state: &AppState) -> Vec<u64> {
-    state.repos[0].virtual_branches.iter().map(|b| b.id).collect()
+    state.repos[0]
+        .virtual_branches
+        .iter()
+        .map(|b| b.id)
+        .collect()
 }
 
 fn has_persist_effect(effects: &[Effect]) -> bool {
@@ -64,7 +73,11 @@ fn create_assigns_incrementing_ids_and_default_name() {
     assert_eq!(branch_ids(&state), vec![1, 2]);
     assert_eq!(branches[0].name.as_ref(), "Branch 1");
     assert_eq!(branches[1].name.as_ref(), "feature");
-    assert!(branches.iter().all(|b| b.applied && !b.pending && b.paths.is_empty()));
+    assert!(
+        branches
+            .iter()
+            .all(|b| b.applied && !b.pending && b.paths.is_empty())
+    );
 }
 
 #[test]
@@ -335,9 +348,8 @@ fn unapplied_error_keeps_applied_and_reports_diagnostic() {
             branch_id: 1,
         },
     );
-    let err = gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend(
-        "boom".into(),
-    ));
+    let err =
+        gitcomet_core::error::Error::new(gitcomet_core::error::ErrorKind::Backend("boom".into()));
     let _ = reduce(
         &mut repos,
         &id_alloc,
@@ -469,7 +481,9 @@ fn persist_effect_carries_full_workspace_snapshot() {
         Msg::Internal(crate::msg::InternalMsg::VirtualBranchUnapplied {
             repo_id,
             branch_id: 1,
-            result: Ok("diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n".to_string()),
+            result: Ok(
+                "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1,1 +1,1 @@\n-foo\n+bar\n".to_string(),
+            ),
         }),
     );
     let data = persist_data(&effects);
@@ -480,10 +494,18 @@ fn persist_effect_carries_full_workspace_snapshot() {
     assert_eq!(branch.name, "feature");
     assert_eq!(branch.paths, vec!["src/lib.rs"]);
     assert!(!branch.applied);
-    assert!(branch.stored_patch.as_deref().unwrap().starts_with("diff --git"));
+    assert!(
+        branch
+            .stored_patch
+            .as_deref()
+            .unwrap()
+            .starts_with("diff --git")
+    );
     // The persist effect targets the repo's workdir.
     let Effect::PersistVirtualBranches {
-        workdir, repo_id: rid, ..
+        workdir,
+        repo_id: rid,
+        ..
     } = &effects[0]
     else {
         panic!("expected PersistVirtualBranches effect");

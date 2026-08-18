@@ -150,7 +150,10 @@ pub(super) fn unassign_path_from_virtual_branch(
     branch.paths.retain(|p| p != &path);
     if branch.paths.len() != old_len {
         repo.virtual_branches_rev += 1;
-        vec![persist_effect(repo, "unassigning a path from a virtual branch")]
+        vec![persist_effect(
+            repo,
+            "unassigning a path from a virtual branch",
+        )]
     } else {
         Vec::new()
     }
@@ -321,7 +324,8 @@ pub(super) fn virtual_branch_hunk_moved(
         Ok(patch) => {
             let patch = patch.trim_end().to_string();
             {
-                let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id) else {
+                let Some(branch) = repo.virtual_branches.iter_mut().find(|b| b.id == branch_id)
+                else {
                     return Vec::new();
                 };
                 branch.stored_patch = Some(match branch.stored_patch.take() {

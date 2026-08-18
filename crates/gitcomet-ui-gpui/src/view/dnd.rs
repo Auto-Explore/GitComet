@@ -7,7 +7,7 @@
 
 use gitcomet_state::model::RepoId;
 use gpui::prelude::*;
-use gpui::{div, px, App, Entity, Render, Window};
+use gpui::{App, Entity, Render, Window, div, px};
 use std::path::PathBuf;
 
 /// Payload dragged from a worktree file row: the repo owning the file and the
