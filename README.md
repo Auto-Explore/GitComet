@@ -259,6 +259,10 @@ SourceTree, GitKraken, Zed, GPUI, KDiff3, Meld, Github Desktop, Git, Gix, Rust, 
 
 This project has been created with the help of AI tools, including OpenAI Codex and Claude Code.
 
+### Star History
+
+[![Star History Chart](https://star-history.dera.page/svg?repos=Auto-Explore/gitcomet&type=Date)](https://star-history.dera.page/#Auto-Explore/gitcomet&Date)
+
 ### License
 
 GitComet is licensed under the GNU Affero General Public License Version 3
