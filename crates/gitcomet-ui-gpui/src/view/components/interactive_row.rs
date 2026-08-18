@@ -107,13 +107,7 @@ impl InteractiveRowStyle {
     }
 
     fn selection_outline(self) -> gpui::BoxShadow {
-        gpui::BoxShadow {
-            color: self.selected_indicator.into_color(),
-            offset: gpui::point(px(0.0), px(0.0)),
-            blur_radius: px(0.0),
-            spread_radius: px(1.0),
-            inset: true,
-        }
+        selection_outline_shadow(self.selected_indicator)
     }
 
     pub fn resolved_background(self, state: InteractiveRowState) -> Rgba {
@@ -143,6 +137,30 @@ impl InteractiveRowStyle {
             .active(move |row| row.bg(active))
             .focus(move |row| row.bg(focus).shadow(focus_outline.clone()))
     }
+}
+
+/// The 1px inset ring a selected row wears. Kept as a free function so rows
+/// that paint their own selection fill instead of going through
+/// [`InteractiveRowExt`] draw the same ring rather than inventing one.
+fn selection_outline_shadow(color: Rgba) -> gpui::BoxShadow {
+    gpui::BoxShadow {
+        color: color.into_color(),
+        offset: gpui::point(px(0.0), px(0.0)),
+        blur_radius: px(0.0),
+        spread_radius: px(1.0),
+        inset: true,
+    }
+}
+
+/// The selection ring for rows that carry their own selection background.
+///
+/// Light themes need it: their selection fills sit within a few percent of the
+/// surface underneath, so a filled row reads as a smudge rather than as the
+/// selected one. Dark themes carry the selection in the fill alone, and get
+/// `None`. Mirrors what [`InteractiveRowStyle`] already does for sidebar rows.
+pub fn light_theme_selection_outline(theme: AppTheme) -> Option<gpui::BoxShadow> {
+    (!theme.is_dark)
+        .then(|| selection_outline_shadow(theme.colors.interaction.selected_indicator))
 }
 
 pub trait InteractiveRowExt {

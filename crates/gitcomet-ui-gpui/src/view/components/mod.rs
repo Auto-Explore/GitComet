@@ -33,7 +33,9 @@ pub use context_menu::{
     context_menu_header, context_menu_label, context_menu_separator,
 };
 pub use diff_stat::diff_stat;
-pub use interactive_row::{InteractiveRowExt, InteractiveRowState, InteractiveRowStyle};
+pub use interactive_row::{
+    InteractiveRowExt, InteractiveRowState, InteractiveRowStyle, light_theme_selection_outline,
+};
 pub use modal::{modal_scrim, modal_surface, popover_surface};
 /// Public field type of [`PickerPromptLayout::headers`], carried out of the
 /// private module with it so a caller can name what that field hands them
