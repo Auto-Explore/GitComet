@@ -2339,8 +2339,6 @@ impl MainPaneView {
         }
     }
 
-    /// The row the match cursor is on, for renderers that paint it differently
-    /// from the rest.
     pub(in crate::view) fn diff_search_current_match_row(&self) -> Option<usize> {
         if !self.diff_search_active || !self.diff_search_has_query() {
             return None;
@@ -2498,8 +2496,8 @@ impl MainPaneView {
             let offset = self.file_editor_scroll.offset();
             self.file_editor_scroll.set_offset(point(offset.x, y));
         }
-        // Both: the wash has to be rebuilt too, since the current match is the one
-        // hit the overlay leaves out.
+        // The wash moves too: the current match is the one hit the overlay leaves
+        // out.
         self.file_editor_search_rev = self.file_editor_search_rev.wrapping_add(1);
         self.file_editor_search_reveal_rev = self.file_editor_search_reveal_rev.wrapping_add(1);
     }

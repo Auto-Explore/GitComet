@@ -451,10 +451,8 @@ pub(in crate::view::rows) fn word_highlight_colors(
 /// themselves, so Ctrl+F looks the same either side of the edit toggle.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(in crate::view) enum DiffSearchMatchEmphasis {
-    /// Any match other than the one the cursor is on.
     #[default]
     Other,
-    /// The row the match cursor is on.
     Current,
 }
 

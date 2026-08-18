@@ -288,7 +288,6 @@ impl MainPaneView {
         if previous == Some(current) {
             return;
         }
-        // Same trigger the conflict resolver uses when its editable output moves.
         if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();
         }
