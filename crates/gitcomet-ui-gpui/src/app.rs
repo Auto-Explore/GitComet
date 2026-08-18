@@ -52,6 +52,8 @@ actions!(
         OpenSettings,
         OpenInCodeEditor,
         OpenRepository,
+        CloneRepository,
+        InitializeRepository,
         SwitchRepository,
         ApplyPatch,
         Close,
@@ -637,7 +639,7 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
 
     cx.on_action(|_: &OpenInCodeEditor, cx| {
         cx.defer(|cx| {
-            let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
+            let _ = update_active_or_existing_normal_gitcomet_window(cx, |view, cx| {
                 view.open_active_repo_in_external_code_editor(cx);
             });
         });
@@ -647,7 +649,7 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(move |_: &OpenRepository, cx| {
         let backend = Arc::clone(&repo_backend);
         cx.defer(move |cx| {
-            if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
+            if existing_normal_gitcomet_window_blocks_repository_management_actions(cx) {
                 return;
             }
             prompt_open_repository(cx, backend);
@@ -658,21 +660,19 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
     cx.on_action(move |_: &SwitchRepository, cx| {
         let backend = Arc::clone(&recent_picker_backend);
         cx.defer(move |cx| {
-            if active_normal_gitcomet_window_blocks_non_repository_actions(cx) {
+            if existing_normal_gitcomet_window_blocks_repository_management_actions(cx) {
                 return;
             }
             open_repository_switcher_in_existing_or_new_window(cx, backend);
         });
     });
-    cx.on_action(|_: &ToggleCommandPalette, cx| {
-        cx.defer(toggle_command_palette_in_active_or_existing_window);
+    let command_palette_backend = Arc::clone(&backend);
+    cx.on_action(move |_: &ToggleCommandPalette, cx| {
+        let backend = Arc::clone(&command_palette_backend);
+        cx.defer(move |cx| toggle_command_palette_in_active_existing_or_new_window(cx, backend));
     });
     cx.on_action(|_: &LocateFileInExplorer, cx| {
-        cx.defer(|cx| {
-            let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
-                view.locate_open_file_in_explorer(cx);
-            });
-        });
+        cx.defer(locate_file_in_active_or_existing_normal_window);
     });
 
     cx.on_action(|_: &Close, cx| {
@@ -810,6 +810,18 @@ fn install_macos_app_menu(cx: &mut App, backend: Arc<dyn GitBackend>) {
         cx.defer(prompt_apply_patch);
     });
 
+    let clone_backend = Arc::clone(&backend);
+    cx.on_action(move |_: &CloneRepository, cx| {
+        let backend = Arc::clone(&clone_backend);
+        cx.defer(move |cx| open_clone_repository_in_existing_or_new_window(cx, backend));
+    });
+
+    let initialize_backend = Arc::clone(&backend);
+    cx.on_action(move |_: &InitializeRepository, cx| {
+        let backend = Arc::clone(&initialize_backend);
+        cx.defer(move |cx| prompt_initialize_repository_in_existing_or_new_window(cx, backend));
+    });
+
     refresh_macos_app_menus(cx);
 }
 
@@ -904,7 +916,12 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
     let mut file_items = vec![
         MenuItem::action("New Window", NewWindow),
         MenuItem::separator(),
-        MenuItem::action("Open…", OpenRepository),
+        MenuItem::action(crate::menu_labels::OPEN_REPOSITORY, OpenRepository),
+        MenuItem::action(crate::menu_labels::CLONE_REPOSITORY, CloneRepository),
+        MenuItem::action(
+            crate::menu_labels::INITIALIZE_REPOSITORY,
+            InitializeRepository,
+        ),
         MenuItem::action("Switch Repository…", SwitchRepository),
     ];
 
@@ -916,15 +933,20 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
             disabled: false,
         }));
     }
+    file_items.push(MenuItem::separator());
     if external_editor_configured {
-        file_items.extend([
-            MenuItem::separator(),
-            MenuItem::action("Open in code editor", OpenInCodeEditor),
-        ]);
+        file_items.push(MenuItem::action(
+            crate::menu_labels::OPEN_IN_CODE_EDITOR,
+            OpenInCodeEditor,
+        ));
     }
 
     file_items.extend([
-        MenuItem::action("Apply Patch…", ApplyPatch),
+        MenuItem::action(
+            crate::menu_labels::OPEN_IN_FILE_EXPLORER,
+            LocateFileInExplorer,
+        ),
+        MenuItem::action(crate::menu_labels::APPLY_PATCH, ApplyPatch),
         MenuItem::separator(),
         MenuItem::action("Close", Close),
         MenuItem::action("Close Window", CloseWindow),
@@ -934,7 +956,8 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
         Menu {
             name: "GitComet".into(),
             items: vec![
-                MenuItem::action("Settings…", OpenSettings),
+                MenuItem::action(crate::menu_labels::COMMAND_PALETTE, ToggleCommandPalette),
+                MenuItem::action(crate::menu_labels::SETTINGS, OpenSettings),
                 MenuItem::separator(),
                 MenuItem::os_submenu("Services", SystemMenuType::Services),
                 MenuItem::separator(),
@@ -1133,9 +1156,45 @@ fn update_active_normal_gitcomet_window<R>(
     window.view.update(cx, f).ok()
 }
 
-fn active_normal_gitcomet_window_blocks_non_repository_actions(cx: &mut App) -> bool {
-    update_active_normal_gitcomet_window(cx, |view, _cx| view.blocks_non_repository_actions())
+fn update_active_or_existing_normal_gitcomet_window<R>(
+    cx: &mut App,
+    f: impl FnOnce(&mut GitCometView, &mut gpui::Context<GitCometView>) -> R,
+) -> Option<R> {
+    let window = find_normal_gitcomet_window(cx)?;
+    window.view.update(cx, f).ok()
+}
+
+fn normal_gitcomet_window_blocks_repository_management_actions(
+    cx: &mut App,
+    window: &GitCometWindowEntry,
+) -> bool {
+    window
+        .view
+        .update(cx, |view, _cx| view.blocks_repository_management_actions())
         .unwrap_or(false)
+}
+
+fn existing_normal_gitcomet_window_blocks_repository_management_actions(cx: &mut App) -> bool {
+    let Some(window) = find_normal_gitcomet_window(cx) else {
+        return false;
+    };
+    normal_gitcomet_window_blocks_repository_management_actions(cx, &window)
+}
+
+fn locate_file_in_active_or_existing_normal_window(cx: &mut App) {
+    let Some(window) = find_normal_gitcomet_window(cx) else {
+        return;
+    };
+    if window
+        .view
+        .update(cx, |view, cx| view.locate_open_file_in_explorer(cx))
+        .is_err()
+    {
+        return;
+    }
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
 }
 
 fn mark_clean_shutdown<C>(cx: &mut C)
@@ -1467,6 +1526,77 @@ fn open_repository_switcher_in_existing_or_new_window(cx: &mut App, backend: Arc
     cx.activate(true);
 }
 
+#[cfg(target_os = "macos")]
+fn open_clone_repository_in_window(cx: &mut App, window: &GitCometWindowEntry) {
+    let _ = window.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.open_clone_repository_prompt(window, cx);
+        });
+    });
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn open_clone_repository_in_existing_or_new_window(cx: &mut App, backend: Arc<dyn GitBackend>) {
+    if let Some(window) = find_normal_gitcomet_window(cx) {
+        if normal_gitcomet_window_blocks_repository_management_actions(cx, &window) {
+            return;
+        }
+        open_clone_repository_in_window(cx, &window);
+        return;
+    }
+
+    let launch = normal_launch_config(None, None);
+    let window = open_gitcomet_window(cx, backend, &launch);
+    let _ = window.update(cx, |view, window, cx| {
+        view.open_clone_repository_prompt(window, cx);
+    });
+    activate_gitcomet_window(cx, window.into());
+    cx.activate(true);
+}
+
+#[cfg(target_os = "macos")]
+fn prompt_initialize_repository_in_window(cx: &mut App, window: &GitCometWindowEntry) {
+    let _ = window.handle.update(cx, |root_view, window, cx| {
+        let Ok(view) = root_view.downcast::<GitCometView>() else {
+            return;
+        };
+        view.update(cx, |view, cx| {
+            view.prompt_init_repo(window, cx);
+        });
+    });
+    if cx.active_window().map(|active| active.window_id()) != Some(window.handle.window_id()) {
+        activate_gitcomet_window(cx, window.handle);
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn prompt_initialize_repository_in_existing_or_new_window(
+    cx: &mut App,
+    backend: Arc<dyn GitBackend>,
+) {
+    if let Some(window) = find_normal_gitcomet_window(cx) {
+        if normal_gitcomet_window_blocks_repository_management_actions(cx, &window) {
+            return;
+        }
+        prompt_initialize_repository_in_window(cx, &window);
+        return;
+    }
+
+    let launch = normal_launch_config(None, None);
+    let window = open_gitcomet_window(cx, backend, &launch);
+    let _ = window.update(cx, |view, window, cx| {
+        view.prompt_init_repo(window, cx);
+    });
+    activate_gitcomet_window(cx, window.into());
+    cx.activate(true);
+}
+
 fn toggle_command_palette_in_window(cx: &mut App, window: &GitCometWindowEntry) {
     let _ = window.handle.update(cx, |root_view, window, cx| {
         let Ok(view) = root_view.downcast::<GitCometView>() else {
@@ -1481,12 +1611,24 @@ fn toggle_command_palette_in_window(cx: &mut App, window: &GitCometWindowEntry) 
     }
 }
 
-fn toggle_command_palette_in_active_or_existing_window(cx: &mut App) {
+fn toggle_command_palette_in_active_existing_or_new_window(
+    cx: &mut App,
+    backend: Arc<dyn GitBackend>,
+) {
     if let Some(window) =
         active_normal_gitcomet_window(cx).or_else(|| find_normal_gitcomet_window(cx))
     {
         toggle_command_palette_in_window(cx, &window);
+        return;
     }
+
+    let launch = normal_launch_config(None, None);
+    let window = open_gitcomet_window(cx, backend, &launch);
+    let _ = window.update(cx, |view, window, cx| {
+        view.toggle_command_palette(window, cx);
+    });
+    activate_gitcomet_window(cx, window.into());
+    cx.activate(true);
 }
 
 fn show_open_repository_manual_entry_in_window(
@@ -1845,6 +1987,107 @@ mod tests {
                 "test backend does not open repositories",
             )))
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    fn menu_action_entries(menu: &Menu) -> Vec<(String, String)> {
+        menu.items
+            .iter()
+            .filter_map(|item| match item {
+                MenuItem::Action { name, action, .. } => {
+                    Some((name.to_string(), action.name().to_string()))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_app_menus_use_gitcomet_terminology_and_actions() {
+        let menus = macos_app_menus_with_external_editor(true);
+        let app_menu = menus
+            .iter()
+            .find(|menu| menu.name.as_ref() == "GitComet")
+            .expect("GitComet menu");
+        let file_menu = menus
+            .iter()
+            .find(|menu| menu.name.as_ref() == "File")
+            .expect("File menu");
+
+        let app_entries = menu_action_entries(app_menu);
+        assert_eq!(
+            &app_entries[..2],
+            &[
+                (
+                    crate::menu_labels::COMMAND_PALETTE.to_string(),
+                    ToggleCommandPalette.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::SETTINGS.to_string(),
+                    OpenSettings.name().to_string(),
+                ),
+            ]
+        );
+
+        let file_entries = menu_action_entries(file_menu);
+        assert_eq!(
+            file_entries,
+            vec![
+                ("New Window".to_string(), NewWindow.name().to_string()),
+                (
+                    crate::menu_labels::OPEN_REPOSITORY.to_string(),
+                    OpenRepository.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::CLONE_REPOSITORY.to_string(),
+                    CloneRepository.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::INITIALIZE_REPOSITORY.to_string(),
+                    InitializeRepository.name().to_string(),
+                ),
+                (
+                    "Switch Repository…".to_string(),
+                    SwitchRepository.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::OPEN_IN_CODE_EDITOR.to_string(),
+                    OpenInCodeEditor.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::OPEN_IN_FILE_EXPLORER.to_string(),
+                    LocateFileInExplorer.name().to_string(),
+                ),
+                (
+                    crate::menu_labels::APPLY_PATCH.to_string(),
+                    ApplyPatch.name().to_string(),
+                ),
+                ("Close".to_string(), Close.name().to_string()),
+                ("Close Window".to_string(), CloseWindow.name().to_string(),),
+            ]
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_file_menu_hides_unconfigured_external_editor_action() {
+        let menus = macos_app_menus_with_external_editor(false);
+        let file_menu = menus
+            .iter()
+            .find(|menu| menu.name.as_ref() == "File")
+            .expect("File menu");
+        let entries = menu_action_entries(file_menu);
+
+        assert!(
+            entries
+                .iter()
+                .all(|(_, action)| action != OpenInCodeEditor.name())
+        );
+        assert!(entries.iter().any(|(label, action)| {
+            label == crate::menu_labels::OPEN_IN_FILE_EXPLORER
+                && action == LocateFileInExplorer.name()
+        }));
     }
 
     fn seed_workspace_repo(
@@ -2966,6 +3209,210 @@ mod tests {
         });
         assert_eq!(cx.update(|app| app.windows().len()), 1);
         assert!(panel_visible);
+    }
+
+    #[gpui::test]
+    fn command_palette_opens_new_normal_window_when_none_exist(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+
+        assert_eq!(cx.update(|app| app.windows().len()), 0);
+        cx.update(|app| {
+            toggle_command_palette_in_active_existing_or_new_window(app, Arc::clone(&backend));
+        });
+        cx.run_until_parked();
+
+        let palette_open = cx.update(|app| {
+            let entry = find_normal_gitcomet_window(app)
+                .expect("expected a normal GitComet window for Command Palette");
+            entry
+                .view
+                .read_with(app, |view, _cx| {
+                    crate::view::test_support::command_palette_is_open(view)
+                })
+                .expect("expected to inspect the new GitComet window")
+        });
+        assert_eq!(cx.update(|app| app.windows().len()), 1);
+        assert!(palette_open);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn macos_clone_repository_action_opens_native_clone_prompt(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            install_macos_app_menu(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+        });
+        cx.cx.update(|app| app.dispatch_action(&CloneRepository));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+
+        assert!(
+            cx.debug_bounds("clone_repo_go_hint").is_some(),
+            "Clone repository should open GitComet's native clone prompt"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn macos_initialize_repository_action_requests_folder_picker(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|window, app| {
+            install_macos_app_menu(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+        });
+        cx.cx
+            .update(|app| app.dispatch_action(&InitializeRepository));
+        cx.run_until_parked();
+
+        assert!(
+            cx.did_prompt_for_paths(),
+            "Initialize repository should request a destination folder"
+        );
+        cx.simulate_path_prompt_response(|options| {
+            assert!(options.directories);
+            assert!(!options.files);
+            assert!(!options.multiple);
+            assert_eq!(options.prompt.as_deref(), Some("Initialize Git Repository"));
+            None
+        });
+        cx.run_until_parked();
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn macos_repository_actions_validate_background_normal_window(cx: &mut gpui::TestAppContext) {
+        use gitcomet_core::process::{
+            GitExecutableAvailability, GitExecutablePreference, GitRuntimeState,
+        };
+        use gitcomet_state::model::AppState;
+
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let main_window_id = cx.update(|window, app| {
+            install_macos_app_menu(app, Arc::clone(&backend));
+            view.update(app, |view, cx| {
+                crate::view::test_support::apply_state_snapshot_for_test(
+                    view,
+                    Arc::new(AppState {
+                        git_runtime: GitRuntimeState {
+                            preference: GitExecutablePreference::Custom(PathBuf::new()),
+                            availability: GitExecutableAvailability::Unavailable {
+                                detail: "Git unavailable for menu routing test".to_string(),
+                            },
+                        },
+                        ..AppState::default()
+                    }),
+                    cx,
+                );
+            });
+            let _ = window.draw(app);
+            window.activate_window();
+            window.window_handle().window_id()
+        });
+
+        cx.cx.update(crate::view::open_settings_window);
+        cx.run_until_parked();
+        let settings_window = cx.cx.update(|app| {
+            app.windows()
+                .into_iter()
+                .find(|window| window.window_id() != main_window_id)
+                .expect("Settings window should open")
+        });
+        let settings_window_id = settings_window.window_id();
+        cx.cx.update(|app| {
+            let _ = settings_window.update(app, |_view, window, _cx| window.activate_window());
+            assert_eq!(
+                app.active_window().map(|window| window.window_id()),
+                Some(settings_window_id),
+                "Settings should become active"
+            );
+        });
+        assert_ne!(settings_window_id, main_window_id);
+
+        cx.cx.update(|app| app.dispatch_action(&CloneRepository));
+        cx.run_until_parked();
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        assert!(
+            cx.debug_bounds("clone_repo_go_hint").is_none(),
+            "Clone repository must stay blocked by the target window's unavailable runtime"
+        );
+
+        cx.cx
+            .update(|app| app.dispatch_action(&InitializeRepository));
+        cx.run_until_parked();
+        assert!(
+            !cx.did_prompt_for_paths(),
+            "Initialize repository must stay blocked by the target window's unavailable runtime"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[gpui::test]
+    fn locate_file_action_activates_background_normal_window(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = lock_visual_test();
+        let backend: Arc<dyn GitBackend> = Arc::new(TestBackend);
+        let (store, events) = AppStore::new(Arc::clone(&backend));
+        let (_view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let main_window_id = cx.update(|window, app| {
+            install_app_shortcuts_for_test(app, Arc::clone(&backend));
+            let _ = window.draw(app);
+            window.activate_window();
+            window.window_handle().window_id()
+        });
+        cx.cx.update(crate::view::open_settings_window);
+        cx.run_until_parked();
+        let settings_window = cx.cx.update(|app| {
+            app.windows()
+                .into_iter()
+                .find(|window| window.window_id() != main_window_id)
+                .expect("Settings window should open")
+        });
+        let settings_window_id = settings_window.window_id();
+        cx.cx.update(|app| {
+            let _ = settings_window.update(app, |_view, window, _cx| window.activate_window());
+            assert_eq!(
+                app.active_window().map(|window| window.window_id()),
+                Some(settings_window_id),
+                "Settings should become active"
+            );
+        });
+        assert_ne!(settings_window_id, main_window_id);
+
+        cx.cx
+            .update(|app| app.dispatch_action(&LocateFileInExplorer));
+        cx.run_until_parked();
+
+        cx.cx.update(|app| {
+            assert_eq!(
+                app.active_window().map(|window| window.window_id()),
+                Some(main_window_id),
+                "locating a file should bring the main GitComet window forward"
+            );
+        });
     }
 
     #[cfg(target_os = "macos")]

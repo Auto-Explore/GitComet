@@ -9,6 +9,7 @@ mod http;
 mod kit;
 mod launch_guard;
 mod linux_gui_env;
+mod menu_labels;
 #[doc(hidden)]
 pub mod perf_alloc;
 #[doc(hidden)]
