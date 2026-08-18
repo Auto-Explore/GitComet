@@ -109,6 +109,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::LoadReflog { .. }
             | Msg::LoadRecentCommitMessages { .. }
             | Msg::LoadHoverCommitMessage { .. }
+            | Msg::LoadCherryPickRangePreview { .. }
             | Msg::LoadFileHistory { .. }
             | Msg::LoadBlame { .. }
             | Msg::LoadWorktrees { .. }
@@ -1028,6 +1029,11 @@ fn reduce_inner(
         Msg::LoadRecentCommitMessages { repo_id, limit } => {
             effects::load_recent_commit_messages(state, repo_id, limit)
         }
+        Msg::LoadCherryPickRangePreview {
+            repo_id,
+            range,
+            source,
+        } => effects::load_cherry_pick_range_preview(state, repo_id, range, source),
         Msg::LoadFileHistory {
             repo_id,
             path,
@@ -1168,7 +1174,6 @@ fn reduce_inner(
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::cherry_pick_commit(repo_id, commit_id, commit, mainline, summary)
         }
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
         Msg::CherryPickRangeOntoNewBranch {
             repo_id,
             base,
@@ -1184,21 +1189,6 @@ fn reduce_inner(
                 repo_id, base, range, source, new_branch,
             )
         }
-||||||| Common ancestor
-=======
-        Msg::CherryPickRangeOntoNewBranch {
-            repo_id,
-            base,
-            source,
-            new_branch,
-        } => {
-            if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-                repo_state.set_detached_head_commit(None);
-            }
-            begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::cherry_pick_range_onto_new_branch(repo_id, base, source, new_branch)
-        }
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
         Msg::RevertCommit { repo_id, commit_id } => {
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::revert_commit(repo_id, commit_id)
@@ -2175,6 +2165,12 @@ fn reduce_inner(
             request_rev,
             result,
         }) => effects::recent_commit_messages_loaded(state, repo_id, request_rev, result),
+        Msg::Internal(crate::msg::InternalMsg::CherryPickRangePreviewLoaded {
+            repo_id,
+            range,
+            source,
+            result,
+        }) => effects::cherry_pick_range_preview_loaded(state, repo_id, range, source, result),
         Msg::Internal(crate::msg::InternalMsg::DiffLoaded {
             repo_id,
             target,

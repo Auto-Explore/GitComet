@@ -1395,7 +1395,6 @@ fn summarize_command(
             };
             format!("Cherry-pick {} commits: {state}", entries.len())
         }
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
         RepoCommandKind::CherryPickRangeOntoNewBranch {
             source,
             base,
@@ -1407,27 +1406,8 @@ fn summarize_command(
             } else {
                 "Completed"
             };
-            format!(
-                "Cherry-picked {source} onto {base} as {new_branch}: {state}"
-            )
+            format!("Cherry-picked {source} onto {base} as {new_branch}: {state}")
         }
-||||||| Common ancestor
-=======
-        RepoCommandKind::CherryPickRangeOntoNewBranch {
-            source,
-            base,
-            new_branch,
-        } => {
-            let state = if sequencer_paused(output) {
-                "Paused at a conflict"
-            } else {
-                "Completed"
-            };
-            format!(
-                "Cherry-picked {source} onto {base} as {new_branch}: {state}"
-            )
-        }
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
         RepoCommandKind::CherryPick {
             commit_id,
             commit,
@@ -2619,7 +2599,6 @@ mod tests {
             "Current branch already has all the changes from the cherry-picked commit."
         );
 
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
         let (_, range_summary) = summarize_command(
             &RepoCommandKind::CherryPickRangeOntoNewBranch {
                 base: "main".into(),
@@ -2636,24 +2615,6 @@ mod tests {
             "Cherry-picked feature onto main as feature-copy: Completed"
         );
 
-||||||| Common ancestor
-=======
-        let (_, range_summary) = summarize_command(
-            &RepoCommandKind::CherryPickRangeOntoNewBranch {
-                base: "main".into(),
-                source: "feature".into(),
-                new_branch: "feature-copy".into(),
-            },
-            &command_output("git cherry-pick 3 commits onto feature-copy", "", ""),
-            true,
-            None,
-        );
-        assert_eq!(
-            range_summary,
-            "Cherry-picked feature onto main as feature-copy: Completed"
-        );
-
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
         let (_, merge_abort_summary) = summarize_command(
             &RepoCommandKind::MergeAbort,
             &command_output("git merge --abort", "", ""),

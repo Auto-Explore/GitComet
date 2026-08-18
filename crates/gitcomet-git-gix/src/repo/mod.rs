@@ -1,10 +1,11 @@
 use crate::util::git_workdir_cmd_for as util_git_workdir_cmd_for;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::{
-    Branch, Commit, CommitDetails, CommitFileChange, CommitId, Diff, DiffArea, DiffPreviewTextSide,
-    DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode, LogCursor, LogPage,
-    RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch, RemoteTag, RepoSpec,
-    RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag, UpstreamDivergence, Worktree,
+    Branch, Commit, CommitDetails, CommitFileChange, CommitId, CommitRefSummary, Diff, DiffArea,
+    DiffPreviewTextSide, DiffTarget, FileDiffImage, FileDiffText, FileEntry, HistoryMode,
+    LogCursor, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
+    RemoteTag, RepoSpec, RepoStatus, StashEntry, Submodule, SubmoduleDiffSummary, Tag,
+    UpstreamDivergence, Worktree,
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::git_ops_trace::{self, GitOpTraceKind};
@@ -607,7 +608,6 @@ impl GitRepository for GixRepo {
         self.revert_impl(id)
     }
 
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
     fn cherry_pick_range_onto_new_branch(
         &self,
         base: &str,
@@ -618,18 +618,14 @@ impl GitRepository for GixRepo {
         self.cherry_pick_range_onto_new_branch_impl(base, range, source, new_branch)
     }
 
-||||||| Common ancestor
-=======
-    fn cherry_pick_range_onto_new_branch(
+    fn cherry_pick_range_commits(
         &self,
-        base: &str,
+        range: &str,
         source: &str,
-        new_branch: &str,
-    ) -> Result<CommandOutput> {
-        self.cherry_pick_range_onto_new_branch_impl(base, source, new_branch)
+    ) -> Result<Vec<CommitRefSummary>> {
+        self.cherry_pick_range_commits_impl(range, source)
     }
 
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()> {
         self.stash_create_impl(message, include_untracked)
     }

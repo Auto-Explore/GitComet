@@ -1894,3 +1894,121 @@ fn local_branch_menu_cherry_pick_prefills_source_range_and_base(cx: &mut gpui::T
         }
     });
 }
+
+#[gpui::test]
+fn cherry_pick_range_preview_row_click_opens_commit_and_closes_popover(
+    cx: &mut gpui::TestAppContext,
+) {
+    const FIRST_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const SECOND_SHA: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store.clone(), events, None, window, cx));
+
+    let repo_id = RepoId(241);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_cherry_pick_preview_click",
+        std::process::id()
+    ));
+
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: workdir.clone(),
+        },
+    );
+    repo.head_branch = Loadable::Ready("main".to_string());
+    repo.cherry_pick_range_preview = Some(gitcomet_state::model::CherryPickRangePreview {
+        range: "main".to_string(),
+        source: "feature".to_string(),
+        commits: Loadable::Ready(Arc::new(vec![
+            gitcomet_core::domain::CommitRefSummary {
+                id: CommitId(FIRST_SHA.into()),
+                summary: "first commit".into(),
+            },
+            gitcomet_core::domain::CommitRefSummary {
+                id: CommitId(SECOND_SHA.into()),
+                summary: "second commit".into(),
+            },
+        ])),
+    });
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    });
+    store.replace_snapshot_for_test(Arc::clone(&state));
+
+    cx.update(|window, app| {
+        // Prompt popovers create TextInput entities; the test key bindings
+        // must be installed before those inputs are constructed.
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CherryPickRangePrompt {
+                        repo_id,
+                        prefill_source: Some("feature".to_string()),
+                        prefill_range: Some("main".to_string()),
+                        prefill_base: Some("main".to_string()),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    // The preview rows render a clickable element per commit; clicking one
+    // opens the commit and closes the dialog.
+    let _ = cx
+        .debug_bounds("cherry_pick_range_preview_row_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        .unwrap_or_else(|| {
+            panic!("expected preview row in debug bounds (debug_selector on the row)")
+        });
+    click_debug_selector(
+        cx,
+        "cherry_pick_range_preview_row_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    );
+
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            host.popover.is_none(),
+            "expected opening a preview commit to close the popover"
+        );
+    });
+    wait_until("SelectCommit lands in the store", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .is_some_and(|r| {
+                r.history_state
+                    .selected_commit
+                    .as_ref()
+                    .is_some_and(|c| c.as_ref() == FIRST_SHA)
+            })
+    });
+}

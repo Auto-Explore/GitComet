@@ -211,7 +211,6 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
     match popover {
         PopoverKind::BranchPicker { .. }
         | PopoverKind::CreateBranchFromRefPrompt { .. }
-        | PopoverKind::CherryPickRangePrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::BranchMenu { .. }
         | PopoverKind::BranchSectionMenu { .. }
@@ -238,6 +237,25 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // repaint when it lands rather than keep a label that is now a lie.
         PopoverKind::FileBrowserFolderMenu { .. } => {
             repo.file_browser.file_browser_rev.hash(hasher);
+        }
+
+        // The dialog re-renders when the cherry-pick range preview loads.
+        PopoverKind::CherryPickRangePrompt { .. } => {
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
+            repo.remote_branches_rev.hash(hasher);
+            repo.tags_rev.hash(hasher);
+            match &repo.cherry_pick_range_preview {
+                Some(preview) => {
+                    preview.range.hash(hasher);
+                    preview.source.hash(hasher);
+                    view_fingerprint::hash_loadable_kind(&preview.commits, hasher);
+                    if let Loadable::Ready(commits) = &preview.commits {
+                        commits.len().hash(hasher);
+                    }
+                }
+                None => 0u8.hash(hasher),
+            }
         }
 
         PopoverKind::Repo {

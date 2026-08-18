@@ -63,7 +63,6 @@ pub(super) fn cherry_pick_commit(
     }]
 }
 
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
 pub(super) fn cherry_pick_range_onto_new_branch(
     repo_id: RepoId,
     base: String,
@@ -80,23 +79,6 @@ pub(super) fn cherry_pick_range_onto_new_branch(
     }]
 }
 
-||||||| Common ancestor
-=======
-pub(super) fn cherry_pick_range_onto_new_branch(
-    repo_id: RepoId,
-    base: String,
-    source: String,
-    new_branch: String,
-) -> Vec<Effect> {
-    vec![Effect::CherryPickRangeOntoNewBranch {
-        repo_id,
-        base,
-        source,
-        new_branch,
-    }]
-}
-
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
 pub(super) fn revert_commit(
     repo_id: RepoId,
     commit_id: gitcomet_core::domain::CommitId,
@@ -1114,8 +1096,10 @@ pub(super) fn repo_command_finished(
             | RepoCommandKind::CherryPickRangeOntoNewBranch { .. }
     ) && result.is_ok();
     // The command creates a branch and moves HEAD onto it.
-    let refresh_branches = matches!(&command, RepoCommandKind::CherryPickRangeOntoNewBranch { .. })
-        && result.is_ok();
+    let refresh_branches = matches!(
+        &command,
+        RepoCommandKind::CherryPickRangeOntoNewBranch { .. }
+    ) && result.is_ok();
     let refresh_submodules = matches!(
         &command,
         RepoCommandKind::AddSubmodule { .. }
@@ -1244,7 +1228,11 @@ pub(super) fn repo_command_finished(
         repo_state.set_worktrees(Loadable::Loading);
         extra_effects.push(Effect::LoadWorktrees { repo_id });
     }
-    if refresh_branches && repo_state.loads_in_flight.request(RepoLoadsInFlight::BRANCHES) {
+    if refresh_branches
+        && repo_state
+            .loads_in_flight
+            .request(RepoLoadsInFlight::BRANCHES)
+    {
         repo_state.set_branches(Loadable::NotLoaded);
         extra_effects.push(Effect::LoadBranches { repo_id });
     }

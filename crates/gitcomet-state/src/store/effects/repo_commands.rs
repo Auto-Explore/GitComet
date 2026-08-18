@@ -1068,7 +1068,6 @@ pub(super) fn schedule_interactive_cherry_pick(
     );
 }
 
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
 pub(super) fn schedule_cherry_pick_range_onto_new_branch(
     executor: &TaskExecutor,
     repos: &RepoMap,
@@ -1094,41 +1093,10 @@ pub(super) fn schedule_cherry_pick_range_onto_new_branch(
             source: command_source,
             new_branch: command_new_branch,
         },
-        move |repo| {
-            repo.cherry_pick_range_onto_new_branch(&base, &range, &source, &new_branch)
-        },
+        move |repo| repo.cherry_pick_range_onto_new_branch(&base, &range, &source, &new_branch),
     );
 }
 
-||||||| Common ancestor
-=======
-pub(super) fn schedule_cherry_pick_range_onto_new_branch(
-    executor: &TaskExecutor,
-    repos: &RepoMap,
-    msg_tx: StoreWorkerSender,
-    repo_id: RepoId,
-    base: String,
-    source: String,
-    new_branch: String,
-) {
-    let command_base = base.clone();
-    let command_source = source.clone();
-    let command_new_branch = new_branch.clone();
-    schedule_repo_command(
-        executor,
-        repos,
-        msg_tx,
-        repo_id,
-        RepoCommandKind::CherryPickRangeOntoNewBranch {
-            base: command_base,
-            source: command_source,
-            new_branch: command_new_branch,
-        },
-        move |repo| repo.cherry_pick_range_onto_new_branch(&base, &source, &new_branch),
-    );
-}
-
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
 pub(super) fn schedule_cherry_pick_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,

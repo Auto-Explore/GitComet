@@ -357,6 +357,18 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::LoadCherryPickRangePreview {
+            repo_id,
+            range,
+            source,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::CherryPickRangePreviewLoaded {
+                repo_id,
+                range,
+                source,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::SaveWorktreeFile {
             repo_id,
             path,
@@ -738,7 +750,6 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
         Effect::CherryPickRangeOntoNewBranch {
             repo_id,
             base,
@@ -757,25 +768,6 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
-||||||| Common ancestor
-=======
-        Effect::CherryPickRangeOntoNewBranch {
-            repo_id,
-            base,
-            source,
-            new_branch,
-        } => send(Msg::Internal(
-            crate::msg::InternalMsg::RepoCommandFinished {
-                repo_id,
-                command: RepoCommandKind::CherryPickRangeOntoNewBranch {
-                    base,
-                    source,
-                    new_branch,
-                },
-                result: Err(git_unavailable_error(runtime)),
-            },
-        )),
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
         Effect::RevertCommit { repo_id, .. } => {
             send_repo_action_unavailable(repo_id, RepoActionKind::RevertCommit, runtime, &send)
         }
@@ -1884,6 +1876,15 @@ pub(super) fn schedule_effect(
                 request_rev,
             );
         }
+        Effect::LoadCherryPickRangePreview {
+            repo_id,
+            range,
+            source,
+        } => {
+            repo_load::schedule_load_cherry_pick_range_preview(
+                executor, repos, msg_tx, repo_id, range, source,
+            );
+        }
         Effect::LoadCommitDetails { repo_id, commit_id } => {
             if let Some((msg_tx, _)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -2158,7 +2159,6 @@ pub(super) fn schedule_effect(
                 executor, repos, msg_tx, repo_id, commit_id, commit, mainline, summary,
             );
         }
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
         Effect::CherryPickRangeOntoNewBranch {
             repo_id,
             base,
@@ -2170,19 +2170,6 @@ pub(super) fn schedule_effect(
                 executor, repos, msg_tx, repo_id, base, range, source, new_branch,
             );
         }
-||||||| Common ancestor
-=======
-        Effect::CherryPickRangeOntoNewBranch {
-            repo_id,
-            base,
-            source,
-            new_branch,
-        } => {
-            repo_commands::schedule_cherry_pick_range_onto_new_branch(
-                executor, repos, msg_tx, repo_id, base, source, new_branch,
-            );
-        }
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
         Effect::RevertCommit { repo_id, commit_id } => {
             repo_actions::schedule_revert_commit(executor, repos, msg_tx, repo_id, commit_id);
         }

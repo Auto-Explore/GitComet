@@ -51,7 +51,7 @@ impl PopoverHost {
     ///
     /// `viewport_px` must be the same height the panel gave the picker as its
     /// `max_height`, since that is the viewport the window was built for.
-    fn scroll_picker_prompt_to_row(
+    pub(super) fn scroll_picker_prompt_to_row(
         &self,
         items: &[components::PickerPromptItem],
         layout: &components::PickerPromptLayout,
@@ -103,7 +103,7 @@ impl PopoverHost {
     /// selected index and the Enter target can't drift apart. `on_enter`
     /// receives the selected payload (if any) plus the raw query.
     #[allow(clippy::too_many_arguments)]
-    fn picker_search_subscription<T: Clone + 'static>(
+    pub(super) fn picker_search_subscription<T: Clone + 'static>(
         input: &Entity<components::TextInput>,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,

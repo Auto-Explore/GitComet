@@ -1129,6 +1129,17 @@ pub struct InteractiveCherryPickSetup {
     pub full_messages: Loadable<()>,
 }
 
+/// The commits `range..source` would cherry-pick (oldest first, merges
+/// skipped), previewed in the Cherry-pick dialog. `range`/`source` record the
+/// pair the preview was computed for so a stale result for another pair can
+/// be ignored.
+#[derive(Clone, Debug)]
+pub struct CherryPickRangePreview {
+    pub range: String,
+    pub source: String,
+    pub commits: Loadable<Arc<Vec<CommitRefSummary>>>,
+}
+
 #[derive(Clone, Debug)]
 pub struct RepoState {
     pub id: RepoId,
@@ -1177,6 +1188,7 @@ pub struct RepoState {
     pub reflog: Loadable<Vec<ReflogEntry>>,
     pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
     pub recent_commit_messages_rev: u64,
+    pub cherry_pick_range_preview: Option<CherryPickRangePreview>,
     pub rebase_in_progress: Loadable<bool>,
     pub sequencer_state: Loadable<SequencerState>,
     pub merge_commit_message: Loadable<Option<String>>,
@@ -1301,6 +1313,7 @@ impl RepoState {
             hover_commit_message: None,
             interactive_rebase_setup: None,
             interactive_cherry_pick_setup: None,
+            cherry_pick_range_preview: None,
             merge_message_rev: 0,
             worktrees: Loadable::NotLoaded,
             worktrees_rev: 0,

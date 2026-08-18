@@ -70,6 +70,14 @@ pub struct RecentCommitMessage {
     pub message: String,
 }
 
+/// A single-line summary of one commit in a ref range, used to preview the
+/// commits a cherry-pick range would apply (oldest first, merges skipped).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommitRefSummary {
+    pub id: CommitId,
+    pub summary: Arc<str>,
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Hash)]
 pub enum HistoryMode {
     #[default]

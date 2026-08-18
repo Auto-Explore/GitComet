@@ -99,6 +99,11 @@ pub enum Effect {
         limit: usize,
         request_rev: u64,
     },
+    LoadCherryPickRangePreview {
+        repo_id: RepoId,
+        range: String,
+        source: String,
+    },
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -271,7 +276,6 @@ pub enum Effect {
         mainline: Option<usize>,
         summary: String,
     },
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
     CherryPickRangeOntoNewBranch {
         repo_id: RepoId,
         base: String,
@@ -279,15 +283,6 @@ pub enum Effect {
         source: String,
         new_branch: String,
     },
-||||||| Common ancestor
-=======
-    CherryPickRangeOntoNewBranch {
-        repo_id: RepoId,
-        base: String,
-        source: String,
-        new_branch: String,
-    },
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
     RevertCommit {
         repo_id: RepoId,
         commit_id: CommitId,

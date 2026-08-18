@@ -2057,7 +2057,6 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut repos,
         &id_alloc,
         &mut state,
-<<<<<<< New base: Support explicit commit ranges when cherry-picking onto a new branch (#17)
         Msg::CherryPickRangeOntoNewBranch {
             repo_id,
             base: "main".to_string(),
@@ -2081,30 +2080,6 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         &mut repos,
         &id_alloc,
         &mut state,
-||||||| Common ancestor
-=======
-        Msg::CherryPickRangeOntoNewBranch {
-            repo_id,
-            base: "main".to_string(),
-            source: "feature".to_string(),
-            new_branch: "feature-copy".to_string(),
-        },
-    );
-    assert!(matches!(
-        effects.as_slice(),
-        [Effect::CherryPickRangeOntoNewBranch {
-            repo_id: RepoId(1),
-            base,
-            source,
-            new_branch,
-        }] if base == "main" && source == "feature" && new_branch == "feature-copy"
-    ));
-
-    let effects = reduce(
-        &mut repos,
-        &id_alloc,
-        &mut state,
->>>>>>> Current commit: Add cherry-pick branch A onto B as new branch C from the action bar
         Msg::CreateBranchAndCheckout {
             repo_id,
             name: "feature/new".to_string(),
@@ -4559,4 +4534,111 @@ fn cherry_pick_setup_never_enables_rewording_after_partial_or_stale_message_load
         .expect("setup stays open with its load error");
     assert!(matches!(setup.full_messages, Loadable::Error(_)));
     assert_eq!(setup.entries[0].message, "subject");
+}
+
+#[test]
+fn cherry_pick_range_preview_loads_and_applies_matching_result() {
+    use gitcomet_core::domain::CommitRefSummary;
+
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    );
+    repo.set_open(Loadable::Ready(()));
+    state.repos.push(repo);
+
+    let reduce_msg = |state: &mut AppState, msg: Msg| {
+        reduce(&mut HashMap::default(), &AtomicU64::new(1), state, msg)
+    };
+
+    let _ = reduce_msg(
+        &mut state,
+        Msg::LoadCherryPickRangePreview {
+            repo_id,
+            range: "main".to_string(),
+            source: "feature".to_string(),
+        },
+    );
+    let preview = state.repos[0]
+        .cherry_pick_range_preview
+        .as_ref()
+        .expect("preview set");
+    assert_eq!(preview.range, "main");
+    assert_eq!(preview.source, "feature");
+    assert!(matches!(preview.commits, Loadable::Loading));
+
+    // A matching result lands in state.
+    let _ = reduce_msg(
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CherryPickRangePreviewLoaded {
+            repo_id,
+            range: "main".to_string(),
+            source: "feature".to_string(),
+            result: Ok(vec![
+                CommitRefSummary {
+                    id: CommitId("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".into()),
+                    summary: "first".into(),
+                },
+                CommitRefSummary {
+                    id: CommitId("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".into()),
+                    summary: "second".into(),
+                },
+            ]),
+        }),
+    );
+    let preview = state.repos[0]
+        .cherry_pick_range_preview
+        .as_ref()
+        .expect("preview set");
+    let Loadable::Ready(commits) = &preview.commits else {
+        panic!("expected ready preview");
+    };
+    assert_eq!(commits.len(), 2);
+    assert_eq!(commits[1].summary.as_ref(), "second");
+
+    // A result for a different pair is ignored (stale request).
+    let _ = reduce_msg(
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CherryPickRangePreviewLoaded {
+            repo_id,
+            range: "old".to_string(),
+            source: "stale".to_string(),
+            result: Ok(Vec::new()),
+        }),
+    );
+    let preview = state.repos[0]
+        .cherry_pick_range_preview
+        .as_ref()
+        .expect("preview set");
+    assert!(matches!(preview.commits, Loadable::Ready(_)));
+
+    // An error result is surfaced as Loadable::Error for the matching pair.
+    let _ = reduce_msg(
+        &mut state,
+        Msg::LoadCherryPickRangePreview {
+            repo_id,
+            range: "main".to_string(),
+            source: "other".to_string(),
+        },
+    );
+    let _ = reduce_msg(
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CherryPickRangePreviewLoaded {
+            repo_id,
+            range: "main".to_string(),
+            source: "other".to_string(),
+            result: Err(gitcomet_core::error::Error::new(
+                gitcomet_core::error::ErrorKind::Backend("not an ancestor".into()),
+            )),
+        }),
+    );
+    let preview = state.repos[0]
+        .cherry_pick_range_preview
+        .as_ref()
+        .expect("preview set");
+    assert!(matches!(preview.commits, Loadable::Error(ref e) if e.contains("ancestor")));
 }
