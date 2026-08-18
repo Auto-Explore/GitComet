@@ -232,6 +232,10 @@ impl GitCometView {
             || matches!(self.view_mode, GitCometViewMode::Normal) && self.git_runtime_unavailable()
     }
 
+    pub(crate) fn blocks_repository_management_actions(&self) -> bool {
+        matches!(self.view_mode, GitCometViewMode::Normal) && self.git_runtime_unavailable()
+    }
+
     pub(crate) fn is_splash_screen_active(&self) -> bool {
         should_show_splash_screen(
             self.view_mode,

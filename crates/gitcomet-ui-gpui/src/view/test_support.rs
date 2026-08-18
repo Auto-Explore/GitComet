@@ -15,6 +15,14 @@ pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppCo
     push_test_state(view, view.store.snapshot(), cx);
 }
 
+pub(crate) fn apply_state_snapshot_for_test(
+    view: &mut GitCometView,
+    state: Arc<AppState>,
+    cx: &mut gpui::Context<GitCometView>,
+) {
+    view.apply_state_snapshot(state, cx);
+}
+
 pub(crate) fn set_sidebar_width_for_test(
     view: &mut GitCometView,
     width: gpui::Pixels,
@@ -29,6 +37,10 @@ pub(crate) fn set_sidebar_width_for_test(
 
 pub(crate) fn popover_is_open(view: &GitCometView, app: &App) -> bool {
     popover_kind(view, app).is_some()
+}
+
+pub(crate) fn command_palette_is_open(view: &GitCometView) -> bool {
+    view.command_palette_open
 }
 
 /// `(scrolled, max_scroll)` of the repository tab strip, in pixels.
