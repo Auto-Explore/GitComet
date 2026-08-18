@@ -31,79 +31,44 @@ pub(in crate::view) const PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES: usize = 
 const TS_PREPARED_DOCUMENT_MAX_TEXT_BYTES: usize = PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES;
 const TS_SHARED_DOCUMENT_SEED_MAX_ENTRIES: usize = 64;
 const TS_PENDING_PARSE_REQUEST_MAX_ENTRIES: usize = 8;
-#[cfg(any(test, feature = "syntax-shell"))]
 const BASH_HIGHLIGHTS_QUERY: &str = include_str!("queries/bash_highlights.scm");
-#[cfg(any(test, feature = "syntax-extra"))]
 const C_HIGHLIGHTS_QUERY: &str = include_str!("queries/c_highlights.scm");
-#[cfg(any(test, feature = "syntax-extra"))]
 const C_INJECTIONS_QUERY: &str = include_str!("queries/c_injections.scm");
-#[cfg(any(test, feature = "syntax-extra"))]
 const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.scm");
-#[cfg(any(test, feature = "syntax-extra"))]
 const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
-#[cfg(any(test, feature = "syntax-repo"))]
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
-#[cfg(any(test, feature = "syntax-repo"))]
 const GOMOD_HIGHLIGHTS_QUERY: &str = include_str!("queries/gomod_highlights.scm");
-#[cfg(any(test, feature = "syntax-repo"))]
 const GOWORK_HIGHLIGHTS_QUERY: &str = include_str!("queries/gowork_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const JINJA_HIGHLIGHTS_QUERY: &str = include_str!("queries/jinja_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const JINJA_INJECTIONS_QUERY: &str = include_str!("queries/jinja_injections.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const VUE_HIGHLIGHTS_QUERY: &str = include_str!("queries/vue_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const VUE_INJECTIONS_QUERY: &str = include_str!("queries/vue_injections.scm");
-#[cfg(any(test, feature = "syntax-repo"))]
 const MARKDOWN_HIGHLIGHTS_QUERY: &str = tree_sitter_md::HIGHLIGHT_QUERY_BLOCK;
-#[cfg(any(test, feature = "syntax-repo"))]
 const MARKDOWN_INJECTIONS_QUERY: &str = tree_sitter_md::INJECTION_QUERY_BLOCK;
-#[cfg(any(test, feature = "syntax-repo"))]
 const MARKDOWN_INLINE_HIGHLIGHTS_QUERY: &str = tree_sitter_md::HIGHLIGHT_QUERY_INLINE;
-#[cfg(any(test, feature = "syntax-web"))]
 const CSS_HIGHLIGHTS_QUERY: &str = include_str!("queries/css_highlights.scm");
-#[cfg(any(test, feature = "syntax-go"))]
 const GO_HIGHLIGHTS_QUERY: &str = include_str!("queries/go_highlights.scm");
-#[cfg(any(test, feature = "syntax-go"))]
 const GO_INJECTIONS_QUERY: &str = include_str!("queries/go_injections.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const JAVASCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/javascript_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const JAVASCRIPT_INJECTIONS_QUERY: &str = include_str!("queries/javascript_injections.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const JSDOC_HIGHLIGHTS_QUERY: &str = include_str!("queries/jsdoc_highlights.scm");
-#[cfg(any(test, feature = "syntax-data"))]
 const JSON_HIGHLIGHTS_QUERY: &str = include_str!("queries/json_highlights.scm");
-#[cfg(any(test, feature = "syntax-extra"))]
 const POWERSHELL_HIGHLIGHTS_QUERY: &str = tree_sitter_powershell::HIGHLIGHTS_QUERY;
-#[cfg(any(test, feature = "syntax-python"))]
 const PYTHON_HIGHLIGHTS_QUERY: &str = include_str!("queries/python_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const REGEX_HIGHLIGHTS_QUERY: &str = include_str!("queries/regex_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const TYPESCRIPT_HIGHLIGHTS_QUERY: &str = include_str!("queries/typescript_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const TYPESCRIPT_INJECTIONS_QUERY: &str = include_str!("queries/typescript_injections.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const TSX_HIGHLIGHTS_QUERY: &str = include_str!("queries/tsx_highlights.scm");
-#[cfg(any(test, feature = "syntax-web"))]
 const TSX_INJECTIONS_QUERY: &str = include_str!("queries/tsx_injections.scm");
-#[cfg(any(test, feature = "syntax-rust"))]
+const NIX_HIGHLIGHTS_QUERY: &str = include_str!("queries/nix_highlights.scm");
+const NIX_INJECTIONS_QUERY: &str = include_str!("queries/nix_injections.scm");
 const RUST_HIGHLIGHTS_QUERY: &str = include_str!("queries/rust_highlights.scm");
-#[cfg(any(test, feature = "syntax-rust"))]
 const RUST_INJECTIONS_QUERY: &str = include_str!("queries/rust_injections.scm");
-#[cfg(any(test, feature = "syntax-data"))]
 const YAML_HIGHLIGHTS_QUERY: &str = include_str!("queries/yaml_highlights.scm");
-#[cfg(any(test, feature = "syntax-data"))]
 const YAML_INJECTIONS_QUERY: &str = include_str!("queries/yaml_injections.scm");
-#[cfg(any(test, feature = "syntax-xml"))]
 const XML_HIGHLIGHTS_QUERY: &str = tree_sitter_xml::XML_HIGHLIGHT_QUERY;
-#[cfg(any(test, feature = "syntax-extra"))]
 const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
 
 /// Maximum injection nesting depth. Root document = 0, first injection = 1.
@@ -229,6 +194,7 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     Bicep,
     Lua,
     Makefile,
+    Nix,
     Kotlin,
     Zig,
     Rust,
@@ -1436,7 +1402,6 @@ mod tests {
         assert_eq!(ts_parser_set_language_call_count(), 2);
     }
 
-    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn single_line_syntax_cache_isolated_by_mode_for_xml_markup() {
         reset_ts_parser_test_state();
@@ -1560,7 +1525,6 @@ mod tests {
         assert_eq!(html_again, html);
     }
 
-    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn prepared_document_cache_isolated_by_language_for_same_script_markup() {
         reset_ts_parser_test_state();
@@ -1672,7 +1636,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn prepared_rust_document_highlights_macro_token_tree_via_injection() {
         let text = "test_macro!(value.field::<Vec<u32>>());";
@@ -1706,7 +1669,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn prepared_markdown_document_highlights_fenced_html_block_via_injection() {
         let doc = prepare_markdown_document(&["```html", "<div class=\"note\">ok</div>", "```"]);
@@ -1723,7 +1685,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn prepared_markdown_document_highlights_fenced_ruby_block_via_path_alias() {
         let doc = prepare_markdown_document(&["```foo/bar/baz.rb", "if @user", "end", "```"]);
@@ -1740,7 +1701,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn prepared_markdown_document_highlights_fenced_tsx_block_via_path_alias() {
         let doc = prepare_markdown_document(&[
@@ -1761,7 +1721,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn prepared_markdown_document_highlights_fenced_gomod_block_via_filename_alias() {
         let line = "module example.com/project";
@@ -2060,7 +2019,6 @@ mod tests {
     /// interpolation became its own injected layer: ~5 per line here, which
     /// overruns TS_INJECTION_CACHE_MAX_ENTRIES (32) and evicts half the cache
     /// mid-render, so scrolling re-parses everything.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_plain_binding_directives_produce_no_injections() {
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -2094,7 +2052,6 @@ mod tests {
 
     /// The other half of the guard above: skipping plain bindings must not cost
     /// highlighting for the expressions the injection actually exists to serve.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_expression_directives_still_inject_typescript() {
         let line = r#"  <button v-if="count > 10" @click="submit($event, 'now')">"#;
@@ -2120,7 +2077,6 @@ mod tests {
     /// engine, so the outer capture wins outright. That was invisible while
     /// every interpolation was injected -- the injection carved the body out --
     /// and became visible the moment plain interpolations stopped injecting.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_plain_interpolation_does_not_paint_its_expression_as_a_sigil() {
         let line = r#"  <p>{{ msg }}</p>"#;
@@ -2145,7 +2101,6 @@ mod tests {
     /// through both the @variable override and the injection, landing on the
     /// html `(attribute_value) @string` rule -- the exact miscolouring the
     /// override exists to prevent.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_unquoted_directive_value_is_not_coloured_as_a_string() {
         let line = r#"  <p v-if=ok>x</p>"#;
@@ -2167,7 +2122,6 @@ mod tests {
     /// duplicate by accident, but live.rs keeps both layers and interleaves
     /// their captures at equal depth, so the editor colours the block
     /// arbitrarily. The `lang` veto on the `type=` rules keeps it to one.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_script_with_both_type_and_lang_injects_exactly_one_language() {
         let text = "<script type=\"module\" lang=\"ts\">\nconst x: number = 1;\n</script>\n";
@@ -2217,7 +2171,6 @@ mod tests {
     /// those had to stop injecting unconditionally too. Inline `style=` was both
     /// the worst offender and actively wrong (the CSS grammar reads an attribute
     /// body as a stylesheet, making `color` a type selector), so it was dropped.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_static_inline_styles_do_not_flood_the_injection_cache() {
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -2246,7 +2199,6 @@ mod tests {
 
     /// A skipped injection still has to leave the value coloured -- that is the
     /// premise the skip rests on.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_plain_binding_directives_are_still_coloured_by_the_host_grammar() {
         let line = r#"  <div :class="wrapperClass">{{ label }}</div>"#;
@@ -4147,7 +4099,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn vendored_rust_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
@@ -4156,7 +4107,6 @@ mod tests {
             .expect("vendored Rust highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_css_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_css::LANGUAGE.into();
@@ -4164,7 +4114,6 @@ mod tests {
         tree_sitter::Query::new(&lang, source).expect("vendored CSS highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-shell"))]
     #[test]
     fn vendored_bash_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_bash::LANGUAGE.into();
@@ -4172,7 +4121,6 @@ mod tests {
             .expect("vendored Bash highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_html_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
@@ -4181,7 +4129,6 @@ mod tests {
             .expect("vendored HTML highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_html_injections_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_html::LANGUAGE.into();
@@ -4193,7 +4140,6 @@ mod tests {
     /// crates.io, so nothing external will tell us when it stops matching the
     /// workspace `tree-sitter`. It binds through `tree-sitter-language`, which
     /// means a tree-sitter upgrade only stays safe while this holds.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_vue_grammar_is_abi_compatible_with_workspace_tree_sitter() {
         let vue: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
@@ -4215,7 +4161,6 @@ mod tests {
     // any routine `cargo update` that bumps an unrelated grammar into a red CI
     // while Vue still parses perfectly.
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_vue_grammar_parses_with_workspace_tree_sitter() {
         let source = concat!(
@@ -4245,7 +4190,6 @@ mod tests {
     /// repository actually ships a grammar for, or the injection silently
     /// no-ops. Reading the targets back off the compiled query keeps this
     /// honest when the query changes.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_injection_targets_resolve_to_working_grammars() {
         let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
@@ -4285,7 +4229,6 @@ mod tests {
     /// compiled query, so a query edit that moved TypeScript behind an
     /// `@injection.language` capture would silently stop warming it and put the
     /// stall back. Assert it stays reachable the way the warm-up can see it.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_spec_warmup_reaches_typescript_through_a_set_directive() {
         let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
@@ -4351,7 +4294,6 @@ mod tests {
     /// `diff_syntax_language_for_code_fence_info` alone would not do -- that is
     /// only half the path, and it would keep passing if the query rule that
     /// forwards the attribute were deleted.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_lang_attribute_values_highlight_their_block() {
         // (lang, block body, tag, kind the injected grammar must produce)
@@ -4444,7 +4386,6 @@ mod tests {
     /// by `#not-match? "\\slang\\s*="`, so a `lang` the vue rules do not handle
     /// used to lose the fallback *and* match nothing, leaving the block with no
     /// highlighting whatsoever.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_unknown_lang_attribute_does_not_silently_disable_highlighting() {
         // A value no grammar in this repo can serve: no injection is the correct
@@ -4473,7 +4414,6 @@ mod tests {
     /// The tree-sitter parser is a thread-local reused across languages, with a
     /// fast path that skips `set_language`. Adding a grammar that is loaded a
     /// different way (vendored, not from crates.io) should not disturb that.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_documents_interleave_with_other_language_documents() {
         let vue = prepare_vue_document(VUE_SFC_FIXTURE);
@@ -4498,7 +4438,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_vue_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
@@ -4506,7 +4445,6 @@ mod tests {
             .expect("vendored Vue highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_vue_injections_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_vue::LANGUAGE.into();
@@ -4524,7 +4462,6 @@ mod tests {
     /// so the html `(attribute_value) @string` rule has to come *before* the
     /// `@variable` directive override for the override to take effect. A
     /// per-line containment check would pass on a reordered copy.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_highlights_query_embeds_the_html_base_verbatim() {
         fn rules(query: &str) -> Vec<&str> {
@@ -4559,7 +4496,6 @@ mod tests {
     /// drops injections. The Vue injection query has the most patterns of any in
     /// the repo and anchors several on very common template nodes, which makes
     /// it the one most likely to hit the cap.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vue_injection_query_stays_under_the_match_limit_on_a_dense_template() {
         let mut lines = vec!["<template>".to_string(), "  <ul>".to_string()];
@@ -4609,7 +4545,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_javascript_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
@@ -4617,7 +4552,6 @@ mod tests {
             .expect("vendored JavaScript highlights.scm should compile against JS grammar");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_javascript_injections_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_javascript::LANGUAGE.into();
@@ -4625,7 +4559,6 @@ mod tests {
             .expect("vendored JavaScript injections.scm should compile against JS grammar");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_typescript_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
@@ -4633,7 +4566,6 @@ mod tests {
             .expect("vendored TypeScript highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_typescript_injections_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into();
@@ -4641,7 +4573,6 @@ mod tests {
             .expect("vendored TypeScript injections.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_tsx_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
@@ -4649,7 +4580,6 @@ mod tests {
             .expect("vendored TSX highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_tsx_injections_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_typescript::LANGUAGE_TSX.into();
@@ -4657,7 +4587,6 @@ mod tests {
             .expect("vendored TSX injections.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-go"))]
     #[test]
     fn vendored_go_queries_compile() {
         let lang: tree_sitter::Language = tree_sitter_go::LANGUAGE.into();
@@ -4667,7 +4596,6 @@ mod tests {
             .expect("vendored Go injections.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-data"))]
     #[test]
     fn vendored_json_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_json::LANGUAGE.into();
@@ -4675,7 +4603,6 @@ mod tests {
             .expect("vendored JSON highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-python"))]
     #[test]
     fn vendored_python_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_python::LANGUAGE.into();
@@ -4683,7 +4610,6 @@ mod tests {
             .expect("vendored Python highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-data"))]
     #[test]
     fn vendored_yaml_queries_compile() {
         let lang: tree_sitter::Language = tree_sitter_yaml::LANGUAGE.into();
@@ -4693,7 +4619,6 @@ mod tests {
             .expect("vendored YAML injections.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn vendored_csharp_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_c_sharp::LANGUAGE.into();
@@ -4701,7 +4626,6 @@ mod tests {
             .expect("vendored C# highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn vendored_c_queries_compile() {
         let lang: tree_sitter::Language = tree_sitter_c::LANGUAGE.into();
@@ -4711,7 +4635,6 @@ mod tests {
             .expect("vendored C injections.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn vendored_cpp_queries_compile() {
         let lang: tree_sitter::Language = tree_sitter_cpp::LANGUAGE.into();
@@ -4721,7 +4644,6 @@ mod tests {
             .expect("vendored C++ injections.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn vendored_injected_web_language_queries_compile() {
         let jsdoc_lang: tree_sitter::Language = tree_sitter_jsdoc::LANGUAGE.into();
@@ -4733,7 +4655,6 @@ mod tests {
             .expect("vendored regex highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn vendored_repo_queries_compile() {
         let markdown_lang: tree_sitter::Language = tree_sitter_md::LANGUAGE.into();
@@ -4763,7 +4684,6 @@ mod tests {
             .expect("go.work highlights.scm should compile");
     }
 
-    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn vendored_xml_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_xml::LANGUAGE_XML.into();
@@ -4771,7 +4691,6 @@ mod tests {
             .expect("XML highlights.scm should compile against XML grammar");
     }
 
-    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn xml_treesitter_captures_tag_and_attribute() {
         let text = r#"<root attr="value">text</root>"#;
@@ -4790,7 +4709,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn xml_treesitter_captures_comment() {
         let text = "<!-- a comment -->";
@@ -4801,7 +4719,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_treesitter_captures_function_and_keyword() {
         let text = "function foo() { return 42; }";
@@ -4824,7 +4741,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn typescript_treesitter_preserves_arrow_operator_inside_arrow_function() {
         let text = "const fn = (x: number): number => x + 1;";
@@ -4844,7 +4760,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn html_highlight_spec_compiles_injection_query() {
         let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html)
@@ -4855,7 +4770,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_highlight_spec_compiles_injection_query() {
         let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::JavaScript)
@@ -4892,199 +4806,157 @@ mod tests {
 
     #[test]
     fn vendored_capture_names_are_supported_or_ignored() {
-        #[cfg(any(test, feature = "syntax-rust"))]
         assert_capture_names_are_supported(
             tree_sitter_rust::LANGUAGE.into(),
             RUST_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_html::LANGUAGE.into(),
             HTML_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(tree_sitter_vue::LANGUAGE.into(), VUE_HIGHLIGHTS_QUERY);
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(tree_sitter_css::LANGUAGE.into(), CSS_HIGHLIGHTS_QUERY);
-        #[cfg(any(test, feature = "syntax-shell"))]
         assert_capture_names_are_supported(
             tree_sitter_bash::LANGUAGE.into(),
             BASH_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_javascript::LANGUAGE.into(),
             JAVASCRIPT_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-python"))]
         assert_capture_names_are_supported(
             tree_sitter_python::LANGUAGE.into(),
             PYTHON_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-go"))]
         assert_capture_names_are_supported(tree_sitter_go::LANGUAGE.into(), GO_HIGHLIGHTS_QUERY);
-        #[cfg(any(test, feature = "syntax-data"))]
         assert_capture_names_are_supported(
             tree_sitter_json::LANGUAGE.into(),
             JSON_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-data"))]
         assert_capture_names_are_supported(
             tree_sitter_yaml::LANGUAGE.into(),
             YAML_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             TYPESCRIPT_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_typescript::LANGUAGE_TSX.into(),
             TSX_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-xml"))]
         assert_capture_names_are_supported(
             tree_sitter_xml::LANGUAGE_XML.into(),
             XML_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(tree_sitter_c::LANGUAGE.into(), C_HIGHLIGHTS_QUERY);
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(tree_sitter_cpp::LANGUAGE.into(), CPP_HIGHLIGHTS_QUERY);
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_c_sharp::LANGUAGE.into(),
             CSHARP_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_java::LANGUAGE.into(),
             tree_sitter_java::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_php::LANGUAGE_PHP.into(),
             tree_sitter_php::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_ruby::LANGUAGE.into(),
             tree_sitter_ruby::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_toml_ng::LANGUAGE.into(),
             tree_sitter_toml_ng::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_lua::LANGUAGE.into(),
             tree_sitter_lua::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_make::LANGUAGE.into(),
             tree_sitter_make::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_kotlin_sg::LANGUAGE.into(),
             tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_zig::LANGUAGE.into(),
             tree_sitter_zig::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_bicep::LANGUAGE.into(),
             tree_sitter_bicep::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_objc::LANGUAGE.into(),
             tree_sitter_objc::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
             tree_sitter_fsharp::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_powershell::LANGUAGE.into(),
             POWERSHELL_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_swift::LANGUAGE.into(),
             tree_sitter_swift::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_jsdoc::LANGUAGE.into(),
             JSDOC_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-web"))]
         assert_capture_names_are_supported(
             tree_sitter_regex::LANGUAGE.into(),
             REGEX_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_r::LANGUAGE.into(),
             tree_sitter_r::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_dart::LANGUAGE.into(),
             tree_sitter_dart::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_scala::LANGUAGE.into(),
             tree_sitter_scala::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-extra"))]
         assert_capture_names_are_supported(
             tree_sitter_sequel::LANGUAGE.into(),
             tree_sitter_sequel::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-repo"))]
         assert_capture_names_are_supported(
             tree_sitter_md::LANGUAGE.into(),
             MARKDOWN_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-repo"))]
         assert_capture_names_are_supported(
             tree_sitter_md::INLINE_LANGUAGE.into(),
             MARKDOWN_INLINE_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-repo"))]
         assert_capture_names_are_supported(
             tree_sitter_diff::LANGUAGE.into(),
             tree_sitter_diff::HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-repo"))]
         assert_capture_names_are_supported(
             tree_sitter_gitcommit::LANGUAGE.into(),
             GITCOMMIT_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-repo"))]
         assert_capture_names_are_supported(
             tree_sitter_gomod::LANGUAGE.into(),
             GOMOD_HIGHLIGHTS_QUERY,
         );
-        #[cfg(any(test, feature = "syntax-repo"))]
         assert_capture_names_are_supported(
             tree_sitter_gowork::LANGUAGE.into(),
             GOWORK_HIGHLIGHTS_QUERY,
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_variable_parameter() {
         let text = "fn foo(bar: u32) {}";
@@ -5097,7 +4969,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_self_as_variable_special() {
         let text = "impl Widget { fn render(&self, item: Item) { self.draw(item); } }";
@@ -5108,7 +4979,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_type_builtin() {
         let text = "let x: u32 = 0;";
@@ -5121,7 +4991,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_macro_as_function_special() {
         let text = "println!(\"hello\");";
@@ -5134,7 +5003,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_keyword_function_type_and_string_families() {
         let text = r#"fn foo(bar: u32) { let x = "hi"; }"#;
@@ -5161,7 +5029,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_impl_family_as_preproc() {
         let impl_text = "impl Widget where T: Trait {}";
@@ -5201,7 +5068,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_use_roots_and_tails() {
         let type_text = "use foo::Bar;";
@@ -5242,7 +5108,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_keeps_use_middle_modules_neutral() {
         let type_text = "use foo::bar::Baz;";
@@ -5325,7 +5190,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_root_modules_before_functions_and_types() {
         let call_text = "let handler = foo::bar::baz();";
@@ -5408,7 +5272,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_constants_in_scoped_paths() {
         let constant_text = "let mode = NotForContentType::SSE;";
@@ -5513,7 +5376,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_captures_grouped_use_import_semantics() {
         let text = "use foo::{bar, baz::Qux};";
@@ -5564,7 +5426,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn rust_treesitter_keeps_use_aliases_neutral() {
         let text = "use foo::bar as baz;";
@@ -5587,7 +5448,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn tsx_treesitter_highlights_jsx_tag_and_attribute() {
         let text = "const node = <button disabled />;";
@@ -5602,7 +5462,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn css_treesitter_captures_property_and_keyword() {
         let text = "@media screen { .foo { color: red; } }";
@@ -5617,7 +5476,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_tagged_template_injects_css() {
         let document = prepare_test_document(
@@ -5632,7 +5490,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_tagged_template_injects_html() {
         let text = "const markup = html`<div class=\"note\">ok</div>`;";
@@ -5649,7 +5506,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_styled_member_template_injects_css() {
         let text = "const Button = styled.div`color: red;`;";
@@ -5662,7 +5518,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_styled_call_template_injects_css() {
         let text = "const Button = styled(Link)`color: red;`;";
@@ -5675,7 +5530,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_comment_prefixed_string_injects_html() {
         let text = r#"const markup = /* html */ "<div class='note'>ok</div>";"#;
@@ -5692,7 +5546,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_comment_prefixed_string_injects_css() {
         let text = r#"const styles = /* css */ "color: red;";"#;
@@ -5705,7 +5558,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_comment_prefixed_template_literal_injects_css() {
         let text = "const styles = /* css */ `color: red;`;";
@@ -5718,7 +5570,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn typescript_tagged_template_injects_yaml() {
         let text = "const workflow = yaml`enabled: true`;";
@@ -5735,7 +5586,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn typescript_tagged_template_injects_html() {
         let text = "const markup = html`<div class=\"note\">ok</div>`;";
@@ -5752,7 +5602,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn typescript_tagged_template_injects_sql() {
         let text = "const query = sql`select name from users`;";
@@ -5765,7 +5614,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn typescript_comment_prefixed_string_injects_css() {
         let text = r#"const styles = /* css */ "color: red;";"#;
@@ -5778,7 +5626,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn typescript_component_styles_array_template_injects_css() {
         let text = "Component({ styles: [`div { color: red; }`] });";
@@ -5791,7 +5638,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn tsx_tagged_template_injects_html() {
         let text = "const markup = html`<div class=\"note\">ok</div>`;";
@@ -5808,7 +5654,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-go"))]
     #[test]
     fn go_treesitter_captures_function_method_property_and_number() {
         let declaration = "func Hello(a B) C { return C{} }";
@@ -5877,7 +5722,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-go"))]
     #[test]
     fn go_comment_prefixed_strings_inject_supported_languages() {
         let cases = [
@@ -5924,7 +5768,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(test, feature = "syntax-data"))]
     #[test]
     fn yaml_github_actions_script_injects_javascript() {
         let text = [
@@ -5952,7 +5795,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-data"))]
     #[test]
     fn yaml_github_actions_inline_script_injects_javascript() {
         let text = [
@@ -5981,7 +5823,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn extra_languages_capture_basic_semantic_tokens() {
         let cases = [
@@ -6091,7 +5932,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn repo_languages_capture_basic_semantic_tokens() {
         let cases = [
@@ -6126,7 +5966,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_treesitter_captures_regex_literal() {
         let text = "const re = /foo+/gi;";
@@ -6140,7 +5979,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn javascript_treesitter_captures_constructor_and_constant_builtin() {
         let constructor_tokens = syntax_tokens_for_line(
@@ -6168,7 +6006,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-go"))]
     #[test]
     fn go_treesitter_captures_namespace_package_identifier() {
         let tokens =
@@ -6179,7 +6016,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn lua_and_c_treesitter_capture_preprocessor_and_label() {
         let preproc = syntax_tokens_for_line(
@@ -6203,7 +6039,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn c_treesitter_uses_vendored_zed_query() {
         let preproc = syntax_tokens_for_line(
@@ -6233,7 +6068,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn cpp_treesitter_uses_vendored_zed_query() {
         let concept_text = "template <typename T> concept Addable = requires(T a, T b) { a + b; };";
@@ -6320,7 +6154,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn injected_web_helper_languages_capture_basic_tokens() {
         let regex_text = "(foo|bar)+";
@@ -6344,7 +6177,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn gitcommit_treesitter_captures_diff_change_kinds() {
         let text = [
@@ -6380,7 +6212,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn prepared_documents_capture_markup_specific_tokens() {
         let gitcommit =
@@ -6413,7 +6244,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn markdown_inline_treesitter_captures_text_literal_and_markup_link() {
         let text = "[link](https://example.com) `code`";
@@ -6434,7 +6264,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn markdown_prepared_document_captures_heading_marker_as_punctuation_special() {
         let document = prepare_test_document(DiffSyntaxLanguage::Markdown, "# Heading");
@@ -6448,7 +6277,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn ruby_and_swift_treesitter_capture_regex_aliases() {
         let cases = [
@@ -6467,7 +6295,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(test, feature = "syntax-repo"))]
     #[test]
     fn gitcommit_prepared_document_captures_path_symbol_and_trailer_tokens() {
         let text = [
@@ -6512,7 +6339,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-xml"))]
     #[test]
     fn xml_treesitter_captures_markup_link_via_system_literal() {
         let text = "<!DOCTYPE root SYSTEM \"https://example.com/schema.dtd\">";
@@ -6735,6 +6561,7 @@ mod tests {
             DiffSyntaxLanguage::Bicep,
             DiffSyntaxLanguage::Lua,
             DiffSyntaxLanguage::Makefile,
+            DiffSyntaxLanguage::Nix,
             DiffSyntaxLanguage::Kotlin,
             DiffSyntaxLanguage::Zig,
             DiffSyntaxLanguage::Rust,
@@ -6786,10 +6613,291 @@ mod tests {
         }
     }
 
+    // ---- Nix ------------------------------------------------------------------
+
+    const NIX_FIXTURE: &[&str] = &[
+        /*  0 */ "# Build a demo package.",
+        /*  1 */ "{ pkgs, lib ? pkgs.lib, ... }:",
+        /*  2 */ "let",
+        /*  3 */ "  inherit (pkgs) stdenv;",
+        /*  4 */ "  version = \"1.0\";",
+        /*  5 */ "  readme = builtins.readFile ./README.md;",
+        /*  6 */ "in",
+        /*  7 */ "stdenv.mkDerivation rec {",
+        /*  8 */ "  pname = \"demo\";",
+        /*  9 */ "  meta.description = \"demo v${version}\";",
+        /* 10 */ "  buildPhase = ''",
+        /* 11 */ "    export OUT=$out",
+        /* 12 */ "    if [ -d bin ]; then",
+        /* 13 */ "      cp -r bin \"$out/bin\"",
+        /* 14 */ "    fi",
+        /* 15 */ "  '';",
+        /* 16 */ "}",
+    ];
+
+    fn prepare_nix_document(lines: &[&str]) -> PreparedSyntaxDocument {
+        prepare_test_document(DiffSyntaxLanguage::Nix, &lines.join("\n"))
+    }
+
+    #[test]
+    fn nix_extension_is_supported() {
+        for path in ["flake.nix", "pkgs/demo/default.nix", "nix/modules/web.nix"] {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(DiffSyntaxLanguage::Nix),
+                "{path} should resolve to the Nix grammar"
+            );
+        }
+        assert_eq!(
+            diff_syntax_language_for_code_fence_info("nix"),
+            Some(DiffSyntaxLanguage::Nix),
+        );
+        // `flake.lock` is JSON and must keep resolving that way.
+        assert_eq!(
+            diff_syntax_language_for_path("flake.lock"),
+            Some(DiffSyntaxLanguage::Json),
+        );
+    }
+
+    #[test]
+    fn prepared_nix_document_highlights_core_syntax() {
+        let doc = prepare_nix_document(NIX_FIXTURE);
+
+        let comment = token_kinds_for_line_fragment(doc, 0, NIX_FIXTURE[0], "demo package");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "`# …` is a Nix line comment: {comment:?}"
+        );
+
+        for (line_ix, keyword) in [(2usize, "let"), (3, "inherit"), (6, "in"), (7, "rec")] {
+            let kinds = token_kinds_for_line_fragment(doc, line_ix, NIX_FIXTURE[line_ix], keyword);
+            assert!(
+                kinds.contains(&SyntaxTokenKind::Keyword),
+                "`{keyword}` should be a keyword: {kinds:?}"
+            );
+        }
+
+        let formal = token_kinds_for_line_fragment(doc, 1, NIX_FIXTURE[1], "pkgs");
+        assert!(
+            formal.contains(&SyntaxTokenKind::VariableParameter),
+            "`pkgs` is a formal in the function's argument set: {formal:?}"
+        );
+
+        let attr = token_kinds_for_line_fragment(doc, 8, NIX_FIXTURE[8], "pname");
+        assert!(
+            attr.contains(&SyntaxTokenKind::Property),
+            "a binding attrpath should read as a property: {attr:?}"
+        );
+
+        let string = token_kinds_for_line_fragment(doc, 8, NIX_FIXTURE[8], "\"demo\"");
+        assert!(
+            string.contains(&SyntaxTokenKind::String),
+            "`\"demo\"` should be a string: {string:?}"
+        );
+
+        let path = token_kinds_for_line_fragment(doc, 5, NIX_FIXTURE[5], "./README.md");
+        assert!(
+            path.contains(&SyntaxTokenKind::StringSpecial),
+            "a bare Nix path is `@string.special.path`: {path:?}"
+        );
+
+        let interpolation = token_kinds_for_line_fragment(doc, 9, NIX_FIXTURE[9], "${");
+        assert!(
+            interpolation.contains(&SyntaxTokenKind::PunctuationSpecial),
+            "`${{` opens an interpolation: {interpolation:?}"
+        );
+    }
+
+    /// The one real guard on the reordering in nix_highlights.scm.
+    ///
+    /// Two patterns capturing the *same* node tie on start byte, so the tiebreak is
+    /// pattern index — the later rule in the file wins. Upstream ends with a blanket
+    /// `(identifier) @variable`, which ported verbatim buries every specific
+    /// identifier rule. Confirmed to fail against upstream's ordering: `builtins`
+    /// comes back as `[Variable]`. If this fails after a re-sync, the query was not
+    /// re-sorted.
+    #[test]
+    fn nix_specific_captures_survive_the_generic_identifier_rule() {
+        let doc = prepare_nix_document(NIX_FIXTURE);
+
+        let builtins = token_kinds_for_line_fragment(doc, 5, NIX_FIXTURE[5], "builtins");
+        assert!(
+            builtins.contains(&SyntaxTokenKind::VariableBuiltin)
+                && !builtins.contains(&SyntaxTokenKind::Variable),
+            "`builtins` must keep its builtin colour rather than falling back to the \
+             blanket `(identifier) @variable` rule: {builtins:?}"
+        );
+
+        let applied = token_kinds_for_line_fragment(doc, 7, NIX_FIXTURE[7], "mkDerivation");
+        assert!(
+            applied.contains(&SyntaxTokenKind::Function)
+                && !applied.contains(&SyntaxTokenKind::Variable),
+            "an identifier in function-application position must read as a function: \
+             {applied:?}"
+        );
+
+        let inherited = token_kinds_for_line_fragment(doc, 3, NIX_FIXTURE[3], "stdenv");
+        assert!(
+            inherited.contains(&SyntaxTokenKind::Property),
+            "`inherit (pkgs) stdenv` names a property: {inherited:?}"
+        );
+    }
+
+    /// An escape inside a string keeps its own colour.
+    ///
+    /// Not an ordering guard, despite appearances: `normalize_non_overlapping_tokens`
+    /// hands each slice to the last *containing* capture in emission order, and the
+    /// cursor emits by node start byte, so a nested `(escape_sequence)` always beats
+    /// the `(string_expression)` around it whichever order their rules appear in.
+    /// Verified — this passes against upstream's ordering too. It is here to pin the
+    /// behaviour, not the query layout.
+    #[test]
+    fn nix_escape_sequences_outrank_the_string_rule() {
+        let lines = ["{ s = \"a\\nb\"; }"];
+        let doc = prepare_nix_document(&lines);
+        let escape = token_kinds_for_line_fragment(doc, 0, lines[0], "\\n");
+        assert!(
+            escape.contains(&SyntaxTokenKind::StringEscape),
+            "`\\n` inside a string must outrank the enclosing `@string` capture: {escape:?}"
+        );
+    }
+
+    /// The interior of `"demo v${version}"` is Nix code, not string text.
+    ///
+    /// Like the escape test above, this holds by node position rather than by rule
+    /// order — the interpolated expression starts after the string does, so it wins
+    /// its own bytes regardless.
+    #[test]
+    fn nix_interpolation_interior_is_not_flat_string() {
+        let doc = prepare_nix_document(NIX_FIXTURE);
+        let inner = token_kinds_for_line_fragment(doc, 9, NIX_FIXTURE[9], "version");
+        assert!(
+            !inner.is_empty() && !inner.contains(&SyntaxTokenKind::String),
+            "the expression inside `${{…}}` should be highlighted as code, not as part \
+             of the surrounding string: {inner:?}"
+        );
+    }
+
+    /// `buildPhase = '' … ''` is shell script, and the combined Bash injection is
+    /// what makes it read as one. Only the injected layer has a concept of `if`.
+    #[test]
+    fn nix_build_phase_is_highlighted_as_bash() {
+        let doc = prepare_nix_document(NIX_FIXTURE);
+
+        let conditional = token_kinds_for_line_fragment(doc, 12, NIX_FIXTURE[12], "if");
+        assert!(
+            conditional.contains(&SyntaxTokenKind::KeywordControl)
+                || conditional.contains(&SyntaxTokenKind::Keyword),
+            "`if` inside buildPhase should come from the injected Bash layer, not read \
+             as string text: {conditional:?}"
+        );
+
+        // And the injection stays inside the indented string: the Nix binding on
+        // the line above is still Nix.
+        let binding = token_kinds_for_line_fragment(doc, 10, NIX_FIXTURE[10], "buildPhase");
+        assert!(
+            binding.contains(&SyntaxTokenKind::Property),
+            "`buildPhase` is a Nix attrpath, not part of the shell script: {binding:?}"
+        );
+    }
+
+    #[test]
+    fn nix_injection_targets_resolve_to_working_grammars() {
+        let lang: tree_sitter::Language = tree_sitter_nix::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, NIX_INJECTIONS_QUERY)
+            .expect("nix_injections.scm should compile");
+        let mut checked = 0usize;
+        for pattern_ix in 0..query.pattern_count() {
+            for setting in query.property_settings(pattern_ix) {
+                if setting.key.as_ref() != "injection.language" {
+                    continue;
+                }
+                let Some(value) = setting.value.as_deref() else {
+                    continue;
+                };
+                let target = injection_language_from_name(value).unwrap_or_else(|| {
+                    panic!("nix_injections.scm names an unknown injection language {value:?}")
+                });
+                assert!(
+                    tree_sitter_highlight_spec(target).is_some(),
+                    "nix_injections.scm injects {value:?} but no grammar is wired for \
+                     {target:?}, so the injection would silently no-op"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(
+            checked, 4,
+            "expected the four curated bash rules; upstream's comment-marked \
+             arbitrary-language rule is deliberately not ported"
+        );
+    }
+
+    #[test]
+    fn nix_spec_warmup_reaches_bash_through_a_set_directive() {
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Nix).expect("nix spec");
+        let injection_query = spec.injection_query.as_ref().expect("nix injection query");
+        let reaches_bash = (0..injection_query.pattern_count()).any(|pattern_ix| {
+            injection_query
+                .property_settings(pattern_ix)
+                .iter()
+                .filter(|setting| setting.key.as_ref() == "injection.language")
+                .any(|setting| {
+                    setting
+                        .value
+                        .as_deref()
+                        .and_then(injection_language_from_name)
+                        == Some(DiffSyntaxLanguage::Bash)
+                })
+        });
+        assert!(
+            reaches_bash,
+            "warm_reachable_highlight_specs must be able to see the bash target, or the \
+             Bash query compile lands on the draw path"
+        );
+    }
+
+    #[test]
+    fn nix_grammar_is_abi_compatible_with_workspace_tree_sitter() {
+        let nix: tree_sitter::Language = tree_sitter_nix::LANGUAGE.into();
+        let abi = nix.abi_version();
+        assert!(
+            (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                .contains(&abi),
+            "tree-sitter-nix ABI {abi} is outside the range this tree-sitter supports \
+             ({}..={})",
+            tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+            tree_sitter::LANGUAGE_VERSION,
+        );
+    }
+
+    #[test]
+    fn nix_grammar_parses_a_flake() {
+        let source = concat!(
+            "{\n",
+            "  description = \"demo\";\n",
+            "  inputs.nixpkgs.url = \"github:NixOS/nixpkgs/nixos-unstable\";\n",
+            "  outputs = { self, nixpkgs }: {\n",
+            "    packages.x86_64-linux.default =\n",
+            "      nixpkgs.legacyPackages.x86_64-linux.hello;\n",
+            "  };\n",
+            "}\n",
+        );
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_nix::LANGUAGE.into())
+            .expect("nix grammar should load into the workspace tree-sitter");
+        let tree = parser.parse(source, None).expect("flake.nix should parse");
+        assert!(
+            !tree.root_node().has_error(),
+            "the nix grammar produced an ERROR node for a well-formed flake: {}",
+            tree.root_node().to_sexp(),
+        );
+    }
+
     // ---- Nunjucks / Jinja2 ----------------------------------------------------
 
     /// The `.njk` / `.j2` / `.jinja` fixture, shared by the tests below.
-    #[cfg(any(test, feature = "syntax-web"))]
     const JINJA_TEMPLATE_FIXTURE: &[&str] = &[
         /* 0 */ "{# page heading #}",
         /* 1 */ "<ul class=\"list\">",
@@ -6799,7 +6907,6 @@ mod tests {
         /* 5 */ "</ul>",
     ];
 
-    #[cfg(any(test, feature = "syntax-web"))]
     fn prepare_jinja_document(lines: &[&str]) -> PreparedSyntaxDocument {
         prepare_test_document(DiffSyntaxLanguage::Jinja, &lines.join("\n"))
     }
@@ -6831,7 +6938,6 @@ mod tests {
         }
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn prepared_jinja_document_highlights_template_tags() {
         let doc = prepare_jinja_document(JINJA_TEMPLATE_FIXTURE);
@@ -6876,7 +6982,6 @@ mod tests {
 
     /// The HTML half of a template comes from the combined injection, not the
     /// Jinja grammar -- which sees only opaque `text` nodes.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn prepared_jinja_document_highlights_html_via_the_combined_injection() {
         let doc = prepare_jinja_document(JINJA_TEMPLATE_FIXTURE);
@@ -6904,7 +7009,6 @@ mod tests {
 
     /// The injected HTML must stay off the template tags, which the Jinja
     /// grammar owns. See `combined_injection_gaps`.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn jinja_html_injection_does_not_bleed_onto_template_tags() {
         let doc = prepare_jinja_document(JINJA_TEMPLATE_FIXTURE);
@@ -6916,7 +7020,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn jinja_injection_targets_resolve_to_working_grammars() {
         let lang: tree_sitter::Language = tree_sitter_jinja_dialects::LANGUAGE.into();
@@ -6951,7 +7054,6 @@ mod tests {
     /// Warm-up reads targets off the compiled query, and only sees `#set!`
     /// literals. If the HTML target ever moved into an `@injection.language`
     /// capture, the ~0.5ms HTML spec compile would move back onto the draw path.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn jinja_spec_warmup_reaches_html_through_a_set_directive() {
         let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Jinja).expect("jinja spec");
@@ -6978,7 +7080,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn jinja_injection_query_stays_under_the_match_limit_on_a_dense_template() {
         let mut lines = vec!["<ul>".to_string()];
@@ -7026,7 +7127,6 @@ mod tests {
 
     /// The grammar is a young crates.io release binding through
     /// `tree-sitter-language`, so a tree-sitter bump could outrun it.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn jinja_grammar_is_abi_compatible_with_workspace_tree_sitter() {
         let jinja: tree_sitter::Language = tree_sitter_jinja_dialects::LANGUAGE.into();
@@ -7041,7 +7141,6 @@ mod tests {
         );
     }
 
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn jinja_grammar_parses_every_dialect_it_claims() {
         let mut parser = tree_sitter::Parser::new();
@@ -7102,6 +7201,11 @@ mod tests {
             vec![
                 // queries/jinja_injections.scm -- the HTML around the template tags.
                 (DiffSyntaxLanguage::Jinja, 0),
+                // queries/nix_injections.scm -- bash in script/hook attributes.
+                (DiffSyntaxLanguage::Nix, 0),
+                (DiffSyntaxLanguage::Nix, 1),
+                (DiffSyntaxLanguage::Nix, 2),
+                (DiffSyntaxLanguage::Nix, 3),
                 // Upstream tree_sitter_fsharp::INJECTIONS_QUERY -- `xml_doc` lines.
                 (DiffSyntaxLanguage::FSharp, 3),
             ],
@@ -7168,7 +7272,6 @@ mod tests {
     /// HTML stands in for the eventual template grammar here so the test needs no
     /// new dependency. The ranges are the same shape a `(text) @injection.content`
     /// rule produces on a real template.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn combined_injection_parses_disjoint_ranges_as_one_document() {
         let text = "<ul>\n{% for x in xs %}<li>hi</li>{% endfor %}\n</ul>\n";
@@ -7195,7 +7298,6 @@ mod tests {
 
     /// The other half: nodes straddling two included ranges report a byte range
     /// covering the host bytes in between, so their captures have to be clipped.
-    #[cfg(any(test, feature = "syntax-web"))]
     #[test]
     fn combined_injection_tokens_do_not_bleed_into_the_gaps() {
         let text = "<ul>\n{% for x in xs %}<li>hi</li>{% endfor %}\n</ul>\n";
@@ -7243,7 +7345,6 @@ mod tests {
 
     /// Byte ranges of the HTML runs in the combined-injection fixture, i.e. what a
     /// template grammar's `(text)` nodes would capture.
-    #[cfg(any(test, feature = "syntax-web"))]
     fn combined_test_ranges(text: &str) -> Vec<Range<usize>> {
         let for_tag = text.find("{% for x in xs %}").expect("for tag");
         let li = text.find("<li>").expect("li");
@@ -7257,7 +7358,6 @@ mod tests {
     /// `xml_doc` is a per-line token, so before combined support each `///` line
     /// was its own XML document: `<summary>` on one line and `</summary>` on
     /// another never met, and each cost an entry in the 32-slot injection cache.
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn fsharp_xml_doc_comment_is_highlighted_as_one_xml_document() {
         let lines = [
@@ -7291,7 +7391,6 @@ mod tests {
     /// nothing and would evict the entries `vue_static_inline_styles_do_not_flood_
     /// the_injection_cache` depends on. Before this change, 200 `///` lines meant
     /// 200 entries into a 32-slot cache.
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn combined_injections_do_not_consume_the_per_node_injection_cache() {
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -7327,7 +7426,6 @@ mod tests {
     /// forgot to clear them would truncate the *next* root parse on this thread —
     /// for any language, with no error anywhere. Asserted behaviourally so it
     /// survives tree-sitter API changes.
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn combined_injection_parse_clears_the_pooled_parsers_included_ranges() {
         let fsharp = ["/// <summary>", "/// x", "/// </summary>", "let x = 1"];
@@ -7354,7 +7452,6 @@ mod tests {
     /// most likely to overflow the in-progress match pool. Overflow is worse for a
     /// combined layer than a single one: tree-sitter discards matches silently, and
     /// a missing range changes the document the injected grammar assembles.
-    #[cfg(any(test, feature = "syntax-extra"))]
     #[test]
     fn fsharp_xml_doc_injection_stays_under_the_match_limit_on_a_long_doc_comment() {
         let mut lines = vec!["/// <summary>".to_string()];
@@ -7393,17 +7490,6 @@ mod tests {
         assert!(matched > 0, "the doc comment should produce matches at all");
     }
 
-    // There are deliberately no `disabled_*_grammars_fall_back_to_none` tests.
-    // Absence of a feature-gated grammar cannot be observed from `cargo test`:
-    // the grammar arms are gated `any(test, feature = ...)` precisely so tests
-    // see every language, and a `#[cfg(not(any(test, ...)))]` test placed inside
-    // `#[cfg(test)] mod tests` is stripped before it is even type-checked. The
-    // check that does bite is a build without the feature:
-    //   cargo build -p gitcomet-ui-gpui --no-default-features --features syntax-minimal
-    // Grammar/spec agreement per language is covered by
-    // `grammar_and_highlight_spec_agree_on_supported_languages` above.
-
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     fn highlight_spec_exposes_ts_language() {
         let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Rust)
@@ -7412,7 +7498,6 @@ mod tests {
         with_ts_parser(&spec.ts_language, |_| ()).expect("should accept the spec's ts_language");
     }
 
-    #[cfg(any(test, feature = "syntax-rust"))]
     #[test]
     #[ignore]
     fn perf_treesitter_tokenization_smoke() {

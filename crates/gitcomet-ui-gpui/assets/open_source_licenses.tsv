@@ -680,6 +680,7 @@ tree-sitter-language	0.1.7	MIT
 tree-sitter-lua	0.5.0	MIT
 tree-sitter-make	1.1.1	MIT
 tree-sitter-md	0.3.2	MIT
+tree-sitter-nix	0.3.0	MIT
 tree-sitter-objc	3.0.2	MIT
 tree-sitter-php	0.24.2	MIT
 tree-sitter-powershell	0.26.4	MIT

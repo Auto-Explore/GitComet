@@ -247,6 +247,16 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
             visual_basic_line_comment: false,
         },
+        // Nix looks like the Hcl arm above but must NOT take its `//` line
+        // comment: `//` is Nix's attribute-set update operator, so
+        // `{ a = 1; } // { b = 2; }` would grey out from the operator to the end
+        // of the line. Nix comments are `#` and `/* */` only.
+        DiffSyntaxLanguage::Nix => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: true,
+            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
         DiffSyntaxLanguage::VisualBasic => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: false,
@@ -295,6 +305,7 @@ fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<Heuristi
         | DiffSyntaxLanguage::Zig
         | DiffSyntaxLanguage::Bicep
         | DiffSyntaxLanguage::Hcl
+        | DiffSyntaxLanguage::Nix
         | DiffSyntaxLanguage::Php => Some(HeuristicBlockCommentKind::C),
         _ => None,
     }
@@ -1317,6 +1328,23 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         DiffSyntaxLanguage::Hcl => matches!(
             ident,
             "true" | "false" | "null" | "for" | "in" | "if" | "else" | "endif" | "endfor"
+        ),
+        // The upstream grammar's keyword list plus the three literals it treats as
+        // builtin identifiers rather than keywords.
+        DiffSyntaxLanguage::Nix => matches!(
+            ident,
+            "if" | "then"
+                | "else"
+                | "let"
+                | "in"
+                | "inherit"
+                | "rec"
+                | "with"
+                | "assert"
+                | "or"
+                | "true"
+                | "false"
+                | "null"
         ),
         DiffSyntaxLanguage::Bicep => matches!(
             ident,

@@ -19,6 +19,7 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "hcl" | "tf" | "tfvars" => DiffSyntaxLanguage::Hcl,
         "bicep" => DiffSyntaxLanguage::Bicep,
         "lua" => DiffSyntaxLanguage::Lua,
+        "nix" => DiffSyntaxLanguage::Nix,
         "mk" | "make" | "makefile" | "gnumakefile" => DiffSyntaxLanguage::Makefile,
         "kt" | "kts" | "kotlin" => DiffSyntaxLanguage::Kotlin,
         "zig" => DiffSyntaxLanguage::Zig,
@@ -195,7 +196,6 @@ pub(super) fn tree_sitter_grammar(
     language: DiffSyntaxLanguage,
 ) -> Option<(tree_sitter::Language, TreesitterQueryAsset)> {
     match language {
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::Markdown => Some((
             tree_sitter_md::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -203,32 +203,26 @@ pub(super) fn tree_sitter_grammar(
                 MARKDOWN_INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::MarkdownInline => Some((
             tree_sitter_md::INLINE_LANGUAGE.into(),
             TreesitterQueryAsset::highlights(MARKDOWN_INLINE_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Jinja => Some((
             tree_sitter_jinja_dialects::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(JINJA_HIGHLIGHTS_QUERY, JINJA_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Vue => Some((
             tree_sitter_vue::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(VUE_HIGHLIGHTS_QUERY, VUE_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Css => Some((
             tree_sitter_css::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(CSS_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Bicep => Some((
             tree_sitter_bicep::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -236,7 +230,10 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_bicep::INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
+        DiffSyntaxLanguage::Nix => Some((
+            tree_sitter_nix::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(NIX_HIGHLIGHTS_QUERY, NIX_INJECTIONS_QUERY),
+        )),
         DiffSyntaxLanguage::Lua => Some((
             tree_sitter_lua::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -244,17 +241,14 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_lua::INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Makefile => Some((
             tree_sitter_make::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_make::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Kotlin => Some((
             tree_sitter_kotlin_sg::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Zig => Some((
             tree_sitter_zig::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -262,42 +256,34 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_zig::INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-rust"))]
         DiffSyntaxLanguage::Rust => Some((
             tree_sitter_rust::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(RUST_HIGHLIGHTS_QUERY, RUST_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-python"))]
         DiffSyntaxLanguage::Python => Some((
             tree_sitter_python::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(PYTHON_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-go"))]
         DiffSyntaxLanguage::Go => Some((
             tree_sitter_go::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(GO_HIGHLIGHTS_QUERY, GO_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::GoMod => Some((
             tree_sitter_gomod::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(GOMOD_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::GoWork => Some((
             tree_sitter_gowork::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(GOWORK_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::C => Some((
             tree_sitter_c::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(C_HIGHLIGHTS_QUERY, C_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Cpp => Some((
             tree_sitter_cpp::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(CPP_HIGHLIGHTS_QUERY, CPP_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::ObjectiveC => Some((
             tree_sitter_objc::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -305,12 +291,10 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_objc::INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::CSharp => Some((
             tree_sitter_c_sharp::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(CSHARP_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::FSharp => Some((
             tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
             TreesitterQueryAsset::with_injections(
@@ -318,12 +302,10 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_fsharp::INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Java => Some((
             tree_sitter_java::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_java::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Php => Some((
             tree_sitter_php::LANGUAGE_PHP.into(),
             TreesitterQueryAsset::with_injections(
@@ -331,17 +313,14 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_php::INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Ruby => Some((
             tree_sitter_ruby::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_ruby::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::PowerShell => Some((
             tree_sitter_powershell::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(POWERSHELL_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Swift => Some((
             tree_sitter_swift::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -349,52 +328,42 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_swift::INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::R => Some((
             tree_sitter_r::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_r::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Dart => Some((
             tree_sitter_dart::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_dart::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Scala => Some((
             tree_sitter_scala::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_scala::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Json => Some((
             tree_sitter_json::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(JSON_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Toml => Some((
             tree_sitter_toml_ng::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_toml_ng::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Yaml => Some((
             tree_sitter_yaml::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(YAML_HIGHLIGHTS_QUERY, YAML_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Sql => Some((
             tree_sitter_sequel::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_sequel::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::Diff => Some((
             tree_sitter_diff::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(tree_sitter_diff::HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::GitCommit => Some((
             tree_sitter_gitcommit::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(GITCOMMIT_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::TypeScript => Some((
             tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
             TreesitterQueryAsset::with_injections(
@@ -402,12 +371,10 @@ pub(super) fn tree_sitter_grammar(
                 TYPESCRIPT_INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Tsx => Some((
             tree_sitter_typescript::LANGUAGE_TSX.into(),
             TreesitterQueryAsset::with_injections(TSX_HIGHLIGHTS_QUERY, TSX_INJECTIONS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::JavaScript => Some((
             tree_sitter_javascript::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
@@ -415,22 +382,18 @@ pub(super) fn tree_sitter_grammar(
                 JAVASCRIPT_INJECTIONS_QUERY,
             ),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Jsdoc => Some((
             tree_sitter_jsdoc::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(JSDOC_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Regex => Some((
             tree_sitter_regex::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(REGEX_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-shell"))]
         DiffSyntaxLanguage::Bash => Some((
             tree_sitter_bash::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(BASH_HIGHLIGHTS_QUERY),
         )),
-        #[cfg(any(test, feature = "syntax-xml"))]
         DiffSyntaxLanguage::Xml => Some((
             tree_sitter_xml::LANGUAGE_XML.into(),
             TreesitterQueryAsset::highlights(XML_HIGHLIGHTS_QUERY),
@@ -578,89 +541,48 @@ pub(super) fn tree_sitter_highlight_spec(
     language: DiffSyntaxLanguage,
 ) -> Option<&'static TreesitterHighlightSpec> {
     match language {
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::Markdown => highlight_spec_entry!(Markdown),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::MarkdownInline => highlight_spec_entry!(MarkdownInline),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Jinja => highlight_spec_entry!(Jinja),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Css => highlight_spec_entry!(Css),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Bicep => highlight_spec_entry!(Bicep),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Lua => highlight_spec_entry!(Lua),
-        #[cfg(any(test, feature = "syntax-extra"))]
+        DiffSyntaxLanguage::Nix => highlight_spec_entry!(Nix),
         DiffSyntaxLanguage::Makefile => highlight_spec_entry!(Makefile),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Kotlin => highlight_spec_entry!(Kotlin),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Zig => highlight_spec_entry!(Zig),
-        #[cfg(any(test, feature = "syntax-rust"))]
         DiffSyntaxLanguage::Rust => highlight_spec_entry!(Rust),
-        #[cfg(any(test, feature = "syntax-python"))]
         DiffSyntaxLanguage::Python => highlight_spec_entry!(Python),
-        #[cfg(any(test, feature = "syntax-go"))]
         DiffSyntaxLanguage::Go => highlight_spec_entry!(Go),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::GoMod => highlight_spec_entry!(GoMod),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::GoWork => highlight_spec_entry!(GoWork),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::C => highlight_spec_entry!(C),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Cpp => highlight_spec_entry!(Cpp),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::ObjectiveC => highlight_spec_entry!(ObjectiveC),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::CSharp => highlight_spec_entry!(CSharp),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::FSharp => highlight_spec_entry!(FSharp),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Java => highlight_spec_entry!(Java),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Php => highlight_spec_entry!(Php),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Ruby => highlight_spec_entry!(Ruby),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::PowerShell => highlight_spec_entry!(PowerShell),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Swift => highlight_spec_entry!(Swift),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::R => highlight_spec_entry!(R),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Dart => highlight_spec_entry!(Dart),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Scala => highlight_spec_entry!(Scala),
-        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Json => highlight_spec_entry!(Json),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Toml => highlight_spec_entry!(Toml),
-        #[cfg(any(test, feature = "syntax-data"))]
         DiffSyntaxLanguage::Yaml => highlight_spec_entry!(Yaml),
-        #[cfg(any(test, feature = "syntax-extra"))]
         DiffSyntaxLanguage::Sql => highlight_spec_entry!(Sql),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::Diff => highlight_spec_entry!(Diff),
-        #[cfg(any(test, feature = "syntax-repo"))]
         DiffSyntaxLanguage::GitCommit => highlight_spec_entry!(GitCommit),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::TypeScript => highlight_spec_entry!(TypeScript),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Tsx => highlight_spec_entry!(Tsx),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::JavaScript => highlight_spec_entry!(JavaScript),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Jsdoc => highlight_spec_entry!(Jsdoc),
-        #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Regex => highlight_spec_entry!(Regex),
-        #[cfg(any(test, feature = "syntax-shell"))]
         DiffSyntaxLanguage::Bash => highlight_spec_entry!(Bash),
-        #[cfg(any(test, feature = "syntax-xml"))]
         DiffSyntaxLanguage::Xml => highlight_spec_entry!(Xml),
         _ => None,
     }
