@@ -1090,8 +1090,9 @@ impl GitCometView {
         }
 
         if renders_full_chrome(self.view_mode) {
-            let terminal_panel = self.render_terminal_panel(theme, window, cx);
-            let has_terminal_panel = terminal_panel.is_some();
+            // Terminal and/or reflog — see `render_bottom_panel` for which.
+            let bottom_panel = self.render_bottom_panel(theme, window, cx);
+            let has_bottom_panel = bottom_panel.is_some();
             let content = div()
                 .flex()
                 .flex_col()
@@ -1175,16 +1176,16 @@ impl GitCometView {
                                         .min_w(px(0.0))
                                         .min_h(px(0.0))
                                         .overflow_hidden()
-                                        .when_some(terminal_panel, |d, terminal_panel| {
+                                        .when_some(bottom_panel, |d, bottom_panel| {
                                             d.flex()
                                                 .flex_col()
                                                 .child(div().flex_1().min_h(px(0.0)).child(
                                                     stable_cached_fill_view(self.main_pane.clone()),
                                                 ))
                                                 .child(self.terminal_panel_resize_handle(theme, cx))
-                                                .child(terminal_panel)
+                                                .child(bottom_panel)
                                         })
-                                        .when(!has_terminal_panel, |d| {
+                                        .when(!has_bottom_panel, |d| {
                                             d.child(stable_cached_fill_view(self.main_pane.clone()))
                                         }),
                                 )

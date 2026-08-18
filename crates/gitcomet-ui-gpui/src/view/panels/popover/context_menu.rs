@@ -24,6 +24,7 @@ mod pinned_section;
 mod previous_commit_messages;
 mod pull;
 mod push;
+mod reflog_entry;
 mod remote;
 mod repo_picker_row;
 mod repo_tab;
@@ -392,6 +393,11 @@ impl PopoverHost {
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 Some(commit::model(self, *repo_id, commit_id))
             }
+            PopoverKind::ReflogEntryMenu {
+                repo_id,
+                target,
+                selector,
+            } => Some(reflog_entry::model(*repo_id, selector, target)),
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 Some(tag::model(self, *repo_id, commit_id))
             }

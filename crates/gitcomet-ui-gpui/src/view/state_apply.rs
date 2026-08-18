@@ -172,6 +172,7 @@ impl GitCometView {
             _ => {}
         }
         self.sync_terminal_sessions_with_state(cx);
+        self.sync_reflog_panels_with_state();
         if !prev_git_runtime_available && self.state.git_runtime.is_available() {
             self.resume_after_git_runtime_recovery();
         }

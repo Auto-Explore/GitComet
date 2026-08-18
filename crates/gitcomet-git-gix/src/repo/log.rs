@@ -1940,6 +1940,7 @@ impl GixRepo {
                     message: bstr_to_arc_str(line.message.as_ref()),
                     time: unix_seconds_to_system_time(line.signature.time.seconds),
                     selector: format!("HEAD@{{{index}}}").into(),
+                    author: bstr_to_arc_str(line.signature.name.as_ref()),
                 })
             })
             .collect()
@@ -2481,5 +2482,41 @@ mod tests {
             Arc::ptr_eq(&cached_commits, &cache[0].commits),
             "third page should use the cached full follow result"
         );
+    }
+
+    #[test]
+    fn reflog_head_entries_carry_the_committer_as_author() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+
+        commit_file(workdir, "a.txt", "one\n", "first");
+        commit_file(workdir, "a.txt", "two\n", "second");
+
+        let repo = open_repo(workdir);
+        let entries = repo.reflog_head_impl(10).expect("reflog_head_impl");
+
+        assert_eq!(entries.len(), 2);
+        // Newest first: the reflog is read in reverse, matching `HEAD@{0}`
+        // being the current position.
+        assert_eq!(entries[0].selector.as_ref(), "HEAD@{0}");
+        assert_eq!(entries[1].selector.as_ref(), "HEAD@{1}");
+        for entry in &entries {
+            // `user.name` from `init_test_repo` is what git records as the
+            // reflog line's committer identity.
+            assert_eq!(entry.author.as_ref(), "Test User");
+        }
+    }
+
+    #[test]
+    fn reflog_head_impl_returns_empty_for_a_zero_limit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        commit_file(workdir, "a.txt", "one\n", "first");
+
+        let repo = open_repo(workdir);
+        let entries = repo.reflog_head_impl(0).expect("reflog_head_impl");
+        assert!(entries.is_empty());
     }
 }

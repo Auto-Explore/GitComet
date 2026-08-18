@@ -27,7 +27,6 @@ mod picker_row_menu;
 mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_onto_confirm;
-mod reflog_prompt;
 mod remote_add_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
@@ -319,10 +318,6 @@ pub(in super::super) struct PopoverHost {
     stash_picker_prompt_selected_index: Option<usize>,
     stash_picker_search_input: Option<Entity<components::TextInput>>,
     _stash_picker_search_input_subscription: Option<gpui::Subscription>,
-    reflog_selected_index: Option<usize>,
-    reflog_search_input: Option<Entity<components::TextInput>>,
-    _reflog_search_input_subscription: Option<gpui::Subscription>,
-    reflog_rows_cache: rows_cache::RowsCache<usize>,
     commit_prompt_message_drafts: HashMap<RepoId, SharedString>,
     commit_prompt_message_input: Entity<components::TextInput>,
     commit_prompt_message_scroll: ScrollHandle,
@@ -475,6 +470,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::ConflictResolverChunkMenu { .. }
             | PopoverKind::ConflictResolverOutputMenu { .. }
             | PopoverKind::CommitMenu { .. }
+            | PopoverKind::ReflogEntryMenu { .. }
             | PopoverKind::TagMenu { .. }
             | PopoverKind::TagRefMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
@@ -907,8 +903,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
                 ),
             ..
         }
-        | PopoverKind::FileHistory { .. }
-        | PopoverKind::ReflogPrompt { .. } => Some(LARGE_PICKER_WIDTH),
+        | PopoverKind::FileHistory { .. } => Some(LARGE_PICKER_WIDTH),
         PopoverKind::AppMenu => Some(APP_MENU_WIDTH),
         PopoverKind::AddRepoMenu => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::TerminalShutdownConfirm(_) | PopoverKind::UnsavedFileEditsConfirm(_) => {
@@ -961,6 +956,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileBrowserFolderMenu { .. }
         | PopoverKind::BranchGroupMenu { .. }
         | PopoverKind::PinnedSectionMenu { .. }
+        | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
@@ -1771,10 +1767,6 @@ impl PopoverHost {
             stash_focus,
             stash_picker_prompt_selected_index: None,
             stash_picker_search_input: None,
-            reflog_selected_index: None,
-            reflog_search_input: None,
-            _reflog_search_input_subscription: None,
-            reflog_rows_cache: rows_cache::RowsCache::default(),
             commit_prompt_message_drafts: HashMap::default(),
             commit_prompt_message_input,
             commit_prompt_message_scroll,
@@ -3048,7 +3040,6 @@ impl PopoverHost {
         self.submodule_picker_selected_index = None;
         self.file_history_selected_index = None;
         self.history_author_filter_selected_index = None;
-        self.reflog_selected_index = None;
         // Rows are keyed by the data they were built from, so a stale slot can
         // only be reused when that data is unchanged. Dropping them on open still
         // keeps the memory from outliving the picker that needed it.
@@ -3060,7 +3051,6 @@ impl PopoverHost {
         self.submodule_picker_rows_cache.clear();
         self.worktree_picker_rows_cache.clear();
         self.branch_ref_rows_cache.clear();
-        self.reflog_rows_cache.clear();
         if is_context_menu {
             self.popover = Some(kind);
             self.context_menu_selected_ix = self
@@ -3175,11 +3165,6 @@ impl PopoverHost {
                 PopoverKind::StashPickerPrompt { .. } => {
                     let _ = self.ensure_stash_picker_search_input(window, cx);
                     self.stash_picker_prompt_selected_index = Some(0);
-                }
-                PopoverKind::ReflogPrompt { repo_id } => {
-                    let _ = self.ensure_reflog_search_input(window, cx);
-                    self.reflog_selected_index = Some(0);
-                    self.store.dispatch(Msg::LoadReflog { repo_id: *repo_id });
                 }
                 PopoverKind::CloneRepo => {
                     let theme = self.theme;
@@ -4107,7 +4092,6 @@ impl PopoverHost {
             PopoverKind::FileHistory { repo_id, path } => {
                 file_history::panel(self, repo_id, path, cx)
             }
-            PopoverKind::ReflogPrompt { repo_id } => reflog_prompt::panel(self, repo_id, cx),
             PopoverKind::PushSetUpstreamPrompt { repo_id, remote } => {
                 push_set_upstream_prompt::panel(self, repo_id, remote, cx)
             }
@@ -4201,6 +4185,18 @@ impl PopoverHost {
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }
+            PopoverKind::ReflogEntryMenu {
+                repo_id,
+                target,
+                selector,
+            } => self.context_menu_view(
+                PopoverKind::ReflogEntryMenu {
+                    repo_id,
+                    target,
+                    selector,
+                },
+                cx,
+            ),
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
             }

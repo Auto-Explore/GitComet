@@ -4370,8 +4370,13 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
-    ReflogPrompt {
+    /// Right-click menu on a reflog panel row: the same reset actions the
+    /// history log's commit context menu offers, targeting the commit the
+    /// clicked reflog entry points at.
+    ReflogEntryMenu {
         repo_id: RepoId,
+        target: CommitId,
+        selector: SharedString,
     },
     PushSetUpstreamPrompt {
         repo_id: RepoId,
@@ -5105,6 +5110,27 @@ pub(crate) struct TerminalPanelResizeState {
     pub(super) start_height: Pixels,
 }
 
+/// Which content the bottom panel currently shows for a repository, when more
+/// than one of its panels (terminal, reflog, …) is open at once. A tab strip
+/// only appears once a second panel is available; with just one open, that
+/// panel fills the area exactly like before this switcher existed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum BottomPanelTab {
+    Terminal,
+    Reflog,
+}
+
+/// Persistent, per-repository state for the reflog panel: unlike the popover
+/// picker it replaced, this survives being hidden behind the terminal tab, so
+/// scroll position, the selected row, and the filter text are exactly where
+/// the user left them when they switch back.
+pub(super) struct ReflogPanelState {
+    pub(super) query_input: Entity<components::TextInput>,
+    pub(super) _query_input_subscription: gpui::Subscription,
+    pub(super) selected: Option<CommitId>,
+    pub(super) scroll: ScrollHandle,
+}
+
 /// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
 /// top of the visible screen at the live tail, and scrollback history is
 /// negative down to `-history_size`. Field order matters — the derived `Ord`
@@ -5527,6 +5553,14 @@ pub struct GitCometView {
     pub(super) terminal_cursor_blink_active: bool,
     pub(super) terminal_cursor_blink_task_scheduled: bool,
     pub(super) terminal_cursor_blink_seq: u64,
+    /// Per-repository reflog panel state. A repo's presence in this map is
+    /// what "open" means for the reflog panel — closing it drops the entry
+    /// (and with it the filter text, scroll position, and selection).
+    pub(super) reflog_panels: HashMap<RepoId, ReflogPanelState>,
+    /// Which of the bottom panel's contents is currently visible for a repo,
+    /// when more than one is open. Absent (and single-panel repos) fall back
+    /// to whichever panel is actually open.
+    pub(super) active_bottom_panel: HashMap<RepoId, BottomPanelTab>,
     pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,

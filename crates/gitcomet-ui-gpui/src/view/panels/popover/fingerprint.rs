@@ -199,7 +199,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::HistoryBranchFilter { repo_id }
         | PopoverKind::HistoryAuthorFilter { repo_id }
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
-        | PopoverKind::ReflogPrompt { repo_id } => Some(*repo_id),
+        | PopoverKind::ReflogEntryMenu { repo_id, .. } => Some(*repo_id),
     }?;
 
     state.repos.iter().find(|r| r.id == repo_id)
@@ -400,19 +400,8 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::TerminalMenu { .. }
         | PopoverKind::RepoPicker
         | PopoverKind::CloneRepo
+        | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::CommitPrompt { .. } => {}
-
-        PopoverKind::ReflogPrompt { .. } => {
-            if let Loadable::Ready(entries) = &repo.reflog {
-                entries.len().hash(hasher);
-                for entry in entries.iter() {
-                    entry.index.hash(hasher);
-                    entry.new_id.hash(hasher);
-                    entry.selector.hash(hasher);
-                    entry.message.hash(hasher);
-                }
-            }
-        }
     }
 }
 
@@ -871,9 +860,15 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         PopoverKind::InteractiveRebaseAutosquashMenu => {
             79u8.hash(hasher);
         }
-        PopoverKind::ReflogPrompt { repo_id } => {
+        PopoverKind::ReflogEntryMenu {
+            repo_id,
+            target,
+            selector,
+        } => {
             98u8.hash(hasher);
             repo_id.hash(hasher);
+            target.hash(hasher);
+            selector.hash(hasher);
         }
     }
 }

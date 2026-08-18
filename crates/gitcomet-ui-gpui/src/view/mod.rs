@@ -178,6 +178,7 @@ mod perf;
 mod permalink;
 pub(super) mod platform_open;
 mod poller;
+mod reflog_panel;
 mod repo_open;
 pub(crate) mod rows;
 mod settings_window;
@@ -1068,8 +1069,7 @@ impl GitCometView {
                 if let Some(repo_id) = self.active_repo_id()
                     && let Some(window) = window
                 {
-                    self.store.dispatch(Msg::LoadReflog { repo_id });
-                    self.open_popover_centered(PopoverKind::ReflogPrompt { repo_id }, window, cx);
+                    self.open_reflog_panel(repo_id, window, cx);
                 }
             }
             "add-remote" => {
@@ -1902,6 +1902,8 @@ impl GitCometView {
             terminal_cursor_blink_active: false,
             terminal_cursor_blink_task_scheduled: false,
             terminal_cursor_blink_seq: 0,
+            reflog_panels: HashMap::default(),
+            active_bottom_panel: HashMap::default(),
             commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
