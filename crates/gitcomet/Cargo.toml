@@ -18,15 +18,7 @@ ui-gpui-runtime = [
     "dep:gitcomet-win32-window-utils",
     "dep:sysinfo",
 ]
-ui-gpui = ["ui-gpui-runtime", "gitcomet-ui-gpui/syntax-all"]
-ui-gpui-syntax-common = [
-    "ui-gpui-runtime",
-    "gitcomet-ui-gpui/syntax-common",
-]
-ui-gpui-syntax-minimal = [
-    "ui-gpui-runtime",
-    "gitcomet-ui-gpui/syntax-minimal",
-]
+ui-gpui = ["ui-gpui-runtime"]
 gix = ["dep:gitcomet-git-gix"]
 
 [dependencies]

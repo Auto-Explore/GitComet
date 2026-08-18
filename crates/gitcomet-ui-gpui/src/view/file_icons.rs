@@ -127,6 +127,12 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     ("ipynb", &["ipynb"]),
     ("java", &["java"]),
     ("javascript", &["cjs", "js", "mjs"]),
+    // Not in Zed's icon theme: GitComet highlights Nunjucks/Jinja templates (see
+    // DiffSyntaxLanguage::Jinja) and a template file falling back to the generic
+    // page icon reads as "unknown type". The split between the two keys is
+    // cosmetic -- one grammar serves both -- but `.njk` and `.j2` come from
+    // different ecosystems and users sort by icon.
+    ("jinja", &["j2", "jinja", "jinja2", "twig", "dj"]),
     ("json", &["json", "jsonc"]),
     ("julia", &["jl"]),
     ("kdl", &["kdl"]),
@@ -139,6 +145,7 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     ("metal", &["metal"]),
     ("nim", &["nim", "nims", "nimble"]),
     ("nix", &["nix"]),
+    ("nunjucks", &["njk", "nunjucks"]), // see the `jinja` entry above
     ("ocaml", &["ml", "mli", "mlx"]),
     ("odin", &["odin"]),
     ("php", &["php"]),
@@ -299,6 +306,7 @@ const FILE_ICONS: &[(&str, &str)] = &[
     ("ipynb", "icons/file_icons/jupyter.svg"),
     ("java", "icons/file_icons/java.svg"),
     ("javascript", "icons/file_icons/javascript.svg"),
+    ("jinja", "icons/file_icons/jinja.svg"),
     ("json", "icons/file_icons/code.svg"),
     ("julia", "icons/file_icons/julia.svg"),
     ("kdl", "icons/file_icons/kdl.svg"),
@@ -311,6 +319,7 @@ const FILE_ICONS: &[(&str, &str)] = &[
     ("metal", "icons/file_icons/metal.svg"),
     ("nim", "icons/file_icons/nim.svg"),
     ("nix", "icons/file_icons/nix.svg"),
+    ("nunjucks", "icons/file_icons/nunjucks.svg"),
     ("ocaml", "icons/file_icons/ocaml.svg"),
     ("odin", "icons/file_icons/odin.svg"),
     ("phoenix", "icons/file_icons/phoenix.svg"),
@@ -476,6 +485,8 @@ pub fn file_icon_color(icon_path: &str, is_dark: bool) -> Option<gpui::Rgba> {
         "css" => (0x6BB4F0, 0x1572B6),
         "sass" => (0xE689B8, 0xBF5590),
         "vue" => (0x6BD3A0, 0x2F9668),
+        "nunjucks" => (0x7FBF6E, 0x3D8137),
+        "jinja" => (0xD86A6A, 0xB41717),
         "astro" => (0xF09668, 0xC6551A),
         "yaml" => (0xB8A2D8, 0x7A5C9E),
         "toml" => (0xC79378, 0x9C5B3C),
