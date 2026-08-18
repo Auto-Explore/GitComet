@@ -324,7 +324,7 @@ impl MainPaneView {
         let gutter = uniform_list_base_handle(&self.conflict_resolved_preview_gutter_scroll);
         let Some(gutter_y) = centered_reveal_scroll_y(
             row_ix,
-            px(RESOLVED_OUTPUT_ROW_HEIGHT_PX),
+            self.conflict_resolved_gutter_row_height,
             gutter.bounds().size.height,
             gutter.max_offset().y,
             gutter.offset().y,

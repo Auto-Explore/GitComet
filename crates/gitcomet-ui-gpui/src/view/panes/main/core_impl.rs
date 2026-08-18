@@ -1802,7 +1802,14 @@ impl MainPaneView {
             file_editor_provider_theme_epoch: 1,
             file_editor_scroll,
             file_editor_gutter_scroll: UniformListScrollHandle::new(),
-            file_editor_gutter_row_height: px(RESOLVED_OUTPUT_ROW_HEIGHT_PX),
+            file_editor_gutter_row_height: ui_scale::design_px_from_percent(
+                RESOLVED_OUTPUT_ROW_HEIGHT_PX,
+                ui_scale::current(cx).percent,
+            ),
+            conflict_resolved_gutter_row_height: ui_scale::design_px_from_percent(
+                RESOLVED_OUTPUT_ROW_HEIGHT_PX,
+                ui_scale::current(cx).percent,
+            ),
             file_editor_blame: None,
             file_editor_blame_width: px(0.0),
             file_editor_wrap_row_starts: Vec::new(),

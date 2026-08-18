@@ -595,6 +595,13 @@ impl TextInput {
             .unwrap_or_else(|| window.line_height())
     }
 
+    /// The explicit line height set by `set_line_height`, if any. Tests use it to
+    /// assert a separate line-number gutter advances at the same rate as the buffer.
+    #[cfg(test)]
+    pub(crate) fn line_height_override(&self) -> Option<Pixels> {
+        self.line_height_override
+    }
+
     pub fn take_enter_pressed(&mut self) -> bool {
         std::mem::take(&mut self.interaction.enter_pressed)
     }

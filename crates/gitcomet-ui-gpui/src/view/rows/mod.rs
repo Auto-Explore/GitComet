@@ -1,4 +1,5 @@
 use super::*;
+use gpui::Pixels;
 use std::cell::RefCell;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -6,10 +7,43 @@ use std::num::NonZeroUsize;
 pub(in crate::view) const MAX_LINES_FOR_SYNTAX_HIGHLIGHTING: usize = 4_000;
 const MAX_CACHED_LINE_NUMBER: usize = 16_384;
 
-/// Fixed width of a conflict diff-column line-number cell, shared by the div
+/// Design width of a conflict diff-column line-number cell, shared by the div
 /// path (`conflict_diff_line_number_cell`, `conflict_input_row_min_width`) and
 /// the canvas path (`conflict_line_no_width`) so the gutter stays aligned.
+///
+/// Design units, not device pixels: read it through [`conflict_line_no_width`].
 pub(in crate::view) const CONFLICT_DIFF_LINE_NO_WIDTH_PX: f32 = 38.0;
+
+/// Design height of one conflict source/output row. The resolver's text is
+/// shaped from `window.rem_size()`, which UI scale changes, so the row box has
+/// to follow it -- a flat 20px row holds a 41px line box at 200% and the text
+/// spills into the row below. Mirrors `diff_canvas::DIFF_ROW_HEIGHT_PX`.
+pub(in crate::view) const CONFLICT_ROW_HEIGHT_PX: f32 = 20.0;
+
+/// Design width of the accent/marker bar a conflict row paints at its left edge
+/// to flag the active conflict. Mirrors `diff_canvas::DIFF_CHANGE_BAR_WIDTH_PX`.
+pub(in crate::view) const CONFLICT_ROW_ACCENT_BAR_WIDTH_PX: f32 = 3.0;
+
+/// Horizontal row padding, `px_2` on each side. The div path spends it through
+/// `.px_2()` and the canvas path through `conflict_canvas::px_2`, both of which are
+/// rem-derived and so already UI-scaled; this constant exists for the width sums
+/// that have to account for it without laying it out.
+pub(in crate::view) const CONFLICT_ROW_PADDING_X_PX: f32 = 8.0;
+
+#[inline]
+pub(in crate::view) fn conflict_scaled_px(value: f32, ui_scale_percent: u32) -> Pixels {
+    crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn conflict_row_height(ui_scale_percent: u32) -> Pixels {
+    conflict_scaled_px(CONFLICT_ROW_HEIGHT_PX, ui_scale_percent)
+}
+
+#[inline]
+pub(in crate::view) fn conflict_line_no_width(ui_scale_percent: u32) -> Pixels {
+    conflict_scaled_px(CONFLICT_DIFF_LINE_NO_WIDTH_PX, ui_scale_percent)
+}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct LruCacheMetrics {
@@ -784,5 +818,52 @@ mod tests {
 
         assert!(first.is_empty());
         assert!(Arc::ptr_eq(&first, &second));
+    }
+
+    /// The resolver's text is shaped from `window.rem_size()`, so its row box and
+    /// line-number cell have to grow with UI scale too -- a flat 20px row holds a
+    /// 41px line box at 200% and spills into the row below.
+    #[test]
+    fn conflict_row_geometry_scales_with_ui_scale() {
+        for percent in [80, 100, 150, 200] {
+            let factor = percent as f32 / 100.0;
+            let height: f32 = conflict_row_height(percent).into();
+            let line_no: f32 = conflict_line_no_width(percent).into();
+            assert!(
+                (height - CONFLICT_ROW_HEIGHT_PX * factor).abs() < 0.01,
+                "row height at {percent}% should be {}, got {height}",
+                CONFLICT_ROW_HEIGHT_PX * factor,
+            );
+            assert!(
+                (line_no - CONFLICT_DIFF_LINE_NO_WIDTH_PX * factor).abs() < 0.01,
+                "line-number width at {percent}% should be {}, got {line_no}",
+                CONFLICT_DIFF_LINE_NO_WIDTH_PX * factor,
+            );
+        }
+
+        // Strictly monotonic across the presets, so no two zoom levels collapse
+        // onto the same geometry.
+        let heights = crate::ui_scale::UI_SCALE_PRESETS
+            .iter()
+            .map(|percent| f32::from(conflict_row_height(*percent)))
+            .collect::<Vec<_>>();
+        assert!(
+            heights.windows(2).all(|pair| pair[0] < pair[1]),
+            "row heights should grow with every preset, got {heights:?}"
+        );
+    }
+
+    /// The conflict rows and the diff rows are the same 20px design row; keeping the
+    /// two helpers in agreement is what stops the resolver drifting away from the
+    /// diff view it sits beside.
+    #[test]
+    fn conflict_row_height_matches_the_diff_row_height() {
+        for percent in crate::ui_scale::UI_SCALE_PRESETS.iter().copied() {
+            assert_eq!(
+                conflict_row_height(percent),
+                crate::view::panes::main::diff_row_height_for_ui_scale(percent),
+                "conflict and diff rows disagree at {percent}%"
+            );
+        }
     }
 }

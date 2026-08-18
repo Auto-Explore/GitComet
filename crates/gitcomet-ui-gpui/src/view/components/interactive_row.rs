@@ -159,8 +159,7 @@ fn selection_outline_shadow(color: Rgba) -> gpui::BoxShadow {
 /// selected one. Dark themes carry the selection in the fill alone, and get
 /// `None`. Mirrors what [`InteractiveRowStyle`] already does for sidebar rows.
 pub fn light_theme_selection_outline(theme: AppTheme) -> Option<gpui::BoxShadow> {
-    (!theme.is_dark)
-        .then(|| selection_outline_shadow(theme.colors.interaction.selected_indicator))
+    (!theme.is_dark).then(|| selection_outline_shadow(theme.colors.interaction.selected_indicator))
 }
 
 pub trait InteractiveRowExt {
