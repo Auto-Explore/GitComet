@@ -193,6 +193,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
         | PopoverKind::BrowseHistoryMenu { repo_id }
+        | PopoverKind::AutomationsMenu { repo_id }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
         | PopoverKind::TerminalMenu { repo_id, .. }
@@ -395,6 +396,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. }
+        | PopoverKind::AutomationsMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
@@ -808,6 +810,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::BrowseHistoryMenu { repo_id } => {
             63u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
+        PopoverKind::AutomationsMenu { repo_id } => {
+            105u8.hash(hasher);
             repo_id.hash(hasher);
         }
         PopoverKind::SubmoduleInnerDiffMenu {

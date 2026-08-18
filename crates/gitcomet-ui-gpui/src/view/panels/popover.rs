@@ -125,6 +125,10 @@ const DIALOG_440_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(440.0);
 const DIALOG_460_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(460.0);
 const DIALOG_540_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(540.0);
 const DIALOG_640_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(640.0);
+/// The Branch extractor dialog: wide enough for its three ref pickers, commit
+/// preview, and "what will be created" summary to all get real room, per the
+/// maintainer's request to give this flow more space than a small popover.
+const DIALOG_860_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(860.0);
 // Leaves enough room for “Open in code editor” and its three-key shortcut
 // badge to remain on one line on non-macOS platforms.
 const APP_MENU_WIDTH: PopoverWidthSpec = PopoverWidthSpec::fixed(320.0);
@@ -513,6 +517,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::BranchGroupMenu { .. }
             | PopoverKind::PinnedSectionMenu { .. }
             | PopoverKind::BrowseHistoryMenu { .. }
+            | PopoverKind::AutomationsMenu { .. }
     )
 }
 
@@ -844,9 +849,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
-        | PopoverKind::CherryPickRangePrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
+        PopoverKind::CherryPickRangePrompt { .. } => Some(DIALOG_860_WIDTH),
         PopoverKind::StashDropConfirm { .. }
         | PopoverKind::Repo {
             kind:
@@ -970,7 +975,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileBrowserFolderMenu { .. }
         | PopoverKind::BranchGroupMenu { .. }
         | PopoverKind::PinnedSectionMenu { .. }
-        | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
+        | PopoverKind::BrowseHistoryMenu { .. }
+        | PopoverKind::AutomationsMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
         | PopoverKind::DiffContentModeSettings
@@ -2226,6 +2232,7 @@ impl PopoverHost {
             | Some(PopoverKind::SquashPrompt { .. })
             | Some(PopoverKind::CheckoutRemoteBranchPrompt { .. })
             | Some(PopoverKind::PushSetUpstreamPrompt { .. })
+            | Some(PopoverKind::CherryPickRangePrompt { .. })
             | Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
                 ..
@@ -3376,19 +3383,19 @@ impl PopoverHost {
                     self.cherry_pick_base_target = base_prefill.clone();
                     let source_input = Self::ensure_cherry_pick_search_input(
                         &mut self.cherry_pick_source_search_input,
-                        "branch",
+                        "branch or tag to copy from",
                         window,
                         cx,
                     );
                     let range_input = Self::ensure_cherry_pick_search_input(
                         &mut self.cherry_pick_range_search_input,
-                        "branch",
+                        "already-merged branch or tag",
                         window,
                         cx,
                     );
                     let base_input = Self::ensure_cherry_pick_search_input(
                         &mut self.cherry_pick_base_search_input,
-                        "branch",
+                        "branch the new one starts from",
                         window,
                         cx,
                     );
@@ -4850,6 +4857,9 @@ impl PopoverHost {
             ),
             PopoverKind::BrowseHistoryMenu { repo_id } => {
                 self.context_menu_view(PopoverKind::BrowseHistoryMenu { repo_id }, cx)
+            }
+            PopoverKind::AutomationsMenu { repo_id } => {
+                self.context_menu_view(PopoverKind::AutomationsMenu { repo_id }, cx)
             }
             PopoverKind::SubmoduleInnerDiffMenu {
                 repo_id,

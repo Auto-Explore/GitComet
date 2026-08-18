@@ -4586,6 +4586,13 @@ pub(super) enum PopoverKind {
     BrowseHistoryMenu {
         repo_id: RepoId,
     },
+    /// Dropdown behind the action bar's "Automations" button. Currently
+    /// lists only the Branch extractor entry (cherry-pick a commit range
+    /// onto a new branch), but is a menu on purpose so future automations
+    /// have somewhere to go without a new action-bar button each time.
+    AutomationsMenu {
+        repo_id: RepoId,
+    },
     SubmoduleInnerDiffMenu {
         repo_id: RepoId,
         submodule_repo_path: std::path::PathBuf,

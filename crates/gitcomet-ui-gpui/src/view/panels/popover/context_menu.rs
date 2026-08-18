@@ -1,5 +1,6 @@
 use super::*;
 
+mod automations;
 mod branch;
 mod branch_group;
 mod branch_section;
@@ -473,6 +474,7 @@ impl PopoverHost {
             PopoverKind::BrowseHistoryMenu { repo_id } => {
                 Some(browse_history::model(self, *repo_id))
             }
+            PopoverKind::AutomationsMenu { repo_id } => Some(automations::model(*repo_id)),
             PopoverKind::SubmoduleInnerDiffMenu {
                 repo_id,
                 submodule_repo_path,
@@ -1358,6 +1360,10 @@ impl PopoverHost {
             ContextMenuAction::OpenPopover { kind } => {
                 let anchor = self.popover_anchor_point();
                 self.open_popover_at(kind, anchor, window, cx);
+                return;
+            }
+            ContextMenuAction::OpenPopoverCentered { kind } => {
+                self.open_popover_centered(kind, window, cx);
                 return;
             }
             ContextMenuAction::ConflictResolverPick { target } => {

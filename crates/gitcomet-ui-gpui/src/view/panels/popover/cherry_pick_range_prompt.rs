@@ -29,7 +29,10 @@ fn picker_row(
         .is_focused(window);
     input.update(cx, |input, cx| {
         input.set_chromeless(is_focused, cx);
-        input.set_leading_icon(is_focused.then_some("icons/git_branch.svg"), cx);
+        // Keep the branch icon visible even when the row isn't focused, so the
+        // three rows read as "pick a ref" fields at a glance instead of
+        // looking like plain, unlabeled text boxes.
+        input.set_leading_icon(Some("icons/git_branch.svg"), cx);
     });
 
     if is_focused {
@@ -57,7 +60,7 @@ fn picker_row(
                         cx,
                     )
                     .tooltip_host(this.tooltip_host.clone())
-                    .empty_text("No matches")
+                    .empty_text("No matching branches or tags")
                     .max_height(scaled_px(240.0))
                     .selected_index(this.branch_picker_selected_index)
                     .select_on_mouse_down()
@@ -129,7 +132,9 @@ fn preview_section(
     } else {
         match preview.map(|p| &p.commits) {
             Some(gitcomet_state::model::Loadable::Ready(commits)) if !commits.is_empty() => {
-                let shown = commits.iter().take(8).collect::<Vec<_>>();
+                // The wider dialog (see `panel`) has room for more rows than
+                // a small anchored popover would.
+                let shown = commits.iter().take(12).collect::<Vec<_>>();
                 let more = commits.len().saturating_sub(shown.len());
                 let mut rows = div().flex().flex_col().gap(scaled_px(2.0)).py_1();
                 for commit in &shown {
@@ -202,7 +207,7 @@ fn preview_section(
                     .child(
                         div()
                             .id("cherry_pick_range_preview_scroll")
-                            .max_h(scaled_px(160.0))
+                            .max_h(scaled_px(220.0))
                             .overflow_y_scroll()
                             .child(rows),
                     )
@@ -238,6 +243,105 @@ fn preview_section(
         .child(body)
 }
 
+/// Plain-language readout of what submitting the form will do, plus a small
+/// text diagram — the maintainer asked for a way to "visualize what is going
+/// into the new branch" beyond the raw commit list in [`preview_section`].
+fn summary_section(
+    this: &PopoverHost,
+    theme: AppTheme,
+    repo_id: RepoId,
+    scaled_px: impl Fn(f32) -> gpui::Pixels + Copy,
+    cx: &gpui::Context<PopoverHost>,
+) -> gpui::Div {
+    let source = this.cherry_pick_source_target.trim().to_string();
+    let range = this.cherry_pick_range_target.trim().to_string();
+    let base = this.cherry_pick_base_target.trim().to_string();
+    let name = this
+        .cherry_pick_name_input
+        .read(cx)
+        .text()
+        .trim()
+        .to_string();
+
+    if source.is_empty()
+        || range.is_empty()
+        || base.is_empty()
+        || name.is_empty()
+        || source == range
+    {
+        return div()
+            .mx_2()
+            .my_1()
+            .px_2()
+            .py_2()
+            .rounded(px(theme.radii.panel))
+            .border_1()
+            .border_color(theme.colors.stroke.subtle)
+            .text_xs()
+            .text_color(theme.colors.foreground.secondary)
+            .child("Fill in the fields above to preview the branch that will be created.");
+    }
+
+    let commit_count = this
+        .state
+        .repos
+        .iter()
+        .find(|r| r.id == repo_id)
+        .and_then(|r| r.cherry_pick_range_preview.as_ref())
+        .filter(|p| p.range == range && p.source == source)
+        .and_then(|p| match &p.commits {
+            gitcomet_state::model::Loadable::Ready(commits) => Some(commits.len()),
+            _ => None,
+        });
+
+    let count_text = match commit_count {
+        Some(0) => "no commits".to_string(),
+        Some(1) => "1 commit".to_string(),
+        Some(n) => format!("{n} commits"),
+        None => "some commits".to_string(),
+    };
+
+    let summary = format!(
+        "New branch \"{name}\" will be created from {base}, then {count_text} from {source} \
+         (everything not already in {range}) will be copied onto it. \
+         {base} and {source} are left untouched."
+    );
+    let diagram = format!("{base}  ──▶  {name} (new)  ◀──  {count_text} from {range}..{source}");
+
+    div()
+        .flex()
+        .flex_col()
+        .gap(scaled_px(4.0))
+        .mx_2()
+        .my_1()
+        .px_2()
+        .py_2()
+        .rounded(px(theme.radii.panel))
+        .bg(theme.colors.surface.raised)
+        .border_1()
+        .border_color(theme.colors.stroke.subtle)
+        .child(
+            div()
+                .text_xs()
+                .font_weight(FontWeight::BOLD)
+                .text_color(theme.colors.foreground.primary)
+                .child("What will be created"),
+        )
+        .child(
+            div()
+                .text_xs()
+                .text_color(theme.colors.foreground.secondary)
+                .child(summary),
+        )
+        .child(
+            div()
+                .text_xs()
+                .font_family("ui-monospace")
+                .text_color(theme.colors.foreground.secondary)
+                .child(diagram),
+        )
+}
+
 pub(super) fn panel(
     this: &mut PopoverHost,
     _repo_id: RepoId,
@@ -267,23 +371,28 @@ pub(super) fn panel(
     div()
         .flex()
         .flex_col()
-        .w(scaled_px(540.0))
-        .child(popover_title("Cherry-pick branch"))
+        .w(scaled_px(860.0))
+        .child(popover_title("Branch extractor"))
         .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()
                 .px_2()
-                .py_1()
+                .py_2()
                 .text_sm()
                 .text_color(theme.colors.foreground.secondary)
                 .child(
-                    "Creates a new branch C from D, checks it out, and cherry-picks every commit unique to A relative to B (B..A, oldest first, merge commits skipped). B must be an ancestor of A.",
+                    "Copies a range of commits onto a brand-new branch, without touching the \
+                     branches they came from. Pick the branch or tag to copy commits from, then \
+                     the earlier point they grew from (it needs to already contain that starting \
+                     point in its history) — every commit after that, oldest first and skipping \
+                     merges, gets copied. Finally, pick which branch the new one should start from.",
                 ),
         )
+        .child(div().border_t_1().border_color(theme.colors.stroke.subtle))
         .child(picker_row(
             this,
             theme,
-            "Source ref (A)",
+            "Copy commits from (A)",
             &source_input,
             |this, name, _e, window, cx| {
                 this.handle_cherry_pick_source_select(name, window, cx);
@@ -294,7 +403,7 @@ pub(super) fn panel(
         .child(picker_row(
             this,
             theme,
-            "Range ref (B)",
+            "Excluding commits already in (B)",
             &range_input,
             |this, name, _e, window, cx| {
                 this.handle_cherry_pick_range_select(name, window, cx);
@@ -305,7 +414,7 @@ pub(super) fn panel(
         .child(picker_row(
             this,
             theme,
-            "Base branch (D)",
+            "New branch starts from (D)",
             &base_input,
             |this, name, _e, window, cx| {
                 this.handle_cherry_pick_base_select(name, window, cx);
@@ -333,6 +442,7 @@ pub(super) fn panel(
                     .child("Source and range are the same — there is nothing to cherry-pick."),
             )
         })
+        .child(summary_section(this, theme, _repo_id, scaled_px, cx))
         .child(div().border_t_1().border_color(theme.colors.stroke.default))
         .child(
             div()

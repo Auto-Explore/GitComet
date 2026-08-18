@@ -115,11 +115,11 @@ pub(super) fn model(
         _ => None,
     });
     items.push(ContextMenuItem::Entry {
-        label: "Cherry-pick onto new branch…".into(),
+        label: "Branch extractor…".into(),
         icon: Some("icons/copy.svg".into()),
         shortcut: None,
         disabled: false,
-        action: Box::new(ContextMenuAction::OpenPopover {
+        action: Box::new(ContextMenuAction::OpenPopoverCentered {
             kind: PopoverKind::CherryPickRangePrompt {
                 repo_id,
                 prefill_source: Some(name.clone()),

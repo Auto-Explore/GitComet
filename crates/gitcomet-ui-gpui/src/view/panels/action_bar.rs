@@ -786,36 +786,34 @@ impl Render for ActionBarView {
             })
             .gitcomet_tooltip(theme, "Create branch".into());
 
-        let cherry_pick_range_invoker: SharedString = "cherry_pick_range_btn".into();
-        let cherry_pick_range_active = self
+        // Home for one-shot automation flows (currently just the Branch
+        // extractor). A dedicated menu rather than a growing row of
+        // standalone buttons, so adding the next automation is a new menu
+        // entry, not a new place in the action bar.
+        let automations_invoker: SharedString = "automations_btn".into();
+        let automations_active = self
             .active_context_menu_invoker
             .as_ref()
-            .is_some_and(|id| id.as_ref() == cherry_pick_range_invoker.as_ref());
-        let cherry_pick_range = components::Button::new("cherry_pick_range", "")
-            .start_slot(icon("icons/copy.svg", icon_primary))
+            .is_some_and(|id| id.as_ref() == automations_invoker.as_ref());
+        let automations_enabled = self.state.active_repo.is_some();
+        let automations = components::Button::new("automations", "Automations")
+            .start_slot(icon("icons/cog.svg", icon_primary))
             .style(components::ButtonStyle::Subtle)
-            .selected(cherry_pick_range_active)
+            .selected(automations_active)
             .selected_bg(menu_selected_bg)
+            .disabled(!automations_enabled)
             .on_click_with_bounds(theme, cx, move |this, _e, bounds, window, cx| {
-                this.activate_context_menu_invoker(cherry_pick_range_invoker.clone(), cx);
+                this.activate_context_menu_invoker(automations_invoker.clone(), cx);
                 if let Some(repo_id) = this.state.active_repo {
                     this.open_popover_for_bounds(
-                        PopoverKind::CherryPickRangePrompt {
-                            repo_id,
-                            prefill_source: None,
-                            prefill_range: None,
-                            prefill_base: None,
-                        },
+                        PopoverKind::AutomationsMenu { repo_id },
                         bounds,
                         window,
                         cx,
                     );
                 }
             })
-            .gitcomet_tooltip(
-                theme,
-                "Cherry-pick ref A onto a new branch C created from D (range B..A)".into(),
-            );
+            .gitcomet_tooltip(theme, "Automation flows for this repository".into());
 
         div()
             .w_full()
@@ -933,7 +931,7 @@ impl Render for ActionBarView {
                     .child(push)
                     .child(terminal)
                     .child(create_branch)
-                    .child(cherry_pick_range)
+                    .child(automations)
                     .child(stash),
             )
     }

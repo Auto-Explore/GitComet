@@ -1866,7 +1866,7 @@ fn local_branch_menu_cherry_pick_prefills_source_range_and_base(cx: &mut gpui::T
 
         let entry = model.items.iter().find_map(|item| match item {
             ContextMenuItem::Entry { label, action, .. }
-                if label.as_ref() == "Cherry-pick onto new branch…" =>
+                if label.as_ref() == "Branch extractor…" =>
             {
                 Some((**action).clone())
             }
@@ -1874,7 +1874,7 @@ fn local_branch_menu_cherry_pick_prefills_source_range_and_base(cx: &mut gpui::T
         });
 
         match entry {
-            Some(ContextMenuAction::OpenPopover {
+            Some(ContextMenuAction::OpenPopoverCentered {
                 kind:
                     PopoverKind::CherryPickRangePrompt {
                         repo_id: rid,
@@ -1888,9 +1888,7 @@ fn local_branch_menu_cherry_pick_prefills_source_range_and_base(cx: &mut gpui::T
                 assert_eq!(prefill_range.as_deref(), Some("origin/awesome"));
                 assert_eq!(prefill_base.as_deref(), Some("main"));
             }
-            _ => panic!(
-                "expected Cherry-pick onto new branch entry with prefilled CherryPickRangePrompt"
-            ),
+            _ => panic!("expected Branch extractor entry with prefilled CherryPickRangePrompt"),
         }
     });
 }
@@ -2010,5 +2008,78 @@ fn cherry_pick_range_preview_row_click_opens_commit_and_closes_popover(
                     .as_ref()
                     .is_some_and(|c| c.as_ref() == FIRST_SHA)
             })
+    });
+}
+
+/// Regression test for the Branch extractor's Cancel button: it calls
+/// `dismiss_prompt_popover`, whose match previously had no arm for
+/// `CherryPickRangePrompt` and silently fell through the catch-all,
+/// leaving the dialog stuck open. It now belongs to the same
+/// standalone-dialog group as `CloneRepo`/`CreateTagPrompt`, closed via
+/// `close_popover`.
+#[gpui::test]
+fn cherry_pick_range_cancel_closes_popover(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let repo_id = RepoId(242);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_cherry_pick_cancel",
+        std::process::id()
+    ));
+
+    let mut repo = RepoState::new_opening(
+        repo_id,
+        gitcomet_core::domain::RepoSpec {
+            workdir: workdir.clone(),
+        },
+    );
+    repo.head_branch = Loadable::Ready("main".to_string());
+    let state = Arc::new(AppState {
+        repos: vec![repo],
+        active_repo: Some(repo_id),
+        ..Default::default()
+    });
+    store.replace_snapshot_for_test(Arc::clone(&state));
+
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.state = Arc::clone(&state);
+            this._ui_model
+                .update(cx, |model, cx| model.set_state(state, cx));
+            cx.notify();
+        });
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CherryPickRangePrompt {
+                        repo_id,
+                        prefill_source: None,
+                        prefill_range: None,
+                        prefill_base: None,
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                assert!(
+                    matches!(
+                        host.popover,
+                        Some(PopoverKind::CherryPickRangePrompt { .. })
+                    ),
+                    "expected the dialog to be open before Cancel"
+                );
+
+                host.dismiss_prompt_popover(window, cx);
+
+                assert!(
+                    host.popover.is_none(),
+                    "expected Cancel to close the Branch extractor dialog"
+                );
+            });
+        });
     });
 }

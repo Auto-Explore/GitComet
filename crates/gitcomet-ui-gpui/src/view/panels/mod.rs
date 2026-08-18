@@ -353,6 +353,13 @@ pub(in crate::view) enum ContextMenuAction {
     OpenPopover {
         kind: PopoverKind,
     },
+    /// Like [`ContextMenuAction::OpenPopover`], but opens the target as a
+    /// centered modal dialog instead of anchoring it to the menu that
+    /// triggered it. For popovers that need real room to breathe (e.g. the
+    /// Branch extractor dialog), rather than a small anchored dropdown.
+    OpenPopoverCentered {
+        kind: PopoverKind,
+    },
     LoadInteractiveRebaseSetup {
         repo_id: RepoId,
         base: String,
