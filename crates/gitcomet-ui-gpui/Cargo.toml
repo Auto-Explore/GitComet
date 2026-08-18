@@ -27,6 +27,7 @@ syntax-web = [
     "dep:tree-sitter-css",
     "dep:tree-sitter-html",
     "dep:tree-sitter-javascript",
+    "dep:tree-sitter-jinja-dialects",
     "dep:tree-sitter-jsdoc",
     "dep:tree-sitter-regex",
     "dep:tree-sitter-typescript",
@@ -111,6 +112,7 @@ tree-sitter-go = { workspace = true, optional = true }
 tree-sitter-gomod = { workspace = true, optional = true }
 tree-sitter-gowork = { workspace = true, optional = true }
 tree-sitter-html = { workspace = true, optional = true }
+tree-sitter-jinja-dialects = { workspace = true, optional = true }
 tree-sitter-javascript = { workspace = true, optional = true }
 tree-sitter-java = { workspace = true, optional = true }
 tree-sitter-jsdoc = { workspace = true, optional = true }
@@ -179,6 +181,7 @@ tree-sitter-go = { workspace = true }
 tree-sitter-gomod = { workspace = true }
 tree-sitter-gowork = { workspace = true }
 tree-sitter-html = { workspace = true }
+tree-sitter-jinja-dialects = { workspace = true }
 tree-sitter-javascript = { workspace = true }
 tree-sitter-java = { workspace = true }
 tree-sitter-jsdoc = { workspace = true }

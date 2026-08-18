@@ -8,6 +8,10 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "markdown-inline" | "markdown_inline" => DiffSyntaxLanguage::MarkdownInline,
         "html" | "htm" => DiffSyntaxLanguage::Html,
         "vue" => DiffSyntaxLanguage::Vue,
+        // The first six are the grammar's own declared file-types; `dj` is the
+        // Django addition. `diff_syntax_language_for_path` reads only the last
+        // extension, so `base.html.j2` and `page.html.dj` land here too.
+        "njk" | "nunjucks" | "j2" | "jinja" | "jinja2" | "twig" | "dj" => DiffSyntaxLanguage::Jinja,
         "xml" | "svg" | "xsl" | "xslt" | "xsd" | "xhtml" | "plist" | "csproj" | "fsproj"
         | "vbproj" | "sln" | "props" | "targets" | "resx" | "xaml" | "wsdl" | "rss" | "atom"
         | "opml" | "glade" | "ui" | "iml" => DiffSyntaxLanguage::Xml,
@@ -208,6 +212,11 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
+        )),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Jinja => Some((
+            tree_sitter_jinja_dialects::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(JINJA_HIGHLIGHTS_QUERY, JINJA_INJECTIONS_QUERY),
         )),
         #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Vue => Some((
@@ -445,11 +454,27 @@ fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec 
     let injection_query = asset.injections.map(|source| {
         tree_sitter::Query::new(&ts_language, source).expect("injections.scm should compile")
     });
+    let injection_combined_patterns = injection_query
+        .as_ref()
+        .map(|injection_query| {
+            (0..injection_query.pattern_count())
+                .map(|pattern_ix| {
+                    injection_query
+                        .property_settings(pattern_ix)
+                        .iter()
+                        .any(|setting| setting.key.as_ref() == "injection.combined")
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    let has_combined_injections = injection_combined_patterns.iter().any(|combined| *combined);
     TreesitterHighlightSpec {
         ts_language,
         query,
         capture_kinds,
         injection_query,
+        injection_combined_patterns,
+        has_combined_injections,
     }
 }
 
@@ -561,6 +586,8 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
         #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
+        #[cfg(any(test, feature = "syntax-web"))]
+        DiffSyntaxLanguage::Jinja => highlight_spec_entry!(Jinja),
         #[cfg(any(test, feature = "syntax-web"))]
         DiffSyntaxLanguage::Css => highlight_spec_entry!(Css),
         #[cfg(any(test, feature = "syntax-extra"))]

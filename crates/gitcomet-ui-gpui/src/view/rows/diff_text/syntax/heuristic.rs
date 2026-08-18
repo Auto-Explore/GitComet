@@ -162,14 +162,21 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // Vue's root grammar is html-like, so it uses html comments here rather
         // than `//`: a template line such as `<img src="//cdn…">` must not be
         // greyed out as a comment.
-        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml | DiffSyntaxLanguage::Vue => {
-            HeuristicCommentConfig {
-                line_comment: None,
-                hash_comment: false,
-                block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
-                visual_basic_line_comment: false,
-            }
-        }
+        // Jinja joins the markup languages for the same reason Vue does, and
+        // takes `<!-- -->` rather than its own `{# #}`: the heuristic supports one
+        // block-comment spec, a `.njk`/`.j2` file is mostly HTML, and the
+        // tree-sitter path already colours `{# #}` as a `(comment)` node. This
+        // fallback only runs for lines past MAX_TREESITTER_LINE_BYTES or in
+        // HeuristicOnly mode.
+        DiffSyntaxLanguage::Html
+        | DiffSyntaxLanguage::Xml
+        | DiffSyntaxLanguage::Vue
+        | DiffSyntaxLanguage::Jinja => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
         DiffSyntaxLanguage::FSharp => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: false,
@@ -263,9 +270,10 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
 
 fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<HeuristicBlockCommentKind> {
     match language {
-        DiffSyntaxLanguage::Html | DiffSyntaxLanguage::Xml | DiffSyntaxLanguage::Vue => {
-            Some(HeuristicBlockCommentKind::Html)
-        }
+        DiffSyntaxLanguage::Html
+        | DiffSyntaxLanguage::Xml
+        | DiffSyntaxLanguage::Vue
+        | DiffSyntaxLanguage::Jinja => Some(HeuristicBlockCommentKind::Html),
         DiffSyntaxLanguage::FSharp => Some(HeuristicBlockCommentKind::FSharp),
         DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
         DiffSyntaxLanguage::PowerShell => Some(HeuristicBlockCommentKind::PowerShell),
@@ -1272,6 +1280,37 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         | DiffSyntaxLanguage::Vue
         | DiffSyntaxLanguage::Css
         | DiffSyntaxLanguage::Toml => matches!(ident, "true" | "false"),
+        // Only the identifiers that cannot also be an HTML attribute name or an
+        // ordinary English word. The heuristic is line-based and sees the whole
+        // line, tags and body text alike, so `if`, `for`, `in`, `is`, `not`,
+        // `and`, `or`, `as`, `set`, `block`, `with`, `call` and `do` are all left
+        // out -- colouring `<label for=…>` or the word "with" in prose as a
+        // keyword is worse than missing a real one. This is the same trade-off
+        // the markup arm above makes for Vue. The tree-sitter path colours the
+        // full keyword set from queries/jinja_highlights.scm.
+        DiffSyntaxLanguage::Jinja => matches!(
+            ident,
+            "endif"
+                | "endfor"
+                | "endblock"
+                | "endmacro"
+                | "endcall"
+                | "endfilter"
+                | "endraw"
+                | "endset"
+                | "endwith"
+                | "endautoescape"
+                | "endverbatim"
+                | "elif"
+                | "elseif"
+                | "extends"
+                | "macro"
+                | "autoescape"
+                | "verbatim"
+                | "true"
+                | "false"
+                | "none"
+        ),
         DiffSyntaxLanguage::Json | DiffSyntaxLanguage::Yaml => {
             matches!(ident, "true" | "false" | "null")
         }

@@ -52,6 +52,10 @@ const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
 #[cfg(any(test, feature = "syntax-web"))]
+const JINJA_HIGHLIGHTS_QUERY: &str = include_str!("queries/jinja_highlights.scm");
+#[cfg(any(test, feature = "syntax-web"))]
+const JINJA_INJECTIONS_QUERY: &str = include_str!("queries/jinja_injections.scm");
+#[cfg(any(test, feature = "syntax-web"))]
 const VUE_HIGHLIGHTS_QUERY: &str = include_str!("queries/vue_highlights.scm");
 #[cfg(any(test, feature = "syntax-web"))]
 const VUE_INJECTIONS_QUERY: &str = include_str!("queries/vue_injections.scm");
@@ -107,6 +111,19 @@ const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
 /// itself contains an injection query.
 const TS_MAX_INJECTION_DEPTH: usize = 1;
 const TS_INJECTION_CACHE_MAX_ENTRIES: usize = 32;
+
+/// Ceilings for one `(#set! injection.combined)` layer.
+///
+/// Deliberately hard limits rather than a time budget. Injected parses are
+/// unbudgeted today, and the prepared path has no stale/retry mechanism to repair
+/// a layer that a `ControlFlow::Break` dropped -- that exists only in `live.rs` --
+/// so a budgeted combined layer would appear and vanish with scroll timing.
+/// Skipping the group deterministically leaves the host grammar painting instead.
+///
+/// The parse only lexes *included* bytes, so a 64-row window of template is a few
+/// KB; these are guards against pathological input, not the expected case.
+const TS_COMBINED_INJECTION_MAX_RANGES: usize = 512;
+const TS_COMBINED_INJECTION_MAX_BYTES: usize = 128 * 1024;
 
 thread_local! {
     static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -203,6 +220,10 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     MarkdownInline,
     Html,
     Vue,
+    /// Nunjucks, Jinja2, Twig and Django templates. One grammar parses the union
+    /// of all four dialects; the HTML around the tags arrives as a combined
+    /// injection (see queries/jinja_injections.scm).
+    Jinja,
     Css,
     Hcl,
     Bicep,
@@ -6697,13 +6718,18 @@ mod tests {
         );
     }
 
-    #[test]
-    fn grammar_and_highlight_spec_agree_on_supported_languages() {
-        let all_languages = [
+    /// Every `DiffSyntaxLanguage` variant, listed by hand.
+    ///
+    /// Deliberately not derived from the enum: the point is that adding a variant
+    /// breaks a test until someone states what the new language does, rather than
+    /// being silently swept into whatever the loop asserts.
+    fn all_supported_languages() -> Vec<DiffSyntaxLanguage> {
+        Vec::from([
             DiffSyntaxLanguage::Markdown,
             DiffSyntaxLanguage::MarkdownInline,
             DiffSyntaxLanguage::Html,
             DiffSyntaxLanguage::Vue,
+            DiffSyntaxLanguage::Jinja,
             DiffSyntaxLanguage::Css,
             DiffSyntaxLanguage::Hcl,
             DiffSyntaxLanguage::Bicep,
@@ -6744,8 +6770,12 @@ mod tests {
             DiffSyntaxLanguage::GitCommit,
             DiffSyntaxLanguage::Bash,
             DiffSyntaxLanguage::Xml,
-        ];
-        for lang in all_languages {
+        ])
+    }
+
+    #[test]
+    fn grammar_and_highlight_spec_agree_on_supported_languages() {
+        for lang in all_supported_languages() {
             let has_grammar = tree_sitter_grammar(lang).is_some();
             let has_spec = tree_sitter_highlight_spec(lang).is_some();
             assert_eq!(
@@ -6754,6 +6784,613 @@ mod tests {
                  grammar={has_grammar}, spec={has_spec}"
             );
         }
+    }
+
+    // ---- Nunjucks / Jinja2 ----------------------------------------------------
+
+    /// The `.njk` / `.j2` / `.jinja` fixture, shared by the tests below.
+    #[cfg(any(test, feature = "syntax-web"))]
+    const JINJA_TEMPLATE_FIXTURE: &[&str] = &[
+        /* 0 */ "{# page heading #}",
+        /* 1 */ "<ul class=\"list\">",
+        /* 2 */ "  {% for item in items %}",
+        /* 3 */ "    <li>{{ item.name | upper }}</li>",
+        /* 4 */ "  {% endfor %}",
+        /* 5 */ "</ul>",
+    ];
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    fn prepare_jinja_document(lines: &[&str]) -> PreparedSyntaxDocument {
+        prepare_test_document(DiffSyntaxLanguage::Jinja, &lines.join("\n"))
+    }
+
+    #[test]
+    fn jinja_extension_is_supported() {
+        for path in [
+            "templates/index.njk",
+            "templates/base.html.j2",
+            "roles/web/templates/nginx.conf.j2",
+            "templates/macros.jinja",
+            "templates/macros.jinja2",
+            "templates/page.twig",
+            "templates/page.html.dj",
+        ] {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(DiffSyntaxLanguage::Jinja),
+                "{path} should resolve to the Jinja grammar"
+            );
+        }
+        // The same table backs markdown fence info, so these come along for free.
+        for fence in ["njk", "jinja", "jinja2", "twig", "nunjucks"] {
+            assert_eq!(
+                diff_syntax_language_for_code_fence_info(fence),
+                Some(DiffSyntaxLanguage::Jinja),
+                "```{fence} should resolve to the Jinja grammar"
+            );
+        }
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn prepared_jinja_document_highlights_template_tags() {
+        let doc = prepare_jinja_document(JINJA_TEMPLATE_FIXTURE);
+
+        let comment = token_kinds_for_line_fragment(doc, 0, JINJA_TEMPLATE_FIXTURE[0], "heading");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "`{{# … #}}` is a Jinja comment: {comment:?}"
+        );
+
+        let open = token_kinds_for_line_fragment(doc, 2, JINJA_TEMPLATE_FIXTURE[2], "{%");
+        assert!(
+            open.contains(&SyntaxTokenKind::PunctuationSpecial),
+            "the `{{%` delimiter should be punctuation, not plain text: {open:?}"
+        );
+
+        for (line_ix, keyword) in [(2usize, "for"), (4, "endfor")] {
+            let kinds = token_kinds_for_line_fragment(
+                doc,
+                line_ix,
+                JINJA_TEMPLATE_FIXTURE[line_ix],
+                keyword,
+            );
+            assert!(
+                kinds.contains(&SyntaxTokenKind::KeywordControl),
+                "`{keyword}` is control flow and should render semibold: {kinds:?}"
+            );
+        }
+
+        let filter = token_kinds_for_line_fragment(doc, 3, JINJA_TEMPLATE_FIXTURE[3], "upper");
+        assert!(
+            filter.contains(&SyntaxTokenKind::Function),
+            "a filter name after `|` should read as a function: {filter:?}"
+        );
+
+        let property = token_kinds_for_line_fragment(doc, 3, JINJA_TEMPLATE_FIXTURE[3], "name");
+        assert!(
+            property.contains(&SyntaxTokenKind::Property),
+            "`item.name` should colour `name` as a property: {property:?}"
+        );
+    }
+
+    /// The HTML half of a template comes from the combined injection, not the
+    /// Jinja grammar -- which sees only opaque `text` nodes.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn prepared_jinja_document_highlights_html_via_the_combined_injection() {
+        let doc = prepare_jinja_document(JINJA_TEMPLATE_FIXTURE);
+
+        let tag = token_kinds_for_line_fragment(doc, 1, JINJA_TEMPLATE_FIXTURE[1], "ul");
+        assert!(
+            tag.contains(&SyntaxTokenKind::Tag),
+            "`<ul>` should be tagged by the injected HTML layer: {tag:?}"
+        );
+        let attribute = token_kinds_for_line_fragment(doc, 1, JINJA_TEMPLATE_FIXTURE[1], "class");
+        assert!(
+            attribute.contains(&SyntaxTokenKind::Attribute),
+            "`class=` should be an HTML attribute: {attribute:?}"
+        );
+
+        // The whole point of the combined injection: `<li>` sits inside the loop
+        // body, in a different `text` node from `<ul>`, and still highlights.
+        let inner = token_kinds_for_line_fragment(doc, 3, JINJA_TEMPLATE_FIXTURE[3], "li");
+        assert!(
+            inner.contains(&SyntaxTokenKind::Tag),
+            "`<li>` is in a separate text run from `<ul>`; only a combined layer \
+             sees them as one document: {inner:?}"
+        );
+    }
+
+    /// The injected HTML must stay off the template tags, which the Jinja
+    /// grammar owns. See `combined_injection_gaps`.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn jinja_html_injection_does_not_bleed_onto_template_tags() {
+        let doc = prepare_jinja_document(JINJA_TEMPLATE_FIXTURE);
+        let kinds = token_kinds_for_line_fragment(doc, 4, JINJA_TEMPLATE_FIXTURE[4], "endfor");
+        assert!(
+            !kinds.contains(&SyntaxTokenKind::Tag),
+            "`{{% endfor %}}` sits in a gap between two HTML ranges; an HTML element \
+             node spanning it must not colour it as a tag: {kinds:?}"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn jinja_injection_targets_resolve_to_working_grammars() {
+        let lang: tree_sitter::Language = tree_sitter_jinja_dialects::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, JINJA_INJECTIONS_QUERY)
+            .expect("jinja_injections.scm should compile");
+        let mut checked = 0usize;
+        for pattern_ix in 0..query.pattern_count() {
+            for setting in query.property_settings(pattern_ix) {
+                if setting.key.as_ref() != "injection.language" {
+                    continue;
+                }
+                let Some(value) = setting.value.as_deref() else {
+                    continue;
+                };
+                let target = injection_language_from_name(value).unwrap_or_else(|| {
+                    panic!("jinja_injections.scm names an unknown injection language {value:?}")
+                });
+                assert!(
+                    tree_sitter_highlight_spec(target).is_some(),
+                    "jinja_injections.scm injects {value:?} but no grammar is wired for \
+                     {target:?}, so the injection would silently no-op"
+                );
+                checked += 1;
+            }
+        }
+        assert!(
+            checked > 0,
+            "expected at least one `#set! injection.language`"
+        );
+    }
+
+    /// Warm-up reads targets off the compiled query, and only sees `#set!`
+    /// literals. If the HTML target ever moved into an `@injection.language`
+    /// capture, the ~0.5ms HTML spec compile would move back onto the draw path.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn jinja_spec_warmup_reaches_html_through_a_set_directive() {
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Jinja).expect("jinja spec");
+        let injection_query = spec
+            .injection_query
+            .as_ref()
+            .expect("jinja injection query");
+        let reaches_html = (0..injection_query.pattern_count()).any(|pattern_ix| {
+            injection_query
+                .property_settings(pattern_ix)
+                .iter()
+                .filter(|setting| setting.key.as_ref() == "injection.language")
+                .any(|setting| {
+                    setting
+                        .value
+                        .as_deref()
+                        .and_then(injection_language_from_name)
+                        == Some(DiffSyntaxLanguage::Html)
+                })
+        });
+        assert!(
+            reaches_html,
+            "warm_reachable_highlight_specs must be able to see the html target"
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn jinja_injection_query_stays_under_the_match_limit_on_a_dense_template() {
+        let mut lines = vec!["<ul>".to_string()];
+        for ix in 0..120 {
+            lines.push(format!(
+                "  {{% if show{ix} %}}<li class=\"r{ix}\">{{{{ row{ix}.label | title }}}}</li>{{% endif %}}"
+            ));
+        }
+        lines.push("</ul>".to_string());
+        let text = lines.join("\n");
+
+        let lang: tree_sitter::Language = tree_sitter_jinja_dialects::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, JINJA_INJECTIONS_QUERY)
+            .expect("jinja_injections.scm should compile");
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang)
+            .expect("jinja grammar should load");
+        let tree = parser
+            .parse(&text, None)
+            .expect("dense template should parse");
+
+        let mut cursor = tree_sitter::QueryCursor::new();
+        cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+        let mut matched = 0usize;
+        {
+            let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
+            tree_sitter::StreamingIterator::advance(&mut matches);
+            while matches.get().is_some() {
+                matched += 1;
+                tree_sitter::StreamingIterator::advance(&mut matches);
+            }
+        }
+
+        assert!(
+            !cursor.did_exceed_match_limit(),
+            "the Jinja injection query overflowed the {TS_QUERY_MATCH_LIMIT}-match \
+             in-progress pool on a {}-line template. A combined group that loses ranges \
+             assembles a different HTML document, so the engine drops the whole group and \
+             the template renders with no HTML highlighting at all",
+            lines.len(),
+        );
+        assert!(matched > 0, "the dense template should produce matches");
+    }
+
+    /// The grammar is a young crates.io release binding through
+    /// `tree-sitter-language`, so a tree-sitter bump could outrun it.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn jinja_grammar_is_abi_compatible_with_workspace_tree_sitter() {
+        let jinja: tree_sitter::Language = tree_sitter_jinja_dialects::LANGUAGE.into();
+        let abi = jinja.abi_version();
+        assert!(
+            (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                .contains(&abi),
+            "tree-sitter-jinja-dialects ABI {abi} is outside the range this tree-sitter \
+             supports ({}..={})",
+            tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+            tree_sitter::LANGUAGE_VERSION,
+        );
+    }
+
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn jinja_grammar_parses_every_dialect_it_claims() {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_jinja_dialects::LANGUAGE.into())
+            .expect("jinja grammar should load into the workspace tree-sitter");
+        // One sample per dialect the crate advertises, since a single grammar
+        // serving all of njk/j2/twig/dj is the reason it was chosen.
+        for (dialect, source) in [
+            ("jinja2", "{% for x in xs %}{{ x|e }}{% endfor %}\n"),
+            ("nunjucks", "{% set n = 1 %}{{ n + 1 }}\n"),
+            ("twig", "{% if a is not empty %}{{ a.b }}{% endif %}\n"),
+            (
+                "django",
+                "{% extends \"base.html\" %}{% block body %}{% endblock %}\n",
+            ),
+        ] {
+            let tree = parser
+                .parse(source, None)
+                .unwrap_or_else(|| panic!("{dialect} sample should parse"));
+            assert!(
+                !tree.root_node().has_error(),
+                "{dialect} sample produced an ERROR node: {}",
+                tree.root_node().to_sexp(),
+            );
+        }
+    }
+
+    // ---- `#set! injection.combined` ------------------------------------------
+
+    /// The inventory tripwire.
+    ///
+    /// Combined injections change how a grammar's whole document is assembled, so
+    /// a grammar bump that quietly introduces the directive must not slip through
+    /// review. F#'s `xml_doc` rule is the only one in the tree today; it arrived
+    /// with the upstream `tree_sitter_fsharp::INJECTIONS_QUERY` rather than being
+    /// written here.
+    #[test]
+    fn combined_injection_declarations_are_exactly_the_known_set() {
+        let mut declared = Vec::new();
+        for lang in all_supported_languages() {
+            let Some(spec) = tree_sitter_highlight_spec(lang) else {
+                continue;
+            };
+            for (pattern_ix, combined) in spec.injection_combined_patterns.iter().enumerate() {
+                if *combined {
+                    declared.push((lang, pattern_ix));
+                }
+            }
+            assert_eq!(
+                spec.has_combined_injections,
+                spec.injection_combined_patterns.iter().any(|c| *c),
+                "{lang:?} has a stale has_combined_injections flag"
+            );
+        }
+        assert_eq!(
+            declared,
+            vec![
+                // queries/jinja_injections.scm -- the HTML around the template tags.
+                (DiffSyntaxLanguage::Jinja, 0),
+                // Upstream tree_sitter_fsharp::INJECTIONS_QUERY -- `xml_doc` lines.
+                (DiffSyntaxLanguage::FSharp, 3),
+            ],
+            "the set of grammars declaring `#set! injection.combined` changed. Every entry \
+             here parses all its matches as one document via set_included_ranges, so a new \
+             one needs the gap-clipping and cache behaviour reviewed -- it is not a \
+             drop-in.\nfound: {declared:?}"
+        );
+    }
+
+    // The one-range cases are the point: a single included range is the shape
+    // every non-combined injection has, and both helpers have to leave it alone.
+    #[allow(clippy::single_range_in_vec_init)]
+    #[test]
+    fn merge_sorted_injection_ranges_normalises_for_set_included_ranges() {
+        // Empty stays empty: an empty slice is tree-sitter's "whole document"
+        // reset, which callers must detect rather than pass on.
+        assert!(merge_sorted_injection_ranges(Vec::new()).is_empty());
+        // Degenerate ranges are dropped, not kept as zero-width.
+        assert!(merge_sorted_injection_ranges(vec![5..5]).is_empty());
+        assert_eq!(merge_sorted_injection_ranges(vec![2..5]), vec![2..5]);
+        // Unsorted input is sorted: set_included_ranges rejects descending ranges.
+        assert_eq!(
+            merge_sorted_injection_ranges(vec![10..12, 2..5]),
+            vec![2..5, 10..12]
+        );
+        // Touching ranges coalesce, so the gap list carries no empty entries.
+        assert_eq!(merge_sorted_injection_ranges(vec![2..5, 5..9]), vec![2..9]);
+        // Overlapping ranges coalesce: set_included_ranges rejects overlap.
+        assert_eq!(merge_sorted_injection_ranges(vec![2..7, 5..9]), vec![2..9]);
+        // Fully contained range is absorbed rather than shortening the outer one.
+        assert_eq!(
+            merge_sorted_injection_ranges(vec![2..20, 5..9]),
+            vec![2..20]
+        );
+    }
+
+    // The one-range cases are the point: a single included range is the shape
+    // every non-combined injection has, and both helpers have to leave it alone.
+    #[allow(clippy::single_range_in_vec_init)]
+    #[test]
+    fn combined_injection_gaps_are_the_complement_within_the_window() {
+        assert_eq!(combined_injection_gaps(0..100, &[]), vec![0..100]);
+        assert!(combined_injection_gaps(0..100, &[0..100]).is_empty());
+        assert_eq!(
+            combined_injection_gaps(0..100, &[10..20, 30..40]),
+            vec![0..10, 20..30, 40..100]
+        );
+        // Range flush against each edge produces no leading/trailing gap.
+        assert_eq!(combined_injection_gaps(0..100, &[0..20]), vec![20..100]);
+        assert_eq!(combined_injection_gaps(0..100, &[80..100]), vec![0..80]);
+        // Ranges reaching outside the window are clipped to it, not extrapolated.
+        assert_eq!(combined_injection_gaps(20..80, &[0..30]), vec![30..80]);
+        assert_eq!(combined_injection_gaps(20..80, &[70..200]), vec![20..70]);
+        assert!(combined_injection_gaps(20..80, &[0..200]).is_empty());
+        // A range entirely outside contributes nothing and does not swallow the window.
+        assert_eq!(combined_injection_gaps(20..80, &[200..300]), vec![20..80]);
+    }
+
+    /// Two halves of an HTML element split across a host-grammar tag must parse as
+    /// one element, and the injected grammar must not colour the host bytes
+    /// between them.
+    ///
+    /// HTML stands in for the eventual template grammar here so the test needs no
+    /// new dependency. The ranges are the same shape a `(text) @injection.content`
+    /// rule produces on a real template.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn combined_injection_parses_disjoint_ranges_as_one_document() {
+        let text = "<ul>\n{% for x in xs %}<li>hi</li>{% endfor %}\n</ul>\n";
+        let input = treesitter_document_input_from_text(text);
+        let bytes = text.as_bytes();
+        let ranges = combined_test_ranges(text);
+
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("html spec");
+        let tree = parse_combined_injection_tree(spec, bytes, input.line_starts.as_ref(), &ranges)
+            .expect("combined parse should succeed");
+
+        assert_eq!(
+            tree.root_node().start_byte(),
+            ranges[0].start,
+            "a tree parsed with included_ranges reports document offsets"
+        );
+        assert!(
+            !tree.root_node().has_error(),
+            "the <ul> opened before `{{% for %}}` should close after `{{% endfor %}}` when the \
+             three text runs are parsed as one document: {}",
+            tree.root_node().to_sexp(),
+        );
+    }
+
+    /// The other half: nodes straddling two included ranges report a byte range
+    /// covering the host bytes in between, so their captures have to be clipped.
+    #[cfg(any(test, feature = "syntax-web"))]
+    #[test]
+    fn combined_injection_tokens_do_not_bleed_into_the_gaps() {
+        let text = "<ul>\n{% for x in xs %}<li>hi</li>{% endfor %}\n</ul>\n";
+        let input = treesitter_document_input_from_text(text);
+        let bytes = text.as_bytes();
+        let ranges = combined_test_ranges(text);
+        let line_starts = input.line_starts.as_ref();
+
+        let spec = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("html spec");
+        let tree = parse_combined_injection_tree(spec, bytes, line_starts, &ranges)
+            .expect("combined parse should succeed");
+
+        let line_count = line_starts.len();
+        let mut tokens = collect_treesitter_document_line_tokens_for_line_window(
+            &tree,
+            spec,
+            bytes,
+            line_starts,
+            0,
+            line_count,
+        );
+        let window_end = line_region_end_byte(line_starts, bytes.len(), line_count - 1);
+        for gap in combined_injection_gaps(0..window_end, &ranges) {
+            subtract_absolute_range_from_document_tokens(line_starts, bytes, 0, &mut tokens, gap);
+        }
+
+        // Line 1 is `{% for x in xs %}<li>hi</li>{% endfor %}`. Only the `<li>hi</li>`
+        // slice belongs to HTML; both template tags are host-grammar bytes.
+        let line_start = line_starts[1];
+        let html_start = text.find("<li>").expect("li") - line_start;
+        let html_end = text.find("{% endfor %}").expect("endfor") - line_start;
+        for token in &tokens[1] {
+            assert!(
+                token.range.start >= html_start && token.range.end <= html_end,
+                "injected HTML token {:?} escaped its included range \
+                 ({html_start}..{html_end}) into a `{{% … %}}` gap",
+                token.range,
+            );
+        }
+        assert!(
+            !tokens[1].is_empty(),
+            "clipping should not have removed the genuine <li> tokens as well"
+        );
+    }
+
+    /// Byte ranges of the HTML runs in the combined-injection fixture, i.e. what a
+    /// template grammar's `(text)` nodes would capture.
+    #[cfg(any(test, feature = "syntax-web"))]
+    fn combined_test_ranges(text: &str) -> Vec<Range<usize>> {
+        let for_tag = text.find("{% for x in xs %}").expect("for tag");
+        let li = text.find("<li>").expect("li");
+        let endfor = text.find("{% endfor %}").expect("endfor");
+        let after_endfor = endfor + "{% endfor %}".len();
+        merge_sorted_injection_ranges(vec![0..for_tag, li..endfor, after_endfor..text.len()])
+    }
+
+    /// F# XML doc comments are the one in-tree consumer of `injection.combined`.
+    ///
+    /// `xml_doc` is a per-line token, so before combined support each `///` line
+    /// was its own XML document: `<summary>` on one line and `</summary>` on
+    /// another never met, and each cost an entry in the 32-slot injection cache.
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn fsharp_xml_doc_comment_is_highlighted_as_one_xml_document() {
+        let lines = [
+            /* 0 */ "/// <summary>",
+            /* 1 */ "/// Adds two numbers.",
+            /* 2 */ "/// </summary>",
+            /* 3 */ "let add x y = x + y",
+        ];
+        let doc = prepare_test_document(DiffSyntaxLanguage::FSharp, &lines.join("\n"));
+
+        let closing = token_kinds_for_line_fragment(doc, 2, lines[2], "summary");
+        assert!(
+            closing.contains(&SyntaxTokenKind::Tag),
+            "`</summary>` closes a tag opened two lines earlier, which only parses \
+             when the three xml_doc lines are one document: {closing:?}"
+        );
+
+        // And the layer stays inside its own ranges: the following line is F#.
+        let keyword = token_kinds_for_line_fragment(doc, 3, lines[3], "let");
+        assert!(
+            keyword.contains(&SyntaxTokenKind::Keyword),
+            "the combined XML layer leaked past the doc comment onto `let`: {keyword:?}"
+        );
+    }
+
+    /// Combined layers must not touch the per-node injection cache at all.
+    ///
+    /// The 32-slot LRU exists to share one injected parse across several line
+    /// windows. A combined layer is scoped to a single window and its result is
+    /// already memoised a level up in the chunk cache, so caching it would buy
+    /// nothing and would evict the entries `vue_static_inline_styles_do_not_flood_
+    /// the_injection_cache` depends on. Before this change, 200 `///` lines meant
+    /// 200 entries into a 32-slot cache.
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn combined_injections_do_not_consume_the_per_node_injection_cache() {
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = vec!["/// <summary>".to_string()];
+        for ix in 0..200 {
+            lines.push(format!("/// line {ix}"));
+        }
+        lines.push("/// </summary>".to_string());
+        lines.push("let add x y = x + y".to_string());
+        let line_count = lines.len();
+
+        let doc = prepare_test_document(DiffSyntaxLanguage::FSharp, &lines.join("\n"));
+        for line_ix in 0..line_count {
+            let _ = syntax_tokens_for_prepared_document_line(doc, line_ix);
+        }
+
+        let cached = TS_INJECTION_CACHE.with(|cache| cache.borrow().len());
+        assert_eq!(
+            cached, 0,
+            "a combined injection is parsed per window and memoised by the chunk cache, so \
+             it must not enter TS_INJECTION_CACHE (cap {TS_INJECTION_CACHE_MAX_ENTRIES}); \
+             {line_count} lines of xml doc comment created {cached} entries"
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// The failure this would cause is invisible and global.
+    ///
+    /// `TS_PARSER` is pooled and its included ranges are sticky; `with_ts_parser`
+    /// can skip `set_language` entirely on the fast path, so a combined parse that
+    /// forgot to clear them would truncate the *next* root parse on this thread —
+    /// for any language, with no error anywhere. Asserted behaviourally so it
+    /// survives tree-sitter API changes.
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn combined_injection_parse_clears_the_pooled_parsers_included_ranges() {
+        let fsharp = ["/// <summary>", "/// x", "/// </summary>", "let x = 1"];
+        let _ = prepare_test_document(DiffSyntaxLanguage::FSharp, &fsharp.join("\n"));
+
+        let mut rust_lines = Vec::new();
+        for ix in 0..300 {
+            rust_lines.push(format!("fn f{ix}() -> u32 {{ {ix} }}"));
+        }
+        let last_ix = rust_lines.len() - 1;
+        let last_line = rust_lines[last_ix].clone();
+        let doc = prepare_test_document(DiffSyntaxLanguage::Rust, &rust_lines.join("\n"));
+
+        let kinds = token_kinds_for_line_fragment(doc, last_ix, &last_line, "fn");
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Keyword),
+            "the last line of a 300-line Rust document lost its tokens after a combined \
+             injection ran on this thread -- the pooled parser's included ranges were not \
+             cleared, so the root parse was truncated: {kinds:?}"
+        );
+    }
+
+    /// A `(text)`-style combined rule fires once per node, so this is the query
+    /// most likely to overflow the in-progress match pool. Overflow is worse for a
+    /// combined layer than a single one: tree-sitter discards matches silently, and
+    /// a missing range changes the document the injected grammar assembles.
+    #[cfg(any(test, feature = "syntax-extra"))]
+    #[test]
+    fn fsharp_xml_doc_injection_stays_under_the_match_limit_on_a_long_doc_comment() {
+        let mut lines = vec!["/// <summary>".to_string()];
+        for ix in 0..200 {
+            lines.push(format!("/// line {ix}"));
+        }
+        lines.push("/// </summary>".to_string());
+        let text = lines.join("\n");
+
+        let lang: tree_sitter::Language = tree_sitter_fsharp::LANGUAGE_FSHARP.into();
+        let query = tree_sitter::Query::new(&lang, tree_sitter_fsharp::INJECTIONS_QUERY)
+            .expect("fsharp injections.scm should compile");
+        let mut parser = tree_sitter::Parser::new();
+        parser.set_language(&lang).expect("fsharp grammar");
+        let tree = parser.parse(&text, None).expect("doc comment should parse");
+
+        let mut cursor = tree_sitter::QueryCursor::new();
+        cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+        let mut matched = 0usize;
+        {
+            let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
+            tree_sitter::StreamingIterator::advance(&mut matches);
+            while matches.get().is_some() {
+                matched += 1;
+                tree_sitter::StreamingIterator::advance(&mut matches);
+            }
+        }
+
+        assert!(
+            !cursor.did_exceed_match_limit(),
+            "the F# injection query overflowed the {TS_QUERY_MATCH_LIMIT}-match in-progress \
+             pool on a {}-line doc comment; a combined group that loses ranges assembles a \
+             different document, so the whole group is dropped when this happens",
+            lines.len(),
+        );
+        assert!(matched > 0, "the doc comment should produce matches at all");
     }
 
     // There are deliberately no `disabled_*_grammars_fall_back_to_none` tests.
