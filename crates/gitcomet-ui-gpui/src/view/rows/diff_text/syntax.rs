@@ -77,18 +77,37 @@ const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
 const TS_MAX_INJECTION_DEPTH: usize = 1;
 const TS_INJECTION_CACHE_MAX_ENTRIES: usize = 32;
 
-/// Ceilings for one `(#set! injection.combined)` layer.
+/// Ceilings for one `(#set! injection.combined)` layer in the *prepared* path.
 ///
-/// Deliberately hard limits rather than a time budget. Injected parses are
-/// unbudgeted today, and the prepared path has no stale/retry mechanism to repair
-/// a layer that a `ControlFlow::Break` dropped -- that exists only in `live.rs` --
-/// so a budgeted combined layer would appear and vanish with scroll timing.
-/// Skipping the group deterministically leaves the host grammar painting instead.
+/// Hard limits rather than a time budget: the prepared path cannot repair a layer
+/// dropped by a `ControlFlow::Break` -- that mechanism exists only in `live.rs` --
+/// so a budgeted layer would appear and vanish with scroll timing.
 ///
-/// The parse only lexes *included* bytes, so a 64-row window of template is a few
-/// KB; these are guards against pathological input, not the expected case.
-const TS_COMBINED_INJECTION_MAX_RANGES: usize = 512;
+/// Both are measured *after* the ranges are clipped by
+/// [`combined_injection_clip_region`], and that ordering is load-bearing. A
+/// template grammar hands out one `(text)` node per gap between tags, so an
+/// unclipped node is document-sized: a 1900-line `.njk` is a single 138KB range,
+/// which tripped the byte ceiling for every window and dropped HTML highlighting
+/// from the whole file.
+///
+/// The byte ceiling is the one that bounds cost, since a combined parse lexes only
+/// included bytes. The range ceiling is only an allocation guard on the
+/// `Vec<tree_sitter::Range>`, sized so template density cannot reach it -- at 512 an
+/// ordinary 8-column table row (~950 ranges in a clipped window) tripped it.
+///
+/// `live.rs` deliberately has no equivalent; see `parse_injection_layers`.
+const TS_COMBINED_INJECTION_MAX_RANGES: usize = 16_384;
 const TS_COMBINED_INJECTION_MAX_BYTES: usize = 128 * 1024;
+
+/// Context on each side of the rendered window that a combined injection is still
+/// parsed with.
+///
+/// Clipping to *exactly* the window is not output-preserving: a `<section` whose
+/// attributes run onto the next lines is cut in half, and the surviving half loses
+/// its captures to error recovery. Measured on that fixture: margin 0 differs on two
+/// lines, margin 1024 is byte-identical to an unclipped parse. 4KB is well past any
+/// realistic multi-line tag and still bounds the parse at window + 8KB.
+const TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES: usize = 4 * 1024;
 
 thread_local! {
     static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
@@ -189,6 +208,10 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     /// of all four dialects; the HTML around the tags arrives as a combined
     /// injection (see queries/jinja_injections.scm).
     Jinja,
+    /// The same grammar with the HTML injection removed, for templates whose body is
+    /// not markup: `values.yaml.j2`, `deploy.sh.j2`, `nginx.conf.j2`. Template tags
+    /// still highlight; only the injection is dropped.
+    JinjaText,
     Css,
     Hcl,
     Bicep,
@@ -1433,6 +1456,201 @@ mod tests {
         let auto_again =
             syntax_tokens_for_line(text, DiffSyntaxLanguage::Xml, DiffSyntaxMode::Auto);
         assert_eq!(auto_again, auto);
+    }
+
+    // ---- Heuristic fallback: Nix and Jinja ------------------------------------
+
+    fn heuristic_tokens(text: &str, language: DiffSyntaxLanguage) -> Vec<SyntaxToken> {
+        syntax_tokens_for_line(text, language, DiffSyntaxMode::HeuristicOnly).to_vec()
+    }
+
+    fn heuristic_string_spans(text: &str, language: DiffSyntaxLanguage) -> Vec<&str> {
+        heuristic_tokens(text, language)
+            .into_iter()
+            .filter(|token| token.kind == SyntaxTokenKind::String)
+            .map(|token| &text[token.range])
+            .collect()
+    }
+
+    /// Treating `'` as a quote painted the rest of the line as a string from the
+    /// tick in `foldl'` onward. HeuristicOnly is a production path for large diffs,
+    /// not just a fallback.
+    #[test]
+    fn nix_apostrophe_identifiers_do_not_open_a_string() {
+        for line in [
+            "  x = lib.foldl' add 0 xs;",
+            "  y = builtins.mapAttrs' (n: v: v) set;",
+            "  inherit (lib) foldl' concatMapAttrs';",
+        ] {
+            assert!(
+                heuristic_string_spans(line, DiffSyntaxLanguage::Nix).is_empty(),
+                "an apostrophe identifier opened a string in {line:?}: {:?}",
+                heuristic_tokens(line, DiffSyntaxLanguage::Nix)
+            );
+        }
+
+        // The tick is part of the identifier, so a keyword check sees the whole
+        // name rather than a truncated prefix.
+        let tokens = heuristic_tokens("  inherit' = 1;", DiffSyntaxLanguage::Nix);
+        assert!(
+            !tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Keyword),
+            "`inherit'` is not the keyword `inherit`: {tokens:?}"
+        );
+
+        // Double-quoted strings are untouched by any of this.
+        assert_eq!(
+            heuristic_string_spans("  z = \"literal\";", DiffSyntaxLanguage::Nix),
+            vec!["\"literal\""]
+        );
+    }
+
+    /// The reason the Nix arm exists instead of reusing the Hcl one: `//` is Nix's
+    /// update operator, so Hcl's `//` line comment would grey out the rest of the
+    /// line. Nothing else guards it -- every other Nix test takes the tree-sitter
+    /// path -- so folding Nix back into the `Hcl | Php` arm would pass the suite.
+    #[test]
+    fn nix_update_operator_is_not_a_line_comment() {
+        let line = "  merged = { a = 1; } // { b = 2; };";
+        let tokens = heuristic_tokens(line, DiffSyntaxLanguage::Nix);
+        assert!(
+            !tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "the `//` update operator was greyed out as a comment: {tokens:?}"
+        );
+
+        // `#` still is one, and `/* */` too.
+        let hashed = heuristic_tokens("  a = 1; # note", DiffSyntaxLanguage::Nix);
+        assert!(
+            hashed
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "`#` is Nix's line comment: {hashed:?}"
+        );
+        let blocked = heuristic_tokens("  a = /* note */ 1;", DiffSyntaxLanguage::Nix);
+        assert!(
+            blocked
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "`/* */` is Nix's block comment: {blocked:?}"
+        );
+    }
+
+    /// Both new keyword tables, which nothing else reaches: every other Nix and
+    /// Jinja test goes through `prepare_test_document`, i.e. tree-sitter.
+    #[test]
+    fn nix_and_jinja_heuristic_keyword_tables_are_covered() {
+        fn keywords(text: &str, language: DiffSyntaxLanguage) -> Vec<&str> {
+            syntax_tokens_for_line(text, language, DiffSyntaxMode::HeuristicOnly)
+                .iter()
+                .filter(|token| {
+                    matches!(
+                        token.kind,
+                        SyntaxTokenKind::Keyword | SyntaxTokenKind::KeywordControl
+                    )
+                })
+                .map(|token| &text[token.range.clone()])
+                .collect()
+        }
+
+        let line = "  x = with pkgs; let y = 1; in rec { inherit y; }";
+        let found = keywords(line, DiffSyntaxLanguage::Nix);
+        for expected in ["with", "let", "in", "rec", "inherit"] {
+            assert!(
+                found.contains(&expected),
+                "Nix keyword `{expected}` missing from {found:?}"
+            );
+        }
+        assert!(
+            keywords("  buildInputs = [ pkgs.hello ];", DiffSyntaxLanguage::Nix).is_empty(),
+            "an ordinary Nix attribute name must not colour as a keyword"
+        );
+
+        // The Jinja table omits any identifier that could also be an HTML attribute
+        // name or an English word: the heuristic sees the whole line.
+        let found = keywords("{% endif %}{% extends 'base' %}", DiffSyntaxLanguage::Jinja);
+        for expected in ["endif", "extends"] {
+            assert!(
+                found.contains(&expected),
+                "Jinja keyword `{expected}` missing from {found:?}"
+            );
+        }
+        for prose in [
+            "  <label for=\"name\">Name</label>",
+            "  <p>Do it with care, and set it aside.</p>",
+        ] {
+            assert!(
+                keywords(prose, DiffSyntaxLanguage::Jinja).is_empty(),
+                "an HTML attribute or English word coloured as a Jinja keyword in \
+                 {prose:?}: {:?}",
+                keywords(prose, DiffSyntaxLanguage::Jinja)
+            );
+        }
+
+        // The text-bodied reading shares the table.
+        assert_eq!(
+            keywords("{% endif %}", DiffSyntaxLanguage::JinjaText),
+            keywords("{% endif %}", DiffSyntaxLanguage::Jinja),
+            "both Jinja readings must share one keyword table"
+        );
+    }
+
+    /// Templates are mostly prose, and an unconditional single-quote rule painted
+    /// the rest of the line from the first `It's`.
+    #[test]
+    fn markup_prose_apostrophes_do_not_open_a_string() {
+        for language in [
+            DiffSyntaxLanguage::Jinja,
+            DiffSyntaxLanguage::Html,
+            DiffSyntaxLanguage::Vue,
+            DiffSyntaxLanguage::Xml,
+        ] {
+            for line in [
+                "  <p>It's a test</p>",
+                "  <p>don't panic</p>",
+                "  <li>{{ user.name }}'s profile</li>",
+            ] {
+                assert!(
+                    heuristic_string_spans(line, language).is_empty(),
+                    "{language:?} treated a prose apostrophe as a quote in {line:?}: {:?}",
+                    heuristic_tokens(line, language)
+                );
+            }
+        }
+    }
+
+    /// ... while a `'` in value position is still a quote, which is why the rule is
+    /// positional rather than a flat "markup has no single quotes".
+    #[test]
+    fn markup_single_quoted_values_are_still_strings() {
+        assert_eq!(
+            heuristic_string_spans("  <div class='card'>", DiffSyntaxLanguage::Html),
+            vec!["'card'"]
+        );
+        assert_eq!(
+            heuristic_string_spans("  {{ x|default('n/a') }}", DiffSyntaxLanguage::Jinja),
+            vec!["'n/a'"]
+        );
+        assert_eq!(
+            heuristic_string_spans("  {% if y == 'z' %}", DiffSyntaxLanguage::Jinja),
+            vec!["'z'"]
+        );
+    }
+
+    /// The positional rule must not leak into languages where `'` really does open
+    /// a string anywhere -- Rust byte and char literals are the sharp case.
+    #[test]
+    fn non_markup_languages_keep_unconditional_single_quote_strings() {
+        assert_eq!(
+            heuristic_string_spans("let b = b'x';", DiffSyntaxLanguage::Rust),
+            vec!["'x'"]
+        );
+        assert_eq!(
+            heuristic_string_spans("s = 'it''s'", DiffSyntaxLanguage::Sql),
+            vec!["'it'", "'s'"]
+        );
     }
 
     /// Pins a deliberate limitation rather than an achievement.
@@ -6916,7 +7134,6 @@ mod tests {
         for path in [
             "templates/index.njk",
             "templates/base.html.j2",
-            "roles/web/templates/nginx.conf.j2",
             "templates/macros.jinja",
             "templates/macros.jinja2",
             "templates/page.twig",
@@ -6928,7 +7145,7 @@ mod tests {
                 "{path} should resolve to the Jinja grammar"
             );
         }
-        // The same table backs markdown fence info, so these come along for free.
+        // The same table backs markdown fence info.
         for fence in ["njk", "jinja", "jinja2", "twig", "nunjucks"] {
             assert_eq!(
                 diff_syntax_language_for_code_fence_info(fence),
@@ -6936,6 +7153,72 @@ mod tests {
                 "```{fence} should resolve to the Jinja grammar"
             );
         }
+    }
+
+    /// A `.j2` says the file is templated, not that it is markup. Resolving a shell
+    /// or config template to the HTML-injecting reading hands the HTML grammar
+    /// `cat <<EOF` and `2>&1`, which open bogus elements.
+    #[test]
+    fn text_bodied_jinja_templates_do_not_get_html_injected() {
+        for path in [
+            "roles/web/templates/nginx.conf.j2",
+            "charts/app/values.yaml.j2",
+            "deploy/deploy.sh.j2",
+            "docker-compose.yml.j2",
+            "config/settings.ini.jinja",
+            "db/schema.sql.j2",
+        ] {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(DiffSyntaxLanguage::JinjaText),
+                "{path} has a non-markup body, so it must not inject HTML"
+            );
+        }
+
+        let markup = tree_sitter_highlight_spec(DiffSyntaxLanguage::Jinja).expect("jinja spec");
+        let text = tree_sitter_highlight_spec(DiffSyntaxLanguage::JinjaText).expect("text spec");
+        assert!(
+            markup.injection_query.is_some(),
+            "the markup reading is the one that injects HTML"
+        );
+        assert!(
+            text.injection_query.is_none(),
+            "the text reading must have no injection query at all"
+        );
+        assert!(
+            !text.has_combined_injections,
+            "with no injection query there is no combined group to build"
+        );
+    }
+
+    /// The shell-template shape that motivated the split, end to end.
+    #[test]
+    fn shell_bodied_jinja_template_does_not_colour_redirects_as_tags() {
+        let lines = [
+            /* 0 */ "#!/bin/sh",
+            /* 1 */ "{% if debug %}",
+            /* 2 */ "cat <<EOF > {{ target }}",
+            /* 3 */ "  value=1",
+            /* 4 */ "EOF",
+            /* 5 */ "{% endif %}",
+            /* 6 */ "run --flag 2>&1 < input",
+        ];
+        let doc = prepare_test_document(DiffSyntaxLanguage::JinjaText, &lines.join("\n"));
+
+        for (line_ix, fragment) in [(2usize, "EOF"), (6, "input")] {
+            let kinds = token_kinds_for_line_fragment(doc, line_ix, lines[line_ix], fragment);
+            assert!(
+                !kinds.contains(&SyntaxTokenKind::Tag),
+                "`{fragment}` on line {line_ix} was coloured as an HTML tag: {kinds:?}"
+            );
+        }
+
+        // The template tags themselves still highlight -- only the injection is gone.
+        let endif = token_kinds_for_line_fragment(doc, 5, lines[5], "endif");
+        assert!(
+            endif.contains(&SyntaxTokenKind::KeywordControl),
+            "template keywords must survive the split: {endif:?}"
+        );
     }
 
     #[test]
@@ -7353,6 +7636,271 @@ mod tests {
         merge_sorted_injection_ranges(vec![0..for_tag, li..endfor, after_endfor..text.len()])
     }
 
+    // ---- Combined-injection scoping -------------------------------------------
+
+    /// A template dense enough to exercise the per-window ceilings, `rows` lines of
+    /// `cells` cells each wrapped in a block so the body is one big text run.
+    fn dense_jinja_table(rows: usize, cells: usize) -> String {
+        let mut lines = vec!["{% block body %}".to_string()];
+        for row in 0..rows {
+            let mut line = String::from("<tr>");
+            for cell in 0..cells {
+                line.push_str(&format!("<td>{{{{ r{row}.c{cell} }}}}</td>"));
+            }
+            line.push_str("</tr>");
+            lines.push(line);
+        }
+        lines.push("{% endblock %}".to_string());
+        lines.join("\n")
+    }
+
+    /// An 8-column table row used to produce 513 ranges in one 64-line chunk, one
+    /// over the ceiling, and the whole chunk lost its HTML.
+    #[test]
+    fn dense_table_template_keeps_its_html_highlighting() {
+        for cells in [4usize, 8, 16] {
+            let text = dense_jinja_table(200, cells);
+            let lines: Vec<&str> = text.lines().collect();
+            let doc = prepare_test_document(DiffSyntaxLanguage::Jinja, &text);
+
+            let kinds = token_kinds_for_line_fragment(doc, 100, lines[100], "<td>");
+            assert!(
+                kinds.contains(&SyntaxTokenKind::Tag),
+                "a {cells}-cell table row lost its HTML highlighting: {kinds:?}"
+            );
+        }
+    }
+
+    /// The byte ceiling had the same defect at an ordinary file size: all the HTML
+    /// between two template tags is ONE `(text)` node, so a ~1800-line template
+    /// tripped the 128KB ceiling in every window.
+    #[test]
+    fn large_template_with_one_huge_text_run_keeps_its_html_highlighting() {
+        let mut lines = vec!["{% block body %}".to_string()];
+        for ix in 0..2_400 {
+            lines.push(format!(
+                "  <span class=\"cell\" data-row=\"{ix}\">value {ix} padded out</span>"
+            ));
+        }
+        lines.push("{% endblock %}".to_string());
+        let text = lines.join("\n");
+        assert!(
+            text.len() > TS_COMBINED_INJECTION_MAX_BYTES,
+            "fixture must exceed the byte ceiling to be a regression test ({} bytes)",
+            text.len()
+        );
+
+        let line_refs: Vec<&str> = text.lines().collect();
+        let doc = prepare_test_document(DiffSyntaxLanguage::Jinja, &text);
+        for line_ix in [1usize, 700, 1_500, 2_300] {
+            let kinds = token_kinds_for_line_fragment(doc, line_ix, line_refs[line_ix], "span");
+            assert!(
+                kinds.contains(&SyntaxTokenKind::Tag),
+                "line {line_ix} of a {}-byte template lost its HTML: {kinds:?}",
+                text.len()
+            );
+        }
+    }
+
+    /// The property the whole optimisation rests on, and the reason for the margin:
+    /// a `<section` whose attributes run onto the next lines straddles the window
+    /// edge, and an exact clip cuts it in half. Asserted against an unclipped parse
+    /// so it stays honest if the margin is ever tuned.
+    #[test]
+    fn clipping_a_combined_layer_to_the_window_preserves_its_tokens() {
+        let mut lines = vec!["{% block body %}".to_string()];
+        for ix in 0..300 {
+            if ix == 62 || ix == 126 {
+                lines.push("  <section".to_string());
+                lines.push("     id=\"straddle\"".to_string());
+                lines.push("     class=\"wide\">body</section>".to_string());
+            } else {
+                lines.push(format!(
+                    "  <span class=\"c{ix}\" data-x='y'>row {ix}</span>"
+                ));
+            }
+        }
+        lines.push("{% endblock %}".to_string());
+        let text = lines.join("\n") + "\n";
+
+        let input = treesitter_document_input_from_text(&text);
+        let bytes = text.as_bytes();
+        let line_starts = input.line_starts.as_ref();
+        let jinja = tree_sitter_highlight_spec(DiffSyntaxLanguage::Jinja).expect("jinja spec");
+        let root = with_ts_parser_parse_result(&jinja.ts_language, |parser| {
+            parse_treesitter_tree(parser, bytes, None, None)
+        })
+        .expect("root parse");
+
+        let start_line_ix = 64usize;
+        let end_line_ix = start_line_ix + TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS;
+        let matches = collect_treesitter_injection_matches_for_line_window(
+            &root,
+            jinja,
+            bytes,
+            line_starts,
+            start_line_ix,
+            end_line_ix,
+        );
+        let group = matches.combined.first().expect("one combined html group");
+        assert_eq!(
+            group.ranges.len(),
+            1,
+            "the fixture's body must be one text run, or it is not testing the hard case"
+        );
+
+        let window_start = line_starts[start_line_ix];
+        let window_end = line_region_end_byte(line_starts, bytes.len(), end_line_ix - 1);
+        let html = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("html spec");
+        let render = |ranges: &[Range<usize>]| -> Vec<Vec<SyntaxToken>> {
+            let tree = parse_combined_injection_tree(html, bytes, line_starts, ranges)
+                .expect("combined parse");
+            let mut injected = collect_treesitter_document_line_tokens_for_line_window(
+                &tree,
+                html,
+                bytes,
+                line_starts,
+                start_line_ix,
+                end_line_ix,
+            );
+            for gap in combined_injection_gaps(window_start..window_end, ranges) {
+                subtract_absolute_range_from_document_tokens(
+                    line_starts,
+                    bytes,
+                    start_line_ix,
+                    &mut injected,
+                    gap,
+                );
+            }
+            injected
+        };
+
+        let clip_region =
+            combined_injection_clip_region(line_starts, bytes.len(), start_line_ix, end_line_ix);
+        let clipped_ranges = clip_injection_ranges_to_region(&group.ranges, &clip_region);
+        let clipped_bytes: usize = clipped_ranges.iter().map(|r| r.end - r.start).sum();
+        let full_bytes: usize = group.ranges.iter().map(|r| r.end - r.start).sum();
+        assert!(
+            clipped_bytes < full_bytes,
+            "the clip must actually shrink the parse ({clipped_bytes} vs {full_bytes})"
+        );
+
+        assert_eq!(
+            render(&group.ranges),
+            render(&clipped_ranges),
+            "clipping to the window changed the tokens the window renders"
+        );
+    }
+
+    /// The clip region is the window plus a margin on both sides, and the margin is
+    /// load-bearing rather than decorative -- see the constant.
+    #[test]
+    fn combined_injection_clip_region_pads_the_window_on_both_sides() {
+        let text = dense_jinja_table(400, 2);
+        let input = treesitter_document_input_from_text(&text);
+        let line_starts = input.line_starts.as_ref();
+        let len = text.len();
+
+        let start_line_ix = 200usize;
+        let end_line_ix = start_line_ix + TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS;
+        let region = combined_injection_clip_region(line_starts, len, start_line_ix, end_line_ix);
+        let window_start = line_starts[start_line_ix];
+        let window_end = line_region_end_byte(line_starts, len, end_line_ix - 1);
+
+        assert!(
+            region.start < window_start && region.end > window_end,
+            "clip region {region:?} must strictly contain the window \
+             {window_start}..{window_end}"
+        );
+        assert_eq!(
+            window_start - region.start,
+            TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES,
+            "leading margin"
+        );
+
+        // ... and still bounded, which is what makes the ceilings window-scoped.
+        assert!(
+            region.end - region.start
+                < window_end - window_start + 2 * TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES + 1,
+            "clip region must not grow past window + 2 * margin"
+        );
+
+        // At the top of the document the margin runs out rather than underflowing.
+        let head = combined_injection_clip_region(line_starts, len, 0, 8);
+        assert_eq!(head.start, 0, "no underflow at the start of the document");
+    }
+
+    /// A cut that touches nothing must leave the line's tokens exactly as they were,
+    /// and must not reallocate to do it.
+    #[test]
+    fn subtracting_a_non_overlapping_range_leaves_line_tokens_untouched() {
+        let original = vec![
+            SyntaxToken {
+                range: 0..4,
+                kind: SyntaxTokenKind::Tag,
+            },
+            SyntaxToken {
+                range: 10..14,
+                kind: SyntaxTokenKind::String,
+            },
+        ];
+
+        // Entirely before, entirely after, and in the gap between the two tokens.
+        for cut in [20..30usize, 4..10, 100..200] {
+            let mut tokens = original.clone();
+            subtract_relative_range_from_line_tokens(&mut tokens, cut.clone());
+            assert_eq!(tokens, original, "cut {cut:?} must be a no-op");
+        }
+
+        // ... and a cut that does overlap still splits, so the fast path is not
+        // swallowing real work.
+        let mut tokens = original.clone();
+        subtract_relative_range_from_line_tokens(&mut tokens, 2..12);
+        assert_eq!(
+            tokens,
+            vec![
+                SyntaxToken {
+                    range: 0..2,
+                    kind: SyntaxTokenKind::Tag,
+                },
+                SyntaxToken {
+                    range: 12..14,
+                    kind: SyntaxTokenKind::String,
+                },
+            ]
+        );
+    }
+
+    /// Pins the ordering rather than a symptom: no in-tree grammar declares both
+    /// kinds over one span yet, but with combined applied first an overlapping
+    /// single would delete its tokens and repaint only part of the span.
+    #[test]
+    fn combined_injection_groups_are_applied_after_the_single_ones() {
+        let source = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/src/view/rows/diff_text/syntax/prepared.rs"
+        ))
+        .expect("prepared.rs should be readable");
+        let body_start = source
+            .find("fn apply_injection_query_tokens_for_document")
+            .expect("the function that applies both kinds of layer");
+        let body = &source[body_start..];
+        let body_end = body.find("\n}\n").expect("the end of the function");
+        let body = &body[..body_end];
+
+        let singles_at = body
+            .find("for injection in &injections.singles")
+            .expect("the singles loop");
+        let combined_at = body
+            .find("for group in &injections.combined")
+            .expect("the combined loop");
+        assert!(
+            singles_at < combined_at,
+            "the singles loop must run before the combined one, or a single's \
+             subtraction erases combined tokens nothing repaints"
+        );
+    }
+
     /// F# XML doc comments are the one in-tree consumer of `injection.combined`.
     ///
     /// `xml_doc` is a per-line token, so before combined support each `///` line
@@ -7385,12 +7933,15 @@ mod tests {
 
     /// Combined layers must not touch the per-node injection cache at all.
     ///
-    /// The 32-slot LRU exists to share one injected parse across several line
-    /// windows. A combined layer is scoped to a single window and its result is
-    /// already memoised a level up in the chunk cache, so caching it would buy
-    /// nothing and would evict the entries `vue_static_inline_styles_do_not_flood_
-    /// the_injection_cache` depends on. Before this change, 200 `///` lines meant
-    /// 200 entries into a 32-slot cache.
+    /// The 32-slot LRU is keyed by a single node's content hash, which a combined
+    /// layer does not have -- its identity is a *set* of ranges. Feeding it one
+    /// entry per constituent node is what F# used to do: 200 `///` lines meant 200
+    /// entries into a 32-slot cache, evicting everything
+    /// `vue_static_inline_styles_do_not_flood_the_injection_cache` depends on.
+    ///
+    /// This is not a claim that combined parses are memoised elsewhere. They are
+    /// not: each of the N/64 chunks pays its own on first build, and clipping is
+    /// what keeps that cost proportional to the window.
     #[test]
     fn combined_injections_do_not_consume_the_per_node_injection_cache() {
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -7411,9 +7962,10 @@ mod tests {
         let cached = TS_INJECTION_CACHE.with(|cache| cache.borrow().len());
         assert_eq!(
             cached, 0,
-            "a combined injection is parsed per window and memoised by the chunk cache, so \
-             it must not enter TS_INJECTION_CACHE (cap {TS_INJECTION_CACHE_MAX_ENTRIES}); \
-             {line_count} lines of xml doc comment created {cached} entries"
+            "a combined layer's identity is a set of ranges, not one node's content \
+             hash, so it must not enter TS_INJECTION_CACHE (cap \
+             {TS_INJECTION_CACHE_MAX_ENTRIES}); {line_count} lines of xml doc comment \
+             created {cached} entries"
         );
 
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());

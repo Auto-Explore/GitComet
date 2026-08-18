@@ -2561,6 +2561,41 @@ pub(super) struct TreesitterHighlightSpec {
     pub(super) has_combined_injections: bool,
 }
 
+impl TreesitterHighlightSpec {
+    /// Whether match `pattern_ix` belongs to a shared layer.
+    ///
+    /// Reads the hoisted `has_combined_injections` gate first, so a grammar with no
+    /// combined pattern costs one branch. Shared by both collectors, which used to
+    /// inline this and drifted apart.
+    pub(super) fn is_combined_injection_pattern(&self, pattern_ix: usize) -> bool {
+        self.has_combined_injections
+            && self
+                .injection_combined_patterns
+                .get(pattern_ix)
+                .copied()
+                .unwrap_or(false)
+    }
+}
+
+/// Merges the per-pattern range map both collectors build into a deterministically
+/// ordered layer list.
+///
+/// The order is load-bearing: overlapping layers are applied in sequence and the
+/// later one wins, so `HashMap` order would tie an overlap's colour to hash seeding.
+pub(super) fn combined_injection_groups_in_apply_order(
+    combined_ranges: HashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>>,
+) -> Vec<(DiffSyntaxLanguage, usize, Vec<Range<usize>>)> {
+    let mut groups: Vec<(DiffSyntaxLanguage, usize, Vec<Range<usize>>)> = combined_ranges
+        .into_iter()
+        .filter_map(|((language, pattern_ix), ranges)| {
+            let ranges = merge_sorted_injection_ranges(ranges);
+            (!ranges.is_empty()).then_some((language, pattern_ix, ranges))
+        })
+        .collect();
+    groups.sort_unstable_by_key(|(language, pattern_ix, _)| (*language, *pattern_ix));
+    groups
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct TreesitterQueryPass {
     pub(super) byte_range: Range<usize>,
@@ -3076,12 +3111,8 @@ fn apply_injection_query_tokens_for_document(
         context.start_line_ix,
         context.end_line_ix,
     );
-    if !injections.truncated {
-        for group in &injections.combined {
-            apply_combined_injection_tokens(group, input, context);
-        }
-    }
-    for injection in injections.singles {
+    for injection in &injections.singles {
+        let injection = *injection;
         let Some(injected_tokens) = collect_injected_tokens_for_parent_line_window(
             input,
             context.line_starts,
@@ -3111,6 +3142,17 @@ fn apply_injection_query_tokens_for_document(
                 continue;
             };
             line_tokens.extend(tokens);
+        }
+    }
+
+    // Combined last, and the order matters once a grammar declares both kinds over
+    // the same bytes. Each layer subtracts its own span from `per_line` before
+    // painting, so the last one wins the overlap; running combined first let a
+    // single delete combined tokens and then repaint only the bytes its own
+    // captures cover, leaving the rest bare. No in-tree grammar mixes them yet.
+    if !injections.truncated {
+        for group in &injections.combined {
+            apply_combined_injection_tokens(group, input, context);
         }
     }
 }
@@ -3157,10 +3199,10 @@ pub(super) fn parse_combined_injection_tree(
 }
 
 /// Clears a parser's included ranges on drop.
-struct IncludedRangesGuard<'parser>(&'parser mut tree_sitter::Parser);
+pub(super) struct IncludedRangesGuard<'parser>(&'parser mut tree_sitter::Parser);
 
 impl<'parser> IncludedRangesGuard<'parser> {
-    fn set(
+    pub(super) fn set(
         parser: &'parser mut tree_sitter::Parser,
         ranges: &[tree_sitter::Range],
     ) -> Option<Self> {
@@ -3171,7 +3213,7 @@ impl<'parser> IncludedRangesGuard<'parser> {
         Some(Self(parser))
     }
 
-    fn parser(&mut self) -> &mut tree_sitter::Parser {
+    pub(super) fn parser(&mut self) -> &mut tree_sitter::Parser {
         self.0
     }
 }
@@ -3182,27 +3224,74 @@ impl Drop for IncludedRangesGuard<'_> {
     }
 }
 
+/// The byte span a combined layer is parsed over for a given window.
+///
+/// The rendered window, widened by [`TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES`]
+/// on each side so a construct straddling the window edge is still parsed whole.
+/// See that constant for why the margin is not optional.
+pub(super) fn combined_injection_clip_region(
+    line_starts: &[usize],
+    input_len: usize,
+    start_line_ix: usize,
+    end_line_ix: usize,
+) -> Range<usize> {
+    let window_start = line_starts.get(start_line_ix).copied().unwrap_or(0);
+    let window_end = line_region_end_byte(line_starts, input_len, end_line_ix.saturating_sub(1));
+    let clip_start = window_start.saturating_sub(TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES);
+    let clip_end = window_end
+        .saturating_add(TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES)
+        .min(input_len);
+    clip_start..clip_end.max(clip_start)
+}
+
+/// `ranges` is already sorted and non-overlapping, and clipping preserves both, so
+/// the result needs no re-merge.
+pub(super) fn clip_injection_ranges_to_region(
+    ranges: &[Range<usize>],
+    region: &Range<usize>,
+) -> Vec<Range<usize>> {
+    ranges
+        .iter()
+        .filter_map(|range| {
+            let start = range.start.max(region.start);
+            let end = range.end.min(region.end);
+            (start < end).then_some(start..end)
+        })
+        .collect()
+}
+
 /// Parses one combined group and splices its tokens into `context.per_line`.
 fn apply_combined_injection_tokens(
     group: &CombinedInjectionGroup,
     input: &[u8],
     context: &mut DocumentTokenCollectionContext<'_>,
 ) {
-    if group.ranges.len() > TS_COMBINED_INJECTION_MAX_RANGES {
+    let Some(spec) = tree_sitter_highlight_spec(group.language) else {
+        return;
+    };
+
+    // Clip before the ceilings are applied, not after; see their doc comment.
+    let clip_region = combined_injection_clip_region(
+        context.line_starts,
+        input.len(),
+        context.start_line_ix,
+        context.end_line_ix,
+    );
+    let ranges = clip_injection_ranges_to_region(&group.ranges, &clip_region);
+    if ranges.is_empty() {
         return;
     }
-    let total_bytes: usize = group
-        .ranges
+    if ranges.len() > TS_COMBINED_INJECTION_MAX_RANGES {
+        return;
+    }
+    let total_bytes: usize = ranges
         .iter()
         .map(|range| range.end.saturating_sub(range.start))
         .sum();
     if total_bytes > TS_COMBINED_INJECTION_MAX_BYTES {
         return;
     }
-    let Some(spec) = tree_sitter_highlight_spec(group.language) else {
-        return;
-    };
-    let Some(tree) = parse_combined_injection_tree(spec, input, context.line_starts, &group.ranges)
+    let Some(tree) = parse_combined_injection_tree(spec, input, context.line_starts, &ranges)
     else {
         return;
     };
@@ -3231,7 +3320,7 @@ fn apply_combined_injection_tokens(
         input.len(),
         context.end_line_ix.saturating_sub(1),
     );
-    for gap in combined_injection_gaps(window_start..window_end, &group.ranges) {
+    for gap in combined_injection_gaps(window_start..window_end, &ranges) {
         subtract_absolute_range_from_document_tokens(
             context.line_starts,
             input,
@@ -3242,7 +3331,7 @@ fn apply_combined_injection_tokens(
     }
 
     // ... and drop the host grammar's tokens from the bytes the injection took over.
-    for range in &group.ranges {
+    for range in &ranges {
         subtract_absolute_range_from_document_tokens(
             context.line_starts,
             input,
@@ -3264,16 +3353,27 @@ fn apply_combined_injection_tokens(
 /// [`collect_treesitter_injection_matches_for_line_window`] -- all three are hard
 /// requirements of `Parser::set_included_ranges`, and an *empty* slice is
 /// tree-sitter's "reset to the whole document" rather than "parse nothing".
-struct CombinedInjectionGroup {
-    language: DiffSyntaxLanguage,
-    ranges: Vec<Range<usize>>,
+///
+/// The key is `(language, pattern_index)` with no host-node identity, matching
+/// upstream tree-sitter's semantics. The cost is that unrelated matches of one
+/// pattern share a document: `buildPhase` and `installPhase` in the same chunk parse
+/// as one bash script, so an unterminated `if` in the first recolours the second.
+///
+/// Do not "fix" that by sub-grouping on the parent node. Nix `(string_fragment)`s do
+/// sit under their own `indented_string_expression`, but Jinja `(text)` nodes are
+/// children of whatever encloses them (`source_file`, `for_statement`,
+/// `if_statement`), so a parent key would shatter one template's HTML into a
+/// document per block. The Nix case needs a per-pattern key.
+pub(super) struct CombinedInjectionGroup {
+    pub(super) language: DiffSyntaxLanguage,
+    pub(super) ranges: Vec<Range<usize>>,
 }
 
-struct TreesitterInjectionMatches {
+pub(super) struct TreesitterInjectionMatches {
     /// One layer per match, the pre-existing behaviour. Unchanged for every
     /// grammar that does not declare `injection.combined`.
-    singles: Vec<TreesitterInjectionMatch>,
-    combined: Vec<CombinedInjectionGroup>,
+    pub(super) singles: Vec<TreesitterInjectionMatch>,
+    pub(super) combined: Vec<CombinedInjectionGroup>,
     /// The query cursor overflowed `TS_QUERY_MATCH_LIMIT` somewhere in this
     /// window, so tree-sitter silently dropped matches.
     ///
@@ -3282,10 +3382,10 @@ struct TreesitterInjectionMatches {
     /// losing one range out of a combined set changes the document the injected
     /// grammar sees, so an unbalanced `<div>` can wreck the whole window. Better
     /// to leave the host grammar painting.
-    truncated: bool,
+    pub(super) truncated: bool,
 }
 
-fn collect_treesitter_injection_matches_for_line_window(
+pub(super) fn collect_treesitter_injection_matches_for_line_window(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
     input: &[u8],
@@ -3349,12 +3449,7 @@ fn collect_treesitter_injection_matches_for_line_window(
                         continue;
                     };
                     let pattern_ix = m.pattern_index;
-                    let is_combined = has_combined
-                        && highlight
-                            .injection_combined_patterns
-                            .get(pattern_ix)
-                            .copied()
-                            .unwrap_or(false);
+                    let is_combined = highlight.is_combined_injection_pattern(pattern_ix);
                     for capture in m
                         .captures
                         .iter()
@@ -3408,23 +3503,9 @@ fn collect_treesitter_injection_matches_for_line_window(
         };
     }
 
-    let mut combined: Vec<(DiffSyntaxLanguage, usize, CombinedInjectionGroup)> = combined_ranges
+    let combined = combined_injection_groups_in_apply_order(combined_ranges)
         .into_iter()
-        .filter_map(|((language, pattern_ix), ranges)| {
-            let ranges = merge_sorted_injection_ranges(ranges);
-            (!ranges.is_empty()).then_some((
-                language,
-                pattern_ix,
-                CombinedInjectionGroup { language, ranges },
-            ))
-        })
-        .collect();
-    // Applied in a stable order regardless of hash iteration order; on overlap the
-    // later layer wins, so the order has to be deterministic.
-    combined.sort_unstable_by_key(|(language, pattern_ix, _)| (*language, *pattern_ix));
-    let combined = combined
-        .into_iter()
-        .map(|(_, _, group)| group)
+        .map(|(language, _, ranges)| CombinedInjectionGroup { language, ranges })
         .collect::<Vec<_>>();
 
     TreesitterInjectionMatches {
@@ -3784,11 +3865,22 @@ pub(super) fn subtract_absolute_range_from_document_tokens(
     }
 }
 
-fn subtract_relative_range_from_line_tokens(
+pub(super) fn subtract_relative_range_from_line_tokens(
     line_tokens: &mut Vec<SyntaxToken>,
     cut_range: Range<usize>,
 ) {
     if cut_range.start >= cut_range.end || line_tokens.is_empty() {
+        return;
+    }
+
+    // Usually a no-op: the caller subtracts once per gap and once per range, so a
+    // dense template reaches this ~2R times per chunk while any one line intersects
+    // only a couple of those cuts. Rebuilding regardless cost a malloc, a memcpy and
+    // a free per miss.
+    if line_tokens
+        .iter()
+        .all(|token| token.range.end <= cut_range.start || token.range.start >= cut_range.end)
+    {
         return;
     }
 

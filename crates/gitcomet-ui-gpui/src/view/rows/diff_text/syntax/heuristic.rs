@@ -124,6 +124,7 @@ struct HeuristicOpenStateScanConfig {
     comment: HeuristicCommentConfig,
     block_comment_kind: Option<HeuristicBlockCommentKind>,
     allow_backtick_strings: bool,
+    single_quote: HeuristicSingleQuote,
 }
 
 impl HeuristicOpenStateScanConfig {
@@ -132,6 +133,7 @@ impl HeuristicOpenStateScanConfig {
             comment: heuristic_comment_config(language),
             block_comment_kind: heuristic_block_comment_kind(language),
             allow_backtick_strings: heuristic_allows_backtick_strings(language),
+            single_quote: heuristic_single_quote_role(language),
         }
     }
 }
@@ -175,6 +177,15 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             line_comment: None,
             hash_comment: false,
             block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+        },
+        // A text-bodied template has no markup to comment, so `<!-- -->` would be
+        // wrong; its body is yaml, shell, nginx.conf or dotenv, and all four use
+        // `#`. That also lands on Jinja's own `{# … #}`, one byte late.
+        DiffSyntaxLanguage::JinjaText => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: true,
+            block_comment: None,
             visual_basic_line_comment: false,
         },
         DiffSyntaxLanguage::FSharp => HeuristicCommentConfig {
@@ -579,6 +590,20 @@ fn advance_streamed_heuristic_open_state_ascii(
                 if matches!(byte, b'"' | b'\'')
                     || (scan_config.allow_backtick_strings && byte == b'`')
                 {
+                    // `potential_open_state_lead` over-approximates for `'`; this is
+                    // where a prose apostrophe or a Nix identifier tick is refused.
+                    if byte == b'\''
+                        && !heuristic_single_quote_opens_string(
+                            scan_config.single_quote,
+                            bytes,
+                            local,
+                        )
+                    {
+                        local += 1;
+                        *abs = abs.saturating_add(1);
+                        record_constant!(*abs, HeuristicOpenState::Normal);
+                        continue;
+                    }
                     local += 1;
                     *abs = abs.saturating_add(1);
                     *state = HeuristicOpenState::String {
@@ -919,6 +944,60 @@ fn heuristic_string_end(text: &str, start: usize, quote: char) -> usize {
     i.min(len)
 }
 
+/// What a `'` means to the heuristic scanner, which has no grammar to ask.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum HeuristicSingleQuote {
+    /// Opens a string anywhere. The C-family default, and what Rust byte and char
+    /// literals (`b'x'`, `'\n'`) need.
+    String,
+    /// Opens a string only where a value can start.
+    ///
+    /// Markup is mostly prose, and prose is full of apostrophes: an unconditional
+    /// rule painted the rest of the line from the first `It's`, and on the streamed
+    /// path the state then bled across lines. The preceding byte separates the two
+    /// uses -- a contraction follows what a value *ends* with, a word byte (`It's`)
+    /// or a closing delimiter (`{{ user.name }}'s`), while a quote follows an
+    /// operator, an opening delimiter or whitespace (`class='x'`,
+    /// `{{ x|default('n/a') }}`).
+    ValuePositionOnly,
+    /// Never a string; part of an identifier instead.
+    ///
+    /// Nix: `'` is a legal identifier character, so `lib.foldl'` and `mapAttrs'` are
+    /// one token each. Nix has no single-quoted string -- only `"..."` and the
+    /// indented `''...''` -- so nothing is lost. The `''...''` form is not
+    /// represented here and renders unhighlighted rather than mis-highlighted.
+    Identifier,
+}
+
+pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> HeuristicSingleQuote {
+    match language {
+        DiffSyntaxLanguage::Nix => HeuristicSingleQuote::Identifier,
+        DiffSyntaxLanguage::Html
+        | DiffSyntaxLanguage::Xml
+        | DiffSyntaxLanguage::Vue
+        | DiffSyntaxLanguage::Jinja => HeuristicSingleQuote::ValuePositionOnly,
+        _ => HeuristicSingleQuote::String,
+    }
+}
+
+fn heuristic_single_quote_opens_string(
+    role: HeuristicSingleQuote,
+    bytes: &[u8],
+    index: usize,
+) -> bool {
+    match role {
+        HeuristicSingleQuote::String => true,
+        HeuristicSingleQuote::Identifier => false,
+        HeuristicSingleQuote::ValuePositionOnly => index
+            .checked_sub(1)
+            .and_then(|prev| bytes.get(prev))
+            .is_none_or(|prev| {
+                !prev.is_ascii_alphanumeric()
+                    && !matches!(prev, b'_' | b'}' | b')' | b']' | b'>' | b'"' | b'\'')
+            }),
+    }
+}
+
 fn heuristic_allows_backtick_strings(language: DiffSyntaxLanguage) -> bool {
     matches!(
         language,
@@ -1131,10 +1210,15 @@ pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
     let mut i = 0usize;
     let comment_config = heuristic_comment_config(language);
     let allow_backtick_strings = heuristic_allows_backtick_strings(language);
+    let single_quote = heuristic_single_quote_role(language);
     let highlight_css_selectors = matches!(language, DiffSyntaxLanguage::Css);
 
     let is_ident_start = |byte: u8| byte == b'_' || byte.is_ascii_alphabetic();
-    let is_ident_continue = |byte: u8| byte == b'_' || byte.is_ascii_alphanumeric();
+    // `'` continues an identifier only where it is not a quote -- Nix's `foldl'`.
+    let ident_tick = single_quote == HeuristicSingleQuote::Identifier;
+    let is_ident_continue = move |byte: u8| {
+        byte == b'_' || byte.is_ascii_alphanumeric() || (ident_tick && byte == b'\'')
+    };
     let is_comment_lead = |byte: u8| {
         comment_config
             .line_comment
@@ -1203,7 +1287,10 @@ pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
             continue;
         }
 
-        if matches!(byte, b'"' | b'\'') || (allow_backtick_strings && byte == b'`') {
+        if (byte == b'"'
+            || (byte == b'\'' && heuristic_single_quote_opens_string(single_quote, bytes, i)))
+            || (allow_backtick_strings && byte == b'`')
+        {
             let j = heuristic_string_end(text, i, byte as char);
             tokens.push(SyntaxToken {
                 range: i..j,
@@ -1299,7 +1386,7 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
         // keyword is worse than missing a real one. This is the same trade-off
         // the markup arm above makes for Vue. The tree-sitter path colours the
         // full keyword set from queries/jinja_highlights.scm.
-        DiffSyntaxLanguage::Jinja => matches!(
+        DiffSyntaxLanguage::Jinja | DiffSyntaxLanguage::JinjaText => matches!(
             ident,
             "endif"
                 | "endfor"
@@ -2268,4 +2355,73 @@ pub(super) fn syntax_tokens_for_line_markdown(text: &str) -> Vec<SyntaxToken> {
     }
 
     tokens
+}
+
+#[cfg(test)]
+mod streamed_open_state_tests {
+    use super::*;
+
+    fn tail_state(text: &str, language: DiffSyntaxLanguage) -> HeuristicOpenState {
+        let bytes = text.as_bytes();
+        let mut state = HeuristicOpenState::Normal;
+        let mut abs = 0usize;
+        let mut recorder: Option<HeuristicCheckpointRecorder<'_>> = None;
+        advance_streamed_heuristic_open_state_ascii(
+            bytes,
+            bytes.len(),
+            language,
+            &mut state,
+            &mut abs,
+            &mut recorder,
+        );
+        assert_eq!(abs, bytes.len(), "the scanner must consume the whole slice");
+        state
+    }
+
+    fn is_open_string(state: HeuristicOpenState) -> bool {
+        matches!(state, HeuristicOpenState::String { .. })
+    }
+
+    /// The nastier half of the apostrophe bug: the string state has no newline
+    /// reset, so once opened it stayed open across every following line until the
+    /// next stray `'`. A per-line assertion cannot see that.
+    #[test]
+    fn a_word_apostrophe_never_opens_the_streamed_string_state() {
+        for (language, text) in [
+            (
+                DiffSyntaxLanguage::Jinja,
+                "<p>It's a test</p>\n<div class=\"x\">plain</div>\n",
+            ),
+            (
+                DiffSyntaxLanguage::Html,
+                "<p>don't panic</p>\n<span>next line</span>\n",
+            ),
+            (
+                DiffSyntaxLanguage::Nix,
+                "  x = lib.foldl' add 0 xs;\n  y = 2;\n",
+            ),
+        ] {
+            assert!(
+                !is_open_string(tail_state(text, language)),
+                "{language:?} left the string state open across lines for {text:?}"
+            );
+        }
+    }
+
+    /// ... while a real unterminated quote still opens it.
+    #[test]
+    fn an_unterminated_value_quote_still_opens_the_streamed_string_state() {
+        assert!(
+            is_open_string(tail_state("<div class='card", DiffSyntaxLanguage::Html)),
+            "a genuine unterminated attribute quote must still open the state"
+        );
+        assert!(
+            !is_open_string(tail_state("<div class='card'>", DiffSyntaxLanguage::Html)),
+            "and close again at the matching quote"
+        );
+        assert!(
+            is_open_string(tail_state("let s = \"open", DiffSyntaxLanguage::Nix)),
+            "Nix double quotes are unaffected by the identifier rule"
+        );
+    }
 }

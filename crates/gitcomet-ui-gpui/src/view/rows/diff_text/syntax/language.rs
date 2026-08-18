@@ -9,8 +9,8 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "html" | "htm" => DiffSyntaxLanguage::Html,
         "vue" => DiffSyntaxLanguage::Vue,
         // The first six are the grammar's own declared file-types; `dj` is the
-        // Django addition. `diff_syntax_language_for_path` reads only the last
-        // extension, so `base.html.j2` and `page.html.dj` land here too.
+        // Django addition. The markup-bodied reading is the right default for a bare
+        // identifier; `diff_syntax_language_for_path` splits off the rest.
         "njk" | "nunjucks" | "j2" | "jinja" | "jinja2" | "twig" | "dj" => DiffSyntaxLanguage::Jinja,
         "xml" | "svg" | "xsl" | "xslt" | "xsd" | "xhtml" | "plist" | "csproj" | "fsproj"
         | "vbproj" | "sln" | "props" | "targets" | "resx" | "xaml" | "wsdl" | "rss" | "atom"
@@ -72,6 +72,33 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
     })
 }
 
+/// Extensions whose body is HTML, so a template wrapping one keeps the injection.
+fn jinja_body_is_markup(inner_extension: &str) -> bool {
+    matches!(
+        inner_extension,
+        "" | "html" | "htm" | "xhtml" | "xml" | "svg" | "vue" | "hbs" | "mustache"
+    )
+}
+
+/// `foo.j2` alone says nothing about what is being templated: `base.html.j2` is
+/// HTML, `values.yaml.j2` and `deploy.sh.j2` are not, and injecting HTML into the
+/// latter makes the HTML grammar open elements on `<<EOF` and `2>&1`. The inner
+/// extension is the only signal available.
+fn jinja_language_for_path(p: &std::path::Path) -> DiffSyntaxLanguage {
+    let inner_extension = p
+        .file_stem()
+        .map(std::path::Path::new)
+        .and_then(|stem| stem.extension())
+        .and_then(|s| s.to_str())
+        .unwrap_or("");
+    let inner_extension = ascii_lowercase_for_match(inner_extension);
+    if jinja_body_is_markup(inner_extension.as_ref()) {
+        DiffSyntaxLanguage::Jinja
+    } else {
+        DiffSyntaxLanguage::JinjaText
+    }
+}
+
 pub(in crate::view) fn diff_syntax_language_for_path(
     path: impl AsRef<std::path::Path>,
 ) -> Option<DiffSyntaxLanguage> {
@@ -81,10 +108,14 @@ pub(in crate::view) fn diff_syntax_language_for_path(
         return Some(DiffSyntaxLanguage::Cpp);
     }
     let ext = ascii_lowercase_for_match(ext);
-    diff_syntax_language_for_identifier(ext.as_ref()).or_else(|| {
+    let resolved = diff_syntax_language_for_identifier(ext.as_ref()).or_else(|| {
         let file_name = p.file_name().and_then(|s| s.to_str()).unwrap_or("");
         let file_name = ascii_lowercase_for_match(file_name);
         diff_syntax_language_for_identifier(file_name.as_ref())
+    })?;
+    Some(match resolved {
+        DiffSyntaxLanguage::Jinja => jinja_language_for_path(p),
+        other => other,
     })
 }
 
@@ -214,6 +245,10 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Jinja => Some((
             tree_sitter_jinja_dialects::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(JINJA_HIGHLIGHTS_QUERY, JINJA_INJECTIONS_QUERY),
+        )),
+        DiffSyntaxLanguage::JinjaText => Some((
+            tree_sitter_jinja_dialects::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(JINJA_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Vue => Some((
             tree_sitter_vue::LANGUAGE.into(),
@@ -546,6 +581,7 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
         DiffSyntaxLanguage::Jinja => highlight_spec_entry!(Jinja),
+        DiffSyntaxLanguage::JinjaText => highlight_spec_entry!(JinjaText),
         DiffSyntaxLanguage::Css => highlight_spec_entry!(Css),
         DiffSyntaxLanguage::Bicep => highlight_spec_entry!(Bicep),
         DiffSyntaxLanguage::Lua => highlight_spec_entry!(Lua),

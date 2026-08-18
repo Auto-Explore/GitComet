@@ -334,14 +334,26 @@ fn collect_layer_captures(
 /// the root's needs no remapping.
 ///
 /// A `(#set! injection.combined)` pattern produces *one* layer covering every
-/// match of it, so `ranges` can hold more than one span. `range` is their hull,
-/// which is all the coarse overlap tests need; anything that has to know whether
-/// a specific byte belongs to the layer must consult `ranges`.
+/// match of it, so `ranges` can hold more than one span. [`Self::hull`] spans
+/// them all, which is what the coarse overlap tests want; anything that has to
+/// know whether a specific byte belongs to the layer must consult `ranges`.
 pub(in crate::view) struct LiveSyntaxLayer {
     spec: &'static TreesitterHighlightSpec,
     tree: tree_sitter::Tree,
-    range: Range<usize>,
     ranges: Vec<Range<usize>>,
+}
+
+impl LiveSyntaxLayer {
+    /// The span covering every range in the layer.
+    ///
+    /// Derived rather than stored: as a field it had to be kept in step by hand at
+    /// three construction sites, and a hull that stopped covering its members would
+    /// show up only as a layer silently skipped by the overlap gate below.
+    fn hull(&self) -> Range<usize> {
+        let start = self.ranges.first().map(|range| range.start).unwrap_or(0);
+        let end = self.ranges.last().map(|range| range.end).unwrap_or(0);
+        start..end.max(start)
+    }
 }
 
 /// Depth-1 only. An injection inside an injection is not pursued: it is rare,
@@ -397,12 +409,7 @@ fn parse_injection_layers(
             while let Some(m) = matches.get() {
                 if let Some(language) = injection_language_for_match(rope, query, m, language_ix) {
                     let pattern_ix = m.pattern_index;
-                    let is_combined = has_combined
-                        && spec
-                            .injection_combined_patterns
-                            .get(pattern_ix)
-                            .copied()
-                            .unwrap_or(false);
+                    let is_combined = spec.is_combined_injection_pattern(pattern_ix);
                     for capture in m.captures.iter().filter(|c| c.index == content_ix) {
                         if let Some(range) =
                             normalized_injection_content_byte_range(capture.node, rope.len())
@@ -458,7 +465,6 @@ fn parse_injection_layers(
             Some(tree) => layers.push(LiveSyntaxLayer {
                 spec: layer_spec,
                 tree,
-                range: range.clone(),
                 ranges: vec![range],
             }),
             None => dropped = true,
@@ -470,34 +476,22 @@ fn parse_injection_layers(
     // a combined set changes the document the injected grammar sees, so the whole
     // group is abandoned to the host grammar rather than parsed half-complete.
     if has_combined && !truncated {
-        let mut groups: Vec<(DiffSyntaxLanguage, usize, Vec<Range<usize>>)> = combined_ranges
-            .into_iter()
-            .filter_map(|((language, pattern_ix), ranges)| {
-                let ranges = merge_sorted_injection_ranges(ranges);
-                (!ranges.is_empty()).then_some((language, pattern_ix, ranges))
-            })
-            .collect();
-        groups.sort_unstable_by_key(|(language, pattern_ix, _)| (*language, *pattern_ix));
+        let groups = combined_injection_groups_in_apply_order(combined_ranges);
+        // No TS_COMBINED_INJECTION_MAX_* ceiling here, deliberately, and do not add
+        // one. Those are the prepared path's stand-in for a budget and are measured
+        // against a 64-row window; this path is not windowed -- `set_byte_range`
+        // above is the whole rope -- so here they capped on document size, costing a
+        // 600-line `.njk` all of its HTML while the diff pane still highlighted it.
+        // `deadline` already bounds this parse, and a layer it drops sets `dropped`
+        // so the off-thread reparse restores it.
         for (language, _, ranges) in groups {
             let Some(layer_spec) = tree_sitter_highlight_spec(language) else {
                 continue;
             };
-            if ranges.len() > TS_COMBINED_INJECTION_MAX_RANGES {
-                continue;
-            }
-            let total_bytes: usize = ranges
-                .iter()
-                .map(|range| range.end.saturating_sub(range.start))
-                .sum();
-            if total_bytes > TS_COMBINED_INJECTION_MAX_BYTES {
-                continue;
-            }
-            let hull = ranges[0].start..ranges[ranges.len() - 1].end;
             match parse_included_range(layer_spec, rope, mask, &ranges, deadline) {
                 Some(tree) => layers.push(LiveSyntaxLayer {
                     spec: layer_spec,
                     tree,
-                    range: hull,
                     ranges,
                 }),
                 None => dropped = true,
@@ -580,13 +574,13 @@ fn parse_included_range(
                 end_point: rope_ts_point(rope, range.end),
             })
             .collect::<Vec<_>>();
-        if parser.set_included_ranges(&included).is_err() {
-            let _ = parser.set_included_ranges(&[]);
-            return None;
-        }
+        // RAII rather than a clear per exit path: a panic in the progress callback or
+        // in `masked_read` would otherwise leave the pooled parser's sticky ranges
+        // set, truncating every later root parse on this thread.
+        let mut guard = IncludedRangesGuard::set(parser, &included)?;
         let mut read = masked_read(rope, mask);
-        let parsed = match deadline {
-            None => parser.parse_with_options(&mut read, None, None),
+        match deadline {
+            None => guard.parser().parse_with_options(&mut read, None, None),
             Some(deadline) => {
                 let mut progress = |_state: &tree_sitter::ParseState| {
                     if Instant::now() >= deadline {
@@ -596,11 +590,11 @@ fn parse_included_range(
                     }
                 };
                 let options = tree_sitter::ParseOptions::new().progress_callback(&mut progress);
-                parser.parse_with_options(&mut read, None, Some(options))
+                guard
+                    .parser()
+                    .parse_with_options(&mut read, None, Some(options))
             }
-        };
-        let _ = parser.set_included_ranges(&[]);
-        parsed
+        }
     })
 }
 
@@ -855,7 +849,6 @@ impl LiveSyntaxDocument {
                 .map(|layer| LiveSyntaxLayer {
                     spec: layer.spec,
                     tree: layer.tree.clone(),
-                    range: layer.range.clone(),
                     ranges: layer.ranges.clone(),
                 })
                 .collect(),
@@ -962,7 +955,8 @@ impl LiveSyntaxSnapshot {
                 &mut hits,
             );
             for layer in &inner.injections {
-                if layer.range.start < pass.end && layer.range.end > pass.start {
+                let hull = layer.hull();
+                if hull.start < pass.end && hull.end > pass.start {
                     collect_layer_captures(
                         layer.spec,
                         &layer.tree,
@@ -2101,14 +2095,14 @@ mod injection_tests {
             layer.ranges
         );
         assert_eq!(
-            layer.range,
+            layer.hull(),
             layer.ranges[0].start..layer.ranges[2].end,
             "`range` is the hull of `ranges`"
         );
         assert!(
-            layer.range.end <= text.find("let add").expect("let binding"),
+            layer.hull().end <= text.find("let add").expect("let binding"),
             "the layer must not reach the F# code below it: {:?}",
-            layer.range
+            layer.hull()
         );
     }
 
@@ -2179,7 +2173,7 @@ mod injection_tests {
             "an ordinary injection is one range, so collect_layer_captures takes \
              the unsplit fast path"
         );
-        assert_eq!(layer.ranges[0], layer.range);
+        assert_eq!(layer.ranges[0], layer.hull());
 
         let snapshot = document.snapshot(AppTheme::gitcomet_dark());
         let highlights = snapshot.highlights_for_byte_range(0..text.len());
@@ -2229,16 +2223,16 @@ mod injection_tests {
 
         let body_start = text.find("\nconst").expect("script body") + 1;
         assert!(
-            layer.range.start <= body_start && layer.range.end >= body_start + "const".len(),
+            layer.hull().start <= body_start && layer.hull().end >= body_start + "const".len(),
             "layer {:?} should cover the script body at {body_start}",
-            layer.range
+            layer.hull()
         );
         assert!(
-            layer.range.start > text.find("<script>").expect("open tag"),
+            layer.hull().start > text.find("<script>").expect("open tag"),
             "the layer must not swallow the opening tag"
         );
         assert!(
-            layer.range.end <= text.find("</script>").expect("close tag"),
+            layer.hull().end <= text.find("</script>").expect("close tag"),
             "the layer must not swallow the closing tag"
         );
     }
@@ -2263,6 +2257,178 @@ mod injection_tests {
         assert!(
             !covering.is_empty(),
             "the injected keyword should be highlighted at its real offset {keyword_at}"
+        );
+    }
+
+    fn jinja_document(text: &str) -> LiveSyntaxDocument {
+        LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::Jinja,
+            Rope::from_str(text),
+            Vec::new().into(),
+            None,
+        )
+        .expect("jinja live document should build")
+    }
+
+    fn dense_jinja_table(rows: usize, cells: usize) -> String {
+        let mut lines = vec!["{% block body %}".to_string()];
+        for row in 0..rows {
+            let mut line = String::from("<tr>");
+            for cell in 0..cells {
+                line.push_str(&format!("<td>{{{{ r{row}.c{cell} }}}}</td>"));
+            }
+            line.push_str("</tr>");
+            lines.push(line);
+        }
+        lines.push("{% endblock %}".to_string());
+        lines.join("\n")
+    }
+
+    /// This path is not windowed, so the prepared path's ceilings must not reach it:
+    /// applied here they capped on document size, and a 600-line `.njk` lost all of
+    /// its HTML in the editor while the diff pane still highlighted it.
+    #[test]
+    fn combined_layer_survives_a_template_past_the_prepared_range_ceiling() {
+        let text = dense_jinja_table(600, 4);
+        let document = jinja_document(&text);
+
+        // Pinned as a literal, not read from the prepared path's constant: the point
+        // is that a document of this density used to be dropped.
+        const CEILING_THAT_USED_TO_APPLY: usize = 512;
+        let layer = document
+            .injections
+            .iter()
+            .find(|layer| layer.ranges.len() > CEILING_THAT_USED_TO_APPLY)
+            .unwrap_or_else(|| {
+                panic!(
+                    "fixture must produce more than {CEILING_THAT_USED_TO_APPLY} combined \
+                     ranges to be a regression test; layers: {:?}",
+                    document
+                        .injections
+                        .iter()
+                        .map(|layer| layer.ranges.len())
+                        .collect::<Vec<_>>()
+                )
+            });
+        assert!(
+            layer.hull().end > 0,
+            "the combined html layer must actually cover the template"
+        );
+
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let probe = text.find("<td>").expect("a table cell");
+        let highlights = snapshot.highlights_for_byte_range(probe..probe + "<td>".len());
+        assert!(
+            !highlights.is_empty(),
+            "the editor dropped HTML highlighting that the diff pane keeps"
+        );
+    }
+
+    /// Same defect on the byte ceiling: `live_syntax_document_supported` admits
+    /// documents up to 8MB, so a 200KB template is valid but used to lose all its
+    /// HTML to the 128KB ceiling.
+    #[test]
+    fn combined_layer_survives_a_template_past_the_prepared_byte_ceiling() {
+        let mut lines = vec!["{% block body %}".to_string()];
+        for ix in 0..3_000 {
+            lines.push(format!(
+                "  <span class=\"cell\" data-row=\"{ix}\">value {ix} padded out</span>"
+            ));
+        }
+        lines.push("{% endblock %}".to_string());
+        let text = lines.join("\n");
+        assert!(
+            text.len() > TS_COMBINED_INJECTION_MAX_BYTES,
+            "fixture must exceed the byte ceiling ({} bytes)",
+            text.len()
+        );
+        assert!(
+            live_syntax_document_supported(DiffSyntaxLanguage::Jinja, text.len()),
+            "and must still be a document the live path accepts"
+        );
+
+        let document = jinja_document(&text);
+        assert!(
+            document
+                .injections
+                .iter()
+                .any(|layer| layer.ranges.len() > 1
+                    || layer.hull().end - layer.hull().start > TS_COMBINED_INJECTION_MAX_BYTES),
+            "the combined html layer must cover a span past the prepared byte ceiling"
+        );
+
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+        let probe = text.rfind("<span").expect("a span near the end");
+        let highlights = snapshot.highlights_for_byte_range(probe..probe + "<span".len());
+        assert!(
+            !highlights.is_empty(),
+            "a {}-byte template lost its HTML highlighting in the editor",
+            text.len()
+        );
+    }
+
+    /// A root parse must not inherit an injected layer's clipping. `TS_PARSER` is
+    /// pooled and its included ranges are sticky, so ranges left set would silently
+    /// truncate the next root parse on this thread, for any language.
+    #[test]
+    fn an_included_range_parse_leaves_the_pooled_parser_unclipped() {
+        let html = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("html spec");
+        let rope = Rope::from_str("<div class=\"a\">text</div>\n");
+        let head: Range<usize> = 0..5;
+        let _ = parse_included_range(html, &rope, &[], std::slice::from_ref(&head), None);
+
+        let text = "fn main() { let value = 1; }\n";
+        let document = LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::Rust,
+            Rope::from_str(text),
+            Vec::new().into(),
+            None,
+        )
+        .expect("rust live document should build");
+        assert_eq!(
+            document.tree.root_node().end_byte(),
+            text.len(),
+            "the next root parse was truncated to the previous layer's ranges"
+        );
+    }
+
+    /// The half of that contract a successful parse cannot exercise. Neither the
+    /// parser nor `masked_read` has a panic a test can inject, so the unwind path is
+    /// pinned on the guard directly; what binds it to `parse_included_range` is that
+    /// there is no other way for that function to set ranges.
+    #[test]
+    fn the_included_ranges_guard_clears_them_on_unwind() {
+        let html = tree_sitter_highlight_spec(DiffSyntaxLanguage::Html).expect("html spec");
+        let rope = Rope::from_str("<div class=\"a\">text</div>\n");
+
+        let unwound = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_ts_parser_parse_result(&html.ts_language, |parser| {
+                let included = [tree_sitter::Range {
+                    start_byte: 0,
+                    end_byte: 5,
+                    start_point: rope_ts_point(&rope, 0),
+                    end_point: rope_ts_point(&rope, 5),
+                }];
+                let _guard = IncludedRangesGuard::set(parser, &included)?;
+                panic!("simulated parse panic");
+                #[allow(unreachable_code)]
+                None::<tree_sitter::Tree>
+            })
+        }));
+        assert!(unwound.is_err(), "the probe must actually unwind");
+
+        let text = "fn main() { let value = 1; }\n";
+        let document = LiveSyntaxDocument::new(
+            DiffSyntaxLanguage::Rust,
+            Rope::from_str(text),
+            Vec::new().into(),
+            None,
+        )
+        .expect("rust live document should build");
+        assert_eq!(
+            document.tree.root_node().end_byte(),
+            text.len(),
+            "an unwinding parse left its included ranges set on the pooled parser"
         );
     }
 
@@ -2357,9 +2523,9 @@ mod injection_tests {
             .expect("expected the layer to survive the edit");
         let body_start = after.find("\nconst").expect("script body") + 1;
         assert!(
-            layer.range.start <= body_start && layer.range.end >= body_start,
+            layer.hull().start <= body_start && layer.hull().end >= body_start,
             "layer {:?} should have moved with the edit to cover {body_start}",
-            layer.range
+            layer.hull()
         );
 
         let snapshot = document.snapshot(AppTheme::gitcomet_dark());
