@@ -2027,3 +2027,174 @@ fn annotate_column_has_a_resize_handle_in_the_file_content_view(cx: &mut gpui::T
 
     std::fs::remove_dir_all(&workdir).expect("cleanup annotate preview fixture");
 }
+
+/// The read-only file view has no selection of its own, so the row the match
+/// cursor is on has to be washed differently from the rest — otherwise stepping
+/// through matches with Enter/F3 changes nothing the reader can see.
+#[gpui::test]
+fn file_preview_search_marks_the_current_match_differently_from_the_rest(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(4711);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_search_current",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview.rs");
+    let lines: Arc<Vec<String>> = Arc::new(vec![
+        "let needle = 1;".to_string(),
+        "fn plain() {}".to_string(),
+        "let needle = 2;".to_string(),
+    ]);
+    let preview_text = lines.join("\n");
+
+    let _ = std::fs::create_dir_all(&workdir);
+    std::fs::write(workdir.join(&file_rel), &preview_text).expect("write preview fixture file");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let workdir = workdir.clone();
+            let file_rel = file_rel.clone();
+            let lines = Arc::clone(&lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    workdir.join(&file_rel),
+                    lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.is_file_preview_active(),
+            "this test is about the read-only view"
+        );
+    });
+
+    // Through the input, not by assigning the query: its observer is what clears
+    // the row style cache, and a row cached before the query carries no wash.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+            });
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+            });
+        });
+    });
+
+    /// The background painted over `needle` on `line`, or `None` when that row
+    /// painted no wash at all.
+    fn wash_on(records: &[rows::DiffPaintRecord], line: usize) -> Option<gpui::Hsla> {
+        records
+            .iter()
+            .filter(|record| record.visible_ix == line && record.region == DiffTextRegion::Inline)
+            .flat_map(|record| record.highlights.iter())
+            .find(|(range, _, background)| *range == (4..10) && background.is_some())
+            .and_then(|(_, _, background)| *background)
+    }
+
+    let draw = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|window, app| {
+            rows::clear_diff_paint_log_for_tests();
+            window.refresh();
+            let _ = window.draw(app);
+        });
+        cx.run_until_parked();
+        rows::diff_paint_log_for_tests()
+    };
+
+    let (plain_wash, current_wash) = cx.update(|_window, app| {
+        let theme = view.read(app).main_pane.read(app).theme;
+        (
+            theme.colors.editor.search_match_background.into_color(),
+            theme.colors.editor.selection_background.into_color(),
+        )
+    });
+
+    let records = draw(cx);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches,
+            vec![0, 2],
+            "both needles must be found"
+        );
+        assert_eq!(pane.diff_search_current_match_row(), Some(0));
+    });
+    assert_eq!(
+        wash_on(&records, 0),
+        Some(current_wash),
+        "the first match is the current one and wears the selection token"
+    );
+    assert_eq!(
+        wash_on(&records, 2),
+        Some(plain_wash),
+        "the other match keeps the plain search wash"
+    );
+
+    // Stepping has to move the emphasis, not just the scroll.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane
+                .update(cx, |pane, _cx| pane.diff_search_next_match());
+        });
+    });
+    let records = draw(cx);
+    cx.update(|_window, app| {
+        assert_eq!(
+            view.read(app)
+                .main_pane
+                .read(app)
+                .diff_search_current_match_row(),
+            Some(2)
+        );
+    });
+    assert_eq!(
+        wash_on(&records, 2),
+        Some(current_wash),
+        "the emphasis follows the cursor to the second match"
+    );
+    assert_eq!(
+        wash_on(&records, 0),
+        Some(plain_wash),
+        "and the row it left behind goes back to the plain wash — the cached \
+         styled row must not keep painting it as current"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}

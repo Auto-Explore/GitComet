@@ -2197,6 +2197,7 @@ impl PatchDiffSearchQueryUpdateFixture {
                     self.theme,
                     base,
                     self.query_cache_matcher.as_ref()?,
+                    super::diff_text::DiffSearchMatchEmphasis::Other,
                 );
                 if let Some(slot) = self.query_cache.get_mut(src_ix) {
                     *slot = Some(PatchDiffSearchQueryCacheEntry {

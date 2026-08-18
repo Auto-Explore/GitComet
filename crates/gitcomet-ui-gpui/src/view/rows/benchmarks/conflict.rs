@@ -1088,6 +1088,7 @@ impl ConflictSearchQueryUpdateFixture {
                         theme,
                         base,
                         query_matcher?,
+                        super::diff_text::DiffSearchMatchEmphasis::Other,
                     )
                 } else {
                     super::diff_text::build_cached_diff_styled_text_with_source_identity(

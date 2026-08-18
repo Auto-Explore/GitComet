@@ -26,9 +26,12 @@ fn worktree_preview_apply_query_overlay(
     theme: AppTheme,
     styled: CachedDiffStyledText,
     query_matcher: Option<&DiffSearchMatcher>,
+    emphasis: DiffSearchMatchEmphasis,
 ) -> CachedDiffStyledText {
     query_matcher
-        .map(|matcher| build_cached_diff_query_overlay_styled_text(theme, &styled, matcher))
+        .map(|matcher| {
+            build_cached_diff_query_overlay_styled_text(theme, &styled, matcher, emphasis)
+        })
         .unwrap_or(styled)
 }
 
@@ -38,6 +41,7 @@ fn worktree_preview_streamed_spec(
     query: &SharedString,
     query_options: super::super::panes::main::diff_search::DiffSearchOptions,
     query_matcher: Option<Arc<DiffSearchMatcher>>,
+    query_emphasis: DiffSearchMatchEmphasis,
     language: Option<rows::DiffSyntaxLanguage>,
     syntax_mode: rows::DiffSyntaxMode,
     prepared_syntax_source: Option<&WorktreePreviewPreparedSyntaxSource>,
@@ -64,6 +68,7 @@ fn worktree_preview_streamed_spec(
             query: query.clone(),
             query_options,
             query_matcher,
+            query_emphasis,
             word_ranges: Arc::from([]),
             word_kind: None,
             syntax,
@@ -118,6 +123,7 @@ impl MainPaneView {
         };
         let highlight_palette = syntax_highlight_palette(theme);
 
+        let current_match_line = this.diff_search_current_match_row();
         let bar_color = worktree_preview_bar_color(this, theme);
         let defer_cache_write = this.worktree_preview_cache_write_blocked_until_rev
             == Some(this.worktree_preview_content_rev);
@@ -187,18 +193,33 @@ impl MainPaneView {
                         wrap,
                     );
                 };
+                // This view has no selection of its own, so the row the cursor is
+                // on wears the selection wash to stand out from the rest.
+                let emphasis = if current_match_line == Some(ix) {
+                    DiffSearchMatchEmphasis::Current
+                } else {
+                    DiffSearchMatchEmphasis::Other
+                };
+                let is_current_match = emphasis == DiffSearchMatchEmphasis::Current;
                 let streamed_spec = worktree_preview_streamed_spec(
                     raw_text.clone(),
                     ix,
                     &query,
                     query_options,
                     query_matcher.clone(),
+                    emphasis,
                     language,
                     syntax_mode,
                     prepared_syntax_source.as_ref(),
                 );
                 let mut pending_styled = None;
-                if streamed_spec.is_none() && this.worktree_preview_segments_cache_get(ix).is_none() {
+                // The current row is rebuilt rather than read from the cache,
+                // which holds the plain wash: re-washing an already-washed row
+                // would keep the foreground the first pass pinned on light themes.
+                // One row per frame, the cost of a cache miss.
+                if streamed_spec.is_none()
+                    && (is_current_match || this.worktree_preview_segments_cache_get(ix).is_none())
+                {
                     let line = raw_text.as_ref();
                     let (styled, is_pending) =
                         build_cached_diff_styled_text_for_prepared_document_line_nonblocking_with_palette(
@@ -226,12 +247,15 @@ impl MainPaneView {
                         theme,
                         styled,
                         query_matcher.as_deref(),
+                        emphasis,
                     );
                     if is_pending {
                         this.ensure_prepared_syntax_chunk_poll(cx);
                         pending_styled = Some(styled);
                     } else {
-                        if defer_cache_write {
+                        // Never cached while current: the cursor moves off it, and
+                        // a cached entry would leave that row painted as current.
+                        if defer_cache_write || is_current_match {
                             pending_styled = Some(styled);
                         } else {
                             this.worktree_preview_segments_cache_set(ix, styled);
@@ -3117,6 +3141,13 @@ fn history_table_row(
         row = row.bg(overlay);
     }
 
+    // On light themes the selection tint lands within a few percent of the list
+    // surface, so a selected row is a smudge rather than a marked row. Ring it
+    // the way selected sidebar rows already are.
+    if selected && let Some(outline) = components::light_theme_selection_outline(theme) {
+        row = row.shadow(vec![outline]);
+    }
+
     if is_head {
         row = row.child(
             div()
@@ -3370,6 +3401,10 @@ fn worktree_uncommitted_history_row(
 
     if selected {
         row = row.bg(theme.colors.accent.subtle_background);
+        // Same light-theme selection ring the commit rows wear.
+        if let Some(outline) = components::light_theme_selection_outline(theme) {
+            row = row.shadow(vec![outline]);
+        }
     }
 
     row.into_any_element()
@@ -3587,6 +3622,10 @@ fn working_tree_summary_history_row(
 
     if selected {
         row = row.bg(theme.colors.accent.subtle_background);
+        // Same light-theme selection ring the commit rows wear.
+        if let Some(outline) = components::light_theme_selection_outline(theme) {
+            row = row.shadow(vec![outline]);
+        }
     }
 
     row.into_any_element()
@@ -3595,9 +3634,9 @@ fn working_tree_summary_history_row(
 #[cfg(test)]
 mod tests {
     use super::{
-        MarkdownChangeHint, MarkdownInlineStyle, MarkdownPreviewImageSource,
-        MarkdownPreviewPictureSizes, MarkdownPreviewRow, MarkdownPreviewRowKind,
-        build_cached_diff_styled_text, history_message_text_left_px,
+        DiffSearchMatchEmphasis, MarkdownChangeHint, MarkdownInlineStyle,
+        MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewRow,
+        MarkdownPreviewRowKind, build_cached_diff_styled_text, history_message_text_left_px,
         history_scope_shows_graph_color_marker, history_worktree_node_color_ix,
         markdown_preview_alert_title_label, markdown_preview_expanded_slice_range,
         markdown_preview_image_source, markdown_preview_inline_highlight,
@@ -3663,6 +3702,7 @@ mod tests {
             theme,
             base.clone(),
             Some(&case_sensitive_matcher),
+            DiffSearchMatchEmphasis::Other,
         );
         let case_sensitive_ranges: Vec<_> = case_sensitive
             .highlights
@@ -3676,8 +3716,12 @@ mod tests {
             ..Default::default()
         };
         let whole_word_matcher = DiffSearchMatcher::new("cat", whole_word_options);
-        let whole_word =
-            worktree_preview_apply_query_overlay(theme, base.clone(), Some(&whole_word_matcher));
+        let whole_word = worktree_preview_apply_query_overlay(
+            theme,
+            base.clone(),
+            Some(&whole_word_matcher),
+            DiffSearchMatchEmphasis::Other,
+        );
         let whole_word_ranges: Vec<_> = whole_word
             .highlights
             .iter()
@@ -3690,7 +3734,12 @@ mod tests {
             ..Default::default()
         };
         let regex_matcher = DiffSearchMatcher::new(r"r.n.e.", regex_options);
-        let regex = worktree_preview_apply_query_overlay(theme, base, Some(&regex_matcher));
+        let regex = worktree_preview_apply_query_overlay(
+            theme,
+            base,
+            Some(&regex_matcher),
+            DiffSearchMatchEmphasis::Other,
+        );
         let regex_ranges: Vec<_> = regex
             .highlights
             .iter()

@@ -5937,12 +5937,14 @@ fn delete_branch_force_removes_branch_config_section() {
         .arg("-C")
         .arg(repo)
         .args(["config", "--local", "--get-regexp", "^branch\\.feature\\."])
-        .status()
+        .output()
         .expect("git config --get-regexp");
     assert_eq!(
-        branch_config.code(),
+        branch_config.status.code(),
         Some(1),
-        "expected branch config section to be removed"
+        "expected branch config section to be removed; stdout: {}; stderr: {}",
+        String::from_utf8_lossy(&branch_config.stdout),
+        String::from_utf8_lossy(&branch_config.stderr),
     );
 }
 
