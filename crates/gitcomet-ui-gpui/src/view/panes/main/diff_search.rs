@@ -1,4 +1,5 @@
 use super::*;
+use crate::kit::text_model::TextModelSnapshot;
 use gitcomet_core::domain::Diff;
 use memchr::{memchr_iter, memchr2_iter};
 use regex::{Regex, RegexBuilder};
@@ -15,6 +16,10 @@ const FILE_PREVIEW_REGEX_SEARCH_KEEP_BYTES: usize = 64 * 1024;
 const DIFF_SEARCH_QUERY_DEBOUNCE_MS: u64 = 150;
 const MAX_UTF8_CHAR_BYTES: usize = 4;
 const DIFF_SEARCH_TRIGRAM_MIN_QUERY_BYTES: usize = 3;
+/// Ceiling on the editor's match list. The other views are bounded by their row
+/// count; this one stores a range per *occurrence*, so a query like the regex `.`
+/// would otherwise grow one per byte.
+const FILE_EDITOR_SEARCH_MAX_MATCHES: usize = 20_000;
 
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
 pub(in crate::view) struct DiffSearchOptions {
@@ -1300,6 +1305,51 @@ fn collect_split_stream_match_visible_rows<'a>(
     collect_stream_match_visible_rows(right_rows, matcher, out);
 }
 
+/// Byte ranges of every occurrence of `matcher` in `snapshot`, capped at
+/// `max_matches`.
+///
+/// A line at a time, so the rope is never flattened. The split costs nothing in
+/// correctness: a line edge already reads as a non-word character for
+/// `whole_word`, and the matcher builds its regex with `multi_line(true)`, so
+/// `^`/`$` mean line anchors either way. A query containing a newline is the one
+/// shape this cannot answer, and the only path that flattens.
+pub(in crate::view) fn file_editor_search_ranges(
+    snapshot: &TextModelSnapshot,
+    matcher: &DiffSearchMatcher,
+    max_matches: usize,
+) -> Vec<Range<usize>> {
+    let mut found: Vec<Range<usize>> = Vec::new();
+    if matcher.is_empty() || matcher.regex_error().is_some() || max_matches == 0 {
+        return found;
+    }
+
+    if matcher.query().contains('\n') {
+        matcher.find_ranges_into(
+            snapshot.slice(0..snapshot.len()).as_ref(),
+            &mut found,
+            max_matches,
+        );
+        return found;
+    }
+
+    let mut line_matches: Vec<Range<usize>> = Vec::new();
+    for row in 0..snapshot.line_count() {
+        let remaining = max_matches - found.len();
+        if remaining == 0 {
+            break;
+        }
+        let line_range = snapshot.line_range(row);
+        let line = snapshot.slice(line_range.clone());
+        matcher.find_ranges_into(line.as_ref(), &mut line_matches, remaining);
+        found.extend(
+            line_matches
+                .iter()
+                .map(|range| line_range.start + range.start..line_range.start + range.end),
+        );
+    }
+    found
+}
+
 impl MainPaneView {
     pub(in crate::view) fn active_conflict_target(
         &self,
@@ -1542,6 +1592,14 @@ impl MainPaneView {
     }
 
     fn diff_search_scan_current_view_with_matcher(&mut self, matcher: &DiffSearchMatcher) {
+        // Ahead of everything else: the arms below dispatch on
+        // `is_file_preview_active()`, which stays true in edit mode, and that is
+        // what had the search counting the stale pre-edit preview text.
+        if self.is_file_editor_active() {
+            self.file_editor_search_scan(matcher);
+            return;
+        }
+
         // Wrapped diffs need source-row scanning so literals can cross soft-wrap boundaries.
         if !self.diff_word_wrap
             && matcher.can_use_ascii_case_insensitive_fast_path()
@@ -1552,6 +1610,47 @@ impl MainPaneView {
         }
 
         self.diff_search_scan_current_view_general(matcher);
+    }
+
+    /// Collect every occurrence in the editor buffer.
+    ///
+    /// Counted per *occurrence*, not per row as everywhere else: three hits on
+    /// one line are three stops. `diff_search_matches` carries the line each one
+    /// sits on, in the same order, so the shared match cursor and the `n/N` label
+    /// keep working over this list unchanged.
+    fn file_editor_search_scan(&mut self, matcher: &DiffSearchMatcher) {
+        self.diff_search_matches.clear();
+        self.file_editor_search_matches.clear();
+        self.file_editor_search_rev = self.file_editor_search_rev.wrapping_add(1);
+
+        let Some(snapshot) = self.file_editor_search_source.clone() else {
+            return;
+        };
+        if matcher.is_empty() || matcher.regex_error().is_some() {
+            return;
+        }
+
+        let found = file_editor_search_ranges(&snapshot, matcher, FILE_EDITOR_SEARCH_MAX_MATCHES);
+        self.diff_search_matches.extend(
+            found
+                .iter()
+                .map(|range| snapshot.row_for_offset(range.start)),
+        );
+        self.file_editor_search_matches = found;
+    }
+
+    pub(in crate::view) fn file_editor_search_current_range(&self) -> Option<Range<usize>> {
+        let ix = self.diff_search_match_ix?;
+        self.file_editor_search_matches.get(ix).cloned()
+    }
+
+    /// Drop the editor's match list and ask the next render to un-paint it.
+    pub(in crate::view) fn file_editor_search_clear(&mut self) {
+        if self.file_editor_search_matches.is_empty() {
+            return;
+        }
+        self.file_editor_search_matches.clear();
+        self.file_editor_search_rev = self.file_editor_search_rev.wrapping_add(1);
     }
 
     fn diff_search_visual_ix_for_source_match(
@@ -2100,6 +2199,11 @@ impl MainPaneView {
     }
 
     fn diff_search_can_refine_current_matches(&self) -> bool {
+        // The editor's list is occurrence-indexed, so the row-wise refinement
+        // below cannot narrow it — it always rescans.
+        if self.is_file_editor_active() {
+            return false;
+        }
         self.is_file_preview_active() || self.active_conflict_target().is_none()
     }
 
@@ -2108,7 +2212,8 @@ impl MainPaneView {
         query: AsciiCaseInsensitiveNeedle<'_>,
         previous_matches: &mut Vec<usize>,
     ) -> bool {
-        if self.is_file_preview_active()
+        if self.is_file_editor_active()
+            || self.is_file_preview_active()
             || self.active_conflict_target().is_some()
             || self.diff_view != DiffViewMode::Inline
             || self.is_file_diff_view_active()
@@ -2155,7 +2260,7 @@ impl MainPaneView {
         query: AsciiCaseInsensitiveNeedle<'_>,
         previous_matches: &mut Vec<usize>,
     ) -> bool {
-        if !self.is_file_preview_active() {
+        if self.is_file_editor_active() || !self.is_file_preview_active() {
             return false;
         }
         let Some(index) = self.worktree_preview_search_trigram_index.as_ref() else {
@@ -2178,6 +2283,16 @@ impl MainPaneView {
         query: AsciiCaseInsensitiveNeedle<'_>,
         visible_ix: usize,
     ) -> bool {
+        if self.is_file_editor_active() {
+            return self
+                .file_editor_search_source
+                .as_ref()
+                .filter(|snapshot| visible_ix < snapshot.line_count())
+                .is_some_and(|snapshot| {
+                    query.is_match(snapshot.slice(snapshot.line_range(visible_ix)).as_ref())
+                });
+        }
+
         if self.is_file_preview_active() {
             return self
                 .worktree_preview_line_raw_text(visible_ix)
@@ -2222,6 +2337,15 @@ impl MainPaneView {
                 query.is_match(left.as_ref()) || query.is_match(right.as_ref())
             }
         }
+    }
+
+    /// The row the match cursor is on, for renderers that paint it differently
+    /// from the rest.
+    pub(in crate::view) fn diff_search_current_match_row(&self) -> Option<usize> {
+        if !self.diff_search_active || !self.diff_search_has_query() {
+            return None;
+        }
+        self.diff_search_current_match_visible_ix()
     }
 
     fn diff_search_current_match_visible_ix(&self) -> Option<usize> {
@@ -2321,6 +2445,11 @@ impl MainPaneView {
         self.clear_diff_text_selection();
         self.diff_selection_range = None;
 
+        if self.is_file_editor_active() {
+            self.file_editor_search_reveal_current(visible_ix);
+            return;
+        }
+
         if self.is_file_preview_active() {
             self.worktree_preview_scroll
                 .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
@@ -2341,6 +2470,38 @@ impl MainPaneView {
             .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
         self.diff_selection_anchor = Some(visible_ix);
         self.diff_selection_range = Some((visible_ix, visible_ix));
+    }
+
+    /// Bring the current match into view in the editor.
+    ///
+    /// Runs without a `cx`, so it does only the scroll and leaves the selection
+    /// to `render_file_editor` via the rev bumped here. The editor is a
+    /// `TextInput`, not a `uniform_list`, so there is no deferred
+    /// `scroll_to_item` to hand the work to and the offset is computed the way a
+    /// list would — as `place_conflict_resolved_output_editor_at_row` does for
+    /// the conflict resolver's editable output.
+    fn file_editor_search_reveal_current(&mut self, line_ix: usize) {
+        // A wrapped line owns several rows; land on the first of them and let the
+        // input's own caret autoscroll close the gap once the selection lands.
+        let visual_row = self
+            .file_editor_wrap_row_starts
+            .get(line_ix)
+            .copied()
+            .unwrap_or(line_ix);
+        if let Some(y) = centered_reveal_scroll_y(
+            visual_row,
+            self.file_editor_gutter_row_height,
+            self.file_editor_scroll.bounds().size.height,
+            self.file_editor_scroll.max_offset().y,
+            self.file_editor_scroll.offset().y,
+        ) {
+            let offset = self.file_editor_scroll.offset();
+            self.file_editor_scroll.set_offset(point(offset.x, y));
+        }
+        // Both: the wash has to be rebuilt too, since the current match is the one
+        // hit the overlay leaves out.
+        self.file_editor_search_rev = self.file_editor_search_rev.wrapping_add(1);
+        self.file_editor_search_reveal_rev = self.file_editor_search_reveal_rev.wrapping_add(1);
     }
 }
 
@@ -2809,12 +2970,14 @@ fn identity_three_way_aligned() -> &'static conflict_resolver::ThreeWayAlignedMa
 
 #[cfg(test)]
 mod tests {
+    use super::file_editor_search_ranges;
     use super::identity_three_way_aligned;
     use super::{
         AsciiCaseInsensitiveNeedle, ConflictResolverSearchContext,
         ConflictResolverSearchTwoWayRows, ConflictResolverSearchVisibleRows, DiffSearchMatcher,
-        DiffSearchOptions, DiffSearchQueryReuse, FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES,
-        StreamMatchCollectionMode, collect_file_diff_line_text_stream_match_visible_rows,
+        DiffSearchOptions, DiffSearchQueryReuse, FILE_EDITOR_SEARCH_MAX_MATCHES,
+        FILE_PREVIEW_SEARCH_SCAN_CHUNK_BYTES, StreamMatchCollectionMode,
+        collect_file_diff_line_text_stream_match_visible_rows,
         collect_split_stream_match_visible_rows, collect_stream_match_visible_rows,
         collect_stream_match_visible_rows_with_mode, conflict_resolver_visible_match_indices,
         conflict_resolver_visible_match_indices_with_matcher, contains_ascii_case_insensitive,
@@ -2832,6 +2995,7 @@ mod tests {
     };
     use std::borrow::Cow;
     use std::io::Write;
+    use std::ops::Range;
     use std::sync::Arc;
 
     fn three_way_search_context<'a>(
@@ -2854,6 +3018,152 @@ mod tests {
             three_way_aligned: identity_three_way_aligned(),
             two_way_rows: empty_conflict_resolver_search_two_way_rows(),
         }
+    }
+
+    fn editor_search(text: &str, query: &str, options: DiffSearchOptions) -> Vec<Range<usize>> {
+        editor_search_capped(text, query, options, FILE_EDITOR_SEARCH_MAX_MATCHES)
+    }
+
+    fn editor_search_capped(
+        text: &str,
+        query: &str,
+        options: DiffSearchOptions,
+        cap: usize,
+    ) -> Vec<Range<usize>> {
+        let model = crate::kit::text_model::TextModel::from_large_text(text);
+        let matcher = DiffSearchMatcher::new(query, options);
+        file_editor_search_ranges(&model.snapshot(), &matcher, cap)
+    }
+
+    /// The whole point of the editor's own scan: three hits on one line are
+    /// three stops, not one. Every other view counts matching *rows*.
+    #[test]
+    fn editor_search_reports_every_occurrence_including_repeats_on_one_line() {
+        let text = "let needle = needle.needle();\nother\nlast needle\n";
+        let ranges = editor_search(text, "needle", DiffSearchOptions::default());
+
+        assert_eq!(ranges.len(), 4);
+        for range in &ranges {
+            assert_eq!(&text[range.clone()], "needle");
+        }
+        // Document order, and offsets are absolute — the per-line scan has to add
+        // each line's start back or every hit past line one lands in the wrong place.
+        assert!(ranges.windows(2).all(|pair| pair[0].end <= pair[1].start));
+        assert_eq!(ranges[3].start, text.rfind("needle").unwrap());
+    }
+
+    #[test]
+    fn editor_search_honors_case_whole_word_and_regex_options() {
+        let text = "Needle needles needle\n";
+
+        assert_eq!(
+            editor_search(text, "needle", DiffSearchOptions::default()).len(),
+            3,
+            "case-insensitive by default"
+        );
+        assert_eq!(
+            editor_search(
+                text,
+                "needle",
+                DiffSearchOptions {
+                    match_case: true,
+                    ..Default::default()
+                }
+            )
+            .len(),
+            2
+        );
+        assert_eq!(
+            editor_search(
+                text,
+                "needle",
+                DiffSearchOptions {
+                    whole_word: true,
+                    ..Default::default()
+                }
+            )
+            .len(),
+            2,
+            "`needles` is not a whole-word hit"
+        );
+        let regex = editor_search(
+            text,
+            r"n..dle",
+            DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(regex.len(), 3);
+    }
+
+    /// Per-line scanning must not turn a line edge into a word character, or
+    /// whole-word would miss every match that starts a line.
+    #[test]
+    fn editor_search_whole_word_matches_at_a_line_edge() {
+        let ranges = editor_search(
+            "needle\nprefix needle\n",
+            "needle",
+            DiffSearchOptions {
+                whole_word: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[0], 0..6);
+    }
+
+    /// `^`/`$` anchor per line because the matcher builds with `multi_line(true)`,
+    /// which is exactly what the per-line split reproduces.
+    #[test]
+    fn editor_search_regex_anchors_are_per_line() {
+        let ranges = editor_search(
+            "alpha\nbeta\nalpha\n",
+            r"^alpha$",
+            DiffSearchOptions {
+                regex: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(ranges.len(), 2);
+        assert_eq!(ranges[1].start, 11);
+    }
+
+    /// The one query shape a line at a time cannot answer, so it takes the
+    /// flattening path instead of silently reporting nothing.
+    #[test]
+    fn editor_search_finds_a_multi_line_query() {
+        let text = "one\ntwo\nthree\n";
+        let ranges = editor_search(text, "one\ntwo", DiffSearchOptions::default());
+        assert_eq!(ranges.len(), 1);
+        assert_eq!(&text[ranges[0].clone()], "one\ntwo");
+    }
+
+    /// The editor stores a range per occurrence rather than per row, so a query
+    /// that matches everywhere has to be bounded or the list grows with the file.
+    #[test]
+    fn editor_search_stops_at_the_match_cap() {
+        let text = "aaaaaaaa\naaaaaaaa\n";
+        assert_eq!(
+            editor_search_capped(text, "a", DiffSearchOptions::default(), 5).len(),
+            5
+        );
+    }
+
+    #[test]
+    fn editor_search_reports_nothing_for_an_empty_or_invalid_query() {
+        assert!(editor_search("needle\n", "", DiffSearchOptions::default()).is_empty());
+        assert!(
+            editor_search(
+                "needle\n",
+                "(unclosed",
+                DiffSearchOptions {
+                    regex: true,
+                    ..Default::default()
+                }
+            )
+            .is_empty()
+        );
     }
 
     #[test]

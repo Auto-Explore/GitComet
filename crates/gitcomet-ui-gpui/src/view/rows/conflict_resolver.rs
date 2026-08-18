@@ -2346,7 +2346,12 @@ impl MainPaneView {
                 Some(ConflictRowStyledTextValue::Owned(styled)) => Some(styled),
                 _ => stable_cache.get(&key),
             } {
-                build_cached_diff_query_overlay_styled_text(theme, base, query_matcher)
+                build_cached_diff_query_overlay_styled_text(
+                    theme,
+                    base,
+                    query_matcher,
+                    DiffSearchMatchEmphasis::Other,
+                )
             } else {
                 let base = build_conflict_cached_diff_styled_text_with_source_identity(
                     theme,
@@ -2358,7 +2363,12 @@ impl MainPaneView {
                     syntax_mode,
                     None,
                 );
-                build_cached_diff_query_overlay_styled_text(theme, &base, query_matcher)
+                build_cached_diff_query_overlay_styled_text(
+                    theme,
+                    &base,
+                    query_matcher,
+                    DiffSearchMatchEmphasis::Other,
+                )
             };
             if !result.pending {
                 query_cache.insert(key, styled);

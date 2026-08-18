@@ -443,10 +443,45 @@ pub(in crate::view::rows) fn word_highlight_colors(
     (set.word_background, foreground)
 }
 
+/// Which of the two search washes a row wears.
+///
+/// The match the cursor is on has to stand out, or stepping through them tells
+/// the reader nothing. The editable buffer marks it by *selecting* it; the
+/// read-only views have no selection to lean on and paint the same token
+/// themselves, so Ctrl+F looks the same either side of the edit toggle.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub(in crate::view) enum DiffSearchMatchEmphasis {
+    /// Any match other than the one the cursor is on.
+    #[default]
+    Other,
+    /// The row the match cursor is on.
+    Current,
+}
+
 /// Same shape for the search-match highlight, off `editor.search_match_*`.
-fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
+///
+/// Shared with the file editor, which paints this wash through its highlight
+/// provider rather than through these row builders.
+pub(in crate::view) fn query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
     let foreground = (!theme.is_dark).then_some(theme.colors.editor.search_match_foreground);
     (theme.colors.editor.search_match_background, foreground)
+}
+
+/// The wash for the match the cursor is on: the same token `TextInput` fills a
+/// selection with, so it reads as "selected" wherever it is shown. No foreground,
+/// because a selection tints behind the text and leaves its colour alone.
+fn current_query_highlight_colors(theme: AppTheme) -> (gpui::Rgba, Option<gpui::Rgba>) {
+    (theme.colors.editor.selection_background, None)
+}
+
+fn query_highlight_colors_for(
+    theme: AppTheme,
+    emphasis: DiffSearchMatchEmphasis,
+) -> (gpui::Rgba, Option<gpui::Rgba>) {
+    match emphasis {
+        DiffSearchMatchEmphasis::Other => query_highlight_colors(theme),
+        DiffSearchMatchEmphasis::Current => current_query_highlight_colors(theme),
+    }
 }
 
 /// Fused version of `build_diff_text_segments` + `segments_to_cached_styled_text`.
@@ -842,6 +877,7 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
     theme: AppTheme,
     base: &CachedDiffStyledText,
     matcher: &DiffSearchMatcher,
+    emphasis: DiffSearchMatchEmphasis,
 ) -> CachedDiffStyledText {
     if matcher.is_empty() || matcher.regex_error().is_some() || base.text.is_empty() {
         return base.clone();
@@ -858,7 +894,7 @@ pub(in super::super) fn build_cached_diff_query_overlay_styled_text(
         }
 
         let base_highlights = base.highlights.as_ref();
-        let (query_bg, query_fg) = query_highlight_colors(theme);
+        let (query_bg, query_fg) = query_highlight_colors_for(theme, emphasis);
         let query_bg: gpui::Hsla = query_bg.into_color();
         let query_fg: Option<gpui::Hsla> = query_fg.map(IntoColor::into_color);
         if base_highlights.is_empty() {

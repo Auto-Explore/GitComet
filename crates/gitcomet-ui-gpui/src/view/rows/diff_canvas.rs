@@ -1007,6 +1007,9 @@ pub(super) struct StreamedDiffTextPaintSpec {
     pub(super) query: SharedString,
     pub(super) query_options: DiffSearchOptions,
     pub(super) query_matcher: Option<Arc<DiffSearchMatcher>>,
+    /// Only the read-only file view sets this; the diff and conflict views mark
+    /// their current match by selecting the row instead.
+    pub(super) query_emphasis: DiffSearchMatchEmphasis,
     pub(super) word_ranges: Arc<[Range<usize>]>,
     pub(super) word_kind: Option<crate::theme::DiffColorKind>,
     pub(super) syntax: StreamedDiffTextSyntaxSource,
@@ -1503,6 +1506,7 @@ fn streamed_diff_text_highlights_hash(spec: &StreamedDiffTextPaintSpec) -> u64 {
     let mut hasher = FxHasher::default();
     spec.query.as_ref().hash(&mut hasher);
     spec.query_options.hash(&mut hasher);
+    spec.query_emphasis.hash(&mut hasher);
     for range in spec.word_ranges.iter() {
         hash_range(&mut hasher, range);
     }
@@ -1864,7 +1868,8 @@ fn build_streamed_diff_slice_styled_text(
             spec.raw_text.len(),
         )
     {
-        base = build_cached_diff_query_overlay_styled_text(theme, &base, matcher);
+        base =
+            build_cached_diff_query_overlay_styled_text(theme, &base, matcher, spec.query_emphasis);
     }
 
     (base, pending, resolved_slice_range)
@@ -3965,6 +3970,7 @@ mod tests {
             query_options,
             query_matcher: (!query.is_empty())
                 .then(|| Arc::new(DiffSearchMatcher::new(query, query_options))),
+            query_emphasis: DiffSearchMatchEmphasis::Other,
             word_ranges: Arc::from(Vec::<Range<usize>>::new()),
             word_kind: None,
             syntax: StreamedDiffTextSyntaxSource::None,
