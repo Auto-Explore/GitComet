@@ -354,6 +354,7 @@ fn streamed_diff_text_spec_with_syntax(
             query: query.clone(),
             query_options,
             query_matcher,
+            query_emphasis: DiffSearchMatchEmphasis::Other,
             word_ranges: Arc::from(word_ranges),
             word_kind,
             syntax,
@@ -918,10 +919,13 @@ impl MainPaneView {
             let base = self
                 .diff_text_segments_cache_get(key, syntax_epoch)?
                 .clone();
+            // The diff view marks its current match by selecting the row, so
+            // every match here wears the same wash.
             let overlaid = build_cached_diff_query_overlay_styled_text(
                 self.theme,
                 &base,
                 self.diff_text_query_cache_matcher.as_ref()?,
+                DiffSearchMatchEmphasis::Other,
             );
             self.diff_text_query_segments_cache[key] = Some(VersionedCachedDiffStyledText {
                 syntax_epoch,

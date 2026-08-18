@@ -96,12 +96,17 @@ pub(in crate::view) fn file_editor_provider_binding_key(
     document_version: u64,
     theme_epoch: u64,
     bracket_match: Option<&(Range<usize>, Range<usize>)>,
+    search_overlay: &[Range<usize>],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = rustc_hash::FxHasher::default();
     document_version.hash(&mut hasher);
     theme_epoch.hash(&mut hasher);
+    // Typing in the search box moves no text and touches no tree either, so
+    // without this the provider stays bound to the pre-query closure and nothing
+    // is ever painted.
+    search_overlay.hash(&mut hasher);
     // Moving the caret between brackets moves no text and touches no tree, so
     // this is the only thing that tells the input its highlights changed.
     match bracket_match {
@@ -123,6 +128,7 @@ pub(in crate::view) fn file_editor_provider_binding_key(
 pub(in crate::view) fn file_editor_heuristic_provider_binding_key(
     revision: (u64, u64),
     theme_epoch: u64,
+    search_overlay: &[Range<usize>],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
@@ -130,6 +136,7 @@ pub(in crate::view) fn file_editor_heuristic_provider_binding_key(
     "file-editor-heuristic".hash(&mut hasher);
     revision.hash(&mut hasher);
     theme_epoch.hash(&mut hasher);
+    search_overlay.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -139,7 +146,7 @@ pub(in crate::view) fn file_editor_heuristic_provider_binding_key(
 /// Mirrors the overlay composition the resolved output uses for its unresolved
 /// rows: highlights arrive sorted and disjoint and leave that way.
 pub(in crate::view) fn apply_file_editor_bracket_highlights(
-    mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
     bracket_match: Option<&(Range<usize>, Range<usize>)>,
     byte_range: Range<usize>,
     style: gpui::HighlightStyle,
@@ -154,10 +161,25 @@ pub(in crate::view) fn apply_file_editor_bracket_highlights(
             overlays.push(clipped);
         }
     }
+    overlays.sort_by_key(|span| span.start);
+    apply_file_editor_overlay_highlights(highlights, &overlays, style)
+}
+
+/// Wash `overlays` over `highlights`, keeping whatever colour the grammar gave
+/// each run and replacing only its background.
+///
+/// `overlays` must be sorted, disjoint and already clipped to the window the
+/// caller is answering for. Both the bracket pair and the search matches go
+/// through here, search first, so the bracket affordance stays readable inside a
+/// washed match.
+pub(in crate::view) fn apply_file_editor_overlay_highlights(
+    mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    overlays: &[Range<usize>],
+    style: gpui::HighlightStyle,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
     if overlays.is_empty() {
         return highlights;
     }
-    overlays.sort_by_key(|span| span.start);
 
     let mut out: Vec<(Range<usize>, gpui::HighlightStyle)> =
         Vec::with_capacity(highlights.len() + overlays.len() * 2);
@@ -179,6 +201,12 @@ pub(in crate::view) fn apply_file_editor_bracket_highlights(
             let end = overlay.end.min(range.end);
             let mut merged = run_style;
             merged.background_color = style.background_color;
+            // Only when the overlay asks for one: the bracket wash leaves the
+            // grammar's colour alone, while the search wash pins one on light
+            // themes, where its background would drown a syntax colour.
+            if style.color.is_some() {
+                merged.color = style.color;
+            }
             out.push((cursor..end, merged));
             cursor = end;
             if overlay.end <= end {
@@ -190,10 +218,10 @@ pub(in crate::view) fn apply_file_editor_bracket_highlights(
         }
     }
 
-    // Brackets in a stretch the grammar produced no run for (plain punctuation
-    // in some grammars) still have to be painted, so add whatever the sweep
-    // above did not cover.
-    for overlay in &overlays {
+    // An overlay landing in a stretch the grammar produced no run for (plain
+    // punctuation in some grammars, or anything at all in a plain-text buffer)
+    // still has to be painted, so add whatever the sweep above did not cover.
+    for overlay in overlays {
         let covered = out
             .iter()
             .any(|(range, _)| range.start <= overlay.start && range.end >= overlay.end);
@@ -205,12 +233,83 @@ pub(in crate::view) fn apply_file_editor_bracket_highlights(
     out
 }
 
+/// Wash the search matches that fall inside `byte_range` over the runs the
+/// grammar produced.
+///
+/// `matches` is the whole document's list, so the window is found by binary
+/// search — a provider is asked for one viewport at a time.
+fn apply_file_editor_search_highlights(
+    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    matches: &[Range<usize>],
+    byte_range: Range<usize>,
+    style: gpui::HighlightStyle,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    if matches.is_empty() || byte_range.is_empty() {
+        return highlights;
+    }
+
+    let first = matches.partition_point(|range| range.end <= byte_range.start);
+    let mut clipped: Vec<Range<usize>> = Vec::new();
+    for range in &matches[first..] {
+        if range.start >= byte_range.end {
+            break;
+        }
+        let start = range.start.max(byte_range.start);
+        let end = range.end.min(byte_range.end);
+        if start < end {
+            clipped.push(start..end);
+        }
+    }
+
+    apply_file_editor_overlay_highlights(highlights, &clipped, style)
+}
+
 impl MainPaneView {
     /// Whether the pane is currently showing the editable buffer.
     pub(in crate::view) fn is_file_editor_active(&self) -> bool {
         self.active_repo()
             .is_some_and(|repo| repo.diff_state.edit_mode)
             && self.file_editor_path().is_some()
+    }
+
+    /// Seat the buffer the search scan reads, and re-scan if it moved.
+    ///
+    /// Every path that changes the editor's text goes through here, so the match
+    /// list can never describe a revision the buffer has left behind. Gating the
+    /// re-scan on the revision is also what keeps this off the install-provider →
+    /// notify → observe cycle: a rebind moves no text, so the second lap stops.
+    fn file_editor_search_source_changed(&mut self, snapshot: TextModelSnapshot) {
+        let previous = self
+            .file_editor_search_source
+            .as_ref()
+            .map(|snapshot| (snapshot.model_id(), snapshot.revision()));
+        let current = (snapshot.model_id(), snapshot.revision());
+        self.file_editor_search_source = Some(snapshot);
+        if previous == Some(current) {
+            return;
+        }
+        if self.diff_search_has_query() {
+            self.diff_search_recompute_matches_preserving_current();
+        }
+    }
+
+    /// The matches the highlight provider paints: every hit except the one the
+    /// cursor is on.
+    ///
+    /// That one is left out deliberately — it is marked by the editor's
+    /// *selection*, and selection quads are painted before highlight backgrounds,
+    /// so a wash over the same span would cover it.
+    fn file_editor_search_overlay_ranges(&self) -> Arc<[Range<usize>]> {
+        if !self.diff_search_active || self.file_editor_search_matches.is_empty() {
+            return Arc::from(Vec::new());
+        }
+        let current = self.diff_search_match_ix;
+        self.file_editor_search_matches
+            .iter()
+            .enumerate()
+            .filter(|(ix, _)| Some(*ix) != current)
+            .map(|(_, range)| range.clone())
+            .collect()
     }
 
     /// The working-tree file the editor is (or would be) editing.
@@ -312,6 +411,10 @@ impl MainPaneView {
         self.file_editor_dirty = false;
         self.file_editor_first_dirty_line = None;
         self.file_editor_saved_fingerprint = None;
+        // Likewise the search: these offsets belong to the outgoing file and mean
+        // nothing in the incoming one. The reload re-seats both.
+        self.file_editor_search_source = None;
+        self.file_editor_search_clear();
         // Markdown and SVG open rendered by default, and the editor edits the
         // *source* of those files. Flipping the toggle here (rather than in the
         // toolbar handler) covers every way in — the button, the shortcut and
@@ -488,6 +591,7 @@ impl MainPaneView {
         // Wholesale replacement: whatever edits the old watermark described are
         // not in this text. A restored stash puts its own back afterwards.
         self.file_editor_first_dirty_line = None;
+        self.file_editor_search_source_changed(snapshot.clone());
         self.refresh_file_editor_syntax(&snapshot, None, cx);
         cx.notify();
     }
@@ -511,6 +615,11 @@ impl MainPaneView {
         });
         let edit = coalesce_resolved_output_edit_deltas(&deltas);
         let text_moved = !deltas.is_empty();
+        // Ahead of the `text_moved` early return, and gated on the buffer's
+        // revision rather than on the deltas: a wholesale `set_text` (a reload
+        // from disk, a restored stash) records none, so the delta test would miss
+        // it and leave the match list describing text that is gone.
+        self.file_editor_search_source_changed(snapshot.clone());
 
         // Read before the edit is handed to the parser, which consumes it. The
         // coalesced start is the earliest byte the batch touched, and everything
@@ -1193,6 +1302,13 @@ impl MainPaneView {
             )
         });
         let source_len = snapshot.len();
+        let search_overlay = self.file_editor_search_overlay_ranges();
+        let (search_bg, search_fg) = rows::query_highlight_colors(self.theme);
+        let search_style = gpui::HighlightStyle {
+            color: search_fg.map(IntoColor::into_color),
+            background_color: Some(search_bg.into_color()),
+            ..Default::default()
+        };
 
         let Some((version, snapshot)) = live else {
             // No wired grammar, or past the parse ceiling. Same fallback the
@@ -1206,16 +1322,25 @@ impl MainPaneView {
             let binding_key = file_editor_heuristic_provider_binding_key(
                 (snapshot.model_id(), snapshot.revision()),
                 self.file_editor_provider_theme_epoch,
+                &search_overlay,
             );
             let provider = HighlightProvider::with_pending(
                 move |byte_range: Range<usize>| HighlightProviderResult {
-                    highlights: language
-                        .map(|language| {
-                            resolved_output_heuristic_highlights_for_range(
-                                theme, &rope, language, byte_range,
-                            )
-                        })
-                        .unwrap_or_default(),
+                    highlights: apply_file_editor_search_highlights(
+                        language
+                            .map(|language| {
+                                resolved_output_heuristic_highlights_for_range(
+                                    theme,
+                                    &rope,
+                                    language,
+                                    byte_range.clone(),
+                                )
+                            })
+                            .unwrap_or_default(),
+                        &search_overlay,
+                        byte_range,
+                        search_style,
+                    ),
                     pending: false,
                 },
                 || 0,
@@ -1237,6 +1362,7 @@ impl MainPaneView {
             version,
             self.file_editor_provider_theme_epoch,
             bracket_match.as_ref(),
+            &search_overlay,
         );
         let bracket_style = gpui::HighlightStyle {
             background_color: Some(
@@ -1251,7 +1377,12 @@ impl MainPaneView {
         let provider = HighlightProvider::with_pending(
             move |byte_range: Range<usize>| HighlightProviderResult {
                 highlights: apply_file_editor_bracket_highlights(
-                    snapshot.highlights_for_byte_range(byte_range.clone()),
+                    apply_file_editor_search_highlights(
+                        snapshot.highlights_for_byte_range(byte_range.clone()),
+                        &search_overlay,
+                        byte_range.clone(),
+                        search_style,
+                    ),
                     bracket_match.as_ref(),
                     byte_range,
                     bracket_style,
@@ -1282,6 +1413,23 @@ impl MainPaneView {
         }
         if self.file_editor_loading {
             return components::empty_state(theme, "Edit", "Loading").into_any_element();
+        }
+
+        // The halves of a search reveal that need a `cx`. The scan and the match
+        // walk have none, so they bump a rev and leave these here. Guarded on the
+        // rev rather than run every frame: rebinding builds a fresh closure.
+        if self.file_editor_search_applied_rev != self.file_editor_search_rev {
+            self.file_editor_search_applied_rev = self.file_editor_search_rev;
+            self.rebind_file_editor_highlight_provider(cx);
+        }
+        if self.file_editor_search_reveal_applied_rev != self.file_editor_search_reveal_rev {
+            self.file_editor_search_reveal_applied_rev = self.file_editor_search_reveal_rev;
+            if let Some(range) = self.file_editor_search_current_range() {
+                // Its autoscroll is also what covers a reveal computed before the
+                // scroll handle had been laid out and had bounds to centre against.
+                self.file_editor_input
+                    .update(cx, |input, cx| input.set_selected_range(range, true, cx));
+            }
         }
 
         // Word wrap is the same preference the diff and preview honour, applied
