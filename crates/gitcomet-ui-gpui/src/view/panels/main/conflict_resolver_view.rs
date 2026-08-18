@@ -8,6 +8,24 @@ use super::*;
 
 pub(super) use conflict_resolver::CONFLICT_BOTTOM_OVERSCROLL_ROWS;
 
+/// Resolver chrome, in design units -- read through `scaled_px` / `design_px_from_percent`
+/// so it tracks the rows' rem-derived text instead of drifting out of step with it.
+const CONFLICT_TOOLBAR_ICON_PX: f32 = 14.0;
+const CONFLICT_TOOLBAR_DIVIDER_H_PX: f32 = 12.0;
+/// Floor on either half of the inputs/output vertical split.
+const CONFLICT_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
+/// Approximate non-resolver chrome (title bar, action bar, status bar) subtracted
+/// from the window height to size the vertical split during a drag.
+const CONFLICT_VSPLIT_CHROME_PX: f32 = 200.0;
+/// Header strip above a side's body in the binary / rendered-preview panels. Sits
+/// between `CONTROL_HEIGHT_PX` and `CONTROL_HEIGHT_MD_PX`, so it gets its own token
+/// rather than borrowing a control height it does not match.
+const CONFLICT_PANEL_HEADER_HEIGHT_PX: f32 = 24.0;
+
+fn scaled_panel_header_height(ui_scale_percent: u32) -> Pixels {
+    crate::ui_scale::design_px_from_percent(CONFLICT_PANEL_HEADER_HEIGHT_PX, ui_scale_percent)
+}
+
 fn conflict_output_wheel_requires_notify(delta_y: Pixels, horizontal_changed: bool) -> bool {
     delta_y != px(0.0) || horizontal_changed
 }
@@ -99,6 +117,13 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> gpui::Div {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
+        let icon_px =
+            crate::ui_scale::design_px_from_percent(CONFLICT_TOOLBAR_ICON_PX, ui_scale_percent);
+        let divider_h = crate::ui_scale::design_px_from_percent(
+            CONFLICT_TOOLBAR_DIVIDER_H_PX,
+            ui_scale_percent,
+        );
         let active_pick_state = self.conflict_resolver_active_pick_state();
         controls = controls
             .when_some(prev_file_btn, |d, btn| d.child(btn))
@@ -115,7 +140,7 @@ impl MainPaneView {
                         .start_slot(svg_icon(
                             "icons/arrow_up_to_line.svg",
                             theme.colors.foreground.primary,
-                            px(14.0),
+                            icon_px,
                         ))
                         .style(components::ButtonStyle::Outlined)
                         .borderless()
@@ -130,7 +155,7 @@ impl MainPaneView {
                         .start_slot(svg_icon(
                             "icons/arrow_up.svg",
                             theme.colors.foreground.primary,
-                            px(14.0),
+                            icon_px,
                         ))
                         .style(components::ButtonStyle::Outlined)
                         .borderless()
@@ -153,7 +178,7 @@ impl MainPaneView {
                         .start_slot(svg_icon(
                             "icons/arrow_down.svg",
                             theme.colors.foreground.primary,
-                            px(14.0),
+                            icon_px,
                         ))
                         .style(components::ButtonStyle::Outlined)
                         .borderless()
@@ -176,7 +201,7 @@ impl MainPaneView {
                         .start_slot(svg_icon(
                             "icons/arrow_down_to_line.svg",
                             theme.colors.foreground.primary,
-                            px(14.0),
+                            icon_px,
                         ))
                         .style(components::ButtonStyle::Outlined)
                         .borderless()
@@ -191,7 +216,7 @@ impl MainPaneView {
                         .start_slot(svg_icon(
                             "icons/arrow_up.svg",
                             theme.colors.status.warning.foreground,
-                            px(14.0),
+                            icon_px,
                         ))
                         .style(components::ButtonStyle::Outlined)
                         .borderless()
@@ -206,7 +231,7 @@ impl MainPaneView {
                         .start_slot(svg_icon(
                             "icons/arrow_down.svg",
                             theme.colors.status.warning.foreground,
-                            px(14.0),
+                            icon_px,
                         ))
                         .style(components::ButtonStyle::Outlined)
                         .borderless()
@@ -246,8 +271,12 @@ impl MainPaneView {
                                 })
                                 .gitcomet_tooltip(theme, tooltip.into())
                         };
-                    let cluster =
-                        d.child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.stroke.default));
+                    let cluster = d.child(
+                        div()
+                            .w(px(1.0))
+                            .h(divider_h)
+                            .bg(theme.colors.stroke.default),
+                    );
                     if is_three_way {
                         cluster
                             .child(pick_btn(
@@ -382,7 +411,12 @@ impl MainPaneView {
                     });
                 });
             controls = controls
-                .child(div().w(px(1.0)).h(px(12.0)).bg(theme.colors.stroke.default))
+                .child(
+                    div()
+                        .w(px(1.0))
+                        .h(divider_h)
+                        .bg(theme.colors.stroke.default),
+                )
                 .child(save_button)
                 .when(show_conflict_save_stage_action(self.view_mode), |d| {
                     let mut save_stage_btn =
@@ -653,6 +687,14 @@ impl MainPaneView {
                                 0
                             };
 
+                            // Every hard dimension in this pane is a design unit:
+                            // the rows' text is shaped from `window.rem_size()`,
+                            // which UI scale moves, so any geometry left in device
+                            // pixels drifts out of step with the text it frames.
+                            let scaled_px = |value: f32| {
+                                crate::ui_scale::design_px_from_percent(value, ui_scale_percent)
+                            };
+                            let show_line_numbers = self.mergetool_show_line_numbers;
                             let conflict_count = self.conflict_resolver_conflict_count();
                             let active_conflict = self.conflict_resolver.active_conflict;
                             let has_conflicts = conflict_count > 0;
@@ -730,7 +772,7 @@ impl MainPaneView {
                             let minimap_w = if !is_rendered_preview_active
                                 && self.conflict_resolver.has_minimap()
                             {
-                                px(components::MINIMAP_COLUMN_WIDTH_PX)
+                                scaled_px(components::MINIMAP_COLUMN_WIDTH_PX)
                             } else {
                                 px(0.0)
                             };
@@ -806,8 +848,8 @@ impl MainPaneView {
                             } else {
                                 px(0.0)
                             };
-                            let handle_w = px(PANE_RESIZE_HANDLE_PX);
-                            let min_col_w = px(DIFF_SPLIT_COL_MIN_PX);
+                            let handle_w = scaled_px(PANE_RESIZE_HANDLE_PX);
+                            let min_col_w = scaled_px(DIFF_SPLIT_COL_MIN_PX);
                             let main_w = (self.main_pane_content_width(cx)
                                 - scrollbar_gutter
                                 - minimap_w)
@@ -1045,7 +1087,7 @@ impl MainPaneView {
                             };
 
                             let top_title_row = div()
-                                .h(px(22.0))
+                                .h(components::control_height(ui_scale_percent))
                                 .w_full()
                                 .flex()
                                 .items_center()
@@ -1066,7 +1108,15 @@ impl MainPaneView {
                                             .text_xs()
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
-                                            .child(div().w(px(38.0)).flex_shrink_0())
+                                            .when(show_line_numbers, |d| {
+                                                d.child(
+                                                    div()
+                                                        .w(crate::view::rows::conflict_line_no_width(
+                                                            ui_scale_percent,
+                                                        ))
+                                                        .flex_shrink_0(),
+                                                )
+                                            })
                                             .child("Base (A, index :1)"),
                                     )
                                     .child(conflict_hsplit_resize_handle(
@@ -1084,7 +1134,15 @@ impl MainPaneView {
                                             .text_xs()
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
-                                            .child(div().w(px(38.0)).flex_shrink_0())
+                                            .when(show_line_numbers, |d| {
+                                                d.child(
+                                                    div()
+                                                        .w(crate::view::rows::conflict_line_no_width(
+                                                            ui_scale_percent,
+                                                        ))
+                                                        .flex_shrink_0(),
+                                                )
+                                            })
                                             .child("Local (B, index :2)"),
                                     )
                                     .child(conflict_hsplit_resize_handle(
@@ -1103,7 +1161,15 @@ impl MainPaneView {
                                             .text_xs()
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
-                                            .child(div().w(px(38.0)).flex_shrink_0())
+                                            .when(show_line_numbers, |d| {
+                                                d.child(
+                                                    div()
+                                                        .w(crate::view::rows::conflict_line_no_width(
+                                                            ui_scale_percent,
+                                                        ))
+                                                        .flex_shrink_0(),
+                                                )
+                                            })
                                             .child("Remote (C, index :3)"),
                                     )
                                 })
@@ -1120,7 +1186,15 @@ impl MainPaneView {
                                             .text_xs()
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
-                                            .child(div().w(px(38.0)).flex_shrink_0())
+                                            .when(show_line_numbers, |d| {
+                                                d.child(
+                                                    div()
+                                                        .w(crate::view::rows::conflict_line_no_width(
+                                                            ui_scale_percent,
+                                                        ))
+                                                        .flex_shrink_0(),
+                                                )
+                                            })
                                             .child("Local (index :2)"),
                                     )
                                     .child(conflict_diff_split_resize_handle(
@@ -1138,7 +1212,15 @@ impl MainPaneView {
                                             .text_xs()
                                             .text_color(theme.colors.foreground.secondary)
                                             .whitespace_nowrap()
-                                            .child(div().w(px(38.0)).flex_shrink_0())
+                                            .when(show_line_numbers, |d| {
+                                                d.child(
+                                                    div()
+                                                        .w(crate::view::rows::conflict_line_no_width(
+                                                            ui_scale_percent,
+                                                        ))
+                                                        .flex_shrink_0(),
+                                                )
+                                            })
                                             .child("Remote (index :3)"),
                                     )
                                 });
@@ -1626,6 +1708,7 @@ impl MainPaneView {
                                             "conflict_minimap",
                                             self.conflict_resolver.minimap_bands.clone(),
                                         )
+                                        .width(minimap_w)
                                         .driver(self.conflict_resolver_diff_scroll.clone())
                                         .on_jump(move |fraction, _window, cx| {
                                             if jump_rows == 0 {
@@ -1686,8 +1769,11 @@ impl MainPaneView {
 
                             // Vertical resize handle between merge inputs and resolved output
                             let vsplit_ratio = self.conflict_resolver_vsplit_ratio;
-                            let handle_h = px(PANE_RESIZE_HANDLE_PX);
-                            let min_section_h = px(80.0);
+                            let handle_h = scaled_px(PANE_RESIZE_HANDLE_PX);
+                            let min_section_h = scaled_px(CONFLICT_SECTION_MIN_HEIGHT_PX);
+                            // Precomputed rather than read through `scaled_px` inside
+                            // the drag listener, which has to be `'static`.
+                            let vsplit_chrome_h = scaled_px(CONFLICT_VSPLIT_CHROME_PX);
 
                             let vsplit_handle = div()
                                 .id("conflict_resolver_vsplit_handle")
@@ -1695,7 +1781,7 @@ impl MainPaneView {
                                 .absolute()
                                 .left_0()
                                 .right_0()
-                                .bottom(px(-4.0))
+                                .bottom(-handle_h * 0.5)
                                 .w_full()
                                 .h(handle_h)
                                 .cursor(CursorStyle::ResizeUpDown)
@@ -1738,7 +1824,8 @@ impl MainPaneView {
                                         let total_h = this.last_window_size.height;
                                         // Approximate available height (window - chrome)
                                         let available =
-                                            (total_h - px(200.0)).max(min_section_h * 2.0);
+                                            (total_h - vsplit_chrome_h)
+                                                .max(min_section_h * 2.0);
                                         let dy = e.event.position.y - state.start_y;
                                         let mut next_top = (available * state.start_ratio) + dy;
                                         next_top = next_top
@@ -2028,6 +2115,7 @@ impl MainPaneView {
                                                                                 .w(crate::view::rows::resolved_output_gutter_width(
                                                                                     self.conflict_resolved_preview_line_count,
                                                                                     self.mergetool_show_line_numbers,
+                                                                                    ui_scale_percent,
                                                                                 ))
                                                                                 .h_full()
                                                                                 .min_h(px(0.0))
@@ -2168,6 +2256,7 @@ impl MainPaneView {
         theme: AppTheme,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         self.ensure_conflict_image_preview_cache(cx);
 
         let base_has_source = !self.conflict_resolver.three_way_text.base.is_empty();
@@ -2206,7 +2295,7 @@ impl MainPaneView {
                 .flex_col()
                 .child(
                     div()
-                        .h(px(24.0))
+                        .h(scaled_panel_header_height(ui_scale_percent))
                         .px_2()
                         .flex()
                         .items_center()
@@ -2379,6 +2468,7 @@ impl MainPaneView {
         side: ThreeWayColumn,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let (id, list_id, vscrollbar_id, hscrollbar_id, label, scroll) = match side {
             ThreeWayColumn::Base => (
                 "conflict_preview_base",
@@ -2496,7 +2586,7 @@ impl MainPaneView {
             .flex_col()
             .child(
                 div()
-                    .h(px(24.0))
+                    .h(scaled_panel_header_height(ui_scale_percent))
                     .px_2()
                     .flex()
                     .items_center()

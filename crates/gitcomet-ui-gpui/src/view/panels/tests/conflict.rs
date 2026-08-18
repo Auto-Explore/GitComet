@@ -8190,3 +8190,251 @@ fn resetting_the_markers_survives_the_resync_it_triggers(cx: &mut gpui::TestAppC
         "the pick controls must be usable after the reset"
     );
 }
+
+/// The resolver's rows are shaped from `window.rem_size()`, which UI scale moves, so
+/// the row boxes have to move with it. A flat 20px row holds a ~31px line box at 150%
+/// and the text spills into the row below -- the "lines break" symptom.
+#[gpui::test]
+fn conflict_resolver_row_geometry_follows_ui_scale(cx: &mut gpui::TestAppContext) {
+    use gitcomet_core::conflict_session::{ConflictPayload, ConflictSession};
+
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(191);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_resolver_ui_scale",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("fixtures/conflict_resolver_ui_scale.txt");
+    let abs_path = workdir.join(&file_rel);
+
+    // Enough lines that the lists virtualize and the output gutter has room to drift.
+    let context = (0..40)
+        .map(|ix| format!("context line {ix}"))
+        .collect::<Vec<_>>();
+    let base_text = context.join("\n");
+    let ours_text = context
+        .iter()
+        .enumerate()
+        .map(|(ix, line)| {
+            if ix == 20 {
+                "ours change".to_string()
+            } else {
+                line.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let theirs_text = context
+        .iter()
+        .enumerate()
+        .map(|(ix, line)| {
+            if ix == 20 {
+                "theirs change".to_string()
+            } else {
+                line.clone()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let head = context[..20].join("\n");
+    let tail = context[21..].join("\n");
+    let current_text = format!(
+        "{head}\n<<<<<<< ours\nours change\n=======\ntheirs change\n>>>>>>> theirs\n{tail}\n"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(abs_path.parent().expect("fixture file parent"))
+        .expect("create resolver ui-scale fixture dir");
+    std::fs::write(&abs_path, &current_text).expect("write resolver ui-scale fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_conflict_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            set_test_conflict_file(
+                &mut repo,
+                file_rel.clone(),
+                base_text.clone(),
+                ours_text.clone(),
+                theirs_text.clone(),
+                current_text.clone(),
+            );
+            repo.conflict_state.conflict_session = Some(ConflictSession::from_merged_text(
+                file_rel.clone(),
+                gitcomet_core::domain::FileConflictKind::BothModified,
+                ConflictPayload::Text(base_text.clone().into()),
+                ConflictPayload::Text(ours_text.clone().into()),
+                ConflictPayload::Text(theirs_text.clone().into()),
+                &current_text,
+            ));
+
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition_with_timeout(
+        cx,
+        &view,
+        "resolver ui-scale fixture initialized",
+        BACKGROUND_SYNTAX_MAIN_PANE_WAIT_TIMEOUT,
+        |pane| {
+            pane.conflict_resolver.path.as_ref() == Some(&file_rel)
+                && pane.conflict_resolver.three_way_visible_len() >= 40
+        },
+        |pane| {
+            format!(
+                "path={:?} three_way_visible={}",
+                pane.conflict_resolver.path.clone(),
+                pane.conflict_resolver.three_way_visible_len(),
+            )
+        },
+    );
+
+    cx.simulate_resize(gpui::size(px(1280.0), px(720.0)));
+    draw_and_drain_test_window(cx);
+
+    // Source rows have a canvas path and a div path, and which one runs is an env
+    // toggle -- pin it rather than inheriting the ambient default.
+    let set_canvas_rows = |cx: &mut gpui::VisualTestContext, enabled: bool| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.main_pane.update(cx, |pane, cx| {
+                    pane.conflict_canvas_rows_enabled = enabled;
+                    cx.notify();
+                });
+            });
+        });
+        draw_and_drain_test_window(cx);
+    };
+
+    /// Total laid-out height of every row in a virtualized list. `item` is the
+    /// viewport, `contents` is the full row stack, so this is `row_height * rows`.
+    fn measured_content_height(handle: &gpui::UniformListScrollHandle, label: &str) -> f32 {
+        handle
+            .0
+            .borrow()
+            .last_item_size
+            .unwrap_or_else(|| panic!("expected rendered item size for {label}"))
+            .contents
+            .height
+            .into()
+    }
+
+    struct Sample {
+        base_contents: f32,
+        gutter_contents: f32,
+        gutter_rows: usize,
+        gutter_row_height: Pixels,
+        editor_line_height: Pixels,
+    }
+
+    let sample = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            Sample {
+                base_contents: measured_content_height(
+                    &pane.conflict_resolver_diff_scroll,
+                    "three-way base column",
+                ),
+                gutter_contents: measured_content_height(
+                    &pane.conflict_resolved_preview_gutter_scroll,
+                    "resolved output gutter",
+                ),
+                gutter_rows: pane.resolved_output_visible_len(),
+                gutter_row_height: pane.conflict_resolved_gutter_row_height,
+                editor_line_height: pane
+                    .conflict_resolver_input
+                    .read(app)
+                    .line_height_override()
+                    .expect("resolved output editor should carry an explicit line height"),
+            }
+        })
+    };
+
+    for canvas_rows in [true, false] {
+        let path = if canvas_rows { "canvas" } else { "div" };
+        set_canvas_rows(cx, canvas_rows);
+        set_ui_scale_percent_for_test(cx, &view, 100);
+        draw_and_drain_test_window(cx);
+        let at_100 = sample(cx);
+
+        set_ui_scale_percent_for_test(cx, &view, 200);
+        draw_and_drain_test_window(cx);
+        let at_200 = sample(cx);
+
+        let base_ratio = at_200.base_contents / at_100.base_contents;
+        assert!(
+            (base_ratio - 2.0).abs() < 0.05,
+            "{path} source column rows should double at 200% (100%={} 200%={})",
+            at_100.base_contents,
+            at_200.base_contents,
+        );
+    }
+
+    set_canvas_rows(cx, true);
+    set_ui_scale_percent_for_test(cx, &view, 100);
+    draw_and_drain_test_window(cx);
+
+    let at_100 = sample(cx);
+
+    // The gutter list and the editable buffer it labels must advance at the same
+    // rate, or the numbers walk off their lines as you scroll down the file.
+    assert_eq!(
+        at_100.gutter_row_height, at_100.editor_line_height,
+        "at 100% the output gutter row height must match the editor line height"
+    );
+    // ...and the height the render pass recorded has to be the one the list really
+    // laid out, since navigation centres the editor on a row using it.
+    assert!(at_100.gutter_rows > 0);
+    let laid_out_100 = at_100.gutter_contents / at_100.gutter_rows as f32;
+    assert!(
+        (laid_out_100 - f32::from(at_100.gutter_row_height)).abs() < 0.01,
+        "recorded gutter row height {:?} disagrees with the {laid_out_100} the list laid out",
+        at_100.gutter_row_height,
+    );
+
+    set_ui_scale_percent_for_test(cx, &view, 200);
+    draw_and_drain_test_window(cx);
+
+    let at_200 = sample(cx);
+
+    assert_eq!(
+        at_200.gutter_row_height, at_200.editor_line_height,
+        "at 200% the output gutter row height must match the editor line height \
+         (gutter={:?} editor={:?})",
+        at_200.gutter_row_height, at_200.editor_line_height,
+    );
+    assert_eq!(at_200.gutter_rows, at_100.gutter_rows);
+    let laid_out_200 = at_200.gutter_contents / at_200.gutter_rows as f32;
+    assert!(
+        (laid_out_200 - f32::from(at_200.gutter_row_height)).abs() < 0.01,
+        "recorded gutter row height {:?} disagrees with the {laid_out_200} the list laid out",
+        at_200.gutter_row_height,
+    );
+
+    let base_ratio = at_200.base_contents / at_100.base_contents;
+    assert!(
+        (base_ratio - 2.0).abs() < 0.05,
+        "source column rows should double at 200% (100%={} 200%={})",
+        at_100.base_contents,
+        at_200.base_contents,
+    );
+    let gutter_ratio = at_200.gutter_contents / at_100.gutter_contents;
+    assert!(
+        (gutter_ratio - 2.0).abs() < 0.05,
+        "output gutter rows should double at 200% (100%={} 200%={})",
+        at_100.gutter_contents,
+        at_200.gutter_contents,
+    );
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup resolver ui-scale fixture");
+}

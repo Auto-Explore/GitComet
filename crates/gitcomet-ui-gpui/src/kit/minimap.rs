@@ -67,6 +67,7 @@ pub struct MinimapColumn {
     bands: Arc<[MinimapRowKind]>,
     driver: Option<Arc<dyn ScrollbarDriver>>,
     on_jump: Option<JumpHandler>,
+    width: Option<Pixels>,
 }
 
 #[derive(Default)]
@@ -81,7 +82,17 @@ impl MinimapColumn {
             bands,
             driver: None,
             on_jump: None,
+            width: None,
         }
+    }
+
+    /// UI-scaled column width. Callers pass
+    /// `design_px_from_percent(MINIMAP_COLUMN_WIDTH_PX, percent)` so the column and
+    /// whatever reserves space for it above agree at every zoom level; without it the
+    /// column stays at its unscaled design width.
+    pub fn width(mut self, width: Pixels) -> Self {
+        self.width = Some(width);
+        self
     }
 
     /// Scroll model the viewport frame follows. The column is laid out at the
@@ -103,7 +114,9 @@ impl MinimapColumn {
             bands,
             driver,
             on_jump,
+            width,
         } = self;
+        let width = width.unwrap_or_else(|| px(MINIMAP_COLUMN_WIDTH_PX));
 
         let state_id = id.clone();
         let paint = canvas(
@@ -204,12 +217,7 @@ impl MinimapColumn {
         )
         .size_full();
 
-        div()
-            .id(id)
-            .h_full()
-            .w(px(MINIMAP_COLUMN_WIDTH_PX))
-            .flex_shrink_0()
-            .child(paint)
+        div().id(id).h_full().w(width).flex_shrink_0().child(paint)
     }
 }
 

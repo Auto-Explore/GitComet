@@ -3407,6 +3407,10 @@ pub(crate) struct MainPaneView {
     /// UI-scaled row height the gutter list paints at, computed by the render
     /// pass so the virtualized row processor can read it without a scale lookup.
     pub(in crate::view) file_editor_gutter_row_height: Pixels,
+    /// The same, for the merge tool's resolved-output gutter. Navigation centres
+    /// the editable output on a row from `&self`, where there is no `cx` to look
+    /// the scale up through, so the render pass leaves it here.
+    pub(in crate::view) conflict_resolved_gutter_row_height: Pixels,
     /// Blame for the edited file, resolved by the render pass so the virtualized
     /// gutter rows can read it without rebuilding the context per row.
     pub(in crate::view) file_editor_blame: Option<rows::BlameRenderCtx>,

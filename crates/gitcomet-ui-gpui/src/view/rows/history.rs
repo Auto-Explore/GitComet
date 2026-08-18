@@ -3141,6 +3141,13 @@ fn history_table_row(
         row = row.bg(overlay);
     }
 
+    // On light themes the selection tint lands within a few percent of the list
+    // surface, so a selected row is a smudge rather than a marked row. Ring it
+    // the way selected sidebar rows already are.
+    if selected && let Some(outline) = components::light_theme_selection_outline(theme) {
+        row = row.shadow(vec![outline]);
+    }
+
     if is_head {
         row = row.child(
             div()
@@ -3394,6 +3401,10 @@ fn worktree_uncommitted_history_row(
 
     if selected {
         row = row.bg(theme.colors.accent.subtle_background);
+        // Same light-theme selection ring the commit rows wear.
+        if let Some(outline) = components::light_theme_selection_outline(theme) {
+            row = row.shadow(vec![outline]);
+        }
     }
 
     row.into_any_element()
@@ -3611,6 +3622,10 @@ fn working_tree_summary_history_row(
 
     if selected {
         row = row.bg(theme.colors.accent.subtle_background);
+        // Same light-theme selection ring the commit rows wear.
+        if let Some(outline) = components::light_theme_selection_outline(theme) {
+            row = row.shadow(vec![outline]);
+        }
     }
 
     row.into_any_element()

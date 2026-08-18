@@ -1838,10 +1838,8 @@ pub(in crate::view) fn file_editor_gutter_width(
         return px(0.0);
     }
     // `px_2` on each side, scaled with everything else so the number cell is not
-    // clipped once the digits grow with the UI.
+    // clipped once the digits grow with the UI. The digit width itself is already
+    // scaled by `resolved_output_line_no_width`.
     let padding = ui_scale::design_px_from_percent(8.0 + 8.0, ui_scale_percent);
-    ui_scale::design_px_from_percent(
-        rows::resolved_output_line_no_width(line_count).into(),
-        ui_scale_percent,
-    ) + padding
+    rows::resolved_output_line_no_width(line_count, ui_scale_percent) + padding
 }

@@ -8,6 +8,35 @@ use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions
 const CONFLICT_ROW_FONT_SCALE: f32 = 0.80;
 const CONFLICT_ROW_TEXT_TRAILING_PADDING_PX: f32 = 16.0;
 
+/// Resolved-output gutter geometry, in design units. `resolved_output_gutter_width`
+/// sums these to size the gutter container, and the row renderer lays the same
+/// values out inside it, so the two must be scaled together or the gutter clips
+/// its own marker and badge.
+const RESOLVED_OUTPUT_MARKER_PX: f32 = 12.0;
+/// `mr_1` after the marker lane. Rem-derived in the row (so already UI-scaled
+/// there); named here so the width sum agrees with it.
+const RESOLVED_OUTPUT_MARKER_GAP_PX: f32 = 4.0;
+const RESOLVED_OUTPUT_MARKER_LANE_PX: f32 =
+    RESOLVED_OUTPUT_MARKER_PX + RESOLVED_OUTPUT_MARKER_GAP_PX;
+/// Width of the A/B/C origin badge cell.
+const RESOLVED_OUTPUT_BADGE_PX: f32 = 24.0;
+/// `mr_1` after the line-number cell.
+const RESOLVED_OUTPUT_LINE_NO_GAP_PX: f32 = 4.0;
+/// The fold row's "reveal 20 more lines" buttons and their glyphs.
+const CONFLICT_FOLD_REVEAL_BUTTON_PX: f32 = 18.0;
+const CONFLICT_FOLD_REVEAL_ICON_PX: f32 = 10.0;
+
+/// The A/B/C glyph box inside the badge cell, and the auto-resolve confidence dot
+/// pinned to the badge's top-right corner.
+const RESOLVED_OUTPUT_BADGE_GLYPH_W_PX: f32 = 18.0;
+const RESOLVED_OUTPUT_BADGE_GLYPH_H_PX: f32 = 14.0;
+const RESOLVED_OUTPUT_CONFIDENCE_DOT_PX: f32 = 5.0;
+/// The marker bar inside the lane, and the caps that flag a region's first and
+/// last row.
+const RESOLVED_OUTPUT_MARKER_BAR_PX: f32 = 2.0;
+const RESOLVED_OUTPUT_MARKER_CAP_W_PX: f32 = 8.0;
+const RESOLVED_OUTPUT_MARKER_CAP_INSET_PX: f32 = 3.0;
+
 fn build_conflict_cached_diff_styled_text(
     theme: AppTheme,
     text: &str,
@@ -183,18 +212,19 @@ fn conflict_input_row_min_width(
     text: &SharedString,
     editor_font_family: &str,
     show_line_numbers: bool,
+    ui_scale_percent: u32,
 ) -> Pixels {
     let pad = window.rem_size() * 0.5;
     let gap = pad;
     let line_no_width = if show_line_numbers {
-        px(super::CONFLICT_DIFF_LINE_NO_WIDTH_PX) + gap
+        conflict_line_no_width(ui_scale_percent) + gap
     } else {
         px(0.0)
     };
     let row_extra = pad * 2.0 + line_no_width;
     (row_extra
         + conflict_row_text_width(window, text, Some(editor_font_family))
-        + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
+        + conflict_scaled_px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
     .round()
 }
 
@@ -202,12 +232,13 @@ fn conflict_resolved_output_row_min_width(
     window: &mut Window,
     text: &SharedString,
     editor_font_family: &str,
+    ui_scale_percent: u32,
 ) -> Pixels {
     let pad = window.rem_size() * 0.5;
     let row_extra = pad * 2.0;
     (row_extra
         + conflict_row_text_width(window, text, Some(editor_font_family))
-        + px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX))
+        + conflict_scaled_px(CONFLICT_ROW_TEXT_TRAILING_PADDING_PX, ui_scale_percent))
     .round()
 }
 
@@ -217,9 +248,14 @@ fn conflict_resolved_output_row_min_width(
 /// this width, so the marker stays pinned at the far-left edge and only where the
 /// code column begins shifts a few px between files of very different line counts
 /// (the same way any editor's line-number gutter widens with the line total).
-pub(in crate::view) fn resolved_output_line_no_width(line_count: usize) -> Pixels {
+pub(in crate::view) fn resolved_output_line_no_width(
+    line_count: usize,
+    ui_scale_percent: u32,
+) -> Pixels {
+    /// Design width of one line-number digit at the resolver's row font size.
+    const DIGIT_WIDTH_PX: f32 = 8.0;
     let digits = line_count.max(1).to_string().len().max(2);
-    px(digits as f32 * 8.0)
+    conflict_scaled_px(digits as f32 * DIGIT_WIDTH_PX, ui_scale_percent)
 }
 
 /// Total width of the resolved-output gutter (marker lane + optional line-number
@@ -228,19 +264,16 @@ pub(in crate::view) fn resolved_output_line_no_width(line_count: usize) -> Pixel
 pub(in crate::view) fn resolved_output_gutter_width(
     line_count: usize,
     show_line_numbers: bool,
+    ui_scale_percent: u32,
 ) -> Pixels {
-    /// Marker lane: 12px marker + 4px `mr_1` gap.
-    const MARKER_LANE_PX: f32 = 12.0 + 4.0;
-    /// Origin badge width.
-    const BADGE_PX: f32 = 24.0;
-    /// Row horizontal padding: `px_2` on each side (8 + 8).
-    const ROW_PADDING_X_PX: f32 = 8.0 + 8.0;
-    /// `mr_1` gap after the line-number cell.
-    const LINE_NO_GAP_PX: f32 = 4.0;
-
-    let marker_and_badge = px(MARKER_LANE_PX + BADGE_PX + ROW_PADDING_X_PX);
+    let marker_and_badge = conflict_scaled_px(
+        RESOLVED_OUTPUT_MARKER_LANE_PX + RESOLVED_OUTPUT_BADGE_PX + CONFLICT_ROW_PADDING_X_PX * 2.0,
+        ui_scale_percent,
+    );
     if show_line_numbers {
-        marker_and_badge + resolved_output_line_no_width(line_count) + px(LINE_NO_GAP_PX)
+        marker_and_badge
+            + resolved_output_line_no_width(line_count, ui_scale_percent)
+            + conflict_scaled_px(RESOLVED_OUTPUT_LINE_NO_GAP_PX, ui_scale_percent)
     } else {
         marker_and_badge
     }
@@ -378,6 +411,7 @@ impl MainPaneView {
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ViewPerfSpan::RenderThreeWayRows);
         let theme = this.theme;
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let show_ws = this.reveal_whitespace_chars;
         // A three-way conflict column marks changed words, so it takes the
@@ -521,7 +555,7 @@ impl MainPaneView {
                     div()
                         .id((div_id_prefix, vi))
                         .w_full()
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .into_any_element(),
                 );
                 continue;
@@ -556,7 +590,7 @@ impl MainPaneView {
                         .id((div_id_prefix, vi))
                         .relative()
                         .w_full()
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .flex()
                         .items_center()
                         .bg(with_alpha(
@@ -572,7 +606,10 @@ impl MainPaneView {
                                         .left_0()
                                         .top_0()
                                         .bottom_0()
-                                        .w(px(3.0))
+                                        .w(conflict_scaled_px(
+                                            CONFLICT_ROW_ACCENT_BAR_WIDTH_PX,
+                                            ui_scale_percent,
+                                        ))
                                         .bg(theme.colors.accent.foreground),
                                 )
                             },
@@ -720,6 +757,7 @@ impl MainPaneView {
                         &display_text,
                         editor_font_family.as_str(),
                         show_line_numbers,
+                        ui_scale_percent,
                     );
 
                     let semantic_nav_target =
@@ -779,6 +817,7 @@ impl MainPaneView {
                             is_active_conflict,
                             row_selection_enabled.then_some(row_selected),
                             alignment_mark,
+                            ui_scale_percent,
                         ));
                         continue;
                     }
@@ -788,7 +827,7 @@ impl MainPaneView {
                         .relative()
                         .w_full()
                         .min_w(min_width)
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .px_2()
                         .flex()
                         .items_center()
@@ -805,7 +844,10 @@ impl MainPaneView {
                                     .left_0()
                                     .top_0()
                                     .bottom_0()
-                                    .w(px(3.0))
+                                    .w(conflict_scaled_px(
+                                        CONFLICT_ROW_ACCENT_BAR_WIDTH_PX,
+                                        ui_scale_percent,
+                                    ))
                                     .bg(theme.colors.accent.foreground),
                             )
                         })
@@ -816,7 +858,11 @@ impl MainPaneView {
                             )))
                         })
                         .when(show_line_numbers, |d| {
-                            d.child(conflict_diff_line_number_cell(theme, line_no))
+                            d.child(conflict_diff_line_number_cell(
+                                theme,
+                                line_no,
+                                ui_scale_percent,
+                            ))
                         })
                         .child(conflict_diff_text_cell(line_text.clone(), styled, show_ws));
 
@@ -959,6 +1005,7 @@ impl MainPaneView {
             return Self::render_conflict_diff_aligned_column_rows(this, range, side, window, cx);
         }
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
@@ -995,7 +1042,7 @@ impl MainPaneView {
                 else {
                     return div()
                         .id((div_id_prefix, visible_row_ix))
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .text_xs()
                         .text_color(theme.colors.foreground.secondary)
                         .child("")
@@ -1084,6 +1131,7 @@ impl MainPaneView {
                     &display_text,
                     editor_font_family.as_str(),
                     show_line_numbers,
+                    ui_scale_percent,
                 );
 
                 let is_active_conflict = this.conflict_resolver.conflict_is_active(conflict_ix);
@@ -1123,6 +1171,7 @@ impl MainPaneView {
                         // both unavailable here.
                         None,
                         None,
+                        ui_scale_percent,
                     );
                 }
 
@@ -1131,7 +1180,7 @@ impl MainPaneView {
                     .relative()
                     .w_full()
                     .min_w(min_width)
-                    .h(px(20.0))
+                    .h(conflict_row_height(ui_scale_percent))
                     .px_2()
                     .flex()
                     .items_center()
@@ -1147,7 +1196,10 @@ impl MainPaneView {
                                 .left_0()
                                 .top_0()
                                 .bottom_0()
-                                .w(px(3.0))
+                                .w(conflict_scaled_px(
+                                    CONFLICT_ROW_ACCENT_BAR_WIDTH_PX,
+                                    ui_scale_percent,
+                                ))
                                 .bg(theme.colors.accent.foreground),
                         )
                     })
@@ -1155,6 +1207,7 @@ impl MainPaneView {
                         d.child(conflict_diff_line_number_cell(
                             theme,
                             line_number_string(line_no),
+                            ui_scale_percent,
                         ))
                     })
                     .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
@@ -1236,6 +1289,7 @@ impl MainPaneView {
         use gitcomet_core::file_diff::FileDiffRowKind as RK;
 
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolverDiffRows);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
@@ -1284,7 +1338,7 @@ impl MainPaneView {
                     div()
                         .id((div_id_prefix, vi))
                         .w_full()
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .into_any_element(),
                 );
                 continue;
@@ -1319,7 +1373,7 @@ impl MainPaneView {
                         .id((div_id_prefix, vi))
                         .relative()
                         .w_full()
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .flex()
                         .items_center()
                         .bg(with_alpha(
@@ -1335,7 +1389,10 @@ impl MainPaneView {
                                         .left_0()
                                         .top_0()
                                         .bottom_0()
-                                        .w(px(3.0))
+                                        .w(conflict_scaled_px(
+                                            CONFLICT_ROW_ACCENT_BAR_WIDTH_PX,
+                                            ui_scale_percent,
+                                        ))
                                         .bg(theme.colors.accent.foreground),
                                 )
                             },
@@ -1496,6 +1553,7 @@ impl MainPaneView {
                         &display_text,
                         editor_font_family.as_str(),
                         show_line_numbers,
+                        ui_scale_percent,
                     );
 
                     let conflict_ix = this
@@ -1546,6 +1604,7 @@ impl MainPaneView {
                             // The two-way split shows ours/theirs only; a pin
                             // needs all three source columns to place it.
                             None,
+                            ui_scale_percent,
                         ));
                         continue;
                     }
@@ -1555,7 +1614,7 @@ impl MainPaneView {
                         .relative()
                         .w_full()
                         .min_w(min_width)
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .px_2()
                         .flex()
                         .items_center()
@@ -1571,7 +1630,10 @@ impl MainPaneView {
                                     .left_0()
                                     .top_0()
                                     .bottom_0()
-                                    .w(px(3.0))
+                                    .w(conflict_scaled_px(
+                                        CONFLICT_ROW_ACCENT_BAR_WIDTH_PX,
+                                        ui_scale_percent,
+                                    ))
                                     .bg(theme.colors.accent.foreground),
                             )
                         })
@@ -1585,6 +1647,7 @@ impl MainPaneView {
                             d.child(conflict_diff_line_number_cell(
                                 theme,
                                 line_number_string(line_no_opt),
+                                ui_scale_percent,
                             ))
                         })
                         .child(conflict_diff_text_cell(text.clone(), styled, show_ws));
@@ -1710,6 +1773,7 @@ impl MainPaneView {
         output_pane: bool,
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let first_line = source_line_start + 1;
         let last_line = source_line_start + len;
         let label: SharedString =
@@ -1723,10 +1787,11 @@ impl MainPaneView {
                           tooltip: &'static str,
                           from_top: bool,
                           cx: &mut gpui::Context<Self>| {
+            let btn_size = conflict_scaled_px(CONFLICT_FOLD_REVEAL_BUTTON_PX, ui_scale_percent);
             div()
                 .id((id_suffix, vi))
-                .w(px(18.0))
-                .h(px(18.0))
+                .w(btn_size)
+                .h(btn_size)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -1748,13 +1813,17 @@ impl MainPaneView {
                         }
                     }),
                 )
-                .child(svg_icon(icon, theme.colors.foreground.secondary, px(10.0)))
+                .child(svg_icon(
+                    icon,
+                    theme.colors.foreground.secondary,
+                    conflict_scaled_px(CONFLICT_FOLD_REVEAL_ICON_PX, ui_scale_percent),
+                ))
                 .gitcomet_tooltip(theme, tooltip.into())
         };
         div()
             .id((id_prefix, vi))
             .w_full()
-            .h(px(20.0))
+            .h(conflict_row_height(ui_scale_percent))
             .px_2()
             .flex()
             .items_center()
@@ -1807,10 +1876,17 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let requested_rows = range.len();
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let line_count = this.conflict_resolved_preview_line_count;
+        // Navigation centres the editable output on a row without a `cx` to hand,
+        // so leave the height these rows actually lay out at where it can read it.
+        this.conflict_resolved_gutter_row_height = crate::ui_scale::design_px_from_percent(
+            crate::view::panes::main::RESOLVED_OUTPUT_ROW_HEIGHT_PX,
+            ui_scale_percent,
+        );
 
         if this.conflict_resolver.resolved_outline_gutter_rows.len() != line_count {
             let meta = &this.conflict_resolver.resolved_outline.meta;
@@ -1860,7 +1936,7 @@ impl MainPaneView {
         );
         // Line-number cell sized to this file's digit count so short numbers sit
         // snug against the marker lane; the gutter container width tracks it.
-        let line_no_w = resolved_output_line_no_width(line_count);
+        let line_no_w = resolved_output_line_no_width(line_count, ui_scale_percent);
         let elements: Vec<AnyElement> = range
             .map(|vi| {
                 // Collapsed context mode projects the output row space; map
@@ -1870,7 +1946,7 @@ impl MainPaneView {
                     Some(conflict_resolver::ThreeWayVisibleItem::CollapsedContext { .. }) => {
                         return div()
                             .id(("conflict_resolved_preview_fold", vi))
-                            .h(px(20.0))
+                            .h(conflict_row_height(ui_scale_percent))
                             .w_full()
                             .bg(fold_bg)
                             .into_any_element();
@@ -1878,7 +1954,7 @@ impl MainPaneView {
                     Some(conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(_)) | None => {
                         return div()
                             .id(("conflict_resolved_preview_oob", vi))
-                            .h(px(20.0))
+                            .h(conflict_row_height(ui_scale_percent))
                             .px_2()
                             .text_xs()
                             .text_color(theme.colors.foreground.secondary)
@@ -1925,8 +2001,17 @@ impl MainPaneView {
                         if theme.is_dark { 0.82 } else { 0.72 },
                     )
                 };
+                let marker_bar_w =
+                    conflict_scaled_px(RESOLVED_OUTPUT_MARKER_BAR_PX, ui_scale_percent);
+                let marker_cap_w =
+                    conflict_scaled_px(RESOLVED_OUTPUT_MARKER_CAP_W_PX, ui_scale_percent);
+                let marker_cap_inset =
+                    conflict_scaled_px(-RESOLVED_OUTPUT_MARKER_CAP_INSET_PX, ui_scale_percent);
                 let marker_lane = div()
-                    .w(px(12.0))
+                    .w(conflict_scaled_px(
+                        RESOLVED_OUTPUT_MARKER_PX,
+                        ui_scale_percent,
+                    ))
                     .mr_1()
                     .h_full()
                     .flex()
@@ -1936,7 +2021,7 @@ impl MainPaneView {
                         d.child(
                             div()
                                 .relative()
-                                .w(px(2.0))
+                                .w(marker_bar_w)
                                 .h_full()
                                 .bg(marker_color)
                                 .when(gutter_row.is_start(), |d| {
@@ -1944,9 +2029,9 @@ impl MainPaneView {
                                         div()
                                             .absolute()
                                             .top(px(0.0))
-                                            .left(px(-3.0))
-                                            .w(px(8.0))
-                                            .h(px(2.0))
+                                            .left(marker_cap_inset)
+                                            .w(marker_cap_w)
+                                            .h(marker_bar_w)
                                             .bg(marker_color),
                                     )
                                 })
@@ -1955,9 +2040,9 @@ impl MainPaneView {
                                         div()
                                             .absolute()
                                             .bottom(px(0.0))
-                                            .left(px(-3.0))
-                                            .w(px(8.0))
-                                            .h(px(2.0))
+                                            .left(marker_cap_inset)
+                                            .w(marker_cap_w)
+                                            .h(marker_bar_w)
                                             .bg(marker_color),
                                     )
                                 }),
@@ -1967,7 +2052,10 @@ impl MainPaneView {
                 let mut row = div()
                     .id(("conflict_resolved_preview_row", ix))
                     .relative()
-                    .h(px(crate::view::panes::main::RESOLVED_OUTPUT_ROW_HEIGHT_PX))
+                    .h(crate::ui_scale::design_px_from_percent(
+                        crate::view::panes::main::RESOLVED_OUTPUT_ROW_HEIGHT_PX,
+                        ui_scale_percent,
+                    ))
                     .px_2()
                     .flex()
                     .items_center()
@@ -2014,15 +2102,24 @@ impl MainPaneView {
                             .filter(|_| gutter_row.is_start() && !conflict_unresolved)
                             .and_then(|cix| this.conflict_autosolve_confidence_for_ix(cix));
                         div()
-                            .w(px(24.0))
+                            .w(conflict_scaled_px(
+                                RESOLVED_OUTPUT_BADGE_PX,
+                                ui_scale_percent,
+                            ))
                             .relative()
                             .flex()
                             .items_center()
                             .justify_center()
                             .child(
                                 div()
-                                    .w(px(18.0))
-                                    .h(px(14.0))
+                                    .w(conflict_scaled_px(
+                                        RESOLVED_OUTPUT_BADGE_GLYPH_W_PX,
+                                        ui_scale_percent,
+                                    ))
+                                    .h(conflict_scaled_px(
+                                        RESOLVED_OUTPUT_BADGE_GLYPH_H_PX,
+                                        ui_scale_percent,
+                                    ))
                                     .flex()
                                     .items_center()
                                     .justify_center()
@@ -2041,14 +2138,18 @@ impl MainPaneView {
                                         theme.colors.status.danger.foreground
                                     }
                                 };
+                                let dot = conflict_scaled_px(
+                                    RESOLVED_OUTPUT_CONFIDENCE_DOT_PX,
+                                    ui_scale_percent,
+                                );
                                 d.child(
                                     div()
                                         .absolute()
-                                        .top(px(1.0))
+                                        .top(conflict_scaled_px(1.0, ui_scale_percent))
                                         .right(px(0.0))
-                                        .w(px(5.0))
-                                        .h(px(5.0))
-                                        .rounded(px(2.5))
+                                        .w(dot)
+                                        .h(dot)
+                                        .rounded(dot * 0.5)
                                         .bg(dot_color),
                                 )
                             })
@@ -2102,6 +2203,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
         let _perf_scope = perf::span(ViewPerfSpan::RenderResolvedPreviewRows);
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let requested_rows = range.len();
         let theme = this.theme;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
@@ -2130,6 +2232,7 @@ impl MainPaneView {
                     window,
                     &line_text,
                     editor_font_family.as_str(),
+                    ui_scale_percent,
                 );
 
                 let conflict_marker = this
@@ -2164,7 +2267,7 @@ impl MainPaneView {
                         .id(("conflict_resolved_output_row", ix))
                         .w_full()
                         .min_w(min_width)
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .px_2()
                         .flex()
                         .items_center()
@@ -2206,7 +2309,7 @@ impl MainPaneView {
                 elements.push(
                     div()
                         .id(("conflict_resolved_output_oob", ix))
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .px_2()
                         .text_xs()
                         .text_color(theme.colors.foreground.secondary)
@@ -2237,6 +2340,7 @@ impl MainPaneView {
         _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> Vec<AnyElement> {
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let query = this.diff_search_query_or_empty();
         let query_options = this.diff_search_options_or_default();
         let query = query.as_ref().to_string();
@@ -2254,7 +2358,7 @@ impl MainPaneView {
                 else {
                     return div()
                         .id(("conflict_compare_split_visible_oob", visible_row_ix))
-                        .h(px(20.0))
+                        .h(conflict_row_height(ui_scale_percent))
                         .px_2()
                         .text_xs()
                         .text_color(this.theme.colors.foreground.secondary)
@@ -2392,6 +2496,7 @@ impl MainPaneView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let theme = self.theme;
+        let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let show_ws = self.reveal_whitespace_chars;
 
         let left_text = SharedString::new(row.old.as_deref().unwrap_or_default());
@@ -2499,7 +2604,9 @@ impl MainPaneView {
         };
 
         if self.conflict_canvas_rows_enabled {
-            let min_width = left_col_w + right_col_w + px(PANE_RESIZE_HANDLE_PX);
+            let min_width = left_col_w
+                + right_col_w
+                + conflict_scaled_px(PANE_RESIZE_HANDLE_PX, ui_scale_percent);
             return conflict_canvas::split_conflict_row_canvas(
                 theme,
                 cx.entity(),
@@ -2521,6 +2628,7 @@ impl MainPaneView {
                 right_styled,
                 show_ws,
                 None,
+                ui_scale_percent,
             );
         }
 
@@ -2528,7 +2636,7 @@ impl MainPaneView {
             .id(("conflict_compare_split_ours", row_ix))
             .w(left_col_w)
             .min_w(px(0.0))
-            .h(px(20.0))
+            .h(conflict_row_height(ui_scale_percent))
             .px_2()
             .flex()
             .items_center()
@@ -2542,6 +2650,7 @@ impl MainPaneView {
                 d.child(conflict_diff_line_number_cell(
                     theme,
                     line_number_string(row.old_line),
+                    ui_scale_percent,
                 ))
             })
             .child(conflict_diff_text_cell(
@@ -2555,7 +2664,7 @@ impl MainPaneView {
             .w(right_col_w)
             .flex_grow(1.)
             .min_w(px(0.0))
-            .h(px(20.0))
+            .h(conflict_row_height(ui_scale_percent))
             .px_2()
             .flex()
             .items_center()
@@ -2569,6 +2678,7 @@ impl MainPaneView {
                 d.child(conflict_diff_line_number_cell(
                     theme,
                     line_number_string(row.new_line),
+                    ui_scale_percent,
                 ))
             })
             .child(conflict_diff_text_cell(
@@ -2577,7 +2687,7 @@ impl MainPaneView {
                 show_ws,
             ));
 
-        let handle_w = px(PANE_RESIZE_HANDLE_PX);
+        let handle_w = conflict_scaled_px(PANE_RESIZE_HANDLE_PX, ui_scale_percent);
         div()
             .id(("conflict_compare_split_row", row_ix))
             .w_full()
@@ -2600,9 +2710,13 @@ impl MainPaneView {
 /// A diff-column line-number cell: fixed width, vertically centered, with a
 /// full-height right divider separating the number gutter from the code —
 /// matching the resolved-output gutter's separator.
-fn conflict_diff_line_number_cell(theme: AppTheme, line_no: SharedString) -> gpui::Div {
+fn conflict_diff_line_number_cell(
+    theme: AppTheme,
+    line_no: SharedString,
+    ui_scale_percent: u32,
+) -> gpui::Div {
     div()
-        .w(px(super::CONFLICT_DIFF_LINE_NO_WIDTH_PX))
+        .w(conflict_line_no_width(ui_scale_percent))
         .h_full()
         .flex()
         .items_center()
@@ -2986,5 +3100,66 @@ mod tests {
                 output_line_ix: None,
             }
         );
+    }
+
+    /// The gutter container hugs its content, so the width sum and the row that
+    /// lays that content out have to scale together -- otherwise the marker and
+    /// badge are clipped at anything above 100%.
+    #[test]
+    fn resolved_output_gutter_width_scales_with_ui_scale() {
+        for percent in [80, 100, 150, 200] {
+            let factor = percent as f32 / 100.0;
+
+            let digits: f32 = resolved_output_line_no_width(1_234, percent).into();
+            assert!(
+                (digits - 4.0 * 8.0 * factor).abs() < 0.01,
+                "a four-digit cell at {percent}% should be {}, got {digits}",
+                4.0 * 8.0 * factor,
+            );
+
+            let with_numbers: f32 = resolved_output_gutter_width(1_234, true, percent).into();
+            let expected_with = (RESOLVED_OUTPUT_MARKER_LANE_PX
+                + RESOLVED_OUTPUT_BADGE_PX
+                + CONFLICT_ROW_PADDING_X_PX * 2.0
+                + 4.0 * 8.0
+                + RESOLVED_OUTPUT_LINE_NO_GAP_PX)
+                * factor;
+            assert!(
+                (with_numbers - expected_with).abs() < 0.01,
+                "gutter width at {percent}% should be {expected_with}, got {with_numbers}",
+            );
+
+            // With numbers hidden only the number cell and its gap drop out; the
+            // marker lane and badge stay, so the gutter never collapses to nothing.
+            let without_numbers: f32 = resolved_output_gutter_width(1_234, false, percent).into();
+            let expected_without = (RESOLVED_OUTPUT_MARKER_LANE_PX
+                + RESOLVED_OUTPUT_BADGE_PX
+                + CONFLICT_ROW_PADDING_X_PX * 2.0)
+                * factor;
+            assert!(
+                (without_numbers - expected_without).abs() < 0.01,
+                "gutter width without numbers at {percent}% should be {expected_without}, \
+                 got {without_numbers}",
+            );
+            assert!(without_numbers < with_numbers);
+        }
+    }
+
+    /// A two-digit floor keeps a short file's numbers from sitting flush against the
+    /// marker lane, and it has to survive scaling.
+    #[test]
+    fn resolved_output_line_no_width_keeps_its_two_digit_floor_at_every_scale() {
+        for percent in [80, 100, 150, 200] {
+            assert_eq!(
+                resolved_output_line_no_width(1, percent),
+                resolved_output_line_no_width(42, percent),
+                "one- and two-line files should share a cell width at {percent}%"
+            );
+            assert!(
+                resolved_output_line_no_width(100, percent)
+                    > resolved_output_line_no_width(42, percent),
+                "a three-digit file should widen the cell at {percent}%"
+            );
+        }
     }
 }
