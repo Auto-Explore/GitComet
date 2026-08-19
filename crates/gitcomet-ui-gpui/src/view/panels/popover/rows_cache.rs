@@ -21,6 +21,7 @@
 //! those inputs, so the two stay in each other's sight.
 
 use super::*;
+use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -92,12 +93,10 @@ impl RowsCacheKey {
 /// Every input the build closure reads has to be hashed in here — a missing one
 /// leaves the picker showing rows built from data that has since changed, with
 /// nothing on screen to say so.
-pub(super) fn signature(
-    inputs: impl FnOnce(&mut std::collections::hash_map::DefaultHasher),
-) -> u64 {
+pub(super) fn signature(inputs: impl FnOnce(&mut FxHasher)) -> u64 {
     use std::hash::Hasher;
 
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     inputs(&mut hasher);
     hasher.finish()
 }

@@ -44,6 +44,29 @@ fn is_autosquash_prefixed(summary: &str) -> bool {
     autosquash_group_key(summary) != summary
 }
 
+fn choose_autosquash_survivor(
+    entries: &[InteractiveRebaseEntry],
+    mode: AutosquashMode,
+    candidates: impl Iterator<Item = usize> + Clone,
+) -> usize {
+    let unprefixed = candidates
+        .clone()
+        .filter(|&ix| !is_autosquash_prefixed(entries[ix].summary.as_str()));
+    let unprefixed_survivor = match mode {
+        // Highest index = newest commit; lowest = oldest.
+        AutosquashMode::ToTop => unprefixed.max(),
+        _ => unprefixed.min(),
+    };
+
+    unprefixed_survivor.unwrap_or_else(|| {
+        match mode {
+            AutosquashMode::ToTop => candidates.max(),
+            _ => candidates.min(),
+        }
+        .expect("autosquash groups are non-empty")
+    })
+}
+
 /// The commit ids folded into each survivor for a given auto-squash `mode`.
 /// Groups commits by their [`autosquash_group_key`] (so `fixup!`/`squash!`
 /// commits fold into their target); the surviving commit per group is chosen by
@@ -59,31 +82,12 @@ fn autosquash_folds(
 ) -> Vec<Option<usize>> {
     let n = entries.len();
     let mut folded_into: Vec<Option<usize>> = vec![None; n];
-    // Pick a group's survivor: prefer an unprefixed member (so its message is
-    // kept over a `fixup!`/`squash!` one), then apply the mode's position rule.
-    let choose_survivor = |candidates: &[usize]| -> usize {
-        let unprefixed: Vec<usize> = candidates
-            .iter()
-            .copied()
-            .filter(|&i| !is_autosquash_prefixed(entries[i].summary.as_str()))
-            .collect();
-        let pool: &[usize] = if unprefixed.is_empty() {
-            candidates
-        } else {
-            &unprefixed
-        };
-        match mode {
-            // Highest index = newest commit; lowest = oldest.
-            AutosquashMode::ToTop => *pool.iter().max().unwrap(),
-            _ => *pool.iter().min().unwrap(),
-        }
-    };
     match mode {
         AutosquashMode::ToTop | AutosquashMode::ToBottom => {
             // Group indices by normalized summary, preserving first-seen order.
-            let mut order: Vec<&str> = Vec::new();
-            let mut groups: std::collections::HashMap<&str, Vec<usize>> =
-                std::collections::HashMap::new();
+            let mut order: Vec<&str> = Vec::with_capacity(entries.len());
+            let mut groups =
+                rustc_hash::FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
             for (i, e) in entries.iter().enumerate() {
                 let key = autosquash_group_key(e.summary.as_str());
                 if key.trim().is_empty() {
@@ -102,7 +106,7 @@ fn autosquash_folds(
                 if indices.len() < 2 {
                     continue;
                 }
-                let survivor = choose_survivor(indices);
+                let survivor = choose_autosquash_survivor(entries, mode, indices.iter().copied());
                 for &i in indices {
                     if i != survivor {
                         folded_into[i] = Some(survivor);
@@ -125,12 +129,11 @@ fn autosquash_folds(
                 while j < n && autosquash_group_key(entries[j].summary.as_str()) == key {
                     j += 1;
                 }
-                let run: Vec<usize> = (i..j).collect();
-                if run.len() >= 2 {
-                    let survivor = choose_survivor(&run);
-                    for &k in &run {
+                if j - i >= 2 {
+                    let survivor = choose_autosquash_survivor(entries, mode, i..j);
+                    for (k, destination) in folded_into.iter_mut().enumerate().take(j).skip(i) {
                         if k != survivor {
-                            folded_into[k] = Some(survivor);
+                            *destination = Some(survivor);
                         }
                     }
                 }
@@ -149,12 +152,12 @@ fn compute_autosquash(
     mode: AutosquashMode,
 ) -> (
     Vec<InteractiveRebaseEntry>,
-    std::collections::HashMap<String, Vec<InteractiveRebaseEntry>>,
+    rustc_hash::FxHashMap<String, Vec<InteractiveRebaseEntry>>,
 ) {
     let folded_into = autosquash_folds(original, mode);
     let mut collapsed = Vec::with_capacity(original.len());
-    let mut folded: std::collections::HashMap<String, Vec<InteractiveRebaseEntry>> =
-        std::collections::HashMap::new();
+    let mut folded: rustc_hash::FxHashMap<String, Vec<InteractiveRebaseEntry>> =
+        rustc_hash::FxHashMap::with_capacity_and_hasher(original.len(), Default::default());
     for (i, e) in original.iter().enumerate() {
         match folded_into[i] {
             Some(survivor) => {
@@ -179,9 +182,12 @@ fn compute_autosquash(
 /// the planned entries cover the live range exactly.
 fn expand_folded(
     entries: &[InteractiveRebaseEntry],
-    folded: &std::collections::HashMap<String, Vec<InteractiveRebaseEntry>>,
+    folded: &rustc_hash::FxHashMap<String, Vec<InteractiveRebaseEntry>>,
 ) -> Vec<InteractiveRebaseEntry> {
-    let mut out = Vec::with_capacity(entries.len());
+    let capacity = folded.values().fold(entries.len(), |len, fixups| {
+        len.saturating_add(fixups.len())
+    });
+    let mut out = Vec::with_capacity(capacity);
     for e in entries {
         out.push(e.clone());
         if let Some(fixups) = folded.get(&e.commit_id) {

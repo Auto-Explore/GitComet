@@ -1447,14 +1447,14 @@ impl MainPaneView {
             context_fold_reveals: if is_same_conflict {
                 std::mem::take(&mut self.conflict_resolver.context_fold_reveals)
             } else {
-                std::collections::HashMap::default()
+                HashMap::default()
             },
             resolved_output_visible: None,
             resolved_output_visible_dirty: true,
             output_context_fold_reveals: if is_same_conflict {
                 std::mem::take(&mut self.conflict_resolver.output_context_fold_reveals)
             } else {
-                std::collections::HashMap::default()
+                HashMap::default()
             },
             conflict_region_indices,
             display_plan_block_indices,

@@ -938,23 +938,23 @@ pub(super) fn build_alacritty_row(
 ) -> (SharedString, Vec<TextRun>, Vec<TerminalBackgroundRect>) {
     let palette = TerminalAnsiPalette::from_theme(theme);
 
-    let mut text = String::new();
-    let mut runs = Vec::new();
-    let mut background_rects: Vec<TerminalBackgroundRect> = Vec::new();
+    let mut text = String::with_capacity(cols);
+    let mut runs = Vec::with_capacity(cols);
+    let mut background_rects: Vec<TerminalBackgroundRect> = Vec::with_capacity(cols);
     let mut active_style: Option<TerminalCellStyle> = None;
     let mut active_len = 0usize;
 
-    let row_cells: Vec<&IndexedCell> = cells.iter().filter(|ic| ic.point.line.0 == row).collect();
+    let mut row_cells = cells.iter().filter(|cell| cell.point.line.0 == row);
+    let mut next_cell = row_cells.next();
 
     let mut col = 0usize;
-    let mut cell_idx = 0usize;
     let mut prev_had_extras = false;
 
     while col < cols {
-        let cell = if cell_idx < row_cells.len() && row_cells[cell_idx].point.column.0 == col {
-            let c = row_cells[cell_idx];
-            cell_idx += 1;
-            c
+        let cell = if next_cell.is_some_and(|cell| cell.point.column.0 == col) {
+            let cell = next_cell.take().expect("matching terminal cell is present");
+            next_cell = row_cells.next();
+            cell
         } else {
             col += 1;
             continue;
@@ -2942,6 +2942,42 @@ mod tests {
         let (text, runs, _bg) = build_alacritty_row(&cells, 5, 3, &base, AppTheme::gitcomet_dark());
         assert_eq!(text, "", "no cells at row 5");
         assert!(runs.is_empty());
+    }
+
+    #[test]
+    fn build_row_reads_only_the_requested_row_from_mixed_cells() {
+        let cell = |row, col, ch| IndexedCell {
+            point: AlacPoint::new(Line(row), Column(col)),
+            cell: AlacCell {
+                c: ch,
+                fg: alacritty_terminal::vte::ansi::Color::Named(
+                    alacritty_terminal::vte::ansi::NamedColor::Foreground,
+                ),
+                bg: alacritty_terminal::vte::ansi::Color::Named(
+                    alacritty_terminal::vte::ansi::NamedColor::Background,
+                ),
+                flags: Flags::empty(),
+                extra: None,
+            },
+        };
+        let cells = vec![
+            cell(0, 0, 'X'),
+            cell(1, 0, 'A'),
+            cell(0, 1, 'Y'),
+            cell(1, 1, 'B'),
+        ];
+
+        let (text, runs, backgrounds) = build_alacritty_row(
+            &cells,
+            1,
+            2,
+            &default_text_style(),
+            AppTheme::gitcomet_dark(),
+        );
+
+        assert_eq!(text, "AB");
+        assert_eq!(runs.iter().map(|run| run.len).sum::<usize>(), 2);
+        assert!(backgrounds.is_empty());
     }
 
     #[test]

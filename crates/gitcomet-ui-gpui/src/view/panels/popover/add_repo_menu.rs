@@ -2,7 +2,7 @@ use super::*;
 
 fn push_entry(
     items: &mut Vec<ContextMenuItem>,
-    debug_selectors: &mut std::collections::HashMap<usize, SharedString>,
+    debug_selectors: &mut HashMap<usize, SharedString>,
     debug_selector: &'static str,
     icon: &'static str,
     label: &'static str,
@@ -23,7 +23,7 @@ fn push_entry(
 /// initialize a repository.
 pub(super) fn model() -> ContextMenuModel {
     let mut items = Vec::with_capacity(3);
-    let mut debug_selectors = std::collections::HashMap::new();
+    let mut debug_selectors = HashMap::with_capacity_and_hasher(3, Default::default());
     push_entry(
         &mut items,
         &mut debug_selectors,

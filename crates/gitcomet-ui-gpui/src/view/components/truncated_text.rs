@@ -11,8 +11,8 @@ use gpui::{
     SharedString, TextAlign, WeakEntity, Window, div, point, px, rems, size,
 };
 use palette::IntoColor;
+use rustc_hash::FxHasher;
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::ops::Range;
 use std::rc::Rc;
@@ -224,7 +224,7 @@ fn fallback_tooltip_element_id(
     profile: TextTruncationProfile,
     focus_range: &Option<Range<usize>>,
 ) -> ElementId {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text.hash(&mut hasher);
     profile.hash(&mut hasher);
     focus_range.hash(&mut hasher);

@@ -426,7 +426,7 @@ pub(super) fn worktree_output_requires_protection(
     let (Some(ours), Some(theirs)) = (ours, theirs) else {
         return true;
     };
-    let stage_lines: std::collections::HashSet<&str> = base
+    let stage_lines: HashSet<&str> = base
         .into_iter()
         .chain([ours, theirs])
         .flat_map(str::lines)
@@ -3514,14 +3514,14 @@ pub(in crate::view) struct IRebaseViewState {
     pub(in crate::view) mode: ICommitEditorMode,
     pub(in crate::view) entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
     pub(in crate::view) original_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
-    pub(in crate::view) source_colors: std::collections::HashMap<String, u8>,
+    pub(in crate::view) source_colors: HashMap<String, u8>,
     /// Active auto-squash strategy, or None when auto-squash is off.
     pub(in crate::view) autosquash_mode: Option<AutosquashMode>,
     /// Commits folded away by auto-squash, keyed by the surviving commit id.
     /// Each survivor's `entries` row displays these ids; they are re-expanded
     /// into `fixup` todo entries when the rebase starts.
     pub(in crate::view) folded:
-        std::collections::HashMap<String, Vec<gitcomet_core::services::InteractiveRebaseEntry>>,
+        HashMap<String, Vec<gitcomet_core::services::InteractiveRebaseEntry>>,
     pub(in crate::view) drag_state: Option<IRebaseDragState>,
     /// Variable-height virtualized list state, lazily created on first render
     /// (`ListState` has no `Default`). Kept in sync with `entries`/`folded` via

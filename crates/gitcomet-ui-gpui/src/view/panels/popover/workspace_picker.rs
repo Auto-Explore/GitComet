@@ -55,8 +55,12 @@ pub(super) fn suggested_worktree_path(repo: &RepoState, query: &str) -> String {
 /// its inputs, which is what lets [`rows_cache`](super::rows_cache) memoise it
 /// across frames.
 pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
-    let mut items = Vec::new();
-    let mut rows = Vec::new();
+    let capacity = match &repo.worktrees {
+        Loadable::Ready(worktrees) => worktrees.len().saturating_add(1),
+        _ => 1,
+    };
+    let mut items = Vec::with_capacity(capacity);
+    let mut rows = Vec::with_capacity(capacity);
     let mut marked_index = None;
 
     // Create row first, mirroring the placeholder's "select or type to create".
@@ -105,11 +109,12 @@ pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
         // Title line: the folder the worktree lives in, then what is checked out
         // in it — the two things that identify a worktree at a glance.
         let name = crate::view::path_display::repo_path_name(&worktree.path);
-        let mut primary = vec![
+        let mut primary = Vec::with_capacity(3);
+        primary.push(
             components::PickerPromptItemPart::new(name.to_string())
                 .profile(components::TextTruncationProfile::End)
                 .flexible(false),
-        ];
+        );
 
         if let Some(branch) = &worktree.branch {
             primary.push(components::PickerPromptItemPart::separator("  on  "));
@@ -131,7 +136,7 @@ pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
 
         // Detail line: where it is on disk, and which commit it sits on. The path
         // stays searchable so a path query still finds its row.
-        let mut secondary = Vec::new();
+        let mut secondary = Vec::with_capacity(3);
         if let Some(head) = &worktree.head {
             let sha = head.as_ref();
             secondary.push(

@@ -5210,7 +5210,7 @@ fn recursive_collapse_closes_exactly_the_subtree_it_opened() {
         expanded,
         &[Arc::new(PathBuf::from("other"))]
             .into_iter()
-            .collect::<std::collections::HashSet<_>>(),
+            .collect::<rustc_hash::FxHashSet<_>>(),
         "collapsing a subtree must not disturb folders outside it"
     );
 }

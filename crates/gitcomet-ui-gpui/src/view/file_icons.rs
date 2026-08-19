@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -364,7 +364,11 @@ const FILE_ICONS: &[(&str, &str)] = &[
 fn icon_keys_by_association(
     associations_by_icon_key: &[(&'static str, &'static [&'static str])],
 ) -> HashMap<&'static str, &'static str> {
-    let mut map = HashMap::new();
+    let capacity = associations_by_icon_key
+        .iter()
+        .map(|(_, associations)| associations.len())
+        .sum();
+    let mut map = HashMap::with_capacity_and_hasher(capacity, Default::default());
     for (icon_key, associations) in associations_by_icon_key {
         for association in *associations {
             map.insert(*association, *icon_key);
@@ -415,13 +419,6 @@ pub fn file_icon_for_path(path: &Path) -> &'static str {
             }
             typ = suffix;
         }
-    }
-
-    // Multi-part suffix (e.g. `Component.stories.tsx` -> `stories.tsx`).
-    if let Some(suffix) = multiple_extensions(path)
-        && let Some(icon) = icon_for_suffix(&suffix)
-    {
-        return icon;
     }
 
     // Extension or hidden-file name (e.g. `.gitignore` -> `gitignore`,
@@ -537,17 +534,6 @@ fn extension_or_hidden_file_name(path: &Path) -> Option<&str> {
         .or_else(|| path.file_stem()?.to_str())
 }
 
-/// Port of Zed's `PathExt::multiple_extensions`.
-fn multiple_extensions(path: &Path) -> Option<String> {
-    let file_name = path.file_name()?.to_str()?;
-    // Skip the file stem; keep only the dotted suffixes.
-    let parts: Vec<&str> = file_name.split('.').skip(1).collect();
-    if parts.len() < 2 {
-        return None;
-    }
-    Some(parts.join("."))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -586,6 +572,11 @@ mod tests {
         assert_eq!(icon(".editorconfig"), "icons/file_icons/editorconfig.svg");
         assert_eq!(icon("eslint.config.js"), "icons/file_icons/eslint.svg");
         assert_eq!(icon(".gitlab-ci.yml"), "icons/file_icons/gitlab.svg");
+        assert_eq!(
+            icon("project.eslint.config.js"),
+            "icons/file_icons/eslint.svg"
+        );
+        assert_eq!(icon(".eslint.config.js"), "icons/file_icons/eslint.svg");
     }
 
     #[test]

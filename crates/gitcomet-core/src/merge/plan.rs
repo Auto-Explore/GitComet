@@ -6,7 +6,8 @@
 
 use super::{DiffAlgorithm, MergeOptions};
 use crate::file_diff::{Edit, EditKind, histogram_edits, myers_edits, split_lines};
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use rustc_hash::FxHashSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -227,7 +228,8 @@ pub fn interactive_merge_plan_is_practical(
     };
 
     if let Some(base) = base {
-        let base_lines: HashSet<&str> = base.lines().collect();
+        let mut base_lines = FxHashSet::with_capacity_and_hasher(base_count, Default::default());
+        base_lines.extend(base.lines());
         let local_shared = local
             .lines()
             .filter(|line| base_lines.contains(line))
@@ -238,7 +240,8 @@ pub fn interactive_merge_plan_is_practical(
             .count();
         shared_enough(local_shared, local_count) && shared_enough(remote_shared, remote_count)
     } else {
-        let local_lines: HashSet<&str> = local.lines().collect();
+        let mut local_lines = FxHashSet::with_capacity_and_hasher(local_count, Default::default());
+        local_lines.extend(local.lines());
         let remote_shared = remote
             .lines()
             .filter(|line| local_lines.contains(line))
@@ -1004,7 +1007,9 @@ fn alignment_segments(
     right: MergeSource,
     right_len: usize,
 ) -> Vec<(Range<usize>, Range<usize>)> {
-    let mut segments = Vec::new();
+    // Each valid pin contributes the gap before it and the pinned range itself,
+    // plus one trailing segment for the whole list.
+    let mut segments = Vec::with_capacity(entries.len().saturating_mul(2).saturating_add(1));
     let mut left_cursor = 0usize;
     let mut right_cursor = 0usize;
     for entry in entries {

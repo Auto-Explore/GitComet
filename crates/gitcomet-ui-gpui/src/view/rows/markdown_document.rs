@@ -733,7 +733,7 @@ fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyEleme
 /// listed up front.
 #[derive(Clone, Default)]
 pub(in crate::view) struct MarkdownDocumentBlockScrolls(
-    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<usize, gpui::ScrollHandle>>>,
+    std::rc::Rc<std::cell::RefCell<rustc_hash::FxHashMap<usize, gpui::ScrollHandle>>>,
 );
 
 impl MarkdownDocumentBlockScrolls {

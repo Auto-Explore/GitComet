@@ -2912,7 +2912,7 @@ fn myers_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     let old_mid_end = old.len().saturating_sub(suffix);
     let new_mid_end = new.len().saturating_sub(suffix);
 
-    let mut edits = Vec::new();
+    let mut edits = Vec::with_capacity(old.len().saturating_add(new.len()));
     for i in 0..prefix {
         edits.push(Edit {
             kind: EditKind::Equal,
@@ -2964,7 +2964,7 @@ fn positional_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'
     let new_mid = &new[prefix..new_mid_end];
     let paired = old_mid.len().min(new_mid.len());
 
-    let mut edits = Vec::new();
+    let mut edits = Vec::with_capacity(old.len().saturating_add(new.len()));
     for i in 0..prefix {
         edits.push(Edit {
             kind: EditKind::Equal,

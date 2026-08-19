@@ -160,7 +160,7 @@ impl GixRepo {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(TreeIndexCacheEntry {
                 head_oid,
-                index_stamp: final_index_stamp.clone(),
+                index_stamp: final_index_stamp,
                 staged: staged.clone(),
             });
         }
@@ -619,7 +619,7 @@ pub(super) fn gix_unmerged_conflicts(
         .index_or_load_from_head_or_empty()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix index: {e}"))))?;
     let path_backing = index.path_backing();
-    let mut stage_entries = Vec::new();
+    let mut stage_entries = Vec::with_capacity(index.entries().len());
 
     for entry in index.entries() {
         let stage = entry.stage_raw() as u8;
@@ -640,7 +640,11 @@ pub(super) fn gix_unmerged_conflicts(
 fn collect_unmerged_conflicts(
     stage_entries: impl IntoIterator<Item = (PathBuf, u8)>,
 ) -> Vec<(PathBuf, FileConflictKind)> {
-    let mut stage_masks: HashMap<PathBuf, u8> = HashMap::default();
+    let stage_entries = stage_entries.into_iter();
+    let mut stage_masks = HashMap::with_capacity_and_hasher(
+        stage_entries.size_hint().1.unwrap_or(0),
+        Default::default(),
+    );
 
     for (path, stage) in stage_entries {
         let Some(shift) = stage.checked_sub(1) else {

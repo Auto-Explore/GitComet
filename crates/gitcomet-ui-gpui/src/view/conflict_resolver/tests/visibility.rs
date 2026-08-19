@@ -1515,7 +1515,7 @@ fn visible_index_for_source_line_maps_lines_and_folds() {
 #[test]
 fn collapsed_context_respects_expanded_folds_and_short_gaps() {
     let conflict_ranges = [12..15];
-    let expanded: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+    let expanded: rustc_hash::FxHashMap<usize, ConflictFoldReveal> = [(
         18usize,
         ConflictFoldReveal {
             expand_all: true,
@@ -1617,7 +1617,7 @@ fn collapsed_context_partial_reveals_shrink_the_fold_from_either_edge() {
     let conflict_ranges = [12..15];
     // Tail fold identity is 18 (lines 18..30 hidden). Reveal 20 from the top:
     // more than the fold holds, so it fully expands (remaining < minimum).
-    let reveals: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+    let reveals: rustc_hash::FxHashMap<usize, ConflictFoldReveal> = [(
         18usize,
         ConflictFoldReveal {
             top: CONFLICT_FOLD_REVEAL_STEP,
@@ -1640,7 +1640,7 @@ fn collapsed_context_partial_reveals_shrink_the_fold_from_either_edge() {
     assert_eq!(projection.get(10), Some(ThreeWayVisibleItem::Line(18)));
 
     // A small reveal from each edge keeps a shrunken fold with the same id.
-    let reveals: std::collections::HashMap<usize, ConflictFoldReveal> = [(
+    let reveals: rustc_hash::FxHashMap<usize, ConflictFoldReveal> = [(
         18usize,
         ConflictFoldReveal {
             top: 3,

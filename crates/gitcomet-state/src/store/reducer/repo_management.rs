@@ -410,7 +410,7 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
     if saved_history_mode.is_none() {
         effects.push(persist_repo_history_mode_effect(
             Some(repo_id),
-            spec.workdir.clone(),
+            spec.workdir,
             history_mode,
         ));
     }
@@ -962,22 +962,20 @@ pub(super) fn clone_repo(state: &mut AppState, url: String, dest: PathBuf) -> Ve
 
 fn parse_clone_progress_percent(line: &str) -> Option<u8> {
     let percent_ix = line.find('%')?;
-    let digits = line[..percent_ix]
-        .chars()
-        .rev()
-        .skip_while(|ch| ch.is_ascii_whitespace())
-        .take_while(|ch| ch.is_ascii_digit())
-        .collect::<String>();
+    let before_percent = &line.as_bytes()[..percent_ix];
+    let end = before_percent
+        .iter()
+        .rposition(|byte| !byte.is_ascii_whitespace())?
+        + 1;
+    let start = before_percent[..end]
+        .iter()
+        .rposition(|byte| !byte.is_ascii_digit())
+        .map_or(0, |ix| ix + 1);
+    let digits = std::str::from_utf8(&before_percent[start..end]).ok()?;
     if digits.is_empty() {
         return None;
     }
-    digits
-        .chars()
-        .rev()
-        .collect::<String>()
-        .parse::<u8>()
-        .ok()
-        .map(|percent| percent.min(100))
+    digits.parse::<u8>().ok().map(|percent| percent.min(100))
 }
 
 fn parse_clone_progress_meter(line: &str) -> Option<CloneProgressMeter> {

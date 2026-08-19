@@ -1547,16 +1547,14 @@ pub(super) struct ConflictResolverUiState {
     /// section 30 collapsed context mode: fold unchanged runs in the source columns.
     pub(super) collapse_context: bool,
     /// Per-fold reveal state for collapsed context mode, keyed by fold id.
-    pub(super) context_fold_reveals:
-        std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
+    pub(super) context_fold_reveals: FxHashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// section 30 collapsed context mode for the resolved output pane: fold
     /// projection in output line space. `None` ⇒ pass-through (one row per
     /// line). Rebuilt lazily after its inputs change.
     pub(super) resolved_output_visible: Option<conflict_resolver::ThreeWayVisibleProjection>,
     pub(super) resolved_output_visible_dirty: bool,
     /// Per-fold reveal state for resolved-output folds (output-line fold ids).
-    pub(super) output_context_fold_reveals:
-        std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
+    pub(super) output_context_fold_reveals: FxHashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// Mapping from visible block index to `ConflictSession` region index.
     pub(super) conflict_region_indices: Vec<usize>,
     /// Mapping from visible marker block index to its semantic merge-plan
@@ -1674,7 +1672,7 @@ impl Default for ConflictResolverUiState {
             shared_path: None,
             loaded_file: None,
             collapse_context: false,
-            context_fold_reveals: std::collections::HashMap::default(),
+            context_fold_reveals: FxHashMap::default(),
             conflict_syntax_language: None,
             source_hash: None,
             output_is_protected: false,
@@ -1723,7 +1721,7 @@ impl Default for ConflictResolverUiState {
             resolved_outline_gutter_rows: Vec::new(),
             resolved_output_visible: None,
             resolved_output_visible_dirty: true,
-            output_context_fold_reveals: std::collections::HashMap::default(),
+            output_context_fold_reveals: FxHashMap::default(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),

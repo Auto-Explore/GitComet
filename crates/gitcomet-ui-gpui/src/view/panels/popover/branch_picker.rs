@@ -143,8 +143,17 @@ fn branch_row(
 /// — the relative dates on the detail line would otherwise make every call
 /// distinct.
 pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) -> BranchRows {
-    let mut items = Vec::new();
-    let mut rows = Vec::new();
+    let local_count = match &repo.branches {
+        Loadable::Ready(branches) => branches.len(),
+        _ => 0,
+    };
+    let remote_count = match &repo.remote_branches {
+        Loadable::Ready(branches) => branches.len(),
+        _ => 0,
+    };
+    let capacity = local_count.saturating_add(remote_count).saturating_add(1);
+    let mut items = Vec::with_capacity(capacity);
+    let mut rows = Vec::with_capacity(capacity);
     let mut marked_index = None;
 
     let head_branch = match &repo.head_branch {
@@ -152,7 +161,7 @@ pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) ->
         _ => None,
     };
 
-    let mut local_names: Vec<&str> = Vec::new();
+    let mut local_names: Vec<&str> = Vec::with_capacity(local_count);
     let branches_ready = matches!(repo.branches, Loadable::Ready(_));
     if let Loadable::Ready(branches) = &repo.branches {
         for branch in branches.iter() {
@@ -318,8 +327,23 @@ pub(super) fn ref_rows_cached(
             Loadable::Ready(head) => Some(head.as_str()),
             _ => None,
         };
-        let mut items = Vec::new();
-        let mut names = Vec::new();
+        let branch_count = match &repo.branches {
+            Loadable::Ready(branches) => branches.len(),
+            _ => 0,
+        };
+        let tag_count = if spec.with_refs {
+            match &repo.tags {
+                Loadable::Ready(tags) => tags.len(),
+                _ => 0,
+            }
+        } else {
+            0
+        };
+        let capacity = branch_count
+            .saturating_add(tag_count)
+            .saturating_add(usize::from(spec.with_refs));
+        let mut items = Vec::with_capacity(capacity);
+        let mut names = Vec::with_capacity(capacity);
         let mut push = |name: String, icon: &'static str| {
             items.push(components::PickerPromptItem::plain(name.clone()).icon(icon));
             names.push(name);

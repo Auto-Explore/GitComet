@@ -223,8 +223,8 @@ impl PickerPromptFrameFixture {
 /// picker's detail lines need it.
 fn build_synthetic_ref_metadata(
     repo: &RepoState,
-) -> std::collections::HashMap<String, gitcomet_core::domain::RefMetadata> {
-    let mut metadata = std::collections::HashMap::default();
+) -> rustc_hash::FxHashMap<String, gitcomet_core::domain::RefMetadata> {
+    let mut metadata = rustc_hash::FxHashMap::default();
     let mut insert = |name: String, ix: usize| {
         metadata.insert(
             name,

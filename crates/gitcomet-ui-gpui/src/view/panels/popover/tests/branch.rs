@@ -1081,7 +1081,7 @@ mod checkout_picker {
     use crate::view::test_support::{push_test_state, redraw};
     use gitcomet_core::domain::{RefMetadata, RemoteBranch};
     use gitcomet_state::model::{RepoId, RepoState};
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap as HashMap;
 
     fn commit_id(hex: &str) -> CommitId {
         CommitId(Arc::from(hex))
@@ -1114,7 +1114,7 @@ mod checkout_picker {
             remote("origin", "main"),
             remote("origin", "HEAD"),
         ]));
-        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::from([
+        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::from_iter([
             (
                 "main".to_string(),
                 RefMetadata {
@@ -1260,7 +1260,7 @@ mod checkout_picker {
     fn rows_stay_name_only_when_the_backend_has_no_ref_metadata(cx: &mut gpui::TestAppContext) {
         let repo_id = RepoId(1);
         let mut repo = repo_with_branches(repo_id);
-        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::new()));
+        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::default()));
         let (view, cx) = open_checkout_picker(cx, repo, repo_id);
 
         let details = cx.update(|_window, app| {

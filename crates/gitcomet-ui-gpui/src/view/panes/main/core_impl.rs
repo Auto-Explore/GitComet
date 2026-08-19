@@ -948,7 +948,7 @@ impl MainPaneView {
                     .source_colors
                     .iter()
                     .cloned()
-                    .collect::<std::collections::HashMap<_, _>>();
+                    .collect::<HashMap<_, _>>();
                 // A repeated state application for the same setup must not
                 // replace view-local reordering or action edits. A different
                 // id set is a genuinely new setup.

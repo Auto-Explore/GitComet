@@ -6,6 +6,7 @@
 //! file is still in the status list. `build/out[1].log` written verbatim is a
 //! character class, not a filename.
 
+use rustc_hash::FxHashSet;
 use std::path::{Component, Path};
 
 /// The ignore file this module writes to, relative to the repository root.
@@ -156,11 +157,17 @@ pub fn append_patterns(existing: &str, patterns: &[String]) -> Option<String> {
     // Indexed rather than rescanned per pattern: a 500-file selection against a
     // 2000-line `.gitignore` is a plausible bulk case, and the naive form walks
     // both strings a million times on the store's worker thread.
-    let present: std::collections::HashSet<&str> =
-        existing.lines().map(trim_trailing_spaces).collect();
+    let existing_line_count = existing.lines().count();
+    let mut present = FxHashSet::with_capacity_and_hasher(existing_line_count, Default::default());
+    present.extend(existing.lines().map(trim_trailing_spaces));
 
-    let mut seen = std::collections::HashSet::new();
-    let mut missing: Vec<&str> = Vec::new();
+    let mut seen = FxHashSet::with_capacity_and_hasher(patterns.len(), Default::default());
+    let capacity = patterns.iter().fold(existing.len(), |capacity, pattern| {
+        capacity.saturating_add(pattern.len().saturating_add(terminator.len()))
+    });
+    let mut out = String::with_capacity(capacity);
+    out.push_str(existing);
+    let mut appended = false;
     for pattern in patterns {
         let pattern = trim_trailing_spaces(pattern);
         if pattern.is_empty() {
@@ -169,21 +176,16 @@ pub fn append_patterns(existing: &str, patterns: &[String]) -> Option<String> {
         // `seen` dedupes within `patterns` itself: two selected files in the
         // same folder both produce `/build/`.
         if !present.contains(pattern) && seen.insert(pattern) {
-            missing.push(pattern);
+            if !appended && !out.is_empty() && !out.ends_with('\n') {
+                out.push_str(terminator);
+            }
+            out.push_str(pattern);
+            out.push_str(terminator);
+            appended = true;
         }
     }
-    if missing.is_empty() {
+    if !appended {
         return None;
-    }
-
-    let mut out = String::with_capacity(existing.len() + missing.len() * 32);
-    out.push_str(existing);
-    if !out.is_empty() && !out.ends_with('\n') {
-        out.push_str(terminator);
-    }
-    for pattern in missing {
-        out.push_str(pattern);
-        out.push_str(terminator);
     }
     Some(out)
 }

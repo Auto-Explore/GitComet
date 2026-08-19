@@ -3,7 +3,7 @@
 
 use crate::domain::{Commit, CommitId};
 use crate::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 /// A validated squash of `commit_count` commits in a linear first-parent
 /// chain reachable from HEAD.

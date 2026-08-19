@@ -14,8 +14,7 @@ use gitcomet_core::services::{CancellationToken, LogChunk, Result};
 use gix::bstr::ByteSlice as _;
 use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
-use rustc_hash::FxHashSet as HashSet;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -94,7 +93,7 @@ fn reflog_lines_rev(
         return Ok(Vec::new());
     };
 
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(limit.unwrap_or(0));
     for line in iter {
         let line =
             line.map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?;
@@ -146,8 +145,8 @@ pub(super) fn stash_reflog_tips(
     repo: &gix::Repository,
     limit: usize,
 ) -> Result<Vec<gix::ObjectId>> {
-    let mut tips = Vec::new();
-    let mut seen = HashSet::default();
+    let mut tips = Vec::with_capacity(limit);
+    let mut seen = HashSet::with_capacity_and_hasher(limit, Default::default());
     for line in stash_reflog_lines(repo, Some(limit))? {
         let id = line.new_oid;
         if !id.is_null() && seen.insert(id) {
@@ -1702,8 +1701,8 @@ impl GixRepo {
             .to_string();
         let (author_name, author_email, authored_at_unix) = match commit.author() {
             Ok(signature) => (
-                bytes_to_text_preserving_utf8(signature.name.as_ref()).to_string(),
-                bytes_to_text_preserving_utf8(signature.email.as_ref()).to_string(),
+                bytes_to_text_preserving_utf8(signature.name.as_ref()),
+                bytes_to_text_preserving_utf8(signature.email.as_ref()),
                 signature.time().ok().map(|time| time.seconds).unwrap_or(0),
             ),
             Err(_) => (String::new(), String::new(), 0),
@@ -1786,7 +1785,7 @@ impl GixRepo {
     ) -> Result<Vec<CommitId>> {
         let repo = self._repo.to_thread_local();
         let mut object_ids = Vec::with_capacity(ids.len());
-        let mut selected = HashMap::with_capacity(ids.len());
+        let mut selected = HashMap::with_capacity_and_hasher(ids.len(), Default::default());
         for (ix, id) in ids.iter().enumerate() {
             let spec = id.as_ref();
             let object_id = repo

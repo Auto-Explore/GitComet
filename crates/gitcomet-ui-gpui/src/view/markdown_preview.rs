@@ -915,14 +915,15 @@ fn align_markdown_diff_rows(
 ) -> Option<()> {
     let old_rows = std::mem::take(&mut old_doc.rows);
     let new_rows = std::mem::take(&mut new_doc.rows);
+    let aligned_capacity = old_rows.len().saturating_add(new_rows.len());
 
     let (mut old_groups, old_trailing) =
         markdown_rows_grouped_by_diff_anchor(old_rows, old_line_to_diff_row, diff_row_count);
     let (mut new_groups, new_trailing) =
         markdown_rows_grouped_by_diff_anchor(new_rows, new_line_to_diff_row, diff_row_count);
 
-    let mut old_aligned = Vec::new();
-    let mut new_aligned = Vec::new();
+    let mut old_aligned = Vec::with_capacity(aligned_capacity);
+    let mut new_aligned = Vec::with_capacity(aligned_capacity);
 
     for diff_ix in 0..diff_row_count {
         let old_group = std::mem::take(&mut old_groups[diff_ix]);
@@ -1223,7 +1224,7 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
 
     let options = markdown_parser_options();
 
-    let mut rows = Vec::new();
+    let mut rows = Vec::with_capacity(line_starts.len());
     let mut text_buf = String::new();
     struct PendingImage {
         source: SharedString,
@@ -2820,12 +2821,27 @@ fn build_aligned_table_row_text(
 ) -> (String, Vec<MarkdownInlineSpan>) {
     const TABLE_COLUMN_SEPARATOR: &str = " | ";
 
-    let mut text = String::new();
-    let mut spans = Vec::new();
-    let mut cells = cells.into_iter().map(Some).collect::<Vec<_>>();
+    let text_capacity = column_widths
+        .iter()
+        .copied()
+        .fold(0usize, usize::saturating_add)
+        .saturating_add(cells.iter().fold(0usize, |extra_bytes, cell| {
+            extra_bytes.saturating_add(cell.text.len().saturating_sub(cell.text.chars().count()))
+        }))
+        .saturating_add(
+            TABLE_COLUMN_SEPARATOR
+                .len()
+                .saturating_mul(column_widths.len().saturating_sub(1)),
+        );
+    let span_capacity = cells
+        .iter()
+        .fold(0usize, |len, cell| len.saturating_add(cell.spans.len()));
+    let mut text = String::with_capacity(text_capacity);
+    let mut spans = Vec::with_capacity(span_capacity);
+    let mut cells = cells.into_iter();
 
     for (ix, width) in column_widths.iter().copied().enumerate() {
-        let cell = cells.get_mut(ix).and_then(Option::take);
+        let cell = cells.next();
         let cell_width = cell
             .as_ref()
             .map(|cell| cell.text.chars().count())

@@ -116,11 +116,10 @@ impl Drop for ActiveCloneRegistration {
     }
 }
 
-fn active_clones() -> &'static Mutex<std::collections::HashMap<PathBuf, Arc<ActiveCloneHandle>>> {
-    static ACTIVE_CLONES: OnceLock<
-        Mutex<std::collections::HashMap<PathBuf, Arc<ActiveCloneHandle>>>,
-    > = OnceLock::new();
-    ACTIVE_CLONES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+fn active_clones() -> &'static Mutex<rustc_hash::FxHashMap<PathBuf, Arc<ActiveCloneHandle>>> {
+    static ACTIVE_CLONES: OnceLock<Mutex<rustc_hash::FxHashMap<PathBuf, Arc<ActiveCloneHandle>>>> =
+        OnceLock::new();
+    ACTIVE_CLONES.get_or_init(|| Mutex::new(rustc_hash::FxHashMap::default()))
 }
 
 struct AskPassScript {
@@ -556,9 +555,7 @@ fn take_clone_progress_fragments(pending: &mut Vec<u8>, eof: bool) -> Vec<String
         }
         pending.clear();
     } else if start > 0 {
-        let remainder = pending[start..].to_vec();
-        pending.clear();
-        pending.extend_from_slice(&remainder);
+        pending.drain(..start);
     }
 
     fragments
@@ -909,6 +906,27 @@ mod tests {
                 "Receiving objects:  20% (20/100)",
                 "Resolving deltas:   5% (1/20)",
             ]
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn take_clone_progress_fragments_retains_partial_chunks_between_reads() {
+        let mut pending = b"Receiving objects:  4".to_vec();
+        assert!(take_clone_progress_fragments(&mut pending, false).is_empty());
+        assert_eq!(pending, b"Receiving objects:  4".to_vec());
+
+        pending.extend_from_slice(b"2% (42/100)\rResolving deltas:  1");
+        assert_eq!(
+            take_clone_progress_fragments(&mut pending, false),
+            vec!["Receiving objects:  42% (42/100)"]
+        );
+        assert_eq!(pending, b"Resolving deltas:  1".to_vec());
+
+        pending.extend_from_slice(b"0% (2/20)\n");
+        assert_eq!(
+            take_clone_progress_fragments(&mut pending, false),
+            vec!["Resolving deltas:  10% (2/20)"]
         );
         assert!(pending.is_empty());
     }

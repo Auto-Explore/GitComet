@@ -5466,7 +5466,7 @@ pub(in crate::view) struct ThreeWayVisibleOptions<'a> {
     /// [`CONFLICT_COLLAPSED_CONTEXT_LINES`] around each conflict.
     pub collapse_context: bool,
     /// Per-fold reveal state, keyed by fold identity (pre-reveal start line).
-    pub context_fold_reveals: Option<&'a std::collections::HashMap<usize, ConflictFoldReveal>>,
+    pub context_fold_reveals: Option<&'a FxHashMap<usize, ConflictFoldReveal>>,
 }
 
 /// Build the three-way visible projection with hide-resolved and collapsed
