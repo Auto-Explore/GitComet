@@ -54,6 +54,7 @@ actions!(
         OpenRepository,
         SwitchRepository,
         ApplyPatch,
+        ShowReflog,
         Close,
         CloseWindow,
         PreviousRepository,
@@ -674,6 +675,13 @@ fn install_app_actions(cx: &mut App, backend: Arc<dyn GitBackend>) {
             });
         });
     });
+    cx.on_action(|_: &ShowReflog, cx| {
+        cx.defer(|cx| {
+            let _ = update_active_normal_gitcomet_window(cx, |view, cx| {
+                view.open_reflog_panel_for_active_repo(cx);
+            });
+        });
+    });
 
     cx.on_action(|_: &Close, cx| {
         cx.defer(|cx| {
@@ -963,6 +971,11 @@ fn macos_app_menus_with_external_editor(external_editor_configured: bool) -> Vec
                 MenuItem::separator(),
                 MenuItem::os_action("Select All", crate::kit::SelectAll, OsAction::SelectAll),
             ],
+            disabled: false,
+        },
+        Menu {
+            name: "View".into(),
+            items: vec![MenuItem::action("Reflog", ShowReflog)],
             disabled: false,
         },
         Menu {
@@ -2004,6 +2017,7 @@ mod tests {
                 .on_action(record_action_listener!(OpenInCodeEditor))
                 .on_action(record_action_listener!(OpenRepository))
                 .on_action(record_action_listener!(SwitchRepository))
+                .on_action(record_action_listener!(ShowReflog))
                 .on_action(record_action_listener!(Close))
                 .on_action(record_action_listener!(CloseWindow))
                 .on_action(record_action_listener!(PreviousRepository))

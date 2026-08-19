@@ -26,6 +26,10 @@ pub(crate) enum ViewPerfSpan {
 pub(crate) enum ViewPerfRenderLane {
     ResolvedPreview,
     MarkdownPreview,
+    /// The reflog panel's `uniform_list`. Recorded so a test can prove the
+    /// panel only builds the visible slice: the whole point of that list is
+    /// that a 200-entry reflog costs a screenful of rows, not 200.
+    Reflog,
 }
 
 #[cfg(any(test, feature = "benchmarks"))]
@@ -51,6 +55,7 @@ pub(crate) struct RowBatchStats {
 pub(crate) struct ViewPerfSnapshot {
     pub render_resolved_preview_rows_batch: RowBatchStats,
     pub markdown_preview_rows_batch: RowBatchStats,
+    pub reflog_rows_batch: RowBatchStats,
     pub render_three_way_rows: SpanStats,
     pub render_resolver_diff_rows: SpanStats,
     pub render_resolved_preview_rows: SpanStats,
@@ -124,6 +129,7 @@ pub(crate) fn snapshot() -> ViewPerfSnapshot {
         ViewPerfSnapshot {
             render_resolved_preview_rows_batch: RENDER_RESOLVED_PREVIEW_ROWS_BATCH.snapshot(),
             markdown_preview_rows_batch: MARKDOWN_PREVIEW_ROWS_BATCH.snapshot(),
+            reflog_rows_batch: REFLOG_ROWS_BATCH.snapshot(),
             render_three_way_rows: RENDER_THREE_WAY_ROWS_SPAN.snapshot(),
             render_resolver_diff_rows: RENDER_RESOLVER_DIFF_ROWS_SPAN.snapshot(),
             render_resolved_preview_rows: RENDER_RESOLVED_PREVIEW_ROWS_SPAN.snapshot(),
@@ -151,6 +157,7 @@ pub(crate) fn reset() {
     {
         RENDER_RESOLVED_PREVIEW_ROWS_BATCH.reset();
         MARKDOWN_PREVIEW_ROWS_BATCH.reset();
+        REFLOG_ROWS_BATCH.reset();
 
         RENDER_THREE_WAY_ROWS_SPAN.reset();
         RENDER_RESOLVER_DIFF_ROWS_SPAN.reset();
@@ -287,6 +294,8 @@ static MARKDOWN_PREVIEW_STYLED_ROW_BUILD_SPAN: AtomicSpanStats = AtomicSpanStats
 static RENDER_RESOLVED_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
 static MARKDOWN_PREVIEW_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
+#[cfg(any(debug_assertions, feature = "benchmarks"))]
+static REFLOG_ROWS_BATCH: AtomicRowBatchStats = AtomicRowBatchStats::new();
 
 #[inline]
 #[cfg(any(debug_assertions, feature = "benchmarks"))]
@@ -312,6 +321,7 @@ fn row_stats(lane: ViewPerfRenderLane) -> &'static AtomicRowBatchStats {
     match lane {
         ViewPerfRenderLane::ResolvedPreview => &RENDER_RESOLVED_PREVIEW_ROWS_BATCH,
         ViewPerfRenderLane::MarkdownPreview => &MARKDOWN_PREVIEW_ROWS_BATCH,
+        ViewPerfRenderLane::Reflog => &REFLOG_ROWS_BATCH,
     }
 }
 

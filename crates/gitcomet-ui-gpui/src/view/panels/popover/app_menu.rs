@@ -84,6 +84,20 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
         AppMenuAction::LocateFileInExplorer,
     );
 
+    // Sits with the other repository-scoped views rather than the app-wide rows
+    // above: it opens a panel about *this* repo's history.
+    push_entry(
+        &mut items,
+        &mut debug_selectors,
+        "app_menu_show_reflog",
+        "Reflog",
+        Shortcut::None,
+        active_repo_id.is_none(),
+        AppMenuAction::ShowReflog {
+            repo_id: active_repo_id,
+        },
+    );
+
     items.push(ContextMenuItem::Separator);
     push_entry(
         &mut items,
@@ -163,6 +177,15 @@ pub(super) fn activate(
                 });
             }
             this.close_popover_and_restore_focus(window, cx);
+        }
+        AppMenuAction::ShowReflog { repo_id } => {
+            this.close_popover_and_restore_focus(window, cx);
+            let Some(repo_id) = repo_id else {
+                return;
+            };
+            let _ = this.root_view.update(cx, |root, cx| {
+                root.open_reflog_panel(repo_id, cx);
+            });
         }
         AppMenuAction::ApplyPatch { repo_id } => {
             let Some(repo_id) = repo_id else {

@@ -1174,7 +1174,8 @@ pub struct RepoState {
     pub log_rev: u64,
     pub stashes: Loadable<Arc<Vec<StashEntry>>>,
     pub stashes_rev: u64,
-    pub reflog: Loadable<Vec<ReflogEntry>>,
+    pub reflog: Loadable<Arc<Vec<ReflogEntry>>>,
+    pub reflog_rev: u64,
     pub recent_commit_messages: Loadable<Arc<Vec<RecentCommitMessage>>>,
     pub recent_commit_messages_rev: u64,
     pub rebase_in_progress: Loadable<bool>,
@@ -1293,6 +1294,7 @@ impl RepoState {
             stashes: Loadable::NotLoaded,
             stashes_rev: 0,
             reflog: Loadable::NotLoaded,
+            reflog_rev: 0,
             recent_commit_messages: Loadable::NotLoaded,
             recent_commit_messages_rev: 0,
             rebase_in_progress: Loadable::NotLoaded,
@@ -1416,6 +1418,20 @@ impl RepoState {
         self.stashes = stashes;
         self.stashes_rev = self.stashes_rev.wrapping_add(1);
         self.bump_branch_sidebar_rev();
+    }
+
+    /// Reflog entries for the HEAD reflog, behind an `Arc` for the same reason
+    /// `stashes` is: the reflog panel reads the whole list every render, and a
+    /// deep clone of up to 200 entries per frame is exactly the cost that made
+    /// that panel feel slow. `reflog_rev` is what the panel keys its filtered
+    /// row cache on, so it must bump on every real change and never otherwise.
+    pub(crate) fn set_reflog(&mut self, reflog: Loadable<Vec<ReflogEntry>>) {
+        let reflog = loadable_into_arc(reflog);
+        if self.reflog == reflog {
+            return;
+        }
+        self.reflog = reflog;
+        self.reflog_rev = self.reflog_rev.wrapping_add(1);
     }
 
     pub(crate) fn set_recent_commit_messages(
@@ -3172,6 +3188,37 @@ mod tests {
         let rev = repo.stashes_rev;
         repo.set_stashes(Loadable::Loading);
         assert_eq!(repo.stashes_rev, rev);
+    }
+
+    /// The reflog panel keys its filtered-row cache on `reflog_rev`, so the rev
+    /// has to bump on every content change and stay put otherwise — a spurious
+    /// bump rebuilds the row list on every poll, a missing one shows stale rows.
+    #[test]
+    fn set_reflog_bumps_rev_only_when_the_entries_change() {
+        let mut repo = new_repo();
+        let before = repo.reflog_rev;
+
+        repo.set_reflog(Loadable::Loading);
+        assert_eq!(repo.reflog_rev, before + 1);
+        repo.set_reflog(Loadable::Loading);
+        assert_eq!(repo.reflog_rev, before + 1);
+
+        let entry = ReflogEntry {
+            index: 0,
+            new_id: CommitId("abc".into()),
+            message: "commit: initial".into(),
+            time: None,
+            selector: "HEAD@{0}".into(),
+            author: "Jane Doe".into(),
+        };
+        repo.set_reflog(Loadable::Ready(vec![entry.clone()]));
+        let ready_rev = repo.reflog_rev;
+        assert_eq!(ready_rev, before + 2);
+
+        // Same entries arriving again (a poll that found nothing new) must not
+        // invalidate the panel's cache.
+        repo.set_reflog(Loadable::Ready(vec![entry]));
+        assert_eq!(repo.reflog_rev, ready_rev);
     }
 
     #[test]

@@ -18,6 +18,10 @@ pub(in crate::view) enum AppMenuAction {
     ApplyPatch {
         repo_id: Option<RepoId>,
     },
+    /// Show the reflog panel for the active repository, in the bottom panel.
+    ShowReflog {
+        repo_id: Option<RepoId>,
+    },
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]
     InstallDesktopIntegration,
     Quit,

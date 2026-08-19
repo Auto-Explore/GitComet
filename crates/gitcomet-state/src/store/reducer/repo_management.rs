@@ -176,7 +176,11 @@ fn clear_cancelled_repo_loading(repo_state: &mut RepoState) {
     if repo_state.stashes.is_loading() {
         repo_state.set_stashes(Loadable::NotLoaded);
     }
-    clear_loading(&mut repo_state.reflog);
+    // `clear_loading` cannot be used here: it mutates the field in place, which
+    // would leave `reflog_rev` stale for the panel that keys its row cache on it.
+    if repo_state.reflog.is_loading() {
+        repo_state.set_reflog(Loadable::NotLoaded);
+    }
     if repo_state.rebase_in_progress.is_loading() {
         repo_state.set_rebase_in_progress(Loadable::NotLoaded);
     }
@@ -1110,7 +1114,7 @@ pub(super) fn repo_opened_ok(
             repo_state.set_log(Loadable::Loading);
             repo_state.set_log_loading_more(false);
             repo_state.set_stashes(Loadable::NotLoaded);
-            repo_state.reflog = Loadable::NotLoaded;
+            repo_state.set_reflog(Loadable::NotLoaded);
             repo_state.set_rebase_in_progress(Loadable::Loading);
             repo_state.set_sequencer_state(Loadable::Loading);
             repo_state.set_merge_commit_message(Loadable::Loading);

@@ -5120,17 +5120,6 @@ pub(super) enum BottomPanelTab {
     Reflog,
 }
 
-/// Persistent, per-repository state for the reflog panel: unlike the popover
-/// picker it replaced, this survives being hidden behind the terminal tab, so
-/// scroll position, the selected row, and the filter text are exactly where
-/// the user left them when they switch back.
-pub(super) struct ReflogPanelState {
-    pub(super) query_input: Entity<components::TextInput>,
-    pub(super) _query_input_subscription: gpui::Subscription,
-    pub(super) selected: Option<CommitId>,
-    pub(super) scroll: ScrollHandle,
-}
-
 /// A cell in alacritty's grid coordinate space. `row` is a `Line`: `0` is the
 /// top of the visible screen at the live tail, and scrollback history is
 /// negative down to `-history_size`. Field order matters — the derived `Ord`
@@ -5553,10 +5542,10 @@ pub struct GitCometView {
     pub(super) terminal_cursor_blink_active: bool,
     pub(super) terminal_cursor_blink_task_scheduled: bool,
     pub(super) terminal_cursor_blink_seq: u64,
-    /// Per-repository reflog panel state. A repo's presence in this map is
-    /// what "open" means for the reflog panel — closing it drops the entry
-    /// (and with it the filter text, scroll position, and selection).
-    pub(super) reflog_panels: HashMap<RepoId, ReflogPanelState>,
+    /// The reflog panel. It owns its own per-repository state (filter text,
+    /// scroll, selection) — a separate entity so that hovering one of its rows
+    /// repaints the panel instead of the whole application window.
+    pub(super) reflog_pane: Entity<ReflogPaneView>,
     /// Which of the bottom panel's contents is currently visible for a repo,
     /// when more than one is open. Absent (and single-panel repos) fall back
     /// to whichever panel is actually open.

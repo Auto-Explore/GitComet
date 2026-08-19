@@ -1,6 +1,4 @@
 use super::*;
-use crate::ui_scale::UiScale;
-use gitcomet_core::domain::ReflogEntry;
 
 /// Bottom panel's minimum height while the reflog panel is the sole (or
 /// active) content. Matches the terminal panel's own floor so the resize
@@ -9,37 +7,64 @@ const REFLOG_PANEL_MIN_HEIGHT_PX: f32 = 120.0;
 /// Height of the Terminal/Reflog switcher shown above the bottom panel's
 /// content once more than one of its panels is open for the active repo.
 const BOTTOM_PANEL_TAB_BAR_HEIGHT_PX: f32 = 30.0;
-const REFLOG_ROW_HEIGHT_PX: f32 = 28.0;
 
 impl GitCometView {
-    /// Whether the reflog panel is open for `repo_id`. Its presence in
-    /// `reflog_panels` *is* "open" — closing it drops the entry, and with it
-    /// the filter text, scroll position, and row selection.
-    pub(super) fn reflog_panel_is_open(&self, repo_id: RepoId) -> bool {
-        self.reflog_panels.contains_key(&repo_id)
+    /// Whether the reflog panel is open for `repo_id`. The panel itself owns
+    /// that fact (and its filter text, scroll position, and selection); the
+    /// root only decides where to put it.
+    pub(super) fn reflog_panel_is_open(&self, repo_id: RepoId, cx: &gpui::App) -> bool {
+        self.reflog_pane.read(cx).is_open(repo_id)
     }
 
-    /// Opens (or re-focuses) the persistent reflog panel for `repo_id`:
-    /// ensures its state exists, kicks off a load, and brings it to the front
-    /// of the bottom panel's tab switcher.
-    pub(super) fn open_reflog_panel(
-        &mut self,
-        repo_id: RepoId,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        self.ensure_reflog_panel_state(repo_id, window, cx);
+    /// Opens (or re-focuses) the persistent reflog panel for `repo_id` and
+    /// brings it to the front of the bottom panel's tab switcher.
+    pub(super) fn open_reflog_panel(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
+        self.reflog_pane
+            .update(cx, |pane, cx| pane.open(repo_id, cx));
         self.active_bottom_panel
             .insert(repo_id, BottomPanelTab::Reflog);
-        self.store.dispatch(Msg::LoadReflog { repo_id });
         cx.notify();
     }
 
-    /// Closes the reflog panel for `repo_id`, dropping its state. The bottom
-    /// panel falls back to the terminal automatically once nothing keys
-    /// `active_bottom_panel` to `Reflog` for a repo without a reflog panel.
+    /// Opens the reflog panel for whichever repository is active. The entry
+    /// point for the application menus and the command palette, none of which
+    /// carry a repository of their own.
+    pub(crate) fn open_reflog_panel_for_active_repo(&mut self, cx: &mut gpui::Context<Self>) {
+        if let Some(repo_id) = self.active_repo_id() {
+            self.open_reflog_panel(repo_id, cx);
+        }
+    }
+
+    /// Closes the reflog panel for `repo_id` from outside the panel — the tab
+    /// strip's close button. The panel drops its own state and calls back into
+    /// [`Self::on_reflog_panel_closed`], so both entry points converge.
     pub(super) fn close_reflog_panel(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
-        self.reflog_panels.remove(&repo_id);
+        self.reflog_pane
+            .update(cx, |pane, cx| pane.close(repo_id, cx));
+        cx.notify();
+    }
+
+    /// Closes whichever bottom-panel content the clicked tab stands for. The
+    /// terminal keeps its shutdown prompt: a tab with a live process asks first,
+    /// exactly as its own close button does.
+    fn close_bottom_panel_tab(
+        &mut self,
+        repo_id: RepoId,
+        tab: BottomPanelTab,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        match tab {
+            BottomPanelTab::Terminal => {
+                if !self.request_close_terminal_for_repo(repo_id, cx) {
+                    self.close_terminal_for_repo(repo_id, cx);
+                }
+            }
+            BottomPanelTab::Reflog => self.close_reflog_panel(repo_id, cx),
+        }
+    }
+
+    /// The panel closed itself: fall the bottom panel back to the terminal.
+    pub(super) fn on_reflog_panel_closed(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
         if self.active_bottom_panel.get(&repo_id) == Some(&BottomPanelTab::Reflog) {
             self.active_bottom_panel
                 .insert(repo_id, BottomPanelTab::Terminal);
@@ -47,88 +72,18 @@ impl GitCometView {
         cx.notify();
     }
 
-    /// Drops reflog panel state for any repository that is no longer open,
-    /// mirroring `sync_terminal_sessions_with_state`'s cleanup of terminal
-    /// sessions — otherwise a closed repo's filter text, scroll position, and
-    /// selection would linger in memory (and, if the same `RepoId` were ever
-    /// reused, resurface for an unrelated repository).
+    /// Drops the remembered bottom-panel tab for any repository that is no
+    /// longer open, mirroring `sync_terminal_sessions_with_state`'s cleanup of
+    /// terminal sessions. The reflog panel's own per-repo state is pruned by
+    /// the panel itself, on the same state snapshot.
     pub(super) fn sync_reflog_panels_with_state(&mut self) {
-        if self.reflog_panels.is_empty() && self.active_bottom_panel.is_empty() {
+        if self.active_bottom_panel.is_empty() {
             return;
         }
         let active_repo_ids: HashSet<RepoId> =
             self.state.repos.iter().map(|repo| repo.id).collect();
-        self.reflog_panels
-            .retain(|repo_id, _| active_repo_ids.contains(repo_id));
         self.active_bottom_panel
             .retain(|repo_id, _| active_repo_ids.contains(repo_id));
-    }
-
-    fn ensure_reflog_panel_state(
-        &mut self,
-        repo_id: RepoId,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        if self.reflog_panels.contains_key(&repo_id) {
-            return;
-        }
-        let query_input = cx.new(|cx| {
-            components::TextInput::new(
-                components::TextInputOptions {
-                    placeholder: "Filter reflog entries".into(),
-                    ..Default::default()
-                },
-                window,
-                cx,
-            )
-        });
-        // The table is filtered by this input's text, which is read fresh on
-        // every render — without this observer, typing would update the
-        // input's own subtree but never trigger the parent re-render that
-        // recomputes the filtered rows.
-        let subscription = cx.observe(&query_input, |_this, _input, cx| {
-            cx.notify();
-        });
-        self.reflog_panels.insert(
-            repo_id,
-            ReflogPanelState {
-                query_input,
-                _query_input_subscription: subscription,
-                selected: None,
-                scroll: ScrollHandle::new(),
-            },
-        );
-    }
-
-    /// Absolute date plus a relative duration in parentheses, e.g.
-    /// `2026-08-18 14:32:07 (3 minutes ago)`. Reuses the app's own date
-    /// preferences (`date_time_format`/`timezone`/`show_timezone`) so the
-    /// reflog panel matches the rest of the app instead of inventing its own
-    /// format, and `format_relative_time` for the parenthetical the same way
-    /// the (now retired) picker version of this panel did.
-    fn reflog_entry_date_display(&self, time: Option<std::time::SystemTime>) -> String {
-        let Some(time) = time else {
-            return String::new();
-        };
-        let mut buf = String::with_capacity(40);
-        crate::view::date_time::format_datetime_into(
-            &mut buf,
-            time,
-            self.date_time_format,
-            self.timezone,
-            self.show_timezone,
-        );
-        if let Ok(duration) = time.duration_since(std::time::UNIX_EPOCH) {
-            let relative = crate::view::date_time::format_relative_time(
-                duration.as_secs() as i64,
-                std::time::SystemTime::now(),
-            );
-            buf.push_str(" (");
-            buf.push_str(&relative);
-            buf.push(')');
-        }
-        buf
     }
 
     /// The bottom panel: the terminal, the reflog panel, or — when both are
@@ -146,7 +101,7 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> Option<AnyElement> {
         let repo_id = self.active_repo_id()?;
-        let reflog_open = self.reflog_panel_is_open(repo_id);
+        let reflog_open = self.reflog_panel_is_open(repo_id, cx);
 
         if !reflog_open {
             return self.render_terminal_panel(theme, window, cx);
@@ -165,7 +120,7 @@ impl GitCometView {
                     .flex_col()
                     .h(self.terminal_panel_height)
                     .min_h(px(REFLOG_PANEL_MIN_HEIGHT_PX))
-                    .child(self.render_reflog_panel(theme, repo_id, window, cx))
+                    .child(self.reflog_pane.clone())
                     .into_any(),
             );
         }
@@ -179,7 +134,7 @@ impl GitCometView {
         let tab_bar = self.render_bottom_panel_tab_bar(theme, repo_id, active_tab, cx);
         let content = match active_tab {
             BottomPanelTab::Terminal => self.render_terminal_panel(theme, window, cx)?,
-            BottomPanelTab::Reflog => self.render_reflog_panel(theme, repo_id, window, cx),
+            BottomPanelTab::Reflog => self.reflog_pane.clone().into_any_element(),
         };
 
         Some(
@@ -210,8 +165,10 @@ impl GitCometView {
         cx: &mut gpui::Context<Self>,
     ) -> AnyElement {
         let tab = |id: &'static str,
+                   close_id: &'static str,
                    icon: &'static str,
                    label: &'static str,
+                   close_tip: &'static str,
                    this_tab: BottomPanelTab,
                    cx: &mut gpui::Context<Self>| {
             let is_active = this_tab == active_tab;
@@ -243,6 +200,9 @@ impl GitCometView {
                 })
                 .child(svg_icon(icon, text_color, px(12.0)))
                 .child(label)
+                .child(bottom_panel_tab_close(
+                    theme, close_id, close_tip, text_color, repo_id, this_tab, cx,
+                ))
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
@@ -266,432 +226,177 @@ impl GitCometView {
             .border_color(theme.colors.stroke.subtle)
             .child(tab(
                 "bottom_panel_tab_terminal",
+                "bottom_panel_tab_terminal_close",
                 "icons/terminal.svg",
                 "Terminal",
+                "Close terminal",
                 BottomPanelTab::Terminal,
                 cx,
             ))
             .child(tab(
                 "bottom_panel_tab_reflog",
+                "bottom_panel_tab_reflog_close",
                 "icons/history.svg",
                 "Reflog",
+                "Close reflog",
                 BottomPanelTab::Reflog,
                 cx,
             ))
             .into_any()
     }
-
-    fn render_reflog_panel(
-        &mut self,
-        theme: AppTheme,
-        repo_id: RepoId,
-        window: &mut Window,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        self.ensure_reflog_panel_state(repo_id, window, cx);
-
-        let query = self
-            .reflog_panels
-            .get(&repo_id)
-            .map(|state| state.query_input.read(cx).text().trim().to_lowercase())
-            .unwrap_or_default();
-
-        let repo = self.state.repos.iter().find(|r| r.id == repo_id);
-        let entries: Option<Vec<ReflogEntry>> = repo.and_then(|r| match &r.reflog {
-            Loadable::Ready(entries) => Some(entries.clone()),
-            _ => None,
-        });
-
-        let query_input = self
-            .reflog_panels
-            .get(&repo_id)
-            .map(|state| state.query_input.clone());
-
-        let header = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .justify_between()
-            .gap(px(8.0))
-            .px(px(8.0))
-            .py(px(4.0))
-            .bg(theme.colors.surface.panel)
-            .border_b_1()
-            .border_color(theme.colors.stroke.subtle)
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(8.0))
-                    .child(
-                        div()
-                            .text_sm()
-                            .font_weight(FontWeight::BOLD)
-                            .child("Reflog"),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(theme.colors.foreground.secondary)
-                            .child(match &entries {
-                                Some(entries) => format!("{} entries", entries.len()),
-                                None => "Loading…".to_string(),
-                            }),
-                    ),
-            )
-            .child(
-                div()
-                    .flex()
-                    .items_center()
-                    .gap(px(6.0))
-                    .child(div().w(px(220.0)).children(query_input))
-                    .child(
-                        components::Button::new("reflog_panel_close", "Close")
-                            .style(components::ButtonStyle::Outlined)
-                            .on_click(theme, cx, move |this, _e, _w, cx| {
-                                this.close_reflog_panel(repo_id, cx);
-                            }),
-                    ),
-            );
-
-        let table_header = div()
-            .flex()
-            .flex_none()
-            .items_center()
-            .px(px(8.0))
-            .py(px(3.0))
-            .gap(px(8.0))
-            .text_xs()
-            .text_color(theme.colors.foreground.secondary)
-            .bg(theme.colors.surface.panel)
-            .border_b_1()
-            .border_color(theme.colors.stroke.subtle)
-            .child(div().w(px(14.0)).flex_none())
-            .child(div().w(px(70.0)).flex_none().child("Selector"))
-            .child(div().w(px(70.0)).flex_none().child("SHA"))
-            .child(div().w(px(22.0)).flex_none())
-            .child(div().w(px(260.0)).flex_none().child("Date"))
-            .child(div().flex_1().min_w(px(0.0)).child("Message"));
-
-        let body: AnyElement = match (repo.map(|r| &r.reflog), entries) {
-            (None, _) => reflog_placeholder(theme, "No repository"),
-            (Some(Loadable::Error(e)), _) => {
-                reflog_error_placeholder(theme, format!("Couldn't load reflog: {e}"))
-            }
-            (Some(_), None) => reflog_placeholder(theme, "Loading…"),
-            (Some(_), Some(entries)) => {
-                let ui_scale = UiScale::from_percent(self.ui_scale_percent);
-                let selected = self
-                    .reflog_panels
-                    .get(&repo_id)
-                    .and_then(|s| s.selected.clone());
-                let scroll = self
-                    .reflog_panels
-                    .get(&repo_id)
-                    .map(|s| s.scroll.clone())
-                    .unwrap_or_default();
-
-                let filtered: Vec<ReflogEntry> = entries
-                    .into_iter()
-                    .filter(|entry| reflog_entry_matches(entry, &query))
-                    .collect();
-
-                if filtered.is_empty() {
-                    reflog_placeholder(
-                        theme,
-                        if query.is_empty() {
-                            "No reflog entries"
-                        } else {
-                            "No entries match your filter"
-                        },
-                    )
-                } else {
-                    let mut rows = div()
-                        .id("reflog_panel_rows")
-                        .flex()
-                        .flex_col()
-                        .flex_1()
-                        .min_h(px(0.0))
-                        .overflow_y_scroll()
-                        .track_scroll(&scroll);
-                    for entry in &filtered {
-                        rows = rows.child(self.render_reflog_row(
-                            theme,
-                            ui_scale,
-                            repo_id,
-                            entry,
-                            entry.index == 0,
-                            selected.as_ref() == Some(&entry.new_id),
-                            cx,
-                        ));
-                    }
-                    rows.into_any()
-                }
-            }
-        };
-
-        div()
-            .flex()
-            .flex_col()
-            .flex_1()
-            .min_h(px(0.0))
-            .bg(theme.colors.surface.canvas)
-            .child(header)
-            .child(table_header)
-            .child(body)
-            .into_any()
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn render_reflog_row(
-        &self,
-        theme: AppTheme,
-        ui_scale: UiScale,
-        repo_id: RepoId,
-        entry: &ReflogEntry,
-        is_current: bool,
-        is_selected: bool,
-        cx: &mut gpui::Context<Self>,
-    ) -> AnyElement {
-        let sha = entry.new_id.as_ref();
-        let short_sha: SharedString = sha.get(0..8).unwrap_or(sha).to_owned().into();
-        let selector: SharedString = entry.selector.to_string().into();
-        let message: SharedString = entry.message.to_string().into();
-        let author: SharedString = entry.author.to_string().into();
-        let date = self.reflog_entry_date_display(entry.time);
-        let target = entry.new_id.clone();
-        let target_for_menu = entry.new_id.clone();
-        let selector_for_menu = selector.clone();
-
-        let row_bg = if is_selected {
-            theme.colors.interaction.selected_background
-        } else {
-            theme.colors.surface.canvas
-        };
-
-        div()
-            .id(("reflog_row", entry.index))
-            .flex()
-            .items_center()
-            .h(px(REFLOG_ROW_HEIGHT_PX))
-            .flex_none()
-            .px(px(8.0))
-            .gap(px(8.0))
-            .bg(row_bg)
-            .cursor(CursorStyle::PointingHand)
-            .hover(move |s| {
-                if is_selected {
-                    s
-                } else {
-                    s.bg(theme.colors.interaction.hover_background)
-                }
-            })
-            .child({
-                let marker = div()
-                    .id(("reflog_row_marker", entry.index))
-                    .w(px(14.0))
-                    .flex_none()
-                    .text_color(theme.colors.accent.foreground)
-                    .child(if is_current { "▶" } else { "" });
-                if is_current {
-                    marker.gitcomet_tooltip(theme, "Current HEAD position".into())
-                } else {
-                    marker
-                }
-            })
-            .child(
-                div()
-                    .w(px(70.0))
-                    .flex_none()
-                    .text_xs()
-                    .text_color(theme.colors.foreground.secondary)
-                    .child(selector.clone()),
-            )
-            .child(
-                div()
-                    .id(("reflog_row_sha", entry.index))
-                    .w(px(70.0))
-                    .flex_none()
-                    .text_xs()
-                    .font_family(UI_MONOSPACE_FONT_FAMILY)
-                    .text_color(theme.colors.accent.foreground)
-                    .child(short_sha)
-                    .gitcomet_tooltip(theme, "View this commit in the history log".into()),
-            )
-            .child(
-                div()
-                    .w(px(22.0))
-                    .flex_none()
-                    .child(components::author_avatar(theme, ui_scale, author.as_ref())),
-            )
-            .child(
-                div()
-                    .w(px(260.0))
-                    .flex_none()
-                    .text_xs()
-                    .text_color(theme.colors.foreground.secondary)
-                    .child(date),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .min_w(px(0.0))
-                    .overflow_hidden()
-                    .whitespace_nowrap()
-                    .text_xs()
-                    .child(message),
-            )
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
-                    if let Some(state) = this.reflog_panels.get_mut(&repo_id) {
-                        state.selected = Some(target.clone());
-                    }
-                    this.store.dispatch(Msg::SelectCommit {
-                        repo_id,
-                        commit_id: target.clone(),
-                    });
-                    cx.notify();
-                }),
-            )
-            .on_mouse_down(
-                MouseButton::Right,
-                cx.listener(move |this, e: &MouseDownEvent, window, cx| {
-                    cx.stop_propagation();
-                    if let Some(state) = this.reflog_panels.get_mut(&repo_id) {
-                        state.selected = Some(target_for_menu.clone());
-                    }
-                    this.open_popover_at(
-                        PopoverKind::ReflogEntryMenu {
-                            repo_id,
-                            target: target_for_menu.clone(),
-                            selector: selector_for_menu.clone(),
-                        },
-                        e.position,
-                        window,
-                        cx,
-                    );
-                }),
-            )
-            .into_any()
-    }
 }
 
-/// Case-insensitive substring match against selector, short sha, message, and
-/// author — the same fields the retired popover picker matched against, plus
-/// the author this panel adds. `query_lowercase` must already be lowercased:
-/// the one caller (`render_reflog_panel`) lowercases the search box's text
-/// once before filtering every row, rather than re-lowercasing it per entry.
-fn reflog_entry_matches(entry: &ReflogEntry, query_lowercase: &str) -> bool {
-    if query_lowercase.is_empty() {
-        return true;
-    }
-    let sha = entry.new_id.as_ref();
-    let short_sha = sha.get(0..8).unwrap_or(sha);
-    entry.selector.to_lowercase().contains(query_lowercase)
-        || short_sha.to_lowercase().contains(query_lowercase)
-        || entry.message.to_lowercase().contains(query_lowercase)
-        || entry.author.to_lowercase().contains(query_lowercase)
-}
-
-fn reflog_placeholder(theme: AppTheme, text: impl Into<SharedString>) -> AnyElement {
+/// The `×` on a bottom-panel tab. Same shape as the terminal's own per-instance
+/// tab close (see `render_terminal_header`): 14px hit target, danger-tinted
+/// hover, and `stop_propagation` so closing a tab never also selects it.
+#[allow(clippy::too_many_arguments)]
+fn bottom_panel_tab_close(
+    theme: AppTheme,
+    id: &'static str,
+    tip: &'static str,
+    text_color: gpui::Rgba,
+    repo_id: RepoId,
+    tab: BottomPanelTab,
+    cx: &mut gpui::Context<GitCometView>,
+) -> gpui::Stateful<gpui::Div> {
     div()
+        .id(id)
         .flex()
-        .flex_1()
+        .flex_none()
         .items_center()
         .justify_center()
-        .min_h(px(0.0))
-        .text_color(theme.colors.foreground.secondary)
-        .child(text.into())
-        .into_any()
-}
-
-/// Same layout as [`reflog_placeholder`], but colored to read as a failure —
-/// git can refuse to read the reflog for a repo that is present but has no
-/// commits yet ("unborn HEAD"), and that message deserves to look distinct
-/// from "still loading" or "nothing to show".
-fn reflog_error_placeholder(theme: AppTheme, text: impl Into<SharedString>) -> AnyElement {
-    div()
-        .flex()
-        .flex_1()
-        .items_center()
-        .justify_center()
-        .min_h(px(0.0))
-        .px(px(16.0))
-        .text_color(theme.colors.status.danger.foreground)
-        .child(text.into())
-        .into_any()
+        .size(px(14.0))
+        .rounded(px(theme.radii.row))
+        .cursor(CursorStyle::PointingHand)
+        .hover(move |s| s.bg(with_alpha(theme.colors.status.danger.foreground, 0.18)))
+        .child(svg_icon("icons/generic_close.svg", text_color, px(10.0)))
+        .gitcomet_tooltip(theme, tip.into())
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(move |this, _e: &MouseDownEvent, _window, cx| {
+                cx.stop_propagation();
+                this.close_bottom_panel_tab(repo_id, tab, cx);
+            }),
+        )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use gitcomet_core::error::{Error, ErrorKind};
+    use gitcomet_core::services::{GitBackend, GitRepository, Result};
+    use gitcomet_state::model::RepoState;
+    use gitcomet_state::store::AppStore;
+    use std::path::Path;
     use std::sync::Arc;
 
-    fn entry(index: usize, selector: &str, sha: &str, author: &str, message: &str) -> ReflogEntry {
-        ReflogEntry {
-            index,
-            new_id: gitcomet_core::domain::CommitId(Arc::from(sha)),
-            message: Arc::from(message),
-            time: None,
-            selector: Arc::from(selector),
-            author: Arc::from(author),
+    struct TestBackend;
+
+    impl GitBackend for TestBackend {
+        fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+            Err(Error::new(ErrorKind::Unsupported(
+                "no repositories in this test",
+            )))
         }
     }
 
-    #[test]
-    fn empty_query_matches_every_entry() {
-        let e = entry(0, "HEAD@{0}", "deadbeefcafe", "Jane Doe", "commit: initial");
-        assert!(reflog_entry_matches(&e, ""));
+    fn view_with_active_repo(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<GitCometView>, RepoId, &mut gpui::VisualTestContext) {
+        let repo_id = RepoId(1);
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let state = Arc::new(AppState {
+            repos: vec![RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: std::path::PathBuf::from("/tmp/bottom-panel-test"),
+                },
+            )],
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        });
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.apply_state_snapshot(Arc::clone(&state), cx);
+            });
+        });
+        (view, repo_id, cx)
     }
 
-    #[test]
-    fn query_matches_selector_sha_message_and_author() {
-        let e = entry(
-            1,
-            "HEAD@{1}",
-            "deadbeefcafe",
-            "Jane Doe",
-            "checkout: moving to feature",
-        );
+    /// The tab strip's `×` is the same gesture as the panel's own: the panel
+    /// goes away and the bottom area falls back to the terminal, rather than
+    /// leaving the strip pointing at content that is no longer there.
+    #[gpui::test]
+    fn closing_the_reflog_tab_returns_the_bottom_panel_to_the_terminal(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (view, repo_id, cx) = view_with_active_repo(cx);
 
-        assert!(reflog_entry_matches(&e, "head@{1}"));
-        assert!(reflog_entry_matches(&e, "deadbeef"));
-        assert!(reflog_entry_matches(&e, "checkout"));
-        assert!(reflog_entry_matches(&e, "jane"));
-        assert!(!reflog_entry_matches(&e, "nonexistent"));
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.open_reflog_panel(repo_id, cx);
+                assert!(this.reflog_panel_is_open(repo_id, cx));
+                assert_eq!(
+                    this.active_bottom_panel.get(&repo_id),
+                    Some(&BottomPanelTab::Reflog)
+                );
+            });
+        });
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.close_bottom_panel_tab(repo_id, BottomPanelTab::Reflog, cx);
+            });
+        });
+        // The panel calls back into the root through `cx.defer`.
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                assert!(
+                    !this.reflog_panel_is_open(repo_id, cx),
+                    "closing the tab should close the panel"
+                );
+                assert_eq!(
+                    this.active_bottom_panel.get(&repo_id),
+                    Some(&BottomPanelTab::Terminal),
+                    "the strip should fall back to the terminal"
+                );
+            });
+        });
     }
 
-    /// `reflog_entry_matches` takes an already-lowercased query (see its
-    /// `query_lowercase` parameter) — the one call site, `render_reflog_panel`,
-    /// lowercases the search box's text once before filtering every row rather
-    /// than re-lowercasing it per entry. This test exercises that real
-    /// end-to-end path: a mixed-case query as the user actually types it,
-    /// lowercased exactly once, the same way the caller does it.
-    #[test]
-    fn a_mixed_case_query_matches_once_lowercased_by_the_caller() {
-        let e = entry(
-            1,
-            "HEAD@{1}",
-            "deadbeefcafe",
-            "Jane Doe",
-            "checkout: moving to feature",
-        );
-        let query = "CHECKOUT".to_lowercase();
-        assert!(reflog_entry_matches(&e, &query));
+    /// The menus and the command palette have no repository of their own, so
+    /// they go through the active one — and do nothing at all without it.
+    #[gpui::test]
+    fn opening_from_a_menu_targets_the_active_repository(cx: &mut gpui::TestAppContext) {
+        let (view, repo_id, cx) = view_with_active_repo(cx);
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.open_reflog_panel_for_active_repo(cx);
+                assert!(this.reflog_panel_is_open(repo_id, cx));
+            });
+        });
     }
 
-    #[test]
-    fn query_does_not_match_beyond_the_short_sha_prefix() {
-        let e = entry(
-            2,
-            "HEAD@{2}",
-            "deadbeefcafe0000",
-            "Jane Doe",
-            "reset: moving to HEAD@{1}",
-        );
-        // Only the first 8 chars are shown/searched as the "sha" field, mirroring
-        // what the table displays.
-        assert!(!reflog_entry_matches(&e, "cafe0000"));
+    #[gpui::test]
+    fn opening_from_a_menu_without_a_repository_is_inert(cx: &mut gpui::TestAppContext) {
+        let (store, events) = AppStore::new(Arc::new(TestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.open_reflog_panel_for_active_repo(cx);
+                assert!(
+                    this.active_bottom_panel.is_empty(),
+                    "no repository means nothing to show a reflog for"
+                );
+            });
+        });
     }
 }
