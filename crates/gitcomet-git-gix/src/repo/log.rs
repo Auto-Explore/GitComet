@@ -20,6 +20,13 @@ use std::sync::Arc;
 
 const RECENT_COMMIT_MESSAGES_MAX_LIMIT: usize = 100;
 
+/// Upper bound on how much of a caller-supplied reflog limit we pre-reserve.
+///
+/// The limit itself is still enforced while iterating; capping the reservation
+/// only keeps a huge limit (`usize::MAX` reads as "all entries") from asking for
+/// that much capacity before we know how long the reflog actually is.
+const REFLOG_RESERVE_MAX: usize = 512;
+
 fn recent_commit_message_limits(limit: usize) -> Option<(usize, usize)> {
     let limit = limit.min(RECENT_COMMIT_MESSAGES_MAX_LIMIT);
     if limit == 0 {
@@ -93,7 +100,7 @@ fn reflog_lines_rev(
         return Ok(Vec::new());
     };
 
-    let mut lines = Vec::with_capacity(limit.unwrap_or(0));
+    let mut lines = Vec::with_capacity(limit.unwrap_or(0).min(REFLOG_RESERVE_MAX));
     for line in iter {
         let line =
             line.map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?;
@@ -145,8 +152,9 @@ pub(super) fn stash_reflog_tips(
     repo: &gix::Repository,
     limit: usize,
 ) -> Result<Vec<gix::ObjectId>> {
-    let mut tips = Vec::with_capacity(limit);
-    let mut seen = FxHashSet::with_capacity_and_hasher(limit, Default::default());
+    let reserve = limit.min(REFLOG_RESERVE_MAX);
+    let mut tips = Vec::with_capacity(reserve);
+    let mut seen = FxHashSet::with_capacity_and_hasher(reserve, Default::default());
     for line in stash_reflog_lines(repo, Some(limit))? {
         let id = line.new_oid;
         if !id.is_null() && seen.insert(id) {
@@ -2505,6 +2513,21 @@ mod tests {
             // reflog line's committer identity.
             assert_eq!(entry.author.as_ref(), "Test User");
         }
+    }
+
+    #[test]
+    fn reflog_head_impl_handles_an_unbounded_limit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        commit_file(workdir, "a.txt", "one\n", "first");
+
+        let repo = open_repo(workdir);
+        // `usize::MAX` reads as "every entry": it must not be reserved up front.
+        let entries = repo
+            .reflog_head_impl(usize::MAX)
+            .expect("reflog_head_impl");
+        assert_eq!(entries.len(), 1);
     }
 
     #[test]
