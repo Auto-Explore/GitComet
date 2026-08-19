@@ -59,7 +59,7 @@ pub(in super::super) struct ReflogPaneView {
     root_view: WeakEntity<GitCometView>,
     /// A repo's presence here *is* "the panel is open" — closing drops the
     /// entry, and with it the filter text, scroll position, and selection.
-    panels: HashMap<RepoId, ReflogPanelState>,
+    panels: FxHashMap<RepoId, ReflogPanelState>,
     notify_fingerprint: u64,
     _ui_model_subscription: gpui::Subscription,
 }
@@ -102,7 +102,7 @@ impl ReflogPaneView {
             timezone,
             show_timezone,
             root_view,
-            panels: HashMap::default(),
+            panels: FxHashMap::default(),
             notify_fingerprint: 0,
             _ui_model_subscription: subscription,
         };
@@ -137,7 +137,7 @@ impl ReflogPaneView {
             // repo's filter text, scroll position, and selection must not linger
             // (and, if the same `RepoId` were ever reused, resurface for an
             // unrelated repository).
-            let open: HashSet<RepoId> = self.state.repos.iter().map(|repo| repo.id).collect();
+            let open: FxHashSet<RepoId> = self.state.repos.iter().map(|repo| repo.id).collect();
             self.panels.retain(|repo_id, _| open.contains(repo_id));
         }
         let _ = self.request_missing_reflogs();

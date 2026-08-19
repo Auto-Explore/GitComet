@@ -143,8 +143,14 @@ fn branch_row(
 /// — the relative dates on the detail line would otherwise make every call
 /// distinct.
 pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) -> BranchRows {
-    let mut items = Vec::new();
-    let mut rows = Vec::new();
+    let local_count = repo.branches.ready().map_or(0usize, |values| values.len());
+    let remote_count = repo
+        .remote_branches
+        .ready()
+        .map_or(0usize, |values| values.len());
+    let capacity = local_count.saturating_add(remote_count).saturating_add(1);
+    let mut items = Vec::with_capacity(capacity);
+    let mut rows = Vec::with_capacity(capacity);
     let mut marked_index = None;
 
     let head_branch = match &repo.head_branch {
@@ -152,7 +158,7 @@ pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) ->
         _ => None,
     };
 
-    let mut local_names: Vec<&str> = Vec::new();
+    let mut local_names: Vec<&str> = Vec::with_capacity(local_count);
     let branches_ready = matches!(repo.branches, Loadable::Ready(_));
     if let Loadable::Ready(branches) = &repo.branches {
         for branch in branches.iter() {
@@ -314,12 +320,18 @@ pub(super) fn ref_rows_cached(
         query,
     );
     super::rows_cache::get_or_build(&this.branch_ref_rows_cache, key, |_now| {
-        let head_branch = match &repo.head_branch {
-            Loadable::Ready(head) => Some(head.as_str()),
-            _ => None,
+        let head_branch = repo.head_branch.ready().map(String::as_str);
+        let branch_count = repo.branches.ready().map_or(0usize, |values| values.len());
+        let tag_count = if spec.with_refs {
+            repo.tags.ready().map_or(0usize, |values| values.len())
+        } else {
+            0
         };
-        let mut items = Vec::new();
-        let mut names = Vec::new();
+        let capacity = branch_count
+            .saturating_add(tag_count)
+            .saturating_add(usize::from(spec.with_refs));
+        let mut items = Vec::with_capacity(capacity);
+        let mut names = Vec::with_capacity(capacity);
         let mut push = |name: String, icon: &'static str| {
             items.push(components::PickerPromptItem::plain(name.clone()).icon(icon));
             names.push(name);

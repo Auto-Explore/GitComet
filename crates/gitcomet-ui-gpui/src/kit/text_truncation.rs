@@ -7,7 +7,6 @@ use rustc_hash::FxHasher;
 #[cfg(any(test, feature = "benchmarks"))]
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::num::NonZeroUsize;
 use std::ops::Range;
@@ -372,7 +371,7 @@ fn hash_with(hash: impl FnOnce(&mut FxHasher)) -> u64 {
 }
 
 fn hash_color(color: Hsla) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = FxHasher::default();
     text_runs::hash_hsla(&color, &mut hasher);
     hasher.finish()
 }

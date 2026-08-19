@@ -68,14 +68,14 @@ pub(super) struct CachedSingleLineSyntaxTokens {
 }
 
 pub(super) struct SingleLineSyntaxTokenCache {
-    pub(super) by_key: HashMap<SingleLineSyntaxTokenCacheKey, CachedSingleLineSyntaxTokens>,
+    pub(super) by_key: FxHashMap<SingleLineSyntaxTokenCacheKey, CachedSingleLineSyntaxTokens>,
     pub(super) lru_order: VecDeque<SingleLineSyntaxTokenCacheKey>,
 }
 
 impl SingleLineSyntaxTokenCache {
     pub(super) fn new() -> Self {
         Self {
-            by_key: HashMap::default(),
+            by_key: FxHashMap::default(),
             lru_order: VecDeque::new(),
         }
     }
@@ -178,10 +178,10 @@ fn syntax_cache_drop_sender() -> Option<&'static mpsc::Sender<SyntaxCacheDropMes
 }
 
 fn shared_prepared_document_seed_store()
--> &'static Mutex<HashMap<PreparedSyntaxCacheKey, PreparedSyntaxDocumentData>> {
-    static STORE: OnceLock<Mutex<HashMap<PreparedSyntaxCacheKey, PreparedSyntaxDocumentData>>> =
+-> &'static Mutex<FxHashMap<PreparedSyntaxCacheKey, PreparedSyntaxDocumentData>> {
+    static STORE: OnceLock<Mutex<FxHashMap<PreparedSyntaxCacheKey, PreparedSyntaxDocumentData>>> =
         OnceLock::new();
-    STORE.get_or_init(|| Mutex::new(HashMap::default()))
+    STORE.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
 fn store_shared_prepared_document_seed(document: &PreparedSyntaxDocumentData) {
@@ -280,7 +280,7 @@ pub(super) fn estimated_line_tokens_allocation_bytes(line_tokens: &[Arc<[SyntaxT
 }
 
 fn estimated_chunked_line_tokens_allocation_bytes(
-    line_token_chunks: &HashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+    line_token_chunks: &FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
 ) -> usize {
     line_token_chunks.values().fold(0usize, |acc, chunk| {
         acc.saturating_add(estimated_line_tokens_allocation_bytes(chunk))
@@ -421,7 +421,7 @@ pub(super) struct PreparedSyntaxCacheMetrics {
 #[derive(Clone, Debug)]
 pub(super) struct TreesitterCachedDocument {
     pub(super) line_count: usize,
-    pub(super) line_token_chunks: HashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+    pub(super) line_token_chunks: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
     pub(super) line_token_bytes: usize,
     pub(super) tree_state: Option<PreparedSyntaxTreeState>,
 }
@@ -429,7 +429,7 @@ pub(super) struct TreesitterCachedDocument {
 impl TreesitterCachedDocument {
     pub(super) fn from_chunked_line_tokens(
         line_count: usize,
-        line_token_chunks: HashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+        line_token_chunks: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
         tree_state: Option<PreparedSyntaxTreeState>,
     ) -> Self {
         let line_token_bytes = estimated_chunked_line_tokens_allocation_bytes(&line_token_chunks);
@@ -504,12 +504,12 @@ impl TreesitterCachedDocument {
 #[cfg(any(test, feature = "benchmarks"))]
 fn chunk_line_tokens_by_row(
     line_tokens: Vec<Arc<[SyntaxToken]>>,
-) -> HashMap<usize, Vec<Arc<[SyntaxToken]>>> {
+) -> FxHashMap<usize, Vec<Arc<[SyntaxToken]>>> {
     if line_tokens.is_empty() {
-        return HashMap::default();
+        return FxHashMap::default();
     }
 
-    let mut chunks = HashMap::default();
+    let mut chunks = FxHashMap::default();
     let mut chunk_ix = 0usize;
     let mut chunk = Vec::with_capacity(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS);
     for line in line_tokens {
@@ -602,11 +602,11 @@ fn chunk_count_for_line_count(line_count: usize) -> usize {
 }
 
 pub(super) struct TreesitterDocumentCache {
-    by_cache_key: HashMap<PreparedSyntaxCacheKey, TreesitterCachedDocument>,
-    by_source_identity: HashMap<PreparedSyntaxSourceIdentity, PreparedSyntaxCacheKey>,
+    by_cache_key: FxHashMap<PreparedSyntaxCacheKey, TreesitterCachedDocument>,
+    by_source_identity: FxHashMap<PreparedSyntaxSourceIdentity, PreparedSyntaxCacheKey>,
     lru_order: VecDeque<PreparedSyntaxCacheKey>,
-    pending_chunk_requests: HashSet<PreparedSyntaxChunkKey>,
-    pending_chunk_request_counts: HashMap<PreparedSyntaxCacheKey, usize>,
+    pending_chunk_requests: FxHashSet<PreparedSyntaxChunkKey>,
+    pending_chunk_request_counts: FxHashMap<PreparedSyntaxCacheKey, usize>,
     metrics: PreparedSyntaxCacheMetrics,
 }
 
@@ -620,11 +620,11 @@ enum SharedDocumentMergeResult {
 impl TreesitterDocumentCache {
     pub(super) fn new() -> Self {
         Self {
-            by_cache_key: HashMap::default(),
-            by_source_identity: HashMap::default(),
+            by_cache_key: FxHashMap::default(),
+            by_source_identity: FxHashMap::default(),
             lru_order: VecDeque::new(),
-            pending_chunk_requests: HashSet::default(),
-            pending_chunk_request_counts: HashMap::default(),
+            pending_chunk_requests: FxHashSet::default(),
+            pending_chunk_request_counts: FxHashMap::default(),
             metrics: PreparedSyntaxCacheMetrics::default(),
         }
     }
@@ -1958,7 +1958,7 @@ fn parse_treesitter_document_core(
                 .borrow_mut()
                 .clone_prefix_line_token_chunks(document.cache_key, *reusable_prefix_chunk_count)
         }),
-        _ => HashMap::default(),
+        _ => FxHashMap::default(),
     };
 
     Some(PreparedSyntaxDocumentData {
@@ -2327,11 +2327,11 @@ impl TreesitterDocumentCache {
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
         chunk_limit: usize,
-    ) -> HashMap<usize, Vec<Arc<[SyntaxToken]>>> {
+    ) -> FxHashMap<usize, Vec<Arc<[SyntaxToken]>>> {
         if chunk_limit == 0 {
-            return HashMap::default();
+            return FxHashMap::default();
         }
-        let reused: HashMap<usize, Vec<Arc<[SyntaxToken]>>> = self
+        let reused: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>> = self
             .by_cache_key
             .get(&cache_key)
             .map(|document| {
@@ -2581,9 +2581,9 @@ impl TreesitterHighlightSpec {
 /// ordered layer list.
 ///
 /// The order is load-bearing: overlapping layers are applied in sequence and the
-/// later one wins, so `HashMap` order would tie an overlap's colour to hash seeding.
+/// later one wins, so `FxHashMap` order would tie an overlap's colour to hash seeding.
 pub(super) fn combined_injection_groups_in_apply_order(
-    combined_ranges: HashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>>,
+    combined_ranges: FxHashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>>,
 ) -> Vec<(DiffSyntaxLanguage, usize, Vec<Range<usize>>)> {
     let mut groups: Vec<(DiffSyntaxLanguage, usize, Vec<Range<usize>>)> = combined_ranges
         .into_iter()
@@ -3425,10 +3425,10 @@ pub(super) fn collect_treesitter_injection_matches_for_line_window(
     // `did_exceed_match_limit` read, and `combined` stays empty below.
     let has_combined = highlight.has_combined_injections;
 
-    let mut seen = HashSet::default();
+    let mut seen = FxHashSet::default();
     let mut injections = Vec::new();
-    let mut combined_ranges: HashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>> =
-        HashMap::default();
+    let mut combined_ranges: FxHashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>> =
+        FxHashMap::default();
     let mut truncated = false;
     for pass in &query_passes {
         catch_treesitter_query_panic(|| {

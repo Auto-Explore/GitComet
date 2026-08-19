@@ -4,6 +4,7 @@ use crate::view::markdown_preview;
 use crate::view::perf::{self, ViewPerfSpan};
 use crate::view::rows;
 use gitcomet_core::domain::DiffRowProvider;
+use rustc_hash::FxHasher;
 
 mod file_diff;
 mod image_cache;
@@ -40,7 +41,7 @@ const FULL_DOCUMENT_SYNTAX_MODE: rows::DiffSyntaxMode = rows::DiffSyntaxMode::Au
 fn patch_diff_content_signature(diff: &gitcomet_core::domain::Diff) -> u64 {
     use std::hash::Hasher;
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     hasher.write_usize(diff.lines.len());
     for line in diff.lines.iter() {
         let kind = match line.kind {
@@ -228,7 +229,7 @@ fn measure_markdown_preview_pictures(
     document: &markdown_preview::MarkdownPreviewDocument,
     image_base_dir: Option<&std::path::Path>,
 ) -> rows::MarkdownPreviewPictureSizes {
-    let mut sizes: HashMap<SharedString, (u32, u32)> = HashMap::default();
+    let mut sizes: FxHashMap<SharedString, (u32, u32)> = FxHashMap::default();
     let mut measure = |source: &SharedString| {
         if sizes.contains_key(source) {
             return;

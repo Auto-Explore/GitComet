@@ -1663,7 +1663,7 @@ impl PopoverHost {
         // `status_entry_for_path` per path is a linear scan of the whole status
         // list each time and this runs on every right-click.
         let all_untracked = if used_selection {
-            let untracked: std::collections::HashSet<&std::path::Path> = repo
+            let untracked: FxHashSet<&std::path::Path> = repo
                 .status_entries_for_area(area)
                 .unwrap_or(&[])
                 .iter()

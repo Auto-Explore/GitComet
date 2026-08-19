@@ -15,7 +15,7 @@ use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, R
 use crate::store::repo_load_trace;
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::services::{GitRepository, SafePushAfterCommitContext};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -684,7 +684,7 @@ pub(crate) fn reset_conflict_resolutions_inline(
 }
 
 fn submit_auth_prompt(
-    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     username: Option<String>,
@@ -726,7 +726,7 @@ fn submit_auth_prompt(
 }
 
 pub(super) fn reduce(
-    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     msg: Msg,
@@ -810,7 +810,7 @@ fn reconcile_active_nav_history(state: &mut AppState, push: bool) {
 }
 
 fn reduce_inner(
-    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     state: &mut AppState,
     msg: Msg,
@@ -2364,7 +2364,7 @@ mod nav_history_tests {
     }
 
     fn dispatch(state: &mut AppState, msg: Msg) {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(99);
         let _ = reduce(&mut repos, &id_alloc, state, msg);
     }
@@ -2931,7 +2931,7 @@ mod comparison_tests {
     }
 
     fn dispatch_effects(state: &mut AppState, msg: Msg) -> Vec<Effect> {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(99);
         reduce(&mut repos, &id_alloc, state, msg)
     }

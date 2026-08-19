@@ -33,7 +33,7 @@ use gpui::{
     Tiling, UniformListScrollHandle, WeakEntity, Window, WindowControlArea, actions, anchored, div,
     fill, point, px, relative, size, uniform_list,
 };
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 #[cfg(test)]
 use std::collections::BTreeMap;
 use std::hash::Hash;
@@ -122,7 +122,7 @@ fn consume_window_grab_activation(suppressed_at: &mut Option<Instant>, now: Inst
 
 fn repo_activation_msg(
     state: &AppState,
-    last_activation_dispatch: &mut HashMap<RepoId, Instant>,
+    last_activation_dispatch: &mut FxHashMap<RepoId, Instant>,
     now: Instant,
 ) -> Option<Msg> {
     let repo_id = state.active_repo?;
@@ -1909,14 +1909,14 @@ impl GitCometView {
             last_window_size: size(px(0.0), px(0.0)),
             ui_window_size_last_seen: size(px(0.0), px(0.0)),
             ui_settings_persist_seq: 0,
-            last_repo_activation_dispatch_at: HashMap::default(),
+            last_repo_activation_dispatch_at: FxHashMap::default(),
             window_grab_activation_suppressed_at: None,
             date_time_format,
             timezone,
             show_timezone,
             change_tracking_view,
             terminal_preferences,
-            terminal_sessions: HashMap::default(),
+            terminal_sessions: FxHashMap::default(),
             terminal_panel_height: px(TERMINAL_PANEL_DEFAULT_HEIGHT_PX),
             terminal_panel_resize: None,
             next_terminal_session_seq: 1,
@@ -1926,7 +1926,7 @@ impl GitCometView {
             terminal_cursor_blink_task_scheduled: false,
             terminal_cursor_blink_seq: 0,
             reflog_pane,
-            active_bottom_panel: HashMap::default(),
+            active_bottom_panel: FxHashMap::default(),
             commit_push_after_enabled,
             diff_scroll_sync,
             diff_content_mode,
@@ -1969,7 +1969,7 @@ impl GitCometView {
             pending_force_remove_worktree_prompt: None,
             pending_submodule_trust_prompt: None,
             pending_submodule_trust_check: None,
-            pending_worktree_branch_removals: HashMap::default(),
+            pending_worktree_branch_removals: FxHashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]
             recent_repos_menu_fingerprint: ui_session.recent_repos.clone(),

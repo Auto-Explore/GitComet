@@ -4,7 +4,7 @@ use crate::view::shortcut_labels::Shortcut;
 
 fn push_entry(
     items: &mut Vec<ContextMenuItem>,
-    debug_selectors: &mut std::collections::HashMap<usize, SharedString>,
+    debug_selectors: &mut FxHashMap<usize, SharedString>,
     debug_selector: &'static str,
     label: &'static str,
     shortcut: Shortcut,
@@ -29,7 +29,7 @@ pub(super) fn model(this: &PopoverHost) -> ContextMenuModel {
     let show_command_palette = command_palette_available(this.root_view_mode);
 
     let mut items = Vec::new();
-    let mut debug_selectors = std::collections::HashMap::new();
+    let mut debug_selectors = FxHashMap::default();
 
     if show_command_palette {
         push_entry(

@@ -6,7 +6,7 @@
 
 use crate::merge::{MergeOptions, merge_file};
 use crate::process::git_command;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashSet;
 use std::collections::BTreeSet;
 use std::fmt;
 use std::io;
@@ -339,7 +339,7 @@ pub fn write_fixture_files(
     // Reserve prefixes already present on disk so repeated extraction runs
     // append new fixture sets instead of clobbering existing ones.
     let existing_prefixes = discover_existing_fixture_prefixes(dest_dir)?;
-    let mut used_prefixes: HashSet<String> = HashSet::with_capacity_and_hasher(
+    let mut used_prefixes: FxHashSet<String> = FxHashSet::with_capacity_and_hasher(
         existing_prefixes.len() + cases.len(),
         Default::default(),
     );
@@ -379,8 +379,8 @@ pub fn write_fixture_files(
 
 fn discover_existing_fixture_prefixes(
     dest_dir: &Path,
-) -> Result<HashSet<String>, MergeExtractionError> {
-    let mut prefixes = HashSet::default();
+) -> Result<FxHashSet<String>, MergeExtractionError> {
+    let mut prefixes = FxHashSet::default();
     let entries = std::fs::read_dir(dest_dir).map_err(|source| MergeExtractionError::Io {
         action: "read fixture directory",
         path: dest_dir.to_path_buf(),
@@ -412,7 +412,7 @@ fn discover_existing_fixture_prefixes(
     Ok(prefixes)
 }
 
-fn allocate_unique_prefix(base_prefix: &str, used_prefixes: &mut HashSet<String>) -> String {
+fn allocate_unique_prefix(base_prefix: &str, used_prefixes: &mut FxHashSet<String>) -> String {
     let mut suffix = 0usize;
     loop {
         let candidate = if suffix == 0 {

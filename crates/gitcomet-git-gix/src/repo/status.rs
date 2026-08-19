@@ -9,7 +9,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, Result};
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::convert::Infallible;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -160,7 +160,7 @@ impl GixRepo {
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(TreeIndexCacheEntry {
                 head_oid,
-                index_stamp: final_index_stamp.clone(),
+                index_stamp: final_index_stamp,
                 staged: staged.clone(),
             });
         }
@@ -291,7 +291,7 @@ impl GixRepo {
 
         let head_tree_id = tree_id_for_commit(&repo, &head_oid)?;
         let mut paths = collect_staged_index_paths_from_tree_index(&repo, &head_tree_id)?;
-        let conflicted: HashSet<PathBuf> = gix_unmerged_conflicts(&repo)?
+        let conflicted: FxHashSet<PathBuf> = gix_unmerged_conflicts(&repo)?
             .into_iter()
             .map(|(path, _)| path)
             .collect();
@@ -526,7 +526,7 @@ fn remove_conflicted_paths_from_staged(
     staged: &mut Vec<FileStatus>,
     conflicted: impl IntoIterator<Item = PathBuf>,
 ) {
-    let conflicted: HashSet<PathBuf> = conflicted.into_iter().collect();
+    let conflicted: FxHashSet<PathBuf> = conflicted.into_iter().collect();
     if !conflicted.is_empty() {
         staged.retain(|entry| !conflicted.contains(&entry.path));
     }
@@ -640,7 +640,9 @@ pub(super) fn gix_unmerged_conflicts(
 fn collect_unmerged_conflicts(
     stage_entries: impl IntoIterator<Item = (PathBuf, u8)>,
 ) -> Vec<(PathBuf, FileConflictKind)> {
-    let mut stage_masks: HashMap<PathBuf, u8> = HashMap::default();
+    let stage_entries = stage_entries.into_iter();
+    let mut stage_masks =
+        FxHashMap::with_capacity_and_hasher(stage_entries.size_hint().0, Default::default());
 
     for (path, stage) in stage_entries {
         let Some(shift) = stage.checked_sub(1) else {
@@ -1321,6 +1323,8 @@ fn supplement_gitlink_status_from_porcelain(
 
 #[cfg(test)]
 mod tests {
+    use rustc_hash::FxHashMap;
+
     use super::{
         apply_porcelain_v2_gitlink_status_record, collect_unmerged_conflicts,
         conflict_kind_from_stage_mask, map_directory_entry_status, map_entry_status,
@@ -1328,7 +1332,6 @@ mod tests {
         should_supplement_unmerged_conflicts, sort_and_dedup_status_entries, tree_id_for_commit,
     };
     use gitcomet_core::domain::{FileConflictKind, FileStatus, FileStatusKind};
-    use rustc_hash::FxHashMap as HashMap;
     use std::fs;
     use std::path::{Path, PathBuf};
     use std::process::{Command, Output};
@@ -1542,7 +1545,7 @@ mod tests {
         let parsed = collect_unmerged_conflicts(stages);
         let by_path = parsed
             .into_iter()
-            .collect::<HashMap<PathBuf, FileConflictKind>>();
+            .collect::<FxHashMap<PathBuf, FileConflictKind>>();
 
         assert_eq!(
             by_path.get(&PathBuf::from("dd.txt")),
@@ -1571,6 +1574,31 @@ mod tests {
         assert_eq!(
             by_path.get(&PathBuf::from("uu.txt")),
             Some(&FileConflictKind::BothModified)
+        );
+    }
+
+    #[test]
+    fn collect_unmerged_conflicts_accepts_a_lazily_filtered_iterator() {
+        // The natural way to drop the intermediate `Vec` in `gix_unmerged_conflicts`
+        // is to hand the index scan straight in. A `Filter` reports `(0, Some(len))`
+        // for its size hint, so the capacity hint must come from the lower bound --
+        // taking the upper one would silently reserve the whole index here.
+        let stages = [
+            (PathBuf::from("src/lib.rs"), 0u8),
+            (PathBuf::from("src/main.rs"), 1u8),
+            (PathBuf::from("src/main.rs"), 2u8),
+            (PathBuf::from("src/main.rs"), 3u8),
+        ];
+
+        let parsed = collect_unmerged_conflicts(
+            stages
+                .into_iter()
+                .filter(|(_, stage)| (1..=3).contains(stage)),
+        );
+
+        assert_eq!(
+            parsed,
+            vec![(PathBuf::from("src/main.rs"), FileConflictKind::BothModified)]
         );
     }
 

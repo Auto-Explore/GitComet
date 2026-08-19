@@ -8,8 +8,7 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId) -> ContextMenuModel {
     let history: Vec<CommitId> = repo.map(|r| r.browse_history.clone()).unwrap_or_default();
 
     let mut items = vec![ContextMenuItem::Header("Browsing history".into())];
-    let mut tooltips: std::collections::HashMap<usize, SharedString> =
-        std::collections::HashMap::new();
+    let mut tooltips = FxHashMap::with_capacity_and_hasher(history.len(), Default::default());
     if history.is_empty() {
         items.push(ContextMenuItem::Label("No browsed commits yet.".into()));
     }

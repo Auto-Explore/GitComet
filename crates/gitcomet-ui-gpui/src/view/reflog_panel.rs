@@ -80,7 +80,7 @@ impl GitCometView {
         if self.active_bottom_panel.is_empty() {
             return;
         }
-        let active_repo_ids: HashSet<RepoId> =
+        let active_repo_ids: FxHashSet<RepoId> =
             self.state.repos.iter().map(|repo| repo.id).collect();
         self.active_bottom_panel
             .retain(|repo_id, _| active_repo_ids.contains(repo_id));

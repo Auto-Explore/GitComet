@@ -248,9 +248,9 @@ fn merge_history_entries(
     sort: bool,
     max_entries: Option<usize>,
 ) -> Vec<HistoryEntry> {
-    use rustc_hash::FxHashSet as HashSet;
+    use rustc_hash::FxHashSet;
 
-    let mut seen_keys: HashSet<String> = HashSet::default();
+    let mut seen_keys: FxHashSet<String> = FxHashSet::default();
     let mut merged: Vec<HistoryEntry> = Vec::new();
 
     // Add all "ours" entries.
@@ -263,7 +263,7 @@ fn merge_history_entries(
     // Determine where to insert "theirs" new entries.
     // Find entries in base that are also in ours — theirs-only entries
     // should be inserted at the position they would naturally appear.
-    let base_keys: HashSet<String> = base_entries
+    let base_keys: FxHashSet<String> = base_entries
         .map(|entries| entries.iter().map(|e| e.dedup_key.clone()).collect())
         .unwrap_or_default();
 

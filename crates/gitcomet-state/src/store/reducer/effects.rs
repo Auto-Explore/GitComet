@@ -21,7 +21,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
-use std::collections::HashSet;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -719,7 +719,7 @@ pub(super) fn ref_metadata_loaded(
             // so latch an empty map rather than `Error` — callers retry on
             // `Error`, which would re-schedule a doomed load on every open.
             Err(e) if matches!(e.kind(), gitcomet_core::error::ErrorKind::Unsupported(_)) => {
-                Loadable::Ready(std::collections::HashMap::new())
+                Loadable::Ready(FxHashMap::default())
             }
             // Deliberately no diagnostic: this data only decorates picker rows,
             // which fall back to name-only. A transient failure must not raise
@@ -2562,7 +2562,7 @@ pub(super) fn squash_rebase_setup_loaded(
         }
     };
 
-    let selected_strs: HashSet<&str> = selected_ids.iter().map(|id| id.as_ref()).collect();
+    let selected_strs: FxHashSet<&str> = selected_ids.iter().map(|id| id.as_ref()).collect();
 
     // The list loaded asynchronously, so re-validate it against the plan the
     // user confirmed before rewriting history. `git log --reverse base..HEAD`

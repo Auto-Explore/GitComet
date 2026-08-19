@@ -11,7 +11,7 @@ use gitcomet_core::mergetool_trace::{
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
@@ -499,10 +499,9 @@ pub(super) fn schedule_load_log(
                 // author means walking the whole history — over ten seconds on
                 // a repository with a million commits — and the user should not
                 // be looking at the previous filter's rows for all of it.
-                let chunk_tx = msg_tx.clone();
                 let mut on_chunk = |chunk: gitcomet_core::services::LogChunk| {
                     send_or_log(
-                        &chunk_tx,
+                        &msg_tx,
                         Msg::Internal(crate::msg::InternalMsg::LogChunkLoaded {
                             repo_id,
                             seq,
@@ -888,7 +887,7 @@ pub(super) fn schedule_load_blame(
             Msg::Internal(crate::msg::InternalMsg::BlameLoaded {
                 repo_id,
                 path: path.clone(),
-                source: source.clone(),
+                source,
                 result,
             }),
         );
@@ -1074,7 +1073,7 @@ const WORKTREE_SCAN_HANDLE_LIMIT: usize = 16;
 
 #[derive(Default)]
 struct WorktreeScanHandles {
-    entries: HashMap<(RepoId, PathBuf), WorktreeScanHandle>,
+    entries: FxHashMap<(RepoId, PathBuf), WorktreeScanHandle>,
     /// Ticks once per lookup; the entry holding the highest tick is the hottest.
     clock: u64,
 }
@@ -1116,7 +1115,7 @@ impl WorktreeScanHandles {
     /// wanted next, and nothing about this repo's cycle says which of theirs to
     /// keep.
     fn evict_one_for(&mut self, repo_id: RepoId) -> bool {
-        let mut held: HashMap<RepoId, usize> = HashMap::new();
+        let mut held: FxHashMap<RepoId, usize> = FxHashMap::default();
         for (entry_repo, _) in self.entries.keys() {
             *held.entry(*entry_repo).or_default() += 1;
         }
@@ -2100,7 +2099,6 @@ pub(super) fn schedule_load_selected_diff(
         );
     }
     if options.load_patch_diff {
-        let cancellation = cancellation.clone();
         spawn_with_selected_diff_guard(
             executor,
             repos,

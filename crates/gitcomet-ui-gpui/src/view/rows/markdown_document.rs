@@ -28,6 +28,7 @@ use crate::view::markdown_preview::{
     TOO_MANY_ROWS_TO_RENDER_MESSAGE, markdown_document_blocks,
 };
 use crate::view::perf::{self, ViewPerfRenderLane};
+use rustc_hash::FxHashMap;
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -733,7 +734,7 @@ fn render_table(rows: RowRun<'_>, context: &MarkdownDocumentContext) -> AnyEleme
 /// listed up front.
 #[derive(Clone, Default)]
 pub(in crate::view) struct MarkdownDocumentBlockScrolls(
-    std::rc::Rc<std::cell::RefCell<std::collections::HashMap<usize, gpui::ScrollHandle>>>,
+    std::rc::Rc<std::cell::RefCell<FxHashMap<usize, gpui::ScrollHandle>>>,
 );
 
 impl MarkdownDocumentBlockScrolls {

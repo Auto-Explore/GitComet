@@ -4,6 +4,8 @@ use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use crate::view::conflict_resolver::ConflictSegment;
 use palette::IntoColor;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
+use std::collections::HashSet;
 
 const DIFF_ROW_HEIGHT_PX: f32 = 20.0;
 const DIFF_FILE_HEADER_HEIGHT_PX: f32 = 28.0;
@@ -207,7 +209,7 @@ pub(super) fn resolved_output_heuristic_provider_binding_key(
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     "heuristic".hash(&mut hasher);
     revision.model_id.hash(&mut hasher);
     revision.revision.hash(&mut hasher);
@@ -426,7 +428,9 @@ pub(super) fn worktree_output_requires_protection(
     let (Some(ours), Some(theirs)) = (ours, theirs) else {
         return true;
     };
-    let stage_lines: std::collections::HashSet<&str> = base
+    // `std`'s seeded `HashSet`, not `FxHashSet`: the keys are raw file lines
+    // off disk, i.e. content an untrusted repository controls.
+    let stage_lines: HashSet<&str> = base
         .into_iter()
         .chain([ours, theirs])
         .flat_map(str::lines)
@@ -1450,7 +1454,7 @@ impl ResolvedOutputKey {
 /// and rows computed against the old geometry then land on the wrong lines.
 fn block_map_fingerprint(block_map: &conflict_resolver::ResolvedOutputBlockMap) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     let ranges = block_map.ranges();
     ranges.len().hash(&mut hasher);
     for range in ranges {
@@ -1464,7 +1468,7 @@ fn block_map_fingerprint(block_map: &conflict_resolver::ResolvedOutputBlockMap) 
 /// the revision already covers that.
 fn resolution_fingerprint(marker_segments: &[conflict_resolver::ConflictSegment]) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     for segment in marker_segments {
         match segment {
             conflict_resolver::ConflictSegment::Block(block) => {
@@ -1648,7 +1652,7 @@ pub(super) fn resolved_output_live_provider_binding_key(
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     document_version.hash(&mut hasher);
     theme_epoch.hash(&mut hasher);
     unresolved_spans.all.hash(&mut hasher);
@@ -1754,7 +1758,7 @@ pub(super) fn first_output_marker_line_for_conflict(
 pub(super) fn conflict_marker_nav_entries_from_markers(
     markers: &[Option<ResolvedOutputConflictMarker>],
 ) -> Vec<usize> {
-    let mut seen_conflicts = HashSet::default();
+    let mut seen_conflicts = FxHashSet::default();
     markers
         .iter()
         .enumerate()
@@ -3046,7 +3050,7 @@ pub(crate) struct MainPaneView {
     /// Painted bounds of each row's stage-gutter cell, recorded during paint so
     /// tests can drive the button without duplicating its geometry.
     pub(in crate::view) diff_stage_gutter_cells:
-        HashMap<(usize, crate::view::rows::DiffStageSlot), gpui::Bounds<Pixels>>,
+        FxHashMap<(usize, crate::view::rows::DiffStageSlot), gpui::Bounds<Pixels>>,
     /// Memoized `(min, max)` author-time range for the currently loaded blame,
     /// keyed by a clone of the blame `Arc`. The range never changes after load,
     /// so this avoids rescanning all blame lines on every render frame. Holding
@@ -3080,7 +3084,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
     pub(in crate::view) diff_visual_line_kind_for_src_ix: Vec<gitcomet_core::domain::DiffLineKind>,
     pub(in crate::view) diff_hide_unified_header_for_src_ix: Vec<bool>,
-    pub(in crate::view) diff_header_display_cache: HashMap<usize, SharedString>,
+    pub(in crate::view) diff_header_display_cache: FxHashMap<usize, SharedString>,
     pub(in crate::view) diff_split_cache: Vec<PatchSplitRow>,
     pub(in crate::view) diff_split_cache_len: usize,
     pub(in crate::view) diff_panel_focus_handle: FocusHandle,
@@ -3092,11 +3096,11 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) diff_wrap_visible_rows: Vec<DiffWrapVisualRow>,
     pub(in crate::view) diff_wrap_visible_cache_key: Option<DiffWrapVisibleCacheKey>,
     pub(in crate::view) collapsed_diff_hunks: Vec<CollapsedDiffHunk>,
-    pub(in crate::view) collapsed_diff_hunk_ix_by_src_ix: HashMap<usize, usize>,
-    pub(in crate::view) collapsed_diff_reveals: HashMap<usize, CollapsedDiffReveal>,
+    pub(in crate::view) collapsed_diff_hunk_ix_by_src_ix: FxHashMap<usize, usize>,
+    pub(in crate::view) collapsed_diff_reveals: FxHashMap<usize, CollapsedDiffReveal>,
     pub(in crate::view) collapsed_diff_visible_rows: Vec<CollapsedDiffVisibleRow>,
     pub(in crate::view) collapsed_diff_hunk_visible_indices: Vec<usize>,
-    pub(in crate::view) collapsed_diff_header_display_cache: HashMap<usize, SharedString>,
+    pub(in crate::view) collapsed_diff_header_display_cache: FxHashMap<usize, SharedString>,
     pub(in crate::view) collapsed_diff_projection_identity: Option<CollapsedDiffProjectionIdentity>,
     pub(in crate::view) diff_visible_cache_len: usize,
     pub(in crate::view) diff_visible_view: DiffViewMode,
@@ -3123,7 +3127,7 @@ pub(crate) struct MainPaneView {
     pub(super) diff_text_autoscroll_target: Option<DiffTextAutoscrollTarget>,
     pub(super) diff_text_last_mouse_pos: Point<Pixels>,
     pub(in crate::view) diff_suppress_clicks_remaining: u8,
-    pub(in crate::view) diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
+    pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
     ///
@@ -3137,9 +3141,9 @@ pub(crate) struct MainPaneView {
     /// sideways half of a search reveal. Rebuilt every frame like
     /// [`Self::diff_text_hitboxes`].
     pub(in crate::view) conflict_text_hitboxes:
-        HashMap<(usize, ThreeWayColumn), crate::view::mod_helpers::ConflictTextHitbox>,
+        FxHashMap<(usize, ThreeWayColumn), crate::view::mod_helpers::ConflictTextHitbox>,
     pub(in crate::view) diff_text_layout_cache_epoch: u64,
-    pub(in crate::view) diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
+    pub(in crate::view) diff_text_layout_cache: FxHashMap<u64, DiffTextLayoutCacheEntry>,
     pub(in crate::view) diff_search_active: bool,
     pub(in crate::view) diff_search_query: SharedString,
     pub(in crate::view) diff_search_options: super::diff_search::DiffSearchOptions,
@@ -3187,7 +3191,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
     pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
     pub(in crate::view) prepared_syntax_documents:
-        HashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
+        FxHashMap<PreparedSyntaxDocumentKey, rows::PreparedDiffSyntaxDocument>,
     #[cfg(test)]
     pub(in crate::view) diff_syntax_budget_override: Option<rows::DiffSyntaxBudget>,
 
@@ -3240,7 +3244,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_markdown_preview_blocks: rows::MarkdownDocumentBlockCache,
     /// Pictures in the rendered preview that are still decoding and already
     /// have someone waiting to repaint the pane when they finish.
-    pub(in crate::view) worktree_markdown_preview_image_waits: HashSet<gpui::Resource>,
+    pub(in crate::view) worktree_markdown_preview_image_waits: FxHashSet<gpui::Resource>,
     pub(in crate::view) worktree_markdown_preview_seq: u64,
     pub(in crate::view) worktree_markdown_preview_inflight: Option<u64>,
     pub(in crate::view) worktree_preview_segments_cache_path: Option<std::path::PathBuf>,
@@ -3248,7 +3252,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) worktree_preview_style_cache_epoch: u64,
     pub(in crate::view) worktree_preview_cache_write_blocked_until_rev: Option<u64>,
     pub(in crate::view) worktree_preview_segments_cache:
-        HashMap<usize, VersionedCachedDiffStyledText>,
+        FxHashMap<usize, VersionedCachedDiffStyledText>,
     pub(in crate::view) diff_preview_is_new_file: bool,
 
     /// The editable working-tree buffer. See `super::file_editor`.
@@ -3284,7 +3288,7 @@ pub(crate) struct MainPaneView {
     /// Keyed by repo *and* path: two repo tabs can hold the same relative path,
     /// and one must not restore over the other's buffer.
     pub(in crate::view) file_editor_stash:
-        HashMap<(RepoId, std::path::PathBuf), super::file_editor::StashedFileEdit>,
+        FxHashMap<(RepoId, std::path::PathBuf), super::file_editor::StashedFileEdit>,
     /// Bumped whenever the set of files with unsaved edits changes.
     ///
     /// That set lives here rather than in the store, so nothing outside this
@@ -3344,7 +3348,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_resolver_input: Entity<components::TextInput>,
     pub(super) _conflict_resolver_input_subscription: gpui::Subscription,
     pub(in crate::view) conflict_resolver: ConflictResolverUiState,
-    pub(in crate::view) conflict_open_summary_toasted_files: HashSet<(RepoId, std::path::PathBuf)>,
+    pub(in crate::view) conflict_open_summary_toasted_files:
+        FxHashSet<(RepoId, std::path::PathBuf)>,
     pub(in crate::view) conflict_resolver_vsplit_ratio: f32,
     pub(in crate::view) conflict_resolver_vsplit_resize: Option<ConflictVSplitResizeState>,
     pub(in crate::view) conflict_three_way_col_ratios: [f32; 2],
@@ -3361,7 +3366,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
     pub(in crate::view) conflict_diff_query_cache_options: super::diff_search::DiffSearchOptions,
     pub(in crate::view) conflict_three_way_segments_cache:
-        HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
+        FxHashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     /// Quick-search overlay layered on top of `conflict_three_way_segments_cache`.
     ///
     /// Separate so a query change throws away only the wash and leaves the
@@ -3370,7 +3375,7 @@ pub(crate) struct MainPaneView {
     /// non-current matches — the current one moves with the search cursor and
     /// is built per frame.
     pub(in crate::view) conflict_three_way_query_segments_cache:
-        HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
+        FxHashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     /// Prepared full-document syntax trees for each merge-input side (base, ours, theirs).
     /// When present, three-way rendering uses document-based syntax instead of per-line heuristics.
     pub(in crate::view) conflict_three_way_prepared_syntax_documents:
@@ -3505,7 +3510,7 @@ pub(crate) struct MainPaneView {
     /// setups open in several repo tabs at once stay independent. Entries are
     /// populated when a repo's setup becomes Ready and dropped when its setup
     /// goes away (see `apply_state`).
-    pub(in crate::view) interactive_rebase_states: HashMap<RepoId, IRebaseViewState>,
+    pub(in crate::view) interactive_rebase_states: FxHashMap<RepoId, IRebaseViewState>,
 }
 
 /// View-local editing state for one repo's interactive rebase setup.
@@ -3514,14 +3519,14 @@ pub(in crate::view) struct IRebaseViewState {
     pub(in crate::view) mode: ICommitEditorMode,
     pub(in crate::view) entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
     pub(in crate::view) original_entries: Vec<gitcomet_core::services::InteractiveRebaseEntry>,
-    pub(in crate::view) source_colors: std::collections::HashMap<String, u8>,
+    pub(in crate::view) source_colors: FxHashMap<String, u8>,
     /// Active auto-squash strategy, or None when auto-squash is off.
     pub(in crate::view) autosquash_mode: Option<AutosquashMode>,
     /// Commits folded away by auto-squash, keyed by the surviving commit id.
     /// Each survivor's `entries` row displays these ids; they are re-expanded
     /// into `fixup` todo entries when the rebase starts.
     pub(in crate::view) folded:
-        std::collections::HashMap<String, Vec<gitcomet_core::services::InteractiveRebaseEntry>>,
+        FxHashMap<String, Vec<gitcomet_core::services::InteractiveRebaseEntry>>,
     pub(in crate::view) drag_state: Option<IRebaseDragState>,
     /// Variable-height virtualized list state, lazily created on first render
     /// (`ListState` has no `Default`). Kept in sync with `entries`/`folded` via

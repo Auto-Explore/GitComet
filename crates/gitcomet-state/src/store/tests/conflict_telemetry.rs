@@ -3,7 +3,7 @@ use crate::msg::{ConflictAutosolveMode, ConflictAutosolveStats};
 
 #[test]
 fn record_conflict_autosolve_telemetry_logs_mode_and_unresolved_deltas() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 

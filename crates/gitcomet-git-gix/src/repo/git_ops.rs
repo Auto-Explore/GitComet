@@ -4,7 +4,7 @@ use gitcomet_core::domain::{Branch, CommitId, RefMetadata, Upstream, UpstreamDiv
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
 use gix::bstr::ByteSlice as _;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
@@ -187,7 +187,7 @@ fn collect_local_branches(
 
     let (branch_count_lower_bound, _) = iter.size_hint();
     let mut branches = Vec::with_capacity(branch_count_lower_bound);
-    let mut target_ids = HashMap::default();
+    let mut target_ids = FxHashMap::default();
     let mut last_target = None;
     for reference in iter {
         let mut reference =
@@ -224,7 +224,7 @@ fn try_collect_loose_local_branches_fast(repo: &gix::Repository) -> Result<Optio
 
     let mut branches = Vec::new();
     let mut scratch = Vec::new();
-    let mut target_ids = HashMap::default();
+    let mut target_ids = FxHashMap::default();
     let mut last_target = None;
     if !collect_loose_local_branches_fast(
         &root,
@@ -279,7 +279,7 @@ fn parse_ref_metadata_for_each_ref(output: &str) -> Vec<(String, RefMetadata)> {
 
 fn parse_local_branches_for_each_ref(output: &str) -> Result<Vec<Branch>> {
     let mut branches = Vec::new();
-    let mut target_ids = HashMap::default();
+    let mut target_ids = FxHashMap::default();
     let mut last_target = None;
 
     for (line_ix, line) in output.lines().enumerate() {
@@ -332,7 +332,7 @@ fn collect_loose_local_branches_fast(
     root: &Path,
     dir: &Path,
     scratch: &mut Vec<u8>,
-    target_ids: &mut HashMap<gix::ObjectId, CommitId>,
+    target_ids: &mut FxHashMap<gix::ObjectId, CommitId>,
     last_target: &mut Option<(gix::ObjectId, CommitId)>,
     branches: &mut Vec<Branch>,
 ) -> Result<bool> {
@@ -471,7 +471,7 @@ fn branch_target_id(reference: &mut gix::Reference<'_>) -> Result<gix::ObjectId>
 }
 
 fn cached_commit_id(
-    cache: &mut HashMap<gix::ObjectId, CommitId>,
+    cache: &mut FxHashMap<gix::ObjectId, CommitId>,
     last_target: &mut Option<(gix::ObjectId, CommitId)>,
     target_id: gix::ObjectId,
 ) -> CommitId {
@@ -625,7 +625,7 @@ mod tests {
         parse_upstream_track_divergence,
     };
     use gitcomet_core::domain::UpstreamDivergence;
-    use rustc_hash::FxHashMap as HashMap;
+    use rustc_hash::FxHashMap;
     use std::sync::Arc;
 
     #[test]
@@ -651,7 +651,7 @@ mod tests {
     fn cached_commit_id_reuses_existing_arc_for_same_object_id() {
         let oid = gix::ObjectId::from_hex(b"0123456789abcdef0123456789abcdef01234567")
             .expect("valid object id");
-        let mut cache = HashMap::default();
+        let mut cache = FxHashMap::default();
         let mut last_target = None;
 
         let first = cached_commit_id(&mut cache, &mut last_target, oid);

@@ -440,10 +440,8 @@ fn reducer_effect_handling_does_not_wait_for_stopped_repo_monitor() {
     let metadata_executor = TaskExecutor::new(1);
     let session_persist_executor = TaskExecutor::new(1);
     let backend: std::sync::Arc<dyn GitBackend> = std::sync::Arc::new(FailingBackend);
-    let repos: rustc_hash::FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> =
-        rustc_hash::FxHashMap::default();
-    let mut repo_task_tokens: rustc_hash::FxHashMap<RepoId, RepoTaskToken> =
-        rustc_hash::FxHashMap::default();
+    let repos: FxHashMap<RepoId, std::sync::Arc<dyn GitRepository>> = FxHashMap::default();
+    let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
     let mut repo_monitors = monitor_impl::RepoMonitorManager::new();
     let (release_tx, release_rx) = std::sync::mpsc::channel();
     let (exited_tx, exited_rx) = std::sync::mpsc::channel();

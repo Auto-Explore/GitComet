@@ -18,6 +18,7 @@ use crate::kit::rope::Rope;
 use crate::kit::text_model::TextModelSnapshot;
 use crate::kit::{HighlightProvider, HighlightProviderResult};
 use palette::IntoColor;
+use rustc_hash::FxHasher;
 use std::path::{Path, PathBuf};
 
 /// How long the buffer has to sit still before auto-save writes it.
@@ -75,7 +76,7 @@ impl StashedFileEdit {
 pub(in crate::view) fn file_editor_text_fingerprint(snapshot: &TextModelSnapshot) -> u64 {
     use std::hash::Hasher;
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     hasher.write_usize(snapshot.len());
     // Chunk-wise, so a large file is never flattened into one string just to be
     // fingerprinted. `TextModelSnapshot::rope()` is an `Arc` bump.
@@ -100,7 +101,7 @@ pub(in crate::view) fn file_editor_provider_binding_key(
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     document_version.hash(&mut hasher);
     theme_epoch.hash(&mut hasher);
     // Typing in the search box moves no text and touches no tree either, so
@@ -132,7 +133,7 @@ pub(in crate::view) fn file_editor_heuristic_provider_binding_key(
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     "file-editor-heuristic".hash(&mut hasher);
     revision.hash(&mut hasher);
     theme_epoch.hash(&mut hasher);
@@ -994,7 +995,7 @@ impl MainPaneView {
     pub(in crate::view) fn sync_unsaved_file_edits_rev(&mut self, cx: &mut gpui::Context<Self>) {
         use std::hash::{Hash, Hasher};
 
-        let mut hasher = rustc_hash::FxHasher::default();
+        let mut hasher = FxHasher::default();
         for (repo_id, path) in self.unsaved_file_edit_keys() {
             repo_id.0.hash(&mut hasher);
             path.hash(&mut hasher);

@@ -517,7 +517,7 @@ impl GitOpsFixture {
                 let distinct_commits = blame
                     .iter()
                     .map(|line| line.commit_id.clone())
-                    .collect::<HashSet<_>>()
+                    .collect::<FxHashSet<_>>()
                     .len();
                 (
                     hash_blame_lines(&blame),

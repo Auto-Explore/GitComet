@@ -37,7 +37,7 @@ fn collect_preview_lines_and_source_len<T: UnifiedDiffLine>(
     kind: DiffLineKind,
     prefix: char,
 ) -> (Vec<String>, usize) {
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(diff.len());
     let mut source_len = 0usize;
 
     for (ix, line) in diff.iter().enumerate() {

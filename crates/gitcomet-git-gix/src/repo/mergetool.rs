@@ -9,7 +9,7 @@ use gitcomet_core::process::background_command as no_window_command;
 use gitcomet_core::services::{
     CommandOutput, MergetoolResult, Result, validate_conflict_resolution_text,
 };
-use std::collections::HashSet;
+use rustc_hash::FxHashSet;
 use std::ffi::{OsStr, OsString};
 use std::path::{Path, PathBuf};
 #[cfg(any(not(windows), test))]
@@ -417,13 +417,13 @@ fn repo_local_mergetool_command_consent_key(workdir: &Path, tool_name: &str) -> 
     format!("gitcomet.mergetool.allowrepolocalcmd-{repo_tool_fingerprint}")
 }
 
-static TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS: OnceLock<Mutex<HashSet<String>>> =
+static TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS: OnceLock<Mutex<FxHashSet<String>>> =
     OnceLock::new();
 
 pub(crate) fn allow_test_repo_local_mergetool_command(workdir: &Path, tool_name: &str) {
     let consent_key = repo_local_mergetool_command_consent_key(workdir, tool_name);
     let allowed =
-        TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS.get_or_init(|| Mutex::new(HashSet::new()));
+        TEST_ALLOWED_REPO_LOCAL_MERGETOOL_COMMANDS.get_or_init(|| Mutex::new(FxHashSet::default()));
     allowed
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())

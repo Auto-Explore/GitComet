@@ -1875,7 +1875,7 @@ impl GitCometView {
             .terminal_sessions
             .keys()
             .copied()
-            .collect::<HashSet<RepoId>>();
+            .collect::<FxHashSet<RepoId>>();
         let repo_tabs_bar = self.repo_tabs_bar.clone();
         let action_bar = self.action_bar.clone();
         cx.defer(move |cx| {
@@ -1900,7 +1900,7 @@ impl GitCometView {
             .repos
             .iter()
             .map(|repo| repo.id)
-            .collect::<HashSet<_>>();
+            .collect::<FxHashSet<_>>();
         let removed_repo_ids: Vec<_> = self
             .terminal_sessions
             .keys()

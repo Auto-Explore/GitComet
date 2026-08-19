@@ -53,7 +53,7 @@ impl MainPaneView {
         let area = self.diff_stage_gutter_area()?;
         let src_ix = self.diff_stage_gutter_src_ix(visible_ix, kind)?;
         let rows = self.patch_diff_rows_slice(0, self.patch_diff_row_len());
-        let mut selected = HashSet::default();
+        let mut selected = FxHashSet::default();
         selected.insert(src_ix);
         match area {
             DiffArea::Unstaged => {

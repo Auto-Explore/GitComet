@@ -11,11 +11,11 @@ use gitcomet_core::services::{
     SafePushAfterCommitContext, SafePushAfterCommitDecision, SafePushAfterCommitTarget,
 };
 use gix::bstr::ByteSlice as _;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashSet;
 use std::process::Command;
 use std::str;
 
-fn parse_refname_set(output: &str) -> HashSet<String> {
+fn parse_refname_set(output: &str) -> FxHashSet<String> {
     output
         .lines()
         .map(str::trim)
@@ -26,8 +26,8 @@ fn parse_refname_set(output: &str) -> HashSet<String> {
 
 fn branches_to_prune(
     branches_output: &str,
-    merged: &HashSet<String>,
-    existing_tracking_refs: &HashSet<String>,
+    merged: &FxHashSet<String>,
+    existing_tracking_refs: &FxHashSet<String>,
     current_branch: Option<&str>,
 ) -> Vec<String> {
     let mut candidates = Vec::new();
@@ -1195,7 +1195,7 @@ mod tests {
         run_git_command,
     };
     use gitcomet_core::services::CommandOutput;
-    use rustc_hash::FxHashSet as HashSet;
+    use rustc_hash::FxHashSet;
     use std::{cell::Cell, process::Command};
 
     #[test]
@@ -1216,11 +1216,11 @@ feature/tracked\torigin/feature/tracked\n\
 feature/unmerged\torigin/feature/unmerged\n\
 feature/current\torigin/feature/current\n\
 feature/no-upstream\t\n";
-        let merged: HashSet<String> = ["feature/stale", "feature/tracked", "feature/current"]
+        let merged: FxHashSet<String> = ["feature/stale", "feature/tracked", "feature/current"]
             .into_iter()
             .map(ToOwned::to_owned)
             .collect();
-        let tracking_refs: HashSet<String> = ["refs/remotes/origin/feature/tracked".to_string()]
+        let tracking_refs: FxHashSet<String> = ["refs/remotes/origin/feature/tracked".to_string()]
             .into_iter()
             .collect();
 

@@ -7,11 +7,11 @@ use gitcomet_core::domain::{CommitId, RemoteTag, Tag};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
 use gix::bstr::ByteSlice as _;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashSet;
 use std::str;
 use std::thread;
 
-fn parse_ls_remote_tag_names(output: &str) -> HashSet<String> {
+fn parse_ls_remote_tag_names(output: &str) -> FxHashSet<String> {
     output
         .lines()
         .map(str::trim)
@@ -40,7 +40,7 @@ fn parse_ls_remote_tags(output: &str, remote_name: &str) -> Vec<RemoteTag> {
         .collect()
 }
 
-fn local_tags_to_prune(local_tags_output: &str, remote_tags: &HashSet<String>) -> Vec<String> {
+fn local_tags_to_prune(local_tags_output: &str, remote_tags: &FxHashSet<String>) -> Vec<String> {
     local_tags_output
         .lines()
         .map(str::trim)
@@ -250,7 +250,7 @@ impl GixRepo {
             });
         }
 
-        let mut remote_tags: HashSet<String> = HashSet::default();
+        let mut remote_tags: FxHashSet<String> = FxHashSet::default();
         for remote in remotes {
             validate_ref_like_arg(&remote.name, "remote name")?;
 
@@ -322,7 +322,7 @@ mod tests {
     use super::{GixRepo, local_tags_to_prune, parse_ls_remote_tag_names, parse_ls_remote_tags};
     use gitcomet_core::error::ErrorKind;
     use gitcomet_core::services::CancellationToken;
-    use rustc_hash::FxHashSet as HashSet;
+    use rustc_hash::FxHashSet;
     use std::path::Path;
     use std::process::Command;
 
@@ -380,7 +380,7 @@ bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\trefs/tags/hotfix\n";
     #[test]
     fn local_tags_to_prune_only_returns_tags_missing_from_remotes() {
         let local_output = "v1.0.0\nv1.1.0\nv2.0.0\n";
-        let remote_tags: HashSet<String> = ["v1.0.0".to_string(), "v2.0.0".to_string()]
+        let remote_tags: FxHashSet<String> = ["v1.0.0".to_string(), "v2.0.0".to_string()]
             .into_iter()
             .collect();
         let prune = local_tags_to_prune(local_output, &remote_tags);

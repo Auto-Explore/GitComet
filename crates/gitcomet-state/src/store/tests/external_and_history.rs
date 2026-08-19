@@ -66,7 +66,7 @@ fn test_recent_commit_message() -> gitcomet_core::domain::RecentCommitMessage {
 
 #[test]
 fn repo_activated_is_reducer_noop_by_itself() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = AppState::default();
@@ -125,7 +125,7 @@ fn repo_load_trace_names_repo_activation_and_refresh_messages() {
 
 #[test]
 fn external_worktree_change_refreshes_status_and_selected_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -246,7 +246,7 @@ fn external_index_change_refreshes_both_staged_and_unstaged_lanes() {
     // side of BOTH the staged (HEAD↔index) and unstaged (index↔worktree) diffs, so both lanes
     // must refresh; otherwise a file that moved between the staged and unstaged sections lingers
     // (stale) in the lane that was not reloaded.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -311,7 +311,7 @@ fn external_index_change_reloads_open_working_tree_diff() {
     // With a staged file's diff open, an external `git add` / `git reset` (index-only change)
     // must reload that working-tree diff so it reflects the new index content rather than showing
     // a stale diff.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -397,7 +397,7 @@ fn external_index_change_must_not_refresh_only_the_staged_lane() {
     // (`git add` / `git reset` / `git restore --staged`) used to emit exactly
     // `[LoadStagedStatus]`, refreshing only the staged lane and leaving a moved file stale in the
     // unstaged section. The change must also pursue the unstaged (worktree) lane.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -469,7 +469,7 @@ fn external_index_change_must_not_refresh_only_the_staged_lane() {
 
 #[test]
 fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recent_messages() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -507,7 +507,7 @@ fn external_git_state_change_preserves_pending_force_push_lease_and_clears_recen
 
 #[test]
 fn external_git_state_change_refreshes_history_and_selected_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -705,7 +705,7 @@ fn external_git_state_change_refreshes_history_and_selected_diff() {
 
 #[test]
 fn external_git_state_refresh_is_coalesced_and_replayed_once() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -881,7 +881,7 @@ fn external_git_state_refresh_is_coalesced_and_replayed_once() {
 
 #[test]
 fn external_worktree_refresh_replays_coalesced_change_then_settles() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -985,7 +985,7 @@ fn external_worktree_refresh_replays_coalesced_change_then_settles() {
 
 #[test]
 fn external_worktree_refresh_coalesces_status_while_status_is_in_flight() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1070,7 +1070,7 @@ fn external_worktree_refresh_coalesces_status_while_status_is_in_flight() {
 
 #[test]
 fn reload_repo_sets_sections_loading_and_emits_refresh_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1168,7 +1168,7 @@ fn repo_externally_changed_worktree_keeps_blame_until_content_changes() {
     // same bytes (a window-focus refresh, a touch, a save that changed nothing).
     // Blame is expensive — it shells out to `git blame` — so it must survive
     // until `diff_loaded`/`diff_file_loaded` sees the content actually differ.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_blamed_unstaged_diff();
 
@@ -1202,7 +1202,7 @@ fn repo_externally_changed_git_state_invalidates_loaded_blame() {
     // byte-identical while every line's attribution changes, and no downstream
     // content comparison can detect that — so git-state events drop blame up
     // front, preserving the target so it reloads for the same file.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_blamed_unstaged_diff();
     let previous = match &state.repos[0].history_state.blame {
@@ -1257,7 +1257,7 @@ fn reload_repo_clears_stale_navigation_history() {
     // Regression: a full reload may rewrite history (rebase/amend), so saved
     // back/forward snapshots can reference commits that no longer resolve. The
     // nav stacks must start fresh rather than letting Back restore a dead view.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1332,7 +1332,7 @@ fn reload_repo_clears_a_stale_comparison_mark() {
     // A reload can follow a reset or a dropped branch that took the marked
     // commit with it. Keeping the mark would leave the context menus offering a
     // "Compare with …" whose only possible outcome is a backend error.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1364,7 +1364,7 @@ fn reload_repo_clears_a_stale_comparison_mark() {
 
 #[test]
 fn load_more_history_emits_paginated_load_log_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1424,7 +1424,7 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
         LogScope::MergesOnly,
         LogScope::AllBranches,
     ] {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(1);
         let mut state = AppState::default();
         state.repos.push(RepoState::new_opening(
@@ -1500,7 +1500,7 @@ fn set_history_scope_emits_load_log_effect_for_every_history_mode() {
 
 #[test]
 fn set_history_scope_retains_ready_log_while_loading() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1547,7 +1547,7 @@ fn set_history_scope_retains_ready_log_while_loading() {
 
 #[test]
 fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1661,7 +1661,7 @@ fn stale_log_loaded_result_replays_latest_pending_scope_switch() {
 
 #[test]
 fn load_more_history_noops_when_no_next_cursor() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1698,7 +1698,7 @@ fn load_more_history_noops_when_no_next_cursor() {
 
 #[test]
 fn log_loaded_appends_when_loading_more() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1780,7 +1780,7 @@ fn log_loaded_appends_when_loading_more() {
 
 #[test]
 fn log_loaded_reconciles_commit_multi_selection() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1838,7 +1838,7 @@ fn log_loaded_reconciles_commit_multi_selection() {
 /// the log having paged anywhere near the commit.
 #[test]
 fn reveal_commit_resolves_an_abbreviation_and_shows_it_immediately() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1895,7 +1895,7 @@ fn reveal_commit_resolves_an_abbreviation_and_shows_it_immediately() {
 /// loudly and cheaply instead of sending the log walking to the root.
 #[test]
 fn reveal_commit_reports_an_unresolvable_reference_without_selecting() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1949,7 +1949,7 @@ fn reveal_commit_reports_an_unresolvable_reference_without_selecting() {
 /// length of a reveal.
 #[test]
 fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2032,7 +2032,7 @@ fn log_loaded_keeps_a_not_yet_paged_selection_when_loading_more() {
 /// mid-reveal scope switch does.
 #[test]
 fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2088,7 +2088,7 @@ fn log_loaded_first_page_keeps_the_commit_a_reveal_is_walking_toward() {
 
 #[test]
 fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2180,7 +2180,7 @@ fn log_loaded_appends_when_loading_more_re_shares_history_log_arc() {
 
 #[test]
 fn log_loaded_clears_retained_scope_switch_log() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2256,7 +2256,7 @@ fn log_loaded_clears_retained_scope_switch_log() {
 
 #[test]
 fn log_loaded_initial_paginated_page_keeps_append_slack() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2310,7 +2310,7 @@ fn log_loaded_initial_paginated_page_keeps_append_slack() {
 
 #[test]
 fn log_loaded_bumps_log_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2361,7 +2361,7 @@ fn log_loaded_bumps_log_rev() {
 
 #[test]
 fn detached_head_target_tracks_current_branch_log_head() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2449,7 +2449,7 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
             CommitId("visible-merge".into()),
         ),
     ] {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(2);
         let mut state = AppState::default();
         let repo_id = RepoId(1);
@@ -2499,7 +2499,7 @@ fn filtered_current_branch_logs_do_not_backfill_detached_head_target() {
 
 #[test]
 fn set_history_scope_bumps_log_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2536,7 +2536,7 @@ fn set_history_scope_bumps_log_rev() {
 
 #[test]
 fn status_loaded_bumps_status_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2569,7 +2569,7 @@ fn status_loaded_bumps_status_rev() {
 
 #[test]
 fn external_tags_change_reloads_tags() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2613,7 +2613,7 @@ fn external_tags_change_reloads_tags() {
 
 #[test]
 fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2651,7 +2651,7 @@ fn external_git_state_change_without_tags_flag_does_not_reload_tags() {
 
 #[test]
 fn external_tags_change_without_git_state_flag_reloads_tags() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2701,7 +2701,7 @@ fn external_tags_change_without_git_state_flag_reloads_tags() {
 /// repo-load pool has one or two threads.
 #[test]
 fn author_filter_change_starts_its_load_while_a_walk_is_in_flight() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2744,7 +2744,7 @@ fn author_filter_change_starts_its_load_while_a_walk_is_in_flight() {
 /// failure: it must not raise a diagnostic or blank the history out.
 #[test]
 fn cancelled_log_reply_is_not_reported_as_an_error() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2791,7 +2791,7 @@ fn cancelled_log_reply_is_not_reported_as_an_error() {
 /// history shows what it has instead of the previous filter's rows.
 #[test]
 fn log_chunks_replace_the_page_progressively() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2895,7 +2895,7 @@ fn log_chunks_replace_the_page_progressively() {
 /// the filter the user has already moved off.
 #[test]
 fn superseded_log_chunks_are_ignored() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2957,7 +2957,7 @@ fn superseded_log_chunks_are_ignored() {
 /// "Scanning history…" banner sits there with a frozen count.
 #[test]
 fn cancelling_repo_loads_clears_the_scan_progress() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -3032,7 +3032,7 @@ fn hover_message_slot(state: &AppState) -> Option<(CommitId, Loadable<Arc<str>>)
 
 #[test]
 fn hovering_a_commit_reads_its_message_once_however_often_the_row_is_re_entered() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = hover_message_state(repo_id);
@@ -3103,7 +3103,7 @@ fn hovering_a_commit_reads_its_message_once_however_often_the_row_is_re_entered(
 
 #[test]
 fn a_hover_message_that_failed_is_retried_on_the_next_hover() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = hover_message_state(repo_id);
@@ -3161,7 +3161,7 @@ fn a_hover_message_that_failed_is_retried_on_the_next_hover() {
 
 #[test]
 fn a_hover_message_for_a_commit_the_pointer_has_left_is_dropped() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = hover_message_state(repo_id);
@@ -3209,7 +3209,7 @@ fn a_hover_message_for_a_commit_the_pointer_has_left_is_dropped() {
 
 #[test]
 fn hovering_a_repository_that_is_not_open_yet_reads_nothing() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let repo_id = RepoId(1);
     let mut state = hover_message_state(repo_id);
@@ -3243,7 +3243,7 @@ fn hovering_a_repository_that_is_not_open_yet_reads_nothing() {
 /// it still arrives as a git-state change and still earns one.
 #[test]
 fn an_index_only_change_does_not_rescan_the_other_worktrees() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3278,7 +3278,7 @@ fn an_index_only_change_does_not_rescan_the_other_worktrees() {
 
     // The open-repo refresh already queued one; let it finish so the in-flight
     // guard is not what makes the next assertion pass.
-    let settle = |repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    let settle = |repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
                   state: &mut AppState,
                   id_alloc: &AtomicU64| {
         reduce(
@@ -3367,7 +3367,7 @@ fn file_browser_loads(effects: &[Effect]) -> usize {
 fn worktree_change_refreshes_the_visible_file_browser_without_blanking_it() {
     // The reported bug's second half: a new folder has to reach the tree already
     // on screen, without discarding the rows or their expansion on the way.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
 
@@ -3400,7 +3400,7 @@ fn worktree_change_refreshes_the_visible_file_browser_without_blanking_it() {
 fn worktree_change_only_marks_the_hidden_file_browser_stale() {
     // Walking the working directory is far costlier than the other loads, so it
     // must not run for every disk event while the sidebar shows branches.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Branches);
 
@@ -3432,7 +3432,7 @@ fn worktree_change_only_marks_the_hidden_file_browser_stale() {
 #[test]
 fn commit_browsing_ignores_worktree_changes() {
     // A commit's tree is immutable, so a disk event says nothing about it.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
     state.repos[0].file_browser.source =
@@ -3455,7 +3455,7 @@ fn commit_browsing_ignores_worktree_changes() {
 #[test]
 fn a_burst_of_worktree_changes_coalesces_into_one_walk_at_a_time() {
     // Events arrive back to back; none may stack a second walk on the first.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
 
@@ -3494,7 +3494,7 @@ fn a_burst_of_worktree_changes_coalesces_into_one_walk_at_a_time() {
 fn a_reply_for_an_abandoned_source_still_releases_the_lane() {
     // Browsing to a commit mid-walk means the reply is for a source nobody wants
     // any more. It still has to end that walk, or the new listing never runs.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, repo_id) = state_with_loaded_file_browser(SidebarMode::Files);
 

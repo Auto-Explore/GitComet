@@ -1,5 +1,5 @@
 use crate::domain::SharedLineText;
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashMap, FxHasher};
 use std::borrow::Cow;
 use std::cell::OnceCell;
 use std::fs::File;
@@ -1367,8 +1367,6 @@ struct ReplacementTextCacheIds {
 fn prepare_replacement_text_cache_ids(
     lines: &[PreparedReplacementLine<'_>],
 ) -> ReplacementTextCacheIds {
-    use rustc_hash::FxHashMap;
-
     let mut text_ids = FxHashMap::default();
     text_ids.reserve(lines.len());
     let mut ids = Vec::with_capacity(lines.len());
@@ -2794,10 +2792,8 @@ fn find_patience_anchors(
     new_start: usize,
     new_end: usize,
 ) -> Vec<(usize, usize)> {
-    use rustc_hash::FxHashMap as HashMap;
-
     // Count occurrences and record position for old lines.
-    let mut old_info: HashMap<&str, (usize, usize)> = HashMap::default();
+    let mut old_info: FxHashMap<&str, (usize, usize)> = FxHashMap::default();
     for (i, &line) in old.iter().enumerate().take(old_end).skip(old_start) {
         let entry = old_info.entry(line).or_insert((0, i));
         entry.0 += 1;
@@ -2805,7 +2801,7 @@ fn find_patience_anchors(
     }
 
     // Count occurrences and record position for new lines.
-    let mut new_info: HashMap<&str, (usize, usize)> = HashMap::default();
+    let mut new_info: FxHashMap<&str, (usize, usize)> = FxHashMap::default();
     for (j, &line) in new.iter().enumerate().take(new_end).skip(new_start) {
         let entry = new_info.entry(line).or_insert((0, j));
         entry.0 += 1;
@@ -2912,7 +2908,12 @@ fn myers_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'a>> {
     let old_mid_end = old.len().saturating_sub(suffix);
     let new_mid_end = new.len().saturating_sub(suffix);
 
-    let mut edits = Vec::new();
+    let mut edits = Vec::with_capacity(
+        old_mid_end
+            .saturating_add(new_mid_end)
+            .saturating_sub(prefix)
+            .saturating_add(suffix),
+    );
     for i in 0..prefix {
         edits.push(Edit {
             kind: EditKind::Equal,
@@ -2964,7 +2965,12 @@ fn positional_fallback_edits<'a>(old: &[&'a str], new: &[&'a str]) -> Vec<Edit<'
     let new_mid = &new[prefix..new_mid_end];
     let paired = old_mid.len().min(new_mid.len());
 
-    let mut edits = Vec::new();
+    let mut edits = Vec::with_capacity(
+        old_mid_end
+            .saturating_add(new_mid_end)
+            .saturating_sub(prefix)
+            .saturating_add(suffix),
+    );
     for i in 0..prefix {
         edits.push(Edit {
             kind: EditKind::Equal,
@@ -3958,6 +3964,44 @@ mod tests {
                 EditKind::Equal,
             ]
         );
+    }
+
+    #[test]
+    fn myers_fallback_reserves_exactly_the_edits_it_pushes() {
+        // These builders are reached only once the combined line count crosses
+        // the linear-fallback threshold, so a loose reservation costs the most
+        // exactly where it is taken. `old.len() + new.len()` counts every
+        // prefix and suffix line on both sides.
+        let old = ["keep", "old-a", "old-b", "tail"];
+        let new = ["keep", "new-a", "tail"];
+
+        let edits = myers_fallback_edits(&old, &new);
+
+        assert_eq!(
+            edits.capacity(),
+            edits.len(),
+            "prefix and suffix lines produce one edit, not two"
+        );
+    }
+
+    #[test]
+    fn positional_fallback_reserves_its_exact_upper_bound() {
+        // Every paired line differs, so the bound is also the exact count.
+        let old = ["keep", "old-a", "old-b", "tail"];
+        let new = ["keep", "new-a", "new-b", "tail"];
+
+        let edits = positional_fallback_edits(&old, &new);
+
+        assert_eq!(edits.capacity(), edits.len());
+
+        // An interior line that matches emits one edit where the bound allowed
+        // two. That slack is the only slack the reservation may carry.
+        let old = ["keep", "old-a", "same", "old-b", "tail"];
+        let new = ["keep", "new-a", "same", "new-b", "tail"];
+
+        let edits = positional_fallback_edits(&old, &new);
+
+        assert_eq!(edits.capacity(), edits.len() + 1);
     }
 
     #[test]

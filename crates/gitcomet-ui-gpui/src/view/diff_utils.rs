@@ -646,7 +646,7 @@ fn append_unselected_hunk_line(
 fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
-    selected_src_ixs: &HashSet<usize>,
+    selected_src_ixs: &FxHashSet<usize>,
     unselected_add: UnselectedHunkLineBehavior,
     unselected_remove: UnselectedHunkLineBehavior,
 ) -> Option<String> {
@@ -738,7 +738,7 @@ fn build_unified_patch_for_hunk_selection_with_unselected_behavior(
 pub(super) fn build_unified_patch_for_hunk_selection(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
-    selected_src_ixs: &HashSet<usize>,
+    selected_src_ixs: &FxHashSet<usize>,
 ) -> Option<String> {
     build_unified_patch_for_hunk_selection_with_unselected_behavior(
         diff,
@@ -758,7 +758,7 @@ pub(super) fn build_unified_patch_for_hunk_selection(
 pub(super) fn build_unified_patch_for_hunk_selection_for_reverse_apply(
     diff: &[AnnotatedDiffLine],
     hunk_src_ix: usize,
-    selected_src_ixs: &HashSet<usize>,
+    selected_src_ixs: &FxHashSet<usize>,
 ) -> Option<String> {
     build_unified_patch_for_hunk_selection_with_unselected_behavior(
         diff,
@@ -774,7 +774,7 @@ pub(super) fn build_unified_patch_for_hunk_selection_for_reverse_apply(
 /// for the unstage/discard direction, which is not the same patch.
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
     diff: &[AnnotatedDiffLine],
-    selected_src_ixs: &HashSet<usize>,
+    selected_src_ixs: &FxHashSet<usize>,
 ) -> Option<String> {
     use gitcomet_core::domain::DiffLineKind as K;
     use std::collections::BTreeMap;
@@ -783,7 +783,7 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
         return None;
     }
 
-    let mut by_hunk: BTreeMap<usize, HashSet<usize>> = BTreeMap::new();
+    let mut by_hunk: BTreeMap<usize, FxHashSet<usize>> = BTreeMap::new();
     for &src_ix in selected_src_ixs {
         let Some(line) = diff.get(src_ix) else {
             continue;
@@ -812,7 +812,7 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks(
 /// Multi-hunk form of [`build_unified_patch_for_hunk_selection_for_reverse_apply`].
 pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(
     diff: &[AnnotatedDiffLine],
-    selected_src_ixs: &HashSet<usize>,
+    selected_src_ixs: &FxHashSet<usize>,
 ) -> Option<String> {
     use gitcomet_core::domain::DiffLineKind as K;
     use std::collections::BTreeMap;
@@ -821,7 +821,7 @@ pub(super) fn build_unified_patch_for_selected_lines_across_hunks_for_reverse_ap
         return None;
     }
 
-    let mut by_hunk: BTreeMap<usize, HashSet<usize>> = BTreeMap::new();
+    let mut by_hunk: BTreeMap<usize, FxHashSet<usize>> = BTreeMap::new();
     for &src_ix in selected_src_ixs {
         let Some(line) = diff.get(src_ix) else {
             continue;
@@ -1151,7 +1151,7 @@ mod tests {
     #[test]
     fn build_unified_patch_for_selected_lines_across_hunks_includes_all_selected_lines() {
         let diff = example_two_hunk_diff();
-        let selected: HashSet<usize> = [6, 7, 12].into_iter().collect();
+        let selected: FxHashSet<usize> = [6, 7, 12].into_iter().collect();
 
         let patch =
             build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
@@ -1165,7 +1165,7 @@ mod tests {
     #[test]
     fn build_unified_patch_for_selected_lines_across_hunks_ignores_context_only_selection() {
         let diff = example_two_hunk_diff();
-        let selected: HashSet<usize> = [5, 8, 10].into_iter().collect();
+        let selected: FxHashSet<usize> = [5, 8, 10].into_iter().collect();
 
         assert!(build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).is_none());
     }
@@ -1173,7 +1173,7 @@ mod tests {
     #[test]
     fn build_unified_patch_for_selected_lines_across_hunks_supports_multiple_files() {
         let diff = example_two_file_diff();
-        let selected: HashSet<usize> = [4, 9].into_iter().collect();
+        let selected: FxHashSet<usize> = [4, 9].into_iter().collect();
 
         let patch =
             build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
@@ -1186,7 +1186,7 @@ mod tests {
     #[test]
     fn build_unified_patch_for_selected_lines_across_hunks_keeps_unselected_preimage_as_context() {
         let diff = example_two_mods_one_hunk_diff();
-        let selected: HashSet<usize> = [6, 7].into_iter().collect();
+        let selected: FxHashSet<usize> = [6, 7].into_iter().collect();
 
         let patch =
             build_unified_patch_for_selected_lines_across_hunks(&diff, &selected).expect("patch");
@@ -1201,7 +1201,7 @@ mod tests {
     #[test]
     fn reverse_apply_patch_keeps_unselected_additions_as_context() {
         let diff = example_two_mods_one_hunk_diff();
-        let selected: HashSet<usize> = [6, 7].into_iter().collect();
+        let selected: FxHashSet<usize> = [6, 7].into_iter().collect();
 
         let patch =
             build_unified_patch_for_selected_lines_across_hunks_for_reverse_apply(&diff, &selected)

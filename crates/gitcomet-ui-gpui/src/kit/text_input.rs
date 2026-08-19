@@ -12,7 +12,7 @@ use gpui::{
     ShapedLine, SharedString, Style, TextAlign, TextRun, UTF16Selection, Window, WrappedLine,
     actions, anchored, deferred, div, fill, point, px, relative, size,
 };
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 #[cfg(any(test, feature = "benchmarks"))]
 use rustc_hash::FxHasher;
 use smallvec::SmallVec;

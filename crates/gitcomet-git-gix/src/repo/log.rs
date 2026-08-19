@@ -14,12 +14,18 @@ use gitcomet_core::services::{CancellationToken, LogChunk, Result};
 use gix::bstr::ByteSlice as _;
 use gix::objs::FindExt as _;
 use gix::traverse::commit::simple::CommitTimeOrder;
-use rustc_hash::FxHashSet as HashSet;
-use std::collections::HashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 const RECENT_COMMIT_MESSAGES_MAX_LIMIT: usize = 100;
+
+/// Upper bound on how much of a caller-supplied reflog limit we pre-reserve.
+///
+/// The limit itself is still enforced while iterating; capping the reservation
+/// only keeps a huge limit (`usize::MAX` reads as "all entries") from asking for
+/// that much capacity before we know how long the reflog actually is.
+const REFLOG_RESERVE_MAX: usize = 512;
 
 fn recent_commit_message_limits(limit: usize) -> Option<(usize, usize)> {
     let limit = limit.min(RECENT_COMMIT_MESSAGES_MAX_LIMIT);
@@ -94,7 +100,7 @@ fn reflog_lines_rev(
         return Ok(Vec::new());
     };
 
-    let mut lines = Vec::new();
+    let mut lines = Vec::with_capacity(limit.unwrap_or(0).min(REFLOG_RESERVE_MAX));
     for line in iter {
         let line =
             line.map_err(|e| Error::new(ErrorKind::Backend(format!("gix reflog {context}: {e}"))))?;
@@ -146,8 +152,9 @@ pub(super) fn stash_reflog_tips(
     repo: &gix::Repository,
     limit: usize,
 ) -> Result<Vec<gix::ObjectId>> {
-    let mut tips = Vec::new();
-    let mut seen = HashSet::default();
+    let reserve = limit.min(REFLOG_RESERVE_MAX);
+    let mut tips = Vec::with_capacity(reserve);
+    let mut seen = FxHashSet::with_capacity_and_hasher(reserve, Default::default());
     for line in stash_reflog_lines(repo, Some(limit))? {
         let id = line.new_oid;
         if !id.is_null() && seen.insert(id) {
@@ -1599,7 +1606,7 @@ impl GixRepo {
         // `refs/remotes`. Some repositories (e.g. Chromium) use additional namespaces like
         // `refs/branch-heads/*`.
         let mut tips = Vec::new();
-        let mut seen = HashSet::default();
+        let mut seen = FxHashSet::default();
         if let Some(head_id) = head_id {
             tips.push(head_id);
             seen.insert(head_id);
@@ -1702,8 +1709,8 @@ impl GixRepo {
             .to_string();
         let (author_name, author_email, authored_at_unix) = match commit.author() {
             Ok(signature) => (
-                bytes_to_text_preserving_utf8(signature.name.as_ref()).to_string(),
-                bytes_to_text_preserving_utf8(signature.email.as_ref()).to_string(),
+                bytes_to_text_preserving_utf8(signature.name.as_ref()),
+                bytes_to_text_preserving_utf8(signature.email.as_ref()),
                 signature.time().ok().map(|time| time.seconds).unwrap_or(0),
             ),
             Err(_) => (String::new(), String::new(), 0),
@@ -1786,7 +1793,7 @@ impl GixRepo {
     ) -> Result<Vec<CommitId>> {
         let repo = self._repo.to_thread_local();
         let mut object_ids = Vec::with_capacity(ids.len());
-        let mut selected = HashMap::with_capacity(ids.len());
+        let mut selected = FxHashMap::with_capacity_and_hasher(ids.len(), Default::default());
         for (ix, id) in ids.iter().enumerate() {
             let spec = id.as_ref();
             let object_id = repo
@@ -1826,8 +1833,8 @@ impl GixRepo {
                 .parent_ids()
                 .map(|parent| parent.detach())
                 .collect::<Vec<_>>();
-            let mut visited = HashSet::default();
-            let mut direct_selected_ancestors = HashSet::default();
+            let mut visited = FxHashSet::default();
+            let mut direct_selected_ancestors = FxHashSet::default();
             while let Some(candidate) = stack.pop() {
                 if !visited.insert(candidate) {
                     continue;
@@ -1878,7 +1885,7 @@ impl GixRepo {
 
         let page = self.log_history_mode_page_impl(HistoryMode::FirstParent, scan_limit, None)?;
         let repo = self._repo.to_thread_local();
-        let mut seen = HashSet::default();
+        let mut seen = FxHashSet::default();
         let mut messages = Vec::with_capacity(limit);
 
         for commit in page.commits {
@@ -2506,6 +2513,19 @@ mod tests {
             // reflog line's committer identity.
             assert_eq!(entry.author.as_ref(), "Test User");
         }
+    }
+
+    #[test]
+    fn reflog_head_impl_handles_an_unbounded_limit() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        commit_file(workdir, "a.txt", "one\n", "first");
+
+        let repo = open_repo(workdir);
+        // `usize::MAX` reads as "every entry": it must not be reserved up front.
+        let entries = repo.reflog_head_impl(usize::MAX).expect("reflog_head_impl");
+        assert_eq!(entries.len(), 1);
     }
 
     #[test]

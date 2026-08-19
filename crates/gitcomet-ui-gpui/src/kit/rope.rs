@@ -397,7 +397,8 @@ impl Rope {
     /// [`Rope::chunks_in_range`]; this exists for the many places that need a
     /// small, bounded slice (one visible row, a word under the caret).
     pub fn text_for_range(&self, range: Range<usize>) -> String {
-        let mut out = String::new();
+        let range = self.clip_range(range);
+        let mut out = String::with_capacity(range.len());
         for chunk in self.chunks_in_range(range) {
             out.push_str(chunk);
         }

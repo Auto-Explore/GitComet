@@ -10,8 +10,9 @@ use gitcomet_core::services::{
     BlameLine, ForcePushLease, InteractiveRebaseEntry, SafePushAfterCommitContext, SequencerState,
     SubmoduleTrustTarget,
 };
+use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -369,7 +370,7 @@ pub enum ConflictFileLoadMode {
 pub struct FileBrowserState {
     pub source: FileSource,
     pub entries: Loadable<Arc<Vec<FileEntry>>>,
-    pub expanded_dirs: HashSet<Arc<PathBuf>>,
+    pub expanded_dirs: FxHashSet<Arc<PathBuf>>,
     pub search_query: String,
     pub file_browser_rev: u64,
     /// The worktree moved under a listing nobody is looking at. Deferring the
@@ -383,7 +384,7 @@ impl Default for FileBrowserState {
         Self {
             source: FileSource::default(),
             entries: Loadable::NotLoaded,
-            expanded_dirs: HashSet::new(),
+            expanded_dirs: FxHashSet::default(),
             search_query: String::new(),
             file_browser_rev: 0,
             stale: false,
@@ -1198,7 +1199,7 @@ pub struct RepoState {
     /// Tip-commit author/date/summary per short refname, loaded on demand by
     /// pickers that display it. Invalidated whenever the branch or
     /// remote-branch lists change, so it never outlives the refs it describes.
-    pub ref_metadata: Loadable<Arc<HashMap<String, RefMetadata>>>,
+    pub ref_metadata: Loadable<Arc<FxHashMap<String, RefMetadata>>>,
     pub ref_metadata_rev: u64,
     pub submodules: Loadable<Arc<Vec<Submodule>>>,
     pub submodules_rev: u64,
@@ -1475,7 +1476,7 @@ impl RepoState {
 
     pub(crate) fn set_ref_metadata(
         &mut self,
-        ref_metadata: Loadable<HashMap<String, RefMetadata>>,
+        ref_metadata: Loadable<FxHashMap<String, RefMetadata>>,
     ) {
         let ref_metadata = loadable_into_arc(ref_metadata);
         if self.ref_metadata == ref_metadata {
@@ -2113,6 +2114,18 @@ pub enum Loadable<T> {
 impl<T> Loadable<T> {
     pub fn is_loading(&self) -> bool {
         matches!(self, Self::Loading)
+    }
+
+    /// The loaded value, if there is one.
+    ///
+    /// Exists so the ~160 sites that only care about the `Ready` arm can say so
+    /// in one line instead of spelling out a `match` with a `_ => ..` fallback,
+    /// which is how the same five-line block ended up copied across the pickers.
+    pub fn ready(&self) -> Option<&T> {
+        match self {
+            Self::Ready(value) => Some(value),
+            _ => None,
+        }
     }
 }
 
@@ -3233,14 +3246,14 @@ mod tests {
             before + 1,
             "rev should not bump for an unchanged value"
         );
-        repo.set_ref_metadata(Loadable::Ready(HashMap::new()));
+        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
         assert_eq!(repo.ref_metadata_rev, before + 2);
     }
 
     #[test]
     fn set_branches_invalidates_cached_ref_metadata() {
         let mut repo = new_repo();
-        repo.set_ref_metadata(Loadable::Ready(HashMap::from([(
+        repo.set_ref_metadata(Loadable::Ready(FxHashMap::from_iter([(
             "main".to_string(),
             RefMetadata {
                 author: "Ada".to_string(),
@@ -3261,7 +3274,7 @@ mod tests {
     #[test]
     fn set_remote_branches_invalidates_cached_ref_metadata() {
         let mut repo = new_repo();
-        repo.set_ref_metadata(Loadable::Ready(HashMap::new()));
+        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
 
         repo.set_remote_branches(Loadable::Ready(vec![]));
 
@@ -3274,7 +3287,7 @@ mod tests {
         // refresh that finds the same refs must leave the cache alone.
         let mut repo = new_repo();
         repo.set_branches(Loadable::Ready(vec![]));
-        repo.set_ref_metadata(Loadable::Ready(HashMap::new()));
+        repo.set_ref_metadata(Loadable::Ready(FxHashMap::default()));
         let rev = repo.ref_metadata_rev;
 
         repo.set_branches(Loadable::Ready(vec![]));
@@ -3430,5 +3443,13 @@ mod tests {
         assert!(!repo.conflict_state.conflict_hide_resolved);
         assert!(repo.detached_head_commit.is_none());
         assert_eq!(repo.sidebar_data_request, SidebarDataRequest::default());
+    }
+
+    #[test]
+    fn loadable_ready_exposes_only_the_loaded_arm() {
+        assert_eq!(Loadable::Ready(vec![1, 2, 3]).ready(), Some(&vec![1, 2, 3]));
+        assert_eq!(Loadable::<Vec<u8>>::NotLoaded.ready(), None);
+        assert_eq!(Loadable::<Vec<u8>>::Loading.ready(), None);
+        assert_eq!(Loadable::<Vec<u8>>::Error("boom".into()).ready(), None);
     }
 }

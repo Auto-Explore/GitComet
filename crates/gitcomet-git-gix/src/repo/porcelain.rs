@@ -7,7 +7,7 @@ use crate::util::{
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
 use gitcomet_core::services::{CommitOperationOutcome, Result};
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
@@ -271,7 +271,7 @@ struct StashApplyPreflight {
 #[derive(Default)]
 struct StashUntrackedRestoreConflicts {
     paths: Vec<PathBuf>,
-    stashed_contents: HashMap<PathBuf, Vec<u8>>,
+    stashed_contents: FxHashMap<PathBuf, Vec<u8>>,
     untracked_parent_id: Option<gix::ObjectId>,
 }
 
@@ -279,7 +279,7 @@ impl StashUntrackedRestoreConflicts {
     fn from_output(stdout: &str, stderr: &str, untracked_parent_id: Option<gix::ObjectId>) -> Self {
         Self {
             paths: untracked_restore_conflict_paths_from_output(stdout, stderr),
-            stashed_contents: HashMap::default(),
+            stashed_contents: FxHashMap::default(),
             untracked_parent_id,
         }
     }
@@ -297,12 +297,12 @@ fn tree_entry_fingerprints(
     repo: &gix::Repository,
     tree: &gix::Tree<'_>,
     context: &str,
-) -> Result<HashMap<PathBuf, TreeEntryFingerprint>> {
+) -> Result<FxHashMap<PathBuf, TreeEntryFingerprint>> {
     let index = repo
         .index_from_tree(&tree.id)
         .map_err(|e| Error::new(ErrorKind::Backend(format!("{context}: {e}"))))?;
     let path_backing = index.path_backing();
-    let mut entries = HashMap::default();
+    let mut entries = FxHashMap::default();
     for entry in index.entries() {
         let path = path_buf_from_git_bytes(entry.path_in(path_backing).as_ref(), context)?;
         entries.insert(
@@ -320,11 +320,11 @@ fn stash_tracked_change_paths(
     repo: &gix::Repository,
     stash_commit: &gix::Commit<'_>,
     index: usize,
-) -> Result<HashSet<PathBuf>> {
+) -> Result<FxHashSet<PathBuf>> {
     let stash_spec = stash_spec(index);
 
     let Some(base_parent_id) = stash_commit.parent_ids().next().map(|id| id.detach()) else {
-        return Ok(HashSet::default());
+        return Ok(FxHashSet::default());
     };
 
     let base_tree = repo
@@ -347,7 +347,7 @@ fn stash_tracked_change_paths(
     })?;
 
     let mut base_entries = tree_entry_fingerprints(repo, &base_tree, "gix stash base tree index")?;
-    let mut changed_paths = HashSet::default();
+    let mut changed_paths = FxHashSet::default();
     for (path, stash_entry) in
         tree_entry_fingerprints(repo, &stash_tree, "gix stash tracked tree index")?
     {
@@ -762,7 +762,7 @@ impl GixRepo {
         Ok(conflicts)
     }
 
-    fn worktree_overwrite_blocker_paths(&self) -> Result<HashSet<PathBuf>> {
+    fn worktree_overwrite_blocker_paths(&self) -> Result<FxHashSet<PathBuf>> {
         let status = self.status_impl()?;
         Ok(status
             .unstaged
@@ -819,7 +819,7 @@ impl GixRepo {
         // ordinary modification still full of conflict markers — and a bare
         // `git reset` additionally clears MERGE_HEAD, silently aborting the
         // merge. Conflicted paths are therefore left exactly as they are.
-        let conflicted: HashSet<PathBuf> = super::status::gix_unmerged_conflicts(&repo)?
+        let conflicted: FxHashSet<PathBuf> = super::status::gix_unmerged_conflicts(&repo)?
             .into_iter()
             .map(|(path, _)| path)
             .collect();
@@ -1053,7 +1053,7 @@ fn stash_apply_error(id: GitFailureId, detail: impl Into<String>) -> Error {
 
 fn untracked_restore_conflict_paths_from_output(stdout: &str, stderr: &str) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut seen = HashSet::default();
+    let mut seen = FxHashSet::default();
     let suffix = " already exists, no checkout";
     for line in stderr.lines().chain(stdout.lines()) {
         let Some(mut path) = line.trim().strip_suffix(suffix) else {

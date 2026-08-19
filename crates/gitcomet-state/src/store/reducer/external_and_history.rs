@@ -17,6 +17,7 @@ use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{InteractiveRebaseEntry, SequencerState};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::sync::Arc;
 
 const LARGE_HISTORY_APPEND_LEN_THRESHOLD: usize = 4_096;
@@ -457,21 +458,20 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id)
         && let Some(setup) = repo_state.interactive_cherry_pick_setup.as_mut()
     {
-        let current_ids: Vec<&str> = setup
+        if !setup
             .entries
             .iter()
             .map(|entry| entry.commit_id.as_str())
-            .collect();
-        if current_ids != requested_ids.iter().map(String::as_str).collect::<Vec<_>>() {
+            .eq(requested_ids.iter().map(String::as_str))
+        {
             return vec![];
         }
 
         match result {
             Ok(messages) => {
-                let returned_ids = messages
-                    .iter()
-                    .map(|(id, _)| id.as_str())
-                    .collect::<std::collections::HashSet<_>>();
+                let mut returned_ids =
+                    FxHashSet::with_capacity_and_hasher(messages.len(), Default::default());
+                returned_ids.extend(messages.iter().map(|(id, _)| id.as_str()));
                 if messages.len() != setup.entries.len()
                     || returned_ids.len() != messages.len()
                     || !setup
@@ -488,7 +488,7 @@ pub(super) fn interactive_cherry_pick_messages_loaded(
                     .entries
                     .drain(..)
                     .map(|entry| (entry.commit_id.clone(), entry))
-                    .collect::<std::collections::HashMap<_, _>>();
+                    .collect::<FxHashMap<_, _>>();
                 let mut ordered_entries = Vec::with_capacity(messages.len());
                 for (id, message) in messages {
                     let Some(mut entry) = entries_by_id.remove(&id) else {

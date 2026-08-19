@@ -16,7 +16,7 @@ use gitcomet_core::domain::DiffTarget;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::{CancellationToken, GitBackend, GitRepository};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::{Arc, Mutex, RwLock};
 
 use super::RepoId;
@@ -138,7 +138,7 @@ fn current_repo_load_epoch(
 
 fn ensure_repo_task_token(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
-    repo_task_tokens: &mut HashMap<RepoId, RepoTaskToken>,
+    repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
     repo_id: RepoId,
 ) -> Option<RepoTaskToken> {
     let load_epoch = current_repo_load_epoch(thread_state, repo_id).unwrap_or(0);
@@ -175,7 +175,7 @@ fn ensure_repo_task_token(
 
 fn repo_load_context(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
-    repo_task_tokens: &mut HashMap<RepoId, RepoTaskToken>,
+    repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) -> Option<(StoreWorkerSender, CancellationToken)> {
@@ -190,7 +190,7 @@ fn repo_load_context(
 /// and is dropped by the reducer rather than vanishing silently.
 fn log_load_context(
     thread_state: &Arc<RwLock<Arc<AppState>>>,
-    repo_task_tokens: &mut HashMap<RepoId, RepoTaskToken>,
+    repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
     msg_tx: StoreWorkerSender,
     repo_id: RepoId,
 ) -> Option<(StoreWorkerSender, CancellationToken)> {
@@ -1316,8 +1316,8 @@ pub(super) fn schedule_effect(
     executors: EffectExecutors<'_>,
     thread_state: &Arc<RwLock<Arc<AppState>>>,
     backend: &Arc<dyn GitBackend>,
-    repos: &HashMap<RepoId, Arc<dyn GitRepository>>,
-    repo_task_tokens: &mut HashMap<RepoId, RepoTaskToken>,
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repo_task_tokens: &mut FxHashMap<RepoId, RepoTaskToken>,
     msg_tx: StoreWorkerSender,
     effect: Effect,
 ) {

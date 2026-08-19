@@ -85,7 +85,7 @@ struct BenchHistoryStashTip {
 #[derive(Clone, Debug, Default)]
 struct BenchHistoryStashAnalysis {
     stash_tips: Vec<BenchHistoryStashTip>,
-    stash_helper_ids: HashSet<CommitId>,
+    stash_helper_ids: FxHashSet<CommitId>,
 }
 
 #[inline]
@@ -103,7 +103,7 @@ fn analyze_history_stashes(
 ) -> BenchHistoryStashAnalysis {
     if stashes.is_empty() {
         let mut stash_tips = Vec::new();
-        let mut stash_helper_ids = HashSet::default();
+        let mut stash_helper_ids = FxHashSet::default();
         for (commit_ix, commit) in commits.iter().enumerate() {
             if !history_commit_is_probable_stash_tip(commit) {
                 continue;
@@ -127,8 +127,8 @@ fn analyze_history_stashes(
         };
     }
 
-    let mut listed_stash_messages_by_id: HashMap<&str, Option<&Arc<str>>> =
-        HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
+    let mut listed_stash_messages_by_id: FxHashMap<&str, Option<&Arc<str>>> =
+        FxHashMap::with_capacity_and_hasher(stashes.len(), Default::default());
     for stash in stashes.iter() {
         listed_stash_messages_by_id.insert(
             stash.id.as_ref(),
@@ -138,7 +138,7 @@ fn analyze_history_stashes(
 
     let mut stash_tips = Vec::with_capacity(stashes.len());
     let mut stash_helper_ids =
-        HashSet::with_capacity_and_hasher(stashes.len().max(4), Default::default());
+        FxHashSet::with_capacity_and_hasher(stashes.len().max(4), Default::default());
     for (commit_ix, commit) in commits.iter().enumerate() {
         let commit_id = commit.id.as_ref();
         let is_probable_stash = history_commit_is_probable_stash_tip(commit);
@@ -166,7 +166,7 @@ fn analyze_history_stashes(
 
 fn build_history_visible_indices(
     commits: &[Commit],
-    stash_helper_ids: &HashSet<CommitId>,
+    stash_helper_ids: &FxHashSet<CommitId>,
 ) -> Vec<usize> {
     if stash_helper_ids.is_empty() {
         return (0..commits.len()).collect();
@@ -188,8 +188,8 @@ fn build_history_branch_text_by_target<'a>(
     remote_branches: &'a [RemoteBranch],
     head_branch: Option<&'a str>,
     head_target: Option<&'a str>,
-) -> (HashMap<&'a str, SharedString>, Option<SharedString>) {
-    let mut by_target: HashMap<&'a str, Vec<String>> = HashMap::default();
+) -> (FxHashMap<&'a str, SharedString>, Option<SharedString>) {
+    let mut by_target: FxHashMap<&'a str, Vec<String>> = FxHashMap::default();
     for branch in branches {
         by_target
             .entry(branch.target.as_ref())
@@ -203,7 +203,7 @@ fn build_history_branch_text_by_target<'a>(
             .push(format!("{}/{}", branch.remote, branch.name));
     }
     let head_label = head_branch.map(|name| branch_sidebar_branch_label(name).to_string());
-    let mut out = HashMap::default();
+    let mut out = FxHashMap::default();
     let mut head_branches_text = None;
     for (target, names) in by_target {
         let joined: SharedString = names.join(", ").into();
@@ -220,8 +220,10 @@ fn build_history_branch_text_by_target<'a>(
     (out, head_branches_text)
 }
 
-fn build_history_tag_names_by_target<'a>(tags: &'a [Tag]) -> HashMap<&'a str, Arc<[SharedString]>> {
-    let mut by_target: HashMap<&'a str, Vec<SharedString>> = HashMap::default();
+fn build_history_tag_names_by_target<'a>(
+    tags: &'a [Tag],
+) -> FxHashMap<&'a str, Arc<[SharedString]>> {
+    let mut by_target: FxHashMap<&'a str, Vec<SharedString>> = FxHashMap::default();
     for tag in tags {
         by_target
             .entry(tag.target.as_ref())
@@ -1784,8 +1786,8 @@ impl HistoryCacheBuildFixture {
         // 9. commit_row_vms — replicate the VM construction from ensure_history_cache
         let mut decorated_count = 0usize;
         let has_stash_tips = !stash_tips.is_empty();
-        let mut author_cache: HashMap<&str, SharedString> =
-            HashMap::with_capacity_and_hasher(64, Default::default());
+        let mut author_cache: FxHashMap<&str, SharedString> =
+            FxHashMap::with_capacity_and_hasher(64, Default::default());
         let mut commit_row_vms: Vec<HistoryCommitRowVm> = Vec::with_capacity(visible_indices.len());
         if has_stash_tips {
             let mut next_stash_tip_ix = 0usize;

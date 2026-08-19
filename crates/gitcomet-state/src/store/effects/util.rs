@@ -1,13 +1,13 @@
 use crate::msg::Msg;
 use gitcomet_core::services::GitRepository;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::Arc;
 
 use super::super::{
     RepoId, executor::TaskExecutor, repo_load_trace, worker_channel::StoreWorkerSender,
 };
 
-pub(super) type RepoMap = HashMap<RepoId, Arc<dyn GitRepository>>;
+pub(super) type RepoMap = FxHashMap<RepoId, Arc<dyn GitRepository>>;
 
 pub(super) fn spawn_with_repo(
     executor: &TaskExecutor,

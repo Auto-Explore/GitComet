@@ -95,7 +95,14 @@ fn submodule_range_label(kind: SubmoduleDiffRangeKind) -> &'static str {
 }
 
 fn inline_submodule_entries(summary: &SubmoduleDiffSummary) -> Vec<InlineSubmoduleDiffEntry> {
-    let mut entries = Vec::new();
+    let capacity = summary.ranges.iter().fold(
+        summary
+            .live_staged
+            .len()
+            .saturating_add(summary.live_unstaged.len()),
+        |len, range| len.saturating_add(range.changes.len()),
+    );
+    let mut entries = Vec::with_capacity(capacity);
     for range in &summary.ranges {
         let Some((from_commit_id, to_commit_id)) = range.from.clone().zip(range.to.clone()) else {
             continue;

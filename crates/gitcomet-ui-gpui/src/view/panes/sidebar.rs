@@ -9,7 +9,7 @@ use gitcomet_core::domain::{FileEntry, FileEntryKind, LogScope};
 use gitcomet_state::model::{Loadable, SidebarDataRequest, SidebarMode};
 use gitcomet_state::msg::Msg;
 use palette::IntoColor;
-use rustc_hash::FxHasher;
+use rustc_hash::{FxHashSet, FxHasher};
 use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
@@ -2138,10 +2138,8 @@ impl SidebarPaneView {
         let has_search = !matchers.is_empty();
 
         let mut tree_rows: Vec<FileBrowserVisibleRow> = if has_search {
-            let mut matching_entry_indices: std::collections::HashSet<usize> =
-                std::collections::HashSet::new();
-            let mut ancestor_paths: std::collections::HashSet<Arc<PathBuf>> =
-                std::collections::HashSet::new();
+            let mut matching_entry_indices = FxHashSet::default();
+            let mut ancestor_paths = FxHashSet::default();
 
             for (i, entry) in entries.iter().enumerate() {
                 let path_str = entry.path.to_string_lossy();
@@ -2224,13 +2222,13 @@ impl SidebarPaneView {
         rows
     }
 
-    fn file_browser_visible_mask(&self, entries: &[FileEntry]) -> std::collections::HashSet<usize> {
+    fn file_browser_visible_mask(&self, entries: &[FileEntry]) -> FxHashSet<usize> {
         let Some(repo) = self.active_repo() else {
-            return std::collections::HashSet::new();
+            return FxHashSet::default();
         };
         let expanded = &repo.file_browser.expanded_dirs;
 
-        let mut visible = std::collections::HashSet::new();
+        let mut visible = FxHashSet::default();
         let mut skip_until_sibling: Option<(usize, usize)> = None;
 
         for (i, entry) in entries.iter().enumerate() {
@@ -2371,7 +2369,7 @@ impl SidebarPaneView {
 
         // Looked up per row, so a set rather than the ordered vec the pinned
         // section is built from.
-        let unsaved_paths: std::collections::HashSet<PathBuf> =
+        let unsaved_paths: FxHashSet<PathBuf> =
             this.unsaved_file_edit_paths(cx).into_iter().collect();
 
         let unsaved_collapsed = this.unsaved_section_is_collapsed();

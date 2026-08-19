@@ -11,12 +11,12 @@ const STASH_ICON_PATH: &str = crate::view::icons::STASH_ICON_PATH;
 
 pub(in crate::view) fn listed_workspace_paths_by_branch(
     repo: &RepoState,
-) -> HashMap<String, std::path::PathBuf> {
+) -> FxHashMap<String, std::path::PathBuf> {
     let Loadable::Ready(worktrees) = &repo.worktrees else {
-        return HashMap::default();
+        return FxHashMap::default();
     };
 
-    let mut worktree_paths = HashMap::default();
+    let mut worktree_paths = FxHashMap::default();
     for worktree in worktrees.iter() {
         if worktree.path == repo.spec.workdir {
             continue;
@@ -263,12 +263,12 @@ fn filtered_label_element<V: 'static>(
 pub(in crate::view) fn active_workspace_paths_by_branch(
     repo: &RepoState,
     open_repos: &[RepoState],
-) -> HashMap<String, std::path::PathBuf> {
+) -> FxHashMap<String, std::path::PathBuf> {
     let Loadable::Ready(worktrees) = &repo.worktrees else {
-        return HashMap::default();
+        return FxHashMap::default();
     };
 
-    let mut active_workspaces = HashMap::default();
+    let mut active_workspaces = FxHashMap::default();
     for worktree in worktrees.iter() {
         let Some(open_repo) = open_repos
             .iter()

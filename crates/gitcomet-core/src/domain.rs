@@ -10,7 +10,7 @@ use std::{
 };
 
 #[cfg(test)]
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 #[cfg(test)]
 use std::sync::Mutex;
 
@@ -714,7 +714,7 @@ pub trait DiffRowProvider {
 pub(crate) struct PagedDiffLineProvider {
     lines: Arc<[DiffLine]>,
     page_size: usize,
-    pages: Mutex<HashMap<usize, Arc<[DiffLine]>>>,
+    pages: Mutex<FxHashMap<usize, Arc<[DiffLine]>>>,
 }
 
 #[cfg(test)]
@@ -723,7 +723,7 @@ impl PagedDiffLineProvider {
         Self {
             lines,
             page_size: page_size.max(1),
-            pages: Mutex::new(HashMap::default()),
+            pages: Mutex::new(FxHashMap::default()),
         }
     }
 

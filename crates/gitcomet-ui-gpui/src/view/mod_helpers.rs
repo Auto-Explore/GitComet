@@ -1,7 +1,7 @@
 use super::*;
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::InteractiveRebaseAction;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 
 type AlacrittyTermLock = super::terminal_alacritty::AlacrittyTermLock;
 
@@ -953,10 +953,10 @@ pub(super) fn reconcile_status_multi_selection(
     selection: &mut StatusMultiSelection,
     status: &gitcomet_core::domain::RepoStatus,
 ) {
-    let mut untracked_paths: HashSet<&std::path::Path> =
-        HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
-    let mut unstaged_paths: HashSet<&std::path::Path> =
-        HashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
+    let mut untracked_paths: FxHashSet<&std::path::Path> =
+        FxHashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
+    let mut unstaged_paths: FxHashSet<&std::path::Path> =
+        FxHashSet::with_capacity_and_hasher(status.unstaged.len(), Default::default());
     for entry in &status.unstaged {
         unstaged_paths.insert(entry.path.as_path());
         if entry.kind == FileStatusKind::Untracked {
@@ -988,8 +988,8 @@ pub(super) fn reconcile_status_multi_selection(
         selection.unstaged_anchor_status_rev = None;
     }
 
-    let mut staged_paths: HashSet<&std::path::Path> =
-        HashSet::with_capacity_and_hasher(status.staged.len(), Default::default());
+    let mut staged_paths: FxHashSet<&std::path::Path> =
+        FxHashSet::with_capacity_and_hasher(status.staged.len(), Default::default());
     for entry in &status.staged {
         staged_paths.insert(entry.path.as_path());
     }
@@ -1013,10 +1013,10 @@ pub(super) fn reconcile_status_multi_selection_with_repo(
     repo: &RepoState,
 ) {
     if let Some(worktree) = repo.worktree_status_entries() {
-        let mut untracked_paths: HashSet<&std::path::Path> =
-            HashSet::with_capacity_and_hasher(worktree.len(), Default::default());
-        let mut unstaged_paths: HashSet<&std::path::Path> =
-            HashSet::with_capacity_and_hasher(worktree.len(), Default::default());
+        let mut untracked_paths: FxHashSet<&std::path::Path> =
+            FxHashSet::with_capacity_and_hasher(worktree.len(), Default::default());
+        let mut unstaged_paths: FxHashSet<&std::path::Path> =
+            FxHashSet::with_capacity_and_hasher(worktree.len(), Default::default());
         for entry in worktree {
             unstaged_paths.insert(entry.path.as_path());
             if entry.kind == FileStatusKind::Untracked {
@@ -1050,8 +1050,8 @@ pub(super) fn reconcile_status_multi_selection_with_repo(
     }
 
     if let Some(staged) = repo.staged_status_entries() {
-        let mut staged_paths: HashSet<&std::path::Path> =
-            HashSet::with_capacity_and_hasher(staged.len(), Default::default());
+        let mut staged_paths: FxHashSet<&std::path::Path> =
+            FxHashSet::with_capacity_and_hasher(staged.len(), Default::default());
         for entry in staged {
             staged_paths.insert(entry.path.as_path());
         }
@@ -1452,7 +1452,7 @@ pub(super) struct ResolvedOutlineData {
     /// Per-line conflict marker metadata for gutter markers.
     pub(super) markers: Vec<Option<ResolvedOutputConflictMarker>>,
     /// Source line keys currently represented in resolved output (for dedupe/plus-icon).
-    pub(super) sources_index: HashSet<conflict_resolver::SourceLineKey>,
+    pub(super) sources_index: FxHashSet<conflict_resolver::SourceLineKey>,
 }
 
 /// Mode-specific state for streamed (giant-file) conflict resolution.
@@ -1547,16 +1547,14 @@ pub(super) struct ConflictResolverUiState {
     /// section 30 collapsed context mode: fold unchanged runs in the source columns.
     pub(super) collapse_context: bool,
     /// Per-fold reveal state for collapsed context mode, keyed by fold id.
-    pub(super) context_fold_reveals:
-        std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
+    pub(super) context_fold_reveals: FxHashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// section 30 collapsed context mode for the resolved output pane: fold
     /// projection in output line space. `None` ⇒ pass-through (one row per
     /// line). Rebuilt lazily after its inputs change.
     pub(super) resolved_output_visible: Option<conflict_resolver::ThreeWayVisibleProjection>,
     pub(super) resolved_output_visible_dirty: bool,
     /// Per-fold reveal state for resolved-output folds (output-line fold ids).
-    pub(super) output_context_fold_reveals:
-        std::collections::HashMap<usize, conflict_resolver::ConflictFoldReveal>,
+    pub(super) output_context_fold_reveals: FxHashMap<usize, conflict_resolver::ConflictFoldReveal>,
     /// Mapping from visible block index to `ConflictSession` region index.
     pub(super) conflict_region_indices: Vec<usize>,
     /// Mapping from visible marker block index to its semantic merge-plan
@@ -1617,7 +1615,7 @@ pub(super) struct ConflictResolverUiState {
     pub(super) conflict_choices: Vec<conflict_resolver::ConflictChoice>,
     /// Ignore-whitespace visual row kinds by two-way split source row.
     pub(super) two_way_split_visual_kind_cache:
-        HashMap<usize, gitcomet_core::file_diff::FileDiffRowKind>,
+        FxHashMap<usize, gitcomet_core::file_diff::FileDiffRowKind>,
     /// Visible-row indices used to measure horizontal width for the two-way split inputs.
     pub(super) two_way_horizontal_measure_rows: [usize; 2],
     pub(super) three_way_word_highlights: ThreeWaySides<conflict_resolver::WordHighlights>,
@@ -1674,7 +1672,7 @@ impl Default for ConflictResolverUiState {
             shared_path: None,
             loaded_file: None,
             collapse_context: false,
-            context_fold_reveals: std::collections::HashMap::default(),
+            context_fold_reveals: FxHashMap::default(),
             conflict_syntax_language: None,
             source_hash: None,
             output_is_protected: false,
@@ -1703,7 +1701,7 @@ impl Default for ConflictResolverUiState {
             three_way_horizontal_measure_rows: [0; 3],
             conflict_has_base: Vec::new(),
             conflict_choices: Vec::new(),
-            two_way_split_visual_kind_cache: HashMap::default(),
+            two_way_split_visual_kind_cache: FxHashMap::default(),
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights: ThreeWaySides::default(),
             two_way_aligned_word_highlights: FxHashMap::default(),
@@ -1723,7 +1721,7 @@ impl Default for ConflictResolverUiState {
             resolved_outline_gutter_rows: Vec::new(),
             resolved_output_visible: None,
             resolved_output_visible_dirty: true,
-            output_context_fold_reveals: std::collections::HashMap::default(),
+            output_context_fold_reveals: FxHashMap::default(),
             markdown_preview: ConflictResolverMarkdownPreviewState::default(),
             image_preview: ConflictResolverImagePreviewState::default(),
             resolver_preview_mode: ConflictResolverPreviewMode::default(),
@@ -5641,7 +5639,7 @@ pub struct GitCometView {
     pub(super) last_window_size: Size<Pixels>,
     pub(super) ui_window_size_last_seen: Size<Pixels>,
     pub(super) ui_settings_persist_seq: u64,
-    pub(super) last_repo_activation_dispatch_at: HashMap<RepoId, Instant>,
+    pub(super) last_repo_activation_dispatch_at: FxHashMap<RepoId, Instant>,
     /// Set when a deactivation was caused by a move/resize grab we requested, so
     /// the matching re-activation does not trigger a repo refresh.
     pub(super) window_grab_activation_suppressed_at: Option<Instant>,
@@ -5651,7 +5649,7 @@ pub struct GitCometView {
     pub(super) show_timezone: bool,
     pub(super) change_tracking_view: ChangeTrackingView,
     pub(super) terminal_preferences: TerminalPreferences,
-    pub(super) terminal_sessions: HashMap<RepoId, RepoTerminalSession>,
+    pub(super) terminal_sessions: FxHashMap<RepoId, RepoTerminalSession>,
     pub(super) terminal_panel_height: Pixels,
     pub(super) terminal_panel_resize: Option<TerminalPanelResizeState>,
     pub(super) next_terminal_session_seq: u64,
@@ -5667,7 +5665,7 @@ pub struct GitCometView {
     /// Which of the bottom panel's contents is currently visible for a repo,
     /// when more than one is open. Absent (and single-panel repos) fall back
     /// to whichever panel is actually open.
-    pub(super) active_bottom_panel: HashMap<RepoId, BottomPanelTab>,
+    pub(super) active_bottom_panel: FxHashMap<RepoId, BottomPanelTab>,
     pub(super) commit_push_after_enabled: bool,
     pub(super) diff_scroll_sync: DiffScrollSync,
     pub(super) diff_content_mode: DiffContentMode,
@@ -5725,7 +5723,7 @@ pub struct GitCometView {
         Option<gitcomet_state::model::SubmoduleTrustPromptState>,
     pub(super) pending_submodule_trust_check:
         Option<gitcomet_state::model::SubmoduleTrustCheckState>,
-    pub(super) pending_worktree_branch_removals: HashMap<(RepoId, std::path::PathBuf), String>,
+    pub(super) pending_worktree_branch_removals: FxHashMap<(RepoId, std::path::PathBuf), String>,
     pub(super) startup_crash_report: Option<StartupCrashReport>,
     #[cfg(target_os = "macos")]
     pub(super) recent_repos_menu_fingerprint: Vec<std::path::PathBuf>,

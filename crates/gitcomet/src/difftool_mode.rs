@@ -1,7 +1,7 @@
 use crate::cli::{DifftoolConfig, DifftoolInputKind, classify_difftool_input, exit_code};
 use crate::git_root::is_git_root_marker;
 use gitcomet_core::process::git_command;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use tempfile::{Builder, TempDir};
@@ -145,7 +145,7 @@ const MAX_STAGING_DEPTH: usize = 128;
 
 struct StagingCopyState {
     allowed_roots: Vec<PathBuf>,
-    active_dirs: HashSet<PathBuf>,
+    active_dirs: FxHashSet<PathBuf>,
     staged_entries: usize,
     staged_files: usize,
     staged_bytes: u64,
@@ -155,7 +155,7 @@ impl StagingCopyState {
     fn new(allowed_roots: Vec<PathBuf>) -> Self {
         Self {
             allowed_roots,
-            active_dirs: HashSet::default(),
+            active_dirs: FxHashSet::default(),
             staged_entries: 0,
             staged_files: 0,
             staged_bytes: 0,

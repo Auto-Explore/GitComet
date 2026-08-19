@@ -11,6 +11,7 @@ use gitcomet_core::auth::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::process::git_command;
 use gitcomet_core::services::CommandOutput;
+use rustc_hash::FxHashMap;
 use std::fs;
 use std::io::Read as _;
 use std::path::{Path, PathBuf};
@@ -116,11 +117,10 @@ impl Drop for ActiveCloneRegistration {
     }
 }
 
-fn active_clones() -> &'static Mutex<std::collections::HashMap<PathBuf, Arc<ActiveCloneHandle>>> {
-    static ACTIVE_CLONES: OnceLock<
-        Mutex<std::collections::HashMap<PathBuf, Arc<ActiveCloneHandle>>>,
-    > = OnceLock::new();
-    ACTIVE_CLONES.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+fn active_clones() -> &'static Mutex<FxHashMap<PathBuf, Arc<ActiveCloneHandle>>> {
+    static ACTIVE_CLONES: OnceLock<Mutex<FxHashMap<PathBuf, Arc<ActiveCloneHandle>>>> =
+        OnceLock::new();
+    ACTIVE_CLONES.get_or_init(|| Mutex::new(FxHashMap::default()))
 }
 
 struct AskPassScript {
@@ -556,9 +556,7 @@ fn take_clone_progress_fragments(pending: &mut Vec<u8>, eof: bool) -> Vec<String
         }
         pending.clear();
     } else if start > 0 {
-        let remainder = pending[start..].to_vec();
-        pending.clear();
-        pending.extend_from_slice(&remainder);
+        pending.drain(..start);
     }
 
     fragments
@@ -909,6 +907,48 @@ mod tests {
                 "Receiving objects:  20% (20/100)",
                 "Resolving deltas:   5% (1/20)",
             ]
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn take_clone_progress_fragments_retains_partial_chunks_between_reads() {
+        let mut pending = b"Receiving objects:  4".to_vec();
+        assert!(take_clone_progress_fragments(&mut pending, false).is_empty());
+        assert_eq!(pending, b"Receiving objects:  4".to_vec());
+
+        pending.extend_from_slice(b"2% (42/100)\rResolving deltas:  1");
+        assert_eq!(
+            take_clone_progress_fragments(&mut pending, false),
+            vec!["Receiving objects:  42% (42/100)"]
+        );
+        assert_eq!(pending, b"Resolving deltas:  1".to_vec());
+
+        pending.extend_from_slice(b"0% (2/20)\n");
+        assert_eq!(
+            take_clone_progress_fragments(&mut pending, false),
+            vec!["Resolving deltas:  10% (2/20)"]
+        );
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn take_clone_progress_fragments_handles_a_crlf_split_across_reads() {
+        // The `\r\n` skip looks one byte past the terminator, which is not there
+        // yet on the first read. Consuming the `\n` again on the second read
+        // would emit an empty fragment and reset the toast to no progress.
+        let mut pending = b"Receiving objects:  42% (42/100)\r".to_vec();
+        assert_eq!(
+            take_clone_progress_fragments(&mut pending, false),
+            vec!["Receiving objects:  42% (42/100)"]
+        );
+        assert!(pending.is_empty(), "the lone carriage return is consumed");
+
+        pending.extend_from_slice(b"\nResolving deltas: 100% (20/20)\r\n");
+        assert_eq!(
+            take_clone_progress_fragments(&mut pending, false),
+            vec!["Resolving deltas: 100% (20/20)"],
+            "the orphaned newline must not produce an empty fragment"
         );
         assert!(pending.is_empty());
     }

@@ -29,7 +29,7 @@ pub(super) struct HistoryBaseCache {
     /// work happens off the render path. Its readers -- the worktree row anchors
     /// and the selected lane's colour -- each need a handful of lookups but are
     /// called during layout, where a scan of a 50k-commit page is a scan too many.
-    pub(super) visible_ix_by_commit: Arc<rustc_hash::FxHashMap<CommitId, usize>>,
+    pub(super) visible_ix_by_commit: Arc<FxHashMap<CommitId, usize>>,
     pub(super) graph_rows: Arc<[history_graph::GraphRow]>,
     pub(super) max_lanes: usize,
     pub(super) row_vms: Vec<HistoryBaseRowVm>,
@@ -240,7 +240,7 @@ impl HistoryListPlan {
     /// Two plans that place the same rows at the same indices hash equal.
     pub(in crate::view) fn fingerprint(&self) -> u64 {
         use std::hash::{Hash, Hasher};
-        let mut hasher = rustc_hash::FxHasher::default();
+        let mut hasher = FxHasher::default();
         self.show_working_tree_summary_row.hash(&mut hasher);
         self.anchors.len().hash(&mut hasher);
         for anchor in self.anchors.iter() {
@@ -460,7 +460,7 @@ mod history_list_plan_tests {
 
 pub(in crate::view) struct HistoryStashAnalysis<'a> {
     pub(in crate::view) stash_tips: Vec<HistoryStashTip<'a>>,
-    pub(in crate::view) stash_helper_ids: HashSet<&'a str>,
+    pub(in crate::view) stash_helper_ids: FxHashSet<&'a str>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -638,7 +638,7 @@ pub(in crate::view) enum HistoryRefListItemKind {
 }
 
 type HistoryRefItems = Arc<[HistoryRefListItem]>;
-type HistoryRefItemsByTarget<'a> = HashMap<&'a str, HistoryRefItems>;
+type HistoryRefItemsByTarget<'a> = FxHashMap<&'a str, HistoryRefItems>;
 
 #[inline]
 pub(in crate::view) fn history_commit_is_probable_stash_tip(commit: &Commit) -> bool {
@@ -655,7 +655,7 @@ pub(in crate::view) fn analyze_history_stashes<'a>(
 ) -> HistoryStashAnalysis<'a> {
     if stashes.is_empty() {
         let mut stash_tips: Vec<HistoryStashTip<'_>> = Vec::new();
-        let mut stash_helper_ids: HashSet<&str> = HashSet::default();
+        let mut stash_helper_ids: FxHashSet<&str> = FxHashSet::default();
         for (commit_ix, commit) in commits.iter().enumerate() {
             if !history_commit_is_probable_stash_tip(commit) {
                 continue;
@@ -679,8 +679,8 @@ pub(in crate::view) fn analyze_history_stashes<'a>(
         };
     }
 
-    let mut listed_stash_messages_by_id: HashMap<&str, Option<&Arc<str>>> =
-        HashMap::with_capacity_and_hasher(stashes.len(), Default::default());
+    let mut listed_stash_messages_by_id: FxHashMap<&str, Option<&Arc<str>>> =
+        FxHashMap::with_capacity_and_hasher(stashes.len(), Default::default());
     for stash in stashes.iter() {
         listed_stash_messages_by_id.insert(
             stash.id.as_ref(),
@@ -689,8 +689,8 @@ pub(in crate::view) fn analyze_history_stashes<'a>(
     }
 
     let mut stash_tips: Vec<HistoryStashTip<'_>> = Vec::with_capacity(stashes.len());
-    let mut stash_helper_ids: HashSet<&str> =
-        HashSet::with_capacity_and_hasher(stashes.len().max(4), Default::default());
+    let mut stash_helper_ids: FxHashSet<&str> =
+        FxHashSet::with_capacity_and_hasher(stashes.len().max(4), Default::default());
     for (commit_ix, commit) in commits.iter().enumerate() {
         let commit_id = commit.id.as_ref();
         let is_probable_stash = history_commit_is_probable_stash_tip(commit);
@@ -718,7 +718,7 @@ pub(in crate::view) fn analyze_history_stashes<'a>(
 
 pub(in crate::view) fn build_history_visible_indices(
     commits: &[Commit],
-    stash_helper_ids: &HashSet<&str>,
+    stash_helper_ids: &FxHashSet<&str>,
 ) -> HistoryVisibleIndices {
     if stash_helper_ids.is_empty() {
         return HistoryVisibleIndices::all(commits.len());
@@ -894,7 +894,7 @@ fn build_history_branch_names_by_target<'a>(
     remote_branches: &'a [RemoteBranch],
     head_branch: Option<&str>,
     head_target: Option<&str>,
-) -> HashMap<&'a str, HistoryBranchNameBucket<'a>> {
+) -> FxHashMap<&'a str, HistoryBranchNameBucket<'a>> {
     build_history_branch_names_by_target_with_dedup(
         branches,
         remote_branches,
@@ -909,7 +909,7 @@ fn build_history_branch_ref_names_by_target<'a>(
     remote_branches: &'a [RemoteBranch],
     head_branch: Option<&str>,
     head_target: Option<&str>,
-) -> HashMap<&'a str, HistoryBranchNameBucket<'a>> {
+) -> FxHashMap<&'a str, HistoryBranchNameBucket<'a>> {
     build_history_branch_names_by_target_with_dedup(
         branches,
         remote_branches,
@@ -925,9 +925,9 @@ fn build_history_branch_names_by_target_with_dedup<'a>(
     head_branch: Option<&str>,
     head_target: Option<&str>,
     dedup: fn(&mut HistoryBranchNameBucket<'a>),
-) -> HashMap<&'a str, HistoryBranchNameBucket<'a>> {
-    let mut branch_names_by_target: HashMap<&str, HistoryBranchNameBucket<'_>> =
-        HashMap::with_capacity_and_hasher(
+) -> FxHashMap<&'a str, HistoryBranchNameBucket<'a>> {
+    let mut branch_names_by_target: FxHashMap<&str, HistoryBranchNameBucket<'_>> =
+        FxHashMap::with_capacity_and_hasher(
             branches.len() + remote_branches.len(),
             Default::default(),
         );
@@ -1039,7 +1039,7 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
     remote_branches: &'a [RemoteBranch],
     head_branch: Option<&str>,
     head_target: Option<&str>,
-) -> (HashMap<&'a str, HistoryTextVm>, Option<HistoryTextVm>) {
+) -> (FxHashMap<&'a str, HistoryTextVm>, Option<HistoryTextVm>) {
     let branch_names_by_target =
         build_history_branch_names_by_target(branches, remote_branches, head_branch, head_target);
 
@@ -1051,8 +1051,8 @@ pub(in crate::view) fn build_history_branch_text_by_target<'a>(
         shared_history_branch_text_with_extra_plain(&names, head_label.as_str())
     });
 
-    let mut branch_text_by_target: HashMap<&str, HistoryTextVm> =
-        HashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
+    let mut branch_text_by_target: FxHashMap<&str, HistoryTextVm> =
+        FxHashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
     for (target, names) in branch_names_by_target {
         if names.is_empty() {
             continue;
@@ -1165,7 +1165,7 @@ pub(in crate::view) fn build_history_branch_ref_items_by_target<'a>(
     });
 
     let mut ref_items_by_target: HistoryRefItemsByTarget<'_> =
-        HashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
+        FxHashMap::with_capacity_and_hasher(branch_names_by_target.len(), Default::default());
     for (target, names) in branch_names_by_target {
         if names.is_empty() {
             continue;
@@ -1178,9 +1178,9 @@ pub(in crate::view) fn build_history_branch_ref_items_by_target<'a>(
 
 pub(in crate::view) fn build_history_tag_names_by_target(
     tags: &[Tag],
-) -> HashMap<&str, Arc<[HistoryTextVm]>> {
-    let mut tag_names_by_target: HashMap<&str, HistoryTagNameBucket<'_>> =
-        HashMap::with_capacity_and_hasher(tags.len(), Default::default());
+) -> FxHashMap<&str, Arc<[HistoryTextVm]>> {
+    let mut tag_names_by_target: FxHashMap<&str, HistoryTagNameBucket<'_>> =
+        FxHashMap::with_capacity_and_hasher(tags.len(), Default::default());
     for tag in tags.iter() {
         tag_names_by_target
             .entry(tag.target.as_ref())
@@ -1188,8 +1188,8 @@ pub(in crate::view) fn build_history_tag_names_by_target(
             .push(tag.name.as_str());
     }
 
-    let mut tag_text_by_target: HashMap<&str, Arc<[HistoryTextVm]>> =
-        HashMap::with_capacity_and_hasher(tag_names_by_target.len(), Default::default());
+    let mut tag_text_by_target: FxHashMap<&str, Arc<[HistoryTextVm]>> =
+        FxHashMap::with_capacity_and_hasher(tag_names_by_target.len(), Default::default());
     for (target, mut names) in tag_names_by_target {
         if names.is_empty() {
             continue;
@@ -1361,7 +1361,7 @@ pub(super) fn related_commit_contains(bits: &[u64], commit_ix: usize) -> bool {
 fn ancestor_bits<'a>(
     commits: &'a [Commit],
     anchor_ix: usize,
-    id_to_index: &mut Option<HashMap<&'a str, usize>>,
+    id_to_index: &mut Option<FxHashMap<&'a str, usize>>,
 ) -> Vec<u64> {
     let mut bits = vec![0u64; commits.len().div_ceil(64)];
     bits[anchor_ix / 64] |= 1u64 << (anchor_ix % 64);
@@ -1401,7 +1401,7 @@ pub(super) fn build_history_branch_containment_bits<'t>(
     commits: &[Commit],
     tips: impl IntoIterator<Item = &'t CommitId>,
 ) -> Vec<Arc<[u64]>> {
-    let mut id_to_index: Option<HashMap<&str, usize>> = None;
+    let mut id_to_index: Option<FxHashMap<&str, usize>> = None;
     tips.into_iter()
         .map(|tip| {
             let tip_id = tip.as_ref();
@@ -1419,13 +1419,13 @@ pub(super) fn build_history_branch_containment_bits<'t>(
 /// Shared by the ancestor pass and the relation builder; a free fn because the
 /// map borrows from `commits` and a closure cannot name that lifetime.
 fn index_of<'a>(
-    map: &mut Option<HashMap<&'a str, usize>>,
+    map: &mut Option<FxHashMap<&'a str, usize>>,
     commits: &'a [Commit],
     id: &str,
 ) -> Option<usize> {
     map.get_or_insert_with(|| {
-        let mut built: HashMap<&'a str, usize> =
-            HashMap::with_capacity_and_hasher(commits.len(), Default::default());
+        let mut built: FxHashMap<&'a str, usize> =
+            FxHashMap::with_capacity_and_hasher(commits.len(), Default::default());
         for (ix, commit) in commits.iter().enumerate() {
             // First occurrence wins, matching the row the history shows.
             built.entry(commit.id.as_ref()).or_insert(ix);
@@ -1469,7 +1469,7 @@ pub(super) struct HistoryWorktreeSummaryCache {
 pub(super) struct HistoryStashIdsCache {
     pub(super) repo_id: RepoId,
     pub(super) stashes_rev: u64,
-    pub(super) ids: Arc<HashSet<CommitId>>,
+    pub(super) ids: Arc<FxHashSet<CommitId>>,
 }
 
 impl GitCometView {

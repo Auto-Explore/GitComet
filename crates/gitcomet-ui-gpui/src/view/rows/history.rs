@@ -1680,7 +1680,7 @@ fn markdown_preview_expanded_slice_range(
 
 /// Pixel sizes read from picture headers, keyed by the source the document
 /// wrote. Empty for anything that could not be measured without decoding.
-pub(in crate::view) type MarkdownPreviewPictureSizes = Arc<HashMap<SharedString, (u32, u32)>>;
+pub(in crate::view) type MarkdownPreviewPictureSizes = Arc<FxHashMap<SharedString, (u32, u32)>>;
 
 /// Shared stand-in for a preview that measured nothing. The diff preview draws
 /// its pictures into fixed-height bands, so it has no use for their real sizes.

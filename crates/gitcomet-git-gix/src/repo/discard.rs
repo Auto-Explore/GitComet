@@ -3,7 +3,7 @@ use crate::util::run_git_simple_with_paths;
 use gitcomet_core::domain::FileStatusKind;
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::Result;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashSet;
 use std::path::Path;
 
 impl GixRepo {
@@ -13,17 +13,17 @@ impl GixRepo {
         }
 
         let status = self.status_impl()?;
-        let mut selected: HashSet<&Path> =
-            HashSet::with_capacity_and_hasher(paths.len(), Default::default());
+        let mut selected: FxHashSet<&Path> =
+            FxHashSet::with_capacity_and_hasher(paths.len(), Default::default());
         selected.extend(paths.iter().copied());
 
         let mut checkout_paths: Vec<&Path> = Vec::with_capacity(paths.len());
         let mut submodule_update_paths: Vec<&Path> = Vec::with_capacity(paths.len());
         let mut clean_paths: Vec<&Path> = Vec::with_capacity(paths.len());
-        let mut unstaged_selected: HashSet<&Path> =
-            HashSet::with_capacity_and_hasher(paths.len(), Default::default());
+        let mut unstaged_selected: FxHashSet<&Path> =
+            FxHashSet::with_capacity_and_hasher(paths.len(), Default::default());
         let mut has_conflicts = false;
-        let submodule_paths: HashSet<std::path::PathBuf> = self
+        let submodule_paths: FxHashSet<std::path::PathBuf> = self
             .list_submodules_impl()?
             .into_iter()
             .map(|submodule| submodule.path)

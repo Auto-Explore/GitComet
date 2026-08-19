@@ -3,7 +3,7 @@
 
 use crate::domain::{Commit, CommitId};
 use crate::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 
 /// A validated squash of `commit_count` commits in a linear first-parent
 /// chain reachable from HEAD.
@@ -49,14 +49,14 @@ pub fn squash_eligibility(
         return None;
     }
 
-    let selected_set: HashSet<&CommitId> = selected.iter().collect();
+    let selected_set: FxHashSet<&CommitId> = selected.iter().collect();
     if selected_set.len() != selected.len() {
         return None;
     }
 
     // Build a full id → commit lookup for the whole page so we can walk
     // through both selected and non-selected commits.
-    let all_by_id: HashMap<&CommitId, &Commit> = commits.iter().map(|c| (&c.id, c)).collect();
+    let all_by_id: FxHashMap<&CommitId, &Commit> = commits.iter().map(|c| (&c.id, c)).collect();
 
     // Every selected commit must be present in the loaded page.
     if selected_set.iter().any(|id| !all_by_id.contains_key(id)) {

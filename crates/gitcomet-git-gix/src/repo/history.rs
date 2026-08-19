@@ -9,6 +9,7 @@ use gitcomet_core::services::{
     CommandOutput, InteractiveRebaseAction, InteractiveRebaseEntry, ResetMode, Result,
     SequencerState,
 };
+use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -1389,18 +1390,22 @@ fn parse_interactive_rebase_log(output: &str) -> Result<Vec<InteractiveRebaseEnt
 }
 
 fn build_todo_content(entries: &[InteractiveRebaseEntry]) -> String {
-    entries
-        .iter()
-        .map(|e| {
-            let safe_summary = e.summary.replace('\n', " ");
-            format!(
-                "{} {} {}\n",
-                e.action.to_todo_str(),
-                e.commit_id,
-                safe_summary
-            )
-        })
-        .collect()
+    let capacity = entries.iter().fold(0usize, |capacity, entry| {
+        capacity
+            .saturating_add(entry.action.to_todo_str().len())
+            .saturating_add(entry.commit_id.len())
+            .saturating_add(entry.summary.len())
+            .saturating_add(3)
+    });
+    let mut todo = String::with_capacity(capacity);
+    for entry in entries {
+        let _ = write!(todo, "{} {} ", entry.action.to_todo_str(), entry.commit_id);
+        for ch in entry.summary.chars() {
+            todo.push(if ch == '\n' { ' ' } else { ch });
+        }
+        todo.push('\n');
+    }
+    todo
 }
 
 #[cfg(unix)]
@@ -1492,7 +1497,8 @@ exit 0
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_interactive_rebase_log, shell_quote_path};
+    use super::{build_todo_content, parse_interactive_rebase_log, shell_quote_path};
+    use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
     use std::path::Path;
 
     const SHA_A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1526,6 +1532,31 @@ mod tests {
         );
         assert_eq!(entries[1].commit_id, SHA_B);
         assert_eq!(entries[1].message, "Subject B");
+    }
+
+    #[test]
+    fn todo_content_flattens_every_summary_line_without_temporary_strings() {
+        let entries = vec![
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Pick,
+                commit_id: SHA_A.to_string(),
+                summary: "Subject\nbody\n\nlast".to_string(),
+                message: String::new(),
+                new_message: None,
+            },
+            InteractiveRebaseEntry {
+                action: InteractiveRebaseAction::Reword,
+                commit_id: SHA_B.to_string(),
+                summary: "Second subject".to_string(),
+                message: String::new(),
+                new_message: Some("Replacement".to_string()),
+            },
+        ];
+
+        assert_eq!(
+            build_todo_content(&entries),
+            format!("pick {SHA_A} Subject body  last\nreword {SHA_B} Second subject\n")
+        );
     }
 
     #[test]

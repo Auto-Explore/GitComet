@@ -227,7 +227,11 @@ pub fn interactive_merge_plan_is_practical(
     };
 
     if let Some(base) = base {
-        let base_lines: HashSet<&str> = base.lines().collect();
+        // `std`'s seeded `HashSet`, not `FxHashSet`: the keys are raw file
+        // lines an untrusted repository controls, and this is the guard that
+        // bounds pathological input -- it must not be what degrades on it.
+        let mut base_lines = HashSet::with_capacity(base_count);
+        base_lines.extend(base.lines());
         let local_shared = local
             .lines()
             .filter(|line| base_lines.contains(line))
@@ -238,7 +242,8 @@ pub fn interactive_merge_plan_is_practical(
             .count();
         shared_enough(local_shared, local_count) && shared_enough(remote_shared, remote_count)
     } else {
-        let local_lines: HashSet<&str> = local.lines().collect();
+        let mut local_lines = HashSet::with_capacity(local_count);
+        local_lines.extend(local.lines());
         let remote_shared = remote
             .lines()
             .filter(|line| local_lines.contains(line))
@@ -1004,7 +1009,9 @@ fn alignment_segments(
     right: MergeSource,
     right_len: usize,
 ) -> Vec<(Range<usize>, Range<usize>)> {
-    let mut segments = Vec::new();
+    // Each valid pin contributes the gap before it and the pinned range itself,
+    // plus one trailing segment for the whole list.
+    let mut segments = Vec::with_capacity(entries.len().saturating_mul(2).saturating_add(1));
     let mut left_cursor = 0usize;
     let mut right_cursor = 0usize;
     for entry in entries {

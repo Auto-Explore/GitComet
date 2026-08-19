@@ -3,13 +3,14 @@ use crate::ui_scale::UiScale;
 use gpui::prelude::*;
 use gpui::{Div, FontWeight, Pixels, Rgba, TextRun, div, px};
 use palette::IntoColor;
+use rustc_hash::FxHasher;
 
 /// Deterministic identity color for an author name. Uses the same hue recipe
 /// as the history graph lanes (hash-driven hue, fixed saturation,
 /// theme-dependent lightness) so avatars read as part of the same palette.
 pub fn author_color(theme: AppTheme, name: &str) -> Rgba {
     use std::hash::{Hash, Hasher};
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     name.hash(&mut hasher);
     let hue = (hasher.finish() % 360) as f32 / 360.0;
     let light = if theme.is_dark { 0.62 } else { 0.34 };

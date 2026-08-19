@@ -42,7 +42,7 @@ fn repo_with_head_dependent_cached_state(repo_id: RepoId) -> RepoState {
 
 #[test]
 fn pull_and_push_mark_in_flight_until_command_finished() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -268,7 +268,7 @@ fn pull_and_push_mark_in_flight_until_command_finished() {
 
 #[test]
 fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -298,7 +298,7 @@ fn pull_and_push_do_not_mark_in_flight_before_repo_is_opened() {
 
 #[test]
 fn pull_error_is_formatted_as_command_and_output() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -341,7 +341,7 @@ fn pull_error_is_formatted_as_command_and_output() {
 
 #[test]
 fn fetch_all_emits_effect_with_repo_prune_setting() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -382,7 +382,7 @@ fn fetch_all_emits_effect_with_repo_prune_setting() {
 
 #[test]
 fn commit_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -412,7 +412,7 @@ fn commit_emits_effect() {
 
 #[test]
 fn checkout_conflict_base_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -442,7 +442,7 @@ fn checkout_conflict_base_emits_effect() {
 
 #[test]
 fn accept_conflict_deletion_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -472,7 +472,7 @@ fn accept_conflict_deletion_emits_effect() {
 
 #[test]
 fn reset_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -503,7 +503,7 @@ fn reset_emits_effect() {
 
 #[test]
 fn revert_commit_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -535,7 +535,7 @@ fn revert_commit_emits_effect() {
 
 #[test]
 fn commit_amend_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -565,7 +565,7 @@ fn commit_amend_emits_effect() {
 
 #[test]
 fn worktree_commands_reload_worktrees_on_success() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -627,7 +627,7 @@ fn worktree_commands_reload_worktrees_on_success() {
 
 #[test]
 fn worktree_remove_closes_tab_for_removed_worktree() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -672,7 +672,7 @@ fn worktree_remove_closes_tab_for_removed_worktree() {
 
 #[test]
 fn submodule_commands_reload_submodules_on_success() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -865,7 +865,7 @@ fn selected_submodule_command_reloads_selected_summary() {
             reference: "main".to_string(),
         },
     ] {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(1);
         let (mut state, target) = seeded_state(repo_id, path.as_path());
 
@@ -894,7 +894,7 @@ fn selected_submodule_command_reloads_selected_summary() {
 
 #[test]
 fn merge_ref_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -923,7 +923,7 @@ fn merge_ref_emits_effect() {
 
 #[test]
 fn squash_ref_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -953,7 +953,7 @@ fn squash_ref_emits_effect() {
 
 #[test]
 fn rebase_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -982,7 +982,7 @@ fn rebase_emits_effect() {
 
 #[test]
 fn create_rename_and_delete_branch_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1062,7 +1062,7 @@ fn create_rename_and_delete_branch_emit_effects() {
 
 #[test]
 fn create_and_delete_tag_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1137,7 +1137,7 @@ fn create_and_delete_tag_emit_effects() {
 
 #[test]
 fn apply_pop_and_drop_stash_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1202,7 +1202,7 @@ fn apply_pop_and_drop_stash_emit_effects() {
 
 #[test]
 fn checkout_commit_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1242,7 +1242,7 @@ fn checkout_commit_emits_effect() {
 
 #[test]
 fn discard_worktree_changes_path_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1274,7 +1274,7 @@ fn discard_worktree_changes_path_emits_effect() {
 
 #[test]
 fn repo_operations_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1481,7 +1481,7 @@ fn repo_operations_emit_effects() {
 
 #[test]
 fn pull_push_bump_ops_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1537,7 +1537,7 @@ fn pull_push_bump_ops_rev() {
 
 #[test]
 fn pull_branch_and_extended_push_commands_bump_in_flight_and_ops_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1633,7 +1633,7 @@ fn pull_branch_and_extended_push_commands_bump_in_flight_and_ops_rev() {
 
 #[test]
 fn commit_bumps_ops_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1665,7 +1665,7 @@ fn commit_bumps_ops_rev() {
 
 #[test]
 fn pull_push_do_not_bump_unrelated_revs() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1701,7 +1701,7 @@ fn pull_push_do_not_bump_unrelated_revs() {
 
 #[test]
 fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1764,7 +1764,7 @@ fn commit_finished_clears_commit_state_and_requests_primary_refreshes() {
 
 #[test]
 fn repo_command_finished_stage_hunk_triggers_diff_reload_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1835,7 +1835,7 @@ fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
     // Regression: staging recomputes the diff, and the blame annotation column is
     // derived from the same content. Leaving blame `Ready` would make the view
     // skip a reload (same target, already attempted) and paint stale attribution.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1888,7 +1888,7 @@ fn repo_command_finished_stage_hunk_invalidates_loaded_blame() {
 fn commit_finished_invalidates_loaded_blame() {
     // Regression: committing changes which lines are committed, so a stale blame
     // would mislabel them. Blame must be dropped along with the diff.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1924,7 +1924,7 @@ fn commit_finished_invalidates_loaded_blame() {
 
 #[test]
 fn repo_command_finished_stage_hunk_with_svg_diff_triggers_text_and_image_reload_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -1980,7 +1980,7 @@ fn repo_command_finished_stage_hunk_with_svg_diff_triggers_text_and_image_reload
 
 #[test]
 fn additional_routing_messages_emit_effects_and_update_counters() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2443,7 +2443,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
 
 #[test]
 fn repo_command_finished_error_summaries_cover_additional_labels() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2617,7 +2617,7 @@ fn repo_command_finished_error_summaries_cover_additional_labels() {
 
 #[test]
 fn repo_command_finished_success_summaries_cover_additional_commands() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2736,7 +2736,7 @@ fn repo_command_finished_success_summaries_cover_additional_commands() {
 
 #[test]
 fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2799,7 +2799,7 @@ fn apply_worktree_patch_command_finished_reloads_png_diff_preview() {
 
 #[test]
 fn checkout_branch_and_submodule_messages_emit_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2893,7 +2893,7 @@ fn checkout_branch_and_submodule_messages_emit_effects() {
 
 #[test]
 fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2974,7 +2974,7 @@ fn local_submodule_add_trust_prompt_confirms_into_add_effect() {
 
 #[test]
 fn submodule_trust_check_pending_marks_and_clears_around_the_check() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3041,7 +3041,7 @@ fn submodule_trust_check_pending_marks_and_clears_around_the_check() {
 
 #[test]
 fn submodule_add_progress_starts_when_trust_check_proceeds() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3092,7 +3092,7 @@ fn submodule_add_progress_starts_when_trust_check_proceeds() {
 
 #[test]
 fn submodule_add_progress_clears_on_failed_add_command() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3137,7 +3137,7 @@ fn submodule_add_progress_clears_on_failed_add_command() {
 
 #[test]
 fn local_submodule_update_trust_prompt_cancels_cleanly() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3186,7 +3186,7 @@ fn local_submodule_update_trust_prompt_cancels_cleanly() {
 
 #[test]
 fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3278,7 +3278,7 @@ fn pull_branch_and_push_variants_mark_in_flight_when_repo_is_opened() {
 
 #[test]
 fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3407,7 +3407,7 @@ fn commit_and_amend_finished_cover_success_error_and_unknown_repo_paths() {
 
 #[test]
 fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3481,7 +3481,7 @@ fn commit_finished_push_after_commit_enqueues_safe_push_only_on_success() {
 
 #[test]
 fn safe_push_after_commit_decision_push_enqueues_checked_push() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3537,7 +3537,7 @@ fn safe_push_after_commit_decision_push_enqueues_checked_push() {
 
 #[test]
 fn safe_push_after_commit_decision_push_set_upstream_enqueues_checked_push() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3590,7 +3590,7 @@ fn safe_push_after_commit_decision_push_set_upstream_enqueues_checked_push() {
 
 #[test]
 fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3647,7 +3647,7 @@ fn safe_push_after_commit_published_amend_block_stores_lease_offer() {
 
 #[test]
 fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refresh() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3703,7 +3703,7 @@ fn safe_push_after_commit_published_amend_lease_survives_followup_git_state_refr
 
 #[test]
 fn checkout_branch_clears_stale_force_push_lease_and_recent_messages() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3740,7 +3740,7 @@ fn checkout_branch_clears_stale_force_push_lease_and_recent_messages() {
 
 #[test]
 fn cherry_pick_clears_recent_messages_from_previous_head() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3770,7 +3770,7 @@ fn cherry_pick_clears_recent_messages_from_previous_head() {
 
 #[test]
 fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3802,7 +3802,7 @@ fn interactive_cherry_pick_finished_clears_stale_force_push_lease() {
 
 #[test]
 fn head_changing_repo_action_finish_invalidates_data_loaded_while_in_flight() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3831,7 +3831,7 @@ fn head_changing_repo_action_finish_invalidates_data_loaded_while_in_flight() {
 
 #[test]
 fn stale_recent_commit_messages_loaded_after_head_change_is_ignored() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3945,7 +3945,7 @@ fn stale_recent_commit_messages_loaded_after_head_change_is_ignored() {
 
 #[test]
 fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -4002,7 +4002,7 @@ fn repo_command_finished_reset_clears_diff_state_and_unknown_repo_is_noop() {
 
 #[test]
 fn hunk_staging_is_logged_without_announcing_success() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -4061,7 +4061,7 @@ fn hunk_staging_is_logged_without_announcing_success() {
 
 #[test]
 fn stage_hunk_command_finished_reloads_commit_png_image_preview_only() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -4132,7 +4132,7 @@ fn repo_state_with_tags_loaded(repo_id: RepoId) -> RepoState {
 
 #[test]
 fn create_tag_command_finished_reloads_tags() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -4170,7 +4170,7 @@ fn create_tag_command_finished_reloads_tags() {
 
 #[test]
 fn delete_tag_command_finished_reloads_tags() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -4203,7 +4203,7 @@ fn delete_tag_command_finished_reloads_tags() {
 
 #[test]
 fn prune_local_tags_command_finished_reloads_tags() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -4236,7 +4236,7 @@ fn prune_local_tags_command_finished_reloads_tags() {
 
 #[test]
 fn create_tag_failed_does_not_reload_tags() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -4268,7 +4268,7 @@ fn create_tag_failed_does_not_reload_tags() {
 
 #[test]
 fn create_tag_with_message_propagates_to_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -4302,7 +4302,7 @@ fn create_tag_with_message_propagates_to_effect() {
 #[test]
 fn cherry_pick_setup_loads_full_messages_and_patches_entries() {
     const SHA: &str = "1111111111111111111111111111111111111111";
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -4368,7 +4368,7 @@ fn cherry_pick_setup_loads_full_messages_and_patches_entries() {
 fn cherry_pick_setup_applies_repository_topological_order() {
     const DESCENDANT: &str = "3333333333333333333333333333333333333333";
     const ANCESTOR: &str = "1111111111111111111111111111111111111111";
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -4432,7 +4432,7 @@ fn cherry_pick_setup_applies_repository_topological_order() {
 fn cherry_pick_setup_never_enables_rewording_after_partial_or_stale_message_load() {
     const OLD_SHA: &str = "1111111111111111111111111111111111111111";
     const NEW_SHA: &str = "2222222222222222222222222222222222222222";
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(

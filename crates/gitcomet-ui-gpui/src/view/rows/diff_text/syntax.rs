@@ -1,6 +1,6 @@
 use super::super::*;
 use gpui::SharedString;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet, FxHasher};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::VecDeque;
@@ -116,7 +116,7 @@ thread_local! {
     static TS_INPUT: RefCell<String> = const { RefCell::new(String::new()) };
     static TS_DOCUMENT_CACHE: RefCell<TreesitterDocumentCache> = RefCell::new(TreesitterDocumentCache::new());
     static TS_LINE_TOKEN_CACHE: RefCell<SingleLineSyntaxTokenCache> = RefCell::new(SingleLineSyntaxTokenCache::new());
-    static TS_INJECTION_CACHE: RefCell<HashMap<TreesitterInjectionMatch, CachedInjectionTokens>> = RefCell::new(HashMap::default());
+    static TS_INJECTION_CACHE: RefCell<FxHashMap<TreesitterInjectionMatch, CachedInjectionTokens>> = RefCell::new(FxHashMap::default());
     static TS_PENDING_PARSE_REQUESTS: RefCell<Vec<PendingParseRequest>> = const { RefCell::new(Vec::new()) };
     static TS_INJECTION_ACCESS_COUNTER: Cell<u64> = const { Cell::new(0) };
     static TS_INJECTION_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -322,7 +322,7 @@ struct PreparedSyntaxTreeState {
 pub(super) struct PreparedSyntaxDocumentData {
     cache_key: PreparedSyntaxCacheKey,
     line_count: usize,
-    line_token_chunks: HashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+    line_token_chunks: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
     tree_state: Option<PreparedSyntaxTreeState>,
 }
 
@@ -3632,7 +3632,7 @@ mod tests {
     #[test]
     fn cached_document_drop_payload_bytes_match_flattened_chunks() {
         let mut document =
-            TreesitterCachedDocument::from_chunked_line_tokens(128, HashMap::default(), None);
+            TreesitterCachedDocument::from_chunked_line_tokens(128, FxHashMap::default(), None);
         let first_chunk = benchmark_line_tokens_payload(64, 4, 0)
             .into_iter()
             .map(Arc::from)

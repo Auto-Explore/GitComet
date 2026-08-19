@@ -471,7 +471,7 @@ pub struct TextInputPrepaintWindowedFixture {
     wrap_width_key: i32,
     guard_rows: usize,
     max_shape_bytes: usize,
-    shape_cache: HashMap<TextInputShapeCacheKey, u64>,
+    shape_cache: FxHashMap<TextInputShapeCacheKey, u64>,
     /// The pristine text of the line the steady-typing case types into, so the
     /// burst can be rolled back without rebuilding the whole document.
     typing_line_original: Option<(usize, String)>,
@@ -485,7 +485,7 @@ impl TextInputPrepaintWindowedFixture {
             wrap_width_key: wrap_width_px.max(1) as i32,
             guard_rows: 2,
             max_shape_bytes: 4 * 1024,
-            shape_cache: HashMap::default(),
+            shape_cache: FxHashMap::default(),
             typing_line_original: None,
             keystrokes: 0,
         }
