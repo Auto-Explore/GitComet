@@ -537,8 +537,8 @@ read-fonts	0.41.0	MIT OR Apache-2.0
 reborrow	0.5.5	MIT
 redox_syscall	0.5.18	MIT
 redox_users	0.5.2	MIT
-ref-cast	1.0.26	MIT OR Apache-2.0
-ref-cast-impl	1.0.26	MIT OR Apache-2.0
+ref-cast	1.0.27	MIT OR Apache-2.0
+ref-cast-impl	1.0.27	MIT OR Apache-2.0
 regex	1.13.1	MIT OR Apache-2.0
 regex-automata	0.4.18	MIT OR Apache-2.0
 regex-syntax	0.8.11	MIT OR Apache-2.0
@@ -597,7 +597,7 @@ slotmap	1.1.1	Zlib
 smallvec	1.15.2	MIT OR Apache-2.0
 smol	2.0.2	Apache-2.0 OR MIT
 smol_str	0.3.6	MIT OR Apache-2.0
-spin	0.12.2	MIT
+spin	0.12.3	MIT
 spin	0.9.9	MIT
 spirv	0.4.0+sdk-1.4.341.0	Apache-2.0
 stable_deref_trait	1.2.1	MIT OR Apache-2.0
@@ -842,12 +842,12 @@ zeroize	1.9.0	Apache-2.0 OR MIT
 zeroize_derive	1.5.0	Apache-2.0 OR MIT
 zerotrie	0.2.5	Unicode-3.0
 zerovec	0.11.7	Unicode-3.0
-zerovec-derive	0.11.4	Unicode-3.0
+zerovec-derive	0.11.5	Unicode-3.0
 zlib-rs	0.6.7	Zlib
 zmij	1.0.23	MIT
 zune-core	0.5.3	MIT OR Apache-2.0 OR Zlib
 zune-inflate	0.2.54	MIT OR Apache-2.0 OR Zlib
 zune-jpeg	0.5.15	MIT OR Apache-2.0 OR Zlib
-zvariant	5.14.0	MIT
-zvariant_derive	5.14.0	MIT
-zvariant_utils	4.0.0	MIT
+zvariant	5.15.0	MIT
+zvariant_derive	5.15.0	MIT
+zvariant_utils	4.2.0	MIT
