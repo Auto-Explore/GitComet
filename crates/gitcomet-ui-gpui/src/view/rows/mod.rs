@@ -416,11 +416,12 @@ pub(in crate::view) use self::conflict_resolver::{
 pub(in crate::view) use self::diff::{BlameRenderCtx, build_row_blame_paint};
 pub(in crate::view) use self::diff_canvas::blame_gutter_row_canvas;
 pub(in crate::view) use self::history::{
-    MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, markdown_preview_alert_bar_color,
-    markdown_preview_alert_label, markdown_preview_flow_image, markdown_preview_highlighted_text,
-    markdown_preview_image_source, markdown_preview_inline_image, markdown_preview_marker_label,
-    markdown_preview_row_background, markdown_preview_styled_row,
-    worktree_markdown_preview_bar_color,
+    MarkdownPreviewImageSource, MarkdownPreviewPictureSizes, MarkdownPreviewQuery,
+    MarkdownPreviewRevealRequest, markdown_preview_alert_bar_color, markdown_preview_alert_label,
+    markdown_preview_flow_image, markdown_preview_highlighted_text, markdown_preview_image_source,
+    markdown_preview_inline_image, markdown_preview_marker_label, markdown_preview_reveal_offset_y,
+    markdown_preview_row_background, markdown_preview_row_extent,
+    markdown_preview_styled_row_with_query, worktree_markdown_preview_bar_color,
 };
 pub(in crate::view) use self::markdown_document::{
     MarkdownDocumentBlockCache, MarkdownDocumentBlockScrolls, MarkdownDocumentContext,

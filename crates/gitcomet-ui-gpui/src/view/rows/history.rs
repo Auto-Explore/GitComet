@@ -337,6 +337,7 @@ impl MainPaneView {
                 text_region: region,
                 wrap_plan: this.markdown_preview_wrap_plan(MarkdownPreviewList::Old),
                 image_base_dir: image_base_dir.clone(),
+                query: this.markdown_preview_search_query(),
             },
         )
     }
@@ -388,6 +389,7 @@ impl MainPaneView {
                 text_region: DiffTextRegion::Inline,
                 wrap_plan: this.markdown_preview_wrap_plan(MarkdownPreviewList::Inline),
                 image_base_dir: image_base_dir.clone(),
+                query: this.markdown_preview_search_query(),
             },
         )
     }
@@ -439,6 +441,7 @@ impl MainPaneView {
                 text_region: DiffTextRegion::SplitRight,
                 wrap_plan: this.markdown_preview_wrap_plan(MarkdownPreviewList::New),
                 image_base_dir: image_base_dir.clone(),
+                query: this.markdown_preview_search_query(),
             },
         )
     }
@@ -471,6 +474,10 @@ impl MainPaneView {
                 measure.wrap_row_fn(window, self.theme),
             );
             self.markdown_preview_wrap.store(list, measure.key, plan);
+            // A search over this preview holds *visual* row indices, which the
+            // new plan has just renumbered — a resize or a wrap toggle would
+            // otherwise leave Enter jumping to unrelated rows.
+            self.diff_search_recompute_matches();
         }
 
         self.markdown_preview_wrap
@@ -517,6 +524,9 @@ impl MainPaneView {
                     .store(MarkdownPreviewList::Old, measure.key, old_plan);
                 self.markdown_preview_wrap
                     .store(MarkdownPreviewList::New, measure.key, new_plan);
+                // See the single-document path: the visual row space a search
+                // indexed has just been rebuilt.
+                self.diff_search_recompute_matches();
             }
             Some(_) => {}
         }
@@ -743,6 +753,8 @@ pub(super) struct MarkdownPreviewRenderContext<'a> {
     pub(super) wrap_plan: Option<&'a MarkdownPreviewWrapPlan>,
     /// Directory relative image paths resolve against.
     pub(super) image_base_dir: Option<Arc<std::path::Path>>,
+    /// Quick-search state, when the search box is open over this preview.
+    pub(super) query: Option<MarkdownPreviewQuery>,
 }
 
 pub(super) fn render_markdown_preview_document_rows(
@@ -943,7 +955,9 @@ fn markdown_preview_row_element(
     let row_layout = markdown_preview_row_layout(row, ui_scale_percent);
     let typography =
         markdown_preview_row_typography(theme, row, &context.editor_font_family, ui_scale_percent);
-    let full_styled = markdown_preview_row_styled_text(theme, row);
+    let full_styled =
+        markdown_preview_styled_row_with_query(theme, row, row_ix, context.query.as_ref());
+    let full_styled = full_styled.as_ref();
     // Wrapped rows paint one slice of the row's text each; the marker and
     // alert badge belong to the first slice so continuations stay aligned
     // under the text they continue.
@@ -1753,12 +1767,126 @@ fn markdown_preview_remote_image_url(source: &str) -> Option<SharedString> {
         .then(|| SharedString::from(source.to_owned()))
 }
 
-/// Styled text for one row, shared with the flowing single-document renderer.
-pub(in crate::view) fn markdown_preview_styled_row(
+/// The quick-search state a markdown preview renders under.
+///
+/// Carried by both preview renderers — the virtualized lists and the flowing
+/// single document — so a Ctrl+F match is washed in place instead of the view
+/// having to fall back to the markdown source.
+#[derive(Clone)]
+pub(in crate::view) struct MarkdownPreviewQuery {
+    pub(in crate::view) matcher: Arc<DiffSearchMatcher>,
+    /// Visible index of the row the search cursor is on, if it is in this list.
+    pub(in crate::view) current_row: Option<usize>,
+}
+
+impl MarkdownPreviewQuery {
+    fn emphasis(&self, visible_ix: usize) -> DiffSearchMatchEmphasis {
+        if self.current_row == Some(visible_ix) {
+            DiffSearchMatchEmphasis::Current
+        } else {
+            DiffSearchMatchEmphasis::Other
+        }
+    }
+}
+
+/// A pending "bring this row into view" request for the flowing markdown
+/// preview.
+///
+/// The flowing document has no fixed row height and is not a `uniform_list`, so
+/// there is no `scroll_to_item` to hand the work to: the offset can only be
+/// computed once the target row has been laid out. The request is therefore
+/// shared into the renderer, which reports the row's bounds back through
+/// [`Self::take`] during prepaint and applies the scroll then.
+#[derive(Clone, Default)]
+pub(in crate::view) struct MarkdownPreviewRevealRequest(
+    std::rc::Rc<std::cell::Cell<Option<usize>>>,
+);
+
+impl MarkdownPreviewRevealRequest {
+    pub(in crate::view) fn request(&self, row_ix: usize) {
+        self.0.set(Some(row_ix));
+    }
+
+    pub(in crate::view) fn clear(&self) {
+        self.0.set(None);
+    }
+
+    pub(in crate::view) fn pending(&self) -> Option<usize> {
+        self.0.get()
+    }
+
+    /// Claim the request, so the reveal runs once instead of fighting the user
+    /// on every later frame.
+    pub(in crate::view) fn take(&self) -> Option<usize> {
+        self.0.take()
+    }
+}
+
+/// The vertical extent of a laid-out row, from the bounds of its parts.
+///
+/// A row shell holds a marker, an alert badge and the text line; the row is the
+/// band they span together.
+pub(in crate::view) fn markdown_preview_row_extent(
+    children: &[gpui::Bounds<Pixels>],
+) -> Option<(Pixels, Pixels)> {
+    let top = children
+        .iter()
+        .map(|bounds| bounds.origin.y)
+        .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))?;
+    let bottom = children
+        .iter()
+        .map(|bounds| bounds.bottom())
+        .max_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))?;
+    Some((top, (bottom - top).max(px(0.0))))
+}
+
+/// Where a row sits inside a scroll container, and how tall it is.
+///
+/// Split out from the prepaint listener so the arithmetic that decides the new
+/// offset is testable without a window.
+pub(in crate::view) fn markdown_preview_reveal_offset_y(
+    row_top_in_content: Pixels,
+    row_height: Pixels,
+    viewport_height: Pixels,
+    max_offset_y: Pixels,
+    current_y: Pixels,
+) -> Option<Pixels> {
+    if viewport_height <= px(0.0) {
+        return None;
+    }
+    // Centre the row the way a uniform list would, then clamp into the
+    // scrollable range. Offsets are negative as you scroll down.
+    let centered = row_top_in_content + row_height / 2.0 - viewport_height / 2.0;
+    let target = (-centered).clamp(-max_offset_y.max(px(0.0)), px(0.0));
+    (target != current_y).then_some(target)
+}
+
+/// Styled text for one row with the search wash layered on, shared with the
+/// flowing renderer.
+///
+/// The base styling lives in a `OnceLock` on the row itself — it belongs to the
+/// document, which outlives any one query — so the wash is merged on top per
+/// frame rather than stored. Rows with no match return the base untouched, so
+/// the extra work is a substring scan per visible row.
+pub(in crate::view) fn markdown_preview_styled_row_with_query<'a>(
     theme: AppTheme,
-    row: &MarkdownPreviewRow,
-) -> &CachedDiffStyledText {
-    markdown_preview_row_styled_text(theme, row)
+    row: &'a MarkdownPreviewRow,
+    visible_ix: usize,
+    query: Option<&MarkdownPreviewQuery>,
+) -> std::borrow::Cow<'a, CachedDiffStyledText> {
+    let base = markdown_preview_row_styled_text(theme, row);
+    let Some(query) = query else {
+        return std::borrow::Cow::Borrowed(base);
+    };
+    if !query.matcher.is_match(base.text.as_ref()) {
+        return std::borrow::Cow::Borrowed(base);
+    }
+    std::borrow::Cow::Owned(build_cached_diff_query_overlay_styled_text(
+        theme,
+        base,
+        &query.matcher,
+        query.emphasis(visible_ix),
+    ))
 }
 
 /// Text element carrying inline highlights, shared with the flowing renderer.
@@ -4597,5 +4725,152 @@ mod tests {
         assert_eq!(layout.bottom_inset_px, 0.0);
         assert_eq!(markdown_preview_row_background(theme, &row), None);
         assert_eq!(markdown_preview_row_marker(&row), None);
+    }
+}
+
+#[cfg(test)]
+mod markdown_preview_search_tests {
+    use super::{
+        MarkdownPreviewQuery, markdown_preview_reveal_offset_y, markdown_preview_row_extent,
+        markdown_preview_styled_row_with_query,
+    };
+    use crate::view::AppTheme;
+    use crate::view::markdown_preview::{
+        MarkdownChangeHint, MarkdownInlineSpan, MarkdownInlineStyle, MarkdownPreviewRow,
+        MarkdownPreviewRowKind,
+    };
+    use crate::view::panes::main::diff_search::{DiffSearchMatcher, DiffSearchOptions};
+    use gpui::{Bounds, point, px, size};
+    use std::sync::Arc;
+
+    fn row(text: &str, spans: Vec<MarkdownInlineSpan>) -> MarkdownPreviewRow {
+        MarkdownPreviewRow {
+            kind: MarkdownPreviewRowKind::Paragraph,
+            text: text.to_string().into(),
+            inline_spans: Arc::new(spans),
+            code_language: None,
+            code_block_horizontal_scroll_hint: false,
+            source_line_range: 0..1,
+            change_hint: MarkdownChangeHint::None,
+            indent_level: 0,
+            blockquote_level: 0,
+            footnote_label: None,
+            alert_kind: None,
+            starts_alert: false,
+            image: None,
+            inline_images: Arc::from(Vec::new()),
+            styled_text_cache: Default::default(),
+            measured_width_px: Default::default(),
+        }
+    }
+
+    fn query(needle: &str, current_row: Option<usize>) -> MarkdownPreviewQuery {
+        MarkdownPreviewQuery {
+            matcher: Arc::new(DiffSearchMatcher::new(needle, DiffSearchOptions::default())),
+            current_row,
+        }
+    }
+
+    #[test]
+    fn reveal_centres_the_row_and_clamps_to_the_scrollable_range() {
+        // Far down a long document: centre it in the viewport.
+        assert_eq!(
+            markdown_preview_reveal_offset_y(px(1000.0), px(20.0), px(400.0), px(2000.0), px(0.0)),
+            Some(px(-810.0))
+        );
+        // A row near the top cannot be centred; the document stops at its top.
+        assert_eq!(
+            markdown_preview_reveal_offset_y(px(10.0), px(20.0), px(400.0), px(2000.0), px(-50.0)),
+            Some(px(0.0))
+        );
+        // Past the end of the scrollable range, clamp to the bottom.
+        assert_eq!(
+            markdown_preview_reveal_offset_y(px(5000.0), px(20.0), px(400.0), px(600.0), px(0.0)),
+            Some(px(-600.0))
+        );
+        // Already there: no scroll, so nothing repaints.
+        assert_eq!(
+            markdown_preview_reveal_offset_y(
+                px(1000.0),
+                px(20.0),
+                px(400.0),
+                px(2000.0),
+                px(-810.0)
+            ),
+            None
+        );
+        // An unmeasured container has no centre to compute.
+        assert_eq!(
+            markdown_preview_reveal_offset_y(px(1000.0), px(20.0), px(0.0), px(2000.0), px(0.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn row_extent_spans_every_part_of_the_row() {
+        let marker = Bounds {
+            origin: point(px(0.0), px(120.0)),
+            size: size(px(10.0), px(16.0)),
+        };
+        let text = Bounds {
+            origin: point(px(12.0), px(118.0)),
+            size: size(px(200.0), px(40.0)),
+        };
+        assert_eq!(
+            markdown_preview_row_extent(&[marker, text]),
+            Some((px(118.0), px(40.0)))
+        );
+        assert_eq!(markdown_preview_row_extent(&[]), None);
+    }
+
+    /// The wash is layered on the rendered text, so a query matches what the
+    /// reader sees — not the markdown that produced it.
+    #[test]
+    fn the_search_wash_covers_rendered_text_and_leaves_unmatched_rows_untouched() {
+        let theme = AppTheme::gitcomet_dark();
+        let bolded = row(
+            "a bold word",
+            vec![MarkdownInlineSpan {
+                byte_range: 2..6,
+                style: MarkdownInlineStyle::Bold,
+                link_url: None,
+            }],
+        );
+
+        let base = markdown_preview_styled_row_with_query(theme, &bolded, 0, None);
+        // `word` sits outside the bold span, so the wash has to add a range of
+        // its own rather than restyle one that was already there.
+        let washed =
+            markdown_preview_styled_row_with_query(theme, &bolded, 0, Some(&query("word", None)));
+        assert!(
+            washed.highlights.len() > base.highlights.len(),
+            "expected the query wash to add a highlight range alongside the bold span"
+        );
+
+        // The `**` that made it bold is not in the rendered text.
+        let unmatched =
+            markdown_preview_styled_row_with_query(theme, &bolded, 0, Some(&query("**", None)));
+        assert_eq!(
+            unmatched.highlights.len(),
+            base.highlights.len(),
+            "markdown syntax the renderer consumed must not be searchable"
+        );
+    }
+
+    /// The current match is washed differently from the rest, so stepping
+    /// through hits is visible.
+    #[test]
+    fn the_current_match_row_is_washed_differently_from_the_others() {
+        let theme = AppTheme::gitcomet_dark();
+        let plain = row("find me here", Vec::new());
+
+        let current =
+            markdown_preview_styled_row_with_query(theme, &plain, 3, Some(&query("me", Some(3))));
+        let other =
+            markdown_preview_styled_row_with_query(theme, &plain, 3, Some(&query("me", Some(9))));
+        assert_ne!(
+            current.highlights, other.highlights,
+            "the row the search cursor sits on should not look like every other hit"
+        );
     }
 }

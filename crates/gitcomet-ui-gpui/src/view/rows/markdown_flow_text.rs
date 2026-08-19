@@ -331,6 +331,7 @@ impl gpui::Element for MarkdownFlowText {
                     text_start_offset: visual_range.start,
                     text_len,
                     offset_map: None,
+                    painted_text: self.text.clone(),
                     streamed_ascii_monospace_cell_width: None,
                     wrapped: Some(DiffTextWrappedHit { layout, untabbed }),
                 },

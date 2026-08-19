@@ -13,6 +13,9 @@ const DIFF_HUNK_HEADER_HEIGHT_PX: f32 = 24.0;
 /// by hand has to agree with what the gutter actually lays out.
 pub(in crate::view) const RESOLVED_OUTPUT_ROW_HEIGHT_PX: f32 = 20.0;
 
+/// Frames a sideways search reveal waits for its row to paint before giving up.
+pub(in crate::view) const DIFF_SEARCH_HORIZONTAL_REVEAL_ATTEMPTS: u8 = 4;
+
 /// The scroll offset a `uniform_list` would land on to reveal `row_ix`, or
 /// `None` when the row is already fully visible and the list would not move.
 ///
@@ -41,6 +44,48 @@ pub(in crate::view) fn centered_reveal_scroll_y(
     }
     let target_top = (row_top + row_height / 2.0) - viewport_height / 2.0;
     Some(-target_top.clamp(px(0.0), max_offset_y.max(px(0.0))))
+}
+
+/// Margin kept between a revealed search match and the edge it was scrolled
+/// past, so the hit does not sit flush against the pane border.
+pub(in crate::view) const SEARCH_REVEAL_MARGIN_PX: f32 = 24.0;
+
+/// The horizontal scroll offset that brings `[match_left, match_right]` into
+/// view, or `None` when it already is and the pane should not move.
+///
+/// Unlike the vertical reveal this scrolls the *least* it can rather than
+/// centring: a long line jumping sideways on every match is disorienting, and
+/// the surrounding text is what makes a hit readable. A match too wide for the
+/// viewport is anchored by its start, which is where reading resumes.
+///
+/// `match_left`/`match_right` are in content space; offsets run negative as the
+/// view scrolls right, matching `ScrollHandle`.
+pub(in crate::view) fn reveal_scroll_x(
+    match_left: Pixels,
+    match_right: Pixels,
+    viewport_width: Pixels,
+    max_offset_x: Pixels,
+    current_x: Pixels,
+) -> Option<Pixels> {
+    if viewport_width <= px(0.0) {
+        return None;
+    }
+    let margin = px(SEARCH_REVEAL_MARGIN_PX).min(viewport_width / 4.0);
+    let view_left = -current_x;
+    let view_right = view_left + viewport_width;
+
+    let target_left = if match_left < view_left + margin {
+        match_left - margin
+    } else if match_right > view_right - margin {
+        // Anchor the start when the match cannot fit, so reading begins at the
+        // hit rather than at its tail.
+        (match_right + margin - viewport_width).min(match_left - margin)
+    } else {
+        return None;
+    };
+
+    let target = -target_left.clamp(px(0.0), max_offset_x.max(px(0.0)));
+    (target != current_x).then_some(target)
 }
 
 #[inline]
@@ -3079,6 +3124,20 @@ pub(crate) struct MainPaneView {
     pub(super) diff_text_last_mouse_pos: Point<Pixels>,
     pub(in crate::view) diff_suppress_clicks_remaining: u8,
     pub(in crate::view) diff_text_hitboxes: HashMap<(usize, DiffTextRegion), DiffTextHitbox>,
+    /// A search match whose row still has to be brought into view sideways, and
+    /// how many more frames to keep trying for.
+    ///
+    /// The vertical jump is deferred to the list's own prepaint and the row is
+    /// only measurable once it paints at its new position, which is not always
+    /// the very next frame — the frame that applies the scroll can still be
+    /// painting the rows it was showing before. The budget is what stops a row
+    /// that never paints from leaving the request live for good.
+    pub(in crate::view) diff_search_horizontal_reveal: Option<(usize, u8)>,
+    /// Where the merge tool's column rows painted their text this frame, for the
+    /// sideways half of a search reveal. Rebuilt every frame like
+    /// [`Self::diff_text_hitboxes`].
+    pub(in crate::view) conflict_text_hitboxes:
+        HashMap<(usize, ThreeWayColumn), crate::view::mod_helpers::ConflictTextHitbox>,
     pub(in crate::view) diff_text_layout_cache_epoch: u64,
     pub(in crate::view) diff_text_layout_cache: HashMap<u64, DiffTextLayoutCacheEntry>,
     pub(in crate::view) diff_search_active: bool,
@@ -3140,6 +3199,10 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_markdown_preview_seq: u64,
     pub(in crate::view) file_markdown_preview_inflight: Option<u64>,
     pub(in crate::view) markdown_preview_wrap: MarkdownPreviewWrapCache,
+    /// Row the quick-search cursor wants revealed in the flowing markdown
+    /// preview, shared with the renderer that measures it. See
+    /// [`rows::MarkdownPreviewRevealRequest`].
+    pub(in crate::view) markdown_preview_reveal: rows::MarkdownPreviewRevealRequest,
 
     pub(in crate::view) file_image_diff_cache_repo_id: Option<RepoId>,
     pub(in crate::view) file_image_diff_cache_rev: u64,
@@ -3265,6 +3328,13 @@ pub(crate) struct MainPaneView {
     /// which would drag the caret off what the user is typing.
     pub(in crate::view) file_editor_search_reveal_rev: u64,
     pub(in crate::view) file_editor_search_reveal_applied_rev: u64,
+    /// Set once a search reveal has moved the caret, cleared once the editor
+    /// has been scrolled sideways to it.
+    ///
+    /// The caret's x can only be read from the layout of a frame that already
+    /// painted it, so the horizontal half of the reveal lands one frame after
+    /// the selection does.
+    pub(in crate::view) file_editor_search_reveal_x_pending: bool,
     /// Bumped on every theme change: the syntax palette is baked into the
     /// snapshot the provider closes over, so a new theme needs a new binding key.
     pub(in crate::view) file_editor_provider_theme_epoch: u64,
@@ -3291,6 +3361,15 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) conflict_diff_query_cache_query: SharedString,
     pub(in crate::view) conflict_diff_query_cache_options: super::diff_search::DiffSearchOptions,
     pub(in crate::view) conflict_three_way_segments_cache:
+        HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
+    /// Quick-search overlay layered on top of `conflict_three_way_segments_cache`.
+    ///
+    /// Separate so a query change throws away only the wash and leaves the
+    /// syntax/word-highlight work standing, the way the two-way columns split
+    /// `conflict_diff_segments_cache_split` from its query twin. Holds only
+    /// non-current matches — the current one moves with the search cursor and
+    /// is built per frame.
+    pub(in crate::view) conflict_three_way_query_segments_cache:
         HashMap<(usize, ThreeWayColumn), CachedDiffStyledText>,
     /// Prepared full-document syntax trees for each merge-input side (base, ours, theirs).
     /// When present, three-way rendering uses document-based syntax instead of per-line heuristics.
@@ -3556,5 +3635,73 @@ mod tests {
         assert_eq!(regions[0].selected_line_range, 0..0);
         assert_eq!(regions[0].alternate_line_range, 0..1);
         assert!(regions[0].has_non_emitting_rows);
+    }
+}
+
+#[cfg(test)]
+mod search_reveal_x_tests {
+    use super::{SEARCH_REVEAL_MARGIN_PX, reveal_scroll_x};
+    use gpui::px;
+
+    fn viewport() -> gpui::Pixels {
+        px(800.0)
+    }
+
+    fn max_offset() -> gpui::Pixels {
+        px(4000.0)
+    }
+
+    #[test]
+    fn a_match_already_on_screen_does_not_move_the_view() {
+        assert_eq!(
+            reveal_scroll_x(px(200.0), px(260.0), viewport(), max_offset(), px(0.0)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_match_off_the_right_edge_scrolls_just_far_enough_to_show_it() {
+        // Right edge at 800; the match ends at 900, so the view slides by the
+        // overshoot plus the margin and no further.
+        let target = reveal_scroll_x(px(840.0), px(900.0), viewport(), max_offset(), px(0.0))
+            .expect("expected the view to scroll right");
+        assert_eq!(target, px(-(900.0 + SEARCH_REVEAL_MARGIN_PX - 800.0)));
+    }
+
+    #[test]
+    fn a_match_off_the_left_edge_scrolls_back_to_it() {
+        // Scrolled 1000 right, with the match at 300 behind the left edge.
+        let target = reveal_scroll_x(px(300.0), px(360.0), viewport(), max_offset(), px(-1000.0))
+            .expect("expected the view to scroll left");
+        assert_eq!(target, px(-(300.0 - SEARCH_REVEAL_MARGIN_PX)));
+    }
+
+    #[test]
+    fn a_match_wider_than_the_viewport_is_anchored_by_its_start() {
+        let target = reveal_scroll_x(px(1000.0), px(3000.0), viewport(), max_offset(), px(0.0))
+            .expect("expected the view to scroll right");
+        assert_eq!(target, px(-(1000.0 - SEARCH_REVEAL_MARGIN_PX)));
+    }
+
+    #[test]
+    fn the_target_is_clamped_into_the_scrollable_range() {
+        // Never past the end of the content...
+        assert_eq!(
+            reveal_scroll_x(px(9000.0), px(9060.0), viewport(), px(500.0), px(0.0)),
+            Some(px(-500.0))
+        );
+        // ...and never before its start.
+        assert_eq!(
+            reveal_scroll_x(px(0.0), px(10.0), viewport(), max_offset(), px(-40.0)),
+            Some(px(0.0))
+        );
+    }
+
+    #[test]
+    fn an_unmeasured_viewport_has_no_reveal_to_compute() {
+        assert_eq!(
+            reveal_scroll_x(px(1000.0), px(1060.0), px(0.0), max_offset(), px(0.0)),
+            None
+        );
     }
 }

@@ -1386,7 +1386,7 @@ impl MainPaneView {
         self.diff_search_active && !self.diff_search_query.as_ref().is_empty()
     }
 
-    fn diff_search_current_matcher(&mut self) -> DiffSearchMatcher {
+    pub(super) fn diff_search_current_matcher(&mut self) -> DiffSearchMatcher {
         let matcher = DiffSearchMatcher::new(
             self.diff_search_query.as_ref(),
             self.diff_search_options_or_default(),
@@ -1600,6 +1600,17 @@ impl MainPaneView {
             return;
         }
 
+        // Ahead of the preview and conflict arms: a rendered markdown preview
+        // is also a file preview / a conflict target, and those arms would scan
+        // the markdown *source* under it rather than what is on screen.
+        if self.rendered_markdown_preview_owns_view() {
+            match self.markdown_search_surface() {
+                Some(surface) => self.markdown_preview_search_scan(surface, matcher),
+                None => self.diff_search_matches.clear(),
+            }
+            return;
+        }
+
         // Wrapped diffs need source-row scanning so literals can cross soft-wrap boundaries.
         if !self.diff_word_wrap
             && matcher.can_use_ascii_case_insensitive_fast_path()
@@ -1637,6 +1648,71 @@ impl MainPaneView {
                 .map(|range| snapshot.row_for_offset(range.start)),
         );
         self.file_editor_search_matches = found;
+    }
+
+    /// Scroll the merge tool's rendered columns to a match.
+    ///
+    /// Unlike the text columns, which share one aligned row space, the three
+    /// rendered documents are parsed independently from three different
+    /// sources: row 300 of Base is not row 300 of Theirs. Scrolling all three to
+    /// the same index would drag two of them to unrelated prose, so only the
+    /// columns that actually hold the match at that row move.
+    fn conflict_markdown_preview_reveal(&mut self, visible_ix: usize) {
+        let matcher = self.diff_search_current_matcher();
+        if matcher.is_empty() || matcher.regex_error().is_some() {
+            return;
+        }
+        for column in [
+            ThreeWayColumn::Base,
+            ThreeWayColumn::Ours,
+            ThreeWayColumn::Theirs,
+        ] {
+            let matches = match self.conflict_resolver.markdown_preview.document(column) {
+                Loadable::Ready(document) => document
+                    .rows
+                    .get(visible_ix)
+                    .is_some_and(|row| matcher.is_match(row.text.as_ref())),
+                _ => false,
+            };
+            if !matches {
+                continue;
+            }
+            match column {
+                ThreeWayColumn::Base => &self.conflict_resolver_diff_scroll,
+                ThreeWayColumn::Ours => &self.conflict_preview_ours_scroll,
+                ThreeWayColumn::Theirs => &self.conflict_preview_theirs_scroll,
+            }
+            .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+        }
+    }
+
+    /// Collect matches in a rendered markdown preview.
+    ///
+    /// Scans the text the preview *shows*, not the markdown behind it: Ctrl+F
+    /// for `bold` finds a bolded word and does not match the `**` that made it
+    /// bold. Wrapped lists report the first visual row of the matching source
+    /// row, which is the row the reveal scrolls to.
+    fn markdown_preview_search_scan(
+        &mut self,
+        surface: MarkdownSearchSurface,
+        matcher: &DiffSearchMatcher,
+    ) {
+        // Collected before assigning: the documents are borrowed out of `self`.
+        let mut matches = Vec::new();
+        for (list, document) in self.markdown_search_documents(surface) {
+            let plan = list.and_then(|list| self.markdown_preview_wrap_plan(list));
+            matches.extend(
+                document
+                    .rows
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, row)| matcher.is_match(row.text.as_ref()))
+                    .map(|(row_ix, _)| plan.map_or(row_ix, |plan| plan.visual_ix_for_row(row_ix))),
+            );
+        }
+        matches.sort_unstable();
+        matches.dedup();
+        self.diff_search_matches = matches;
     }
 
     pub(in crate::view) fn file_editor_search_current_range(&self) -> Option<Range<usize>> {
@@ -2204,6 +2280,12 @@ impl MainPaneView {
         if self.is_file_editor_active() {
             return false;
         }
+        // A rendered markdown preview holds indices into its own rendered rows;
+        // every refiner below tests the *source* text at that index instead, so
+        // narrowing would quietly drop the wrong rows.
+        if self.rendered_markdown_preview_owns_view() {
+            return false;
+        }
         self.is_file_preview_active() || self.active_conflict_target().is_none()
     }
 
@@ -2442,21 +2524,63 @@ impl MainPaneView {
     fn diff_search_scroll_to_visible_ix(&mut self, visible_ix: usize) {
         self.clear_diff_text_selection();
         self.diff_selection_range = None;
+        // Only the hitbox-backed canvases below arm this; clearing it here
+        // keeps a request from an earlier view alive into one that cannot serve
+        // it.
+        self.diff_search_horizontal_reveal = None;
 
         if self.is_file_editor_active() {
             self.file_editor_search_reveal_current(visible_ix);
             return;
         }
 
+        if self.rendered_markdown_preview_owns_view() {
+            match self.markdown_search_surface() {
+                None => {}
+                // No fixed row height and no `scroll_to_item` to hand this to,
+                // so the renderer measures the row and scrolls during prepaint.
+                Some(MarkdownSearchSurface::Worktree) => {
+                    self.markdown_preview_reveal.request(visible_ix)
+                }
+                Some(MarkdownSearchSurface::DiffInline) => self
+                    .diff_scroll
+                    .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center),
+                // Both sides share one visual row space, so one index moves both.
+                Some(MarkdownSearchSurface::DiffSplit) => {
+                    self.diff_scroll
+                        .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+                    self.diff_split_right_scroll
+                        .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+                }
+                Some(MarkdownSearchSurface::Conflict) => {
+                    self.conflict_markdown_preview_reveal(visible_ix)
+                }
+            }
+            return;
+        }
+
         if self.is_file_preview_active() {
             self.worktree_preview_scroll
                 .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+            // Vertical here; the sideways half needs the row's painted geometry
+            // and runs from the render pass once it has it.
+            self.diff_search_horizontal_reveal = Some((
+                visible_ix,
+                super::helpers::DIFF_SEARCH_HORIZONTAL_REVEAL_ATTEMPTS,
+            ));
             return;
         }
 
         if let Some((_path, conflict_kind)) = self.active_conflict_target() {
             if Self::conflict_resolver_strategy(conflict_kind, false).is_some() {
                 self.conflict_resolver_scroll_all_columns(visible_ix, gpui::ScrollStrategy::Center);
+                // The columns are only half the merge tool. Without this the
+                // resolved output stays wherever it was while the inputs jump.
+                self.conflict_resolver_reveal_search_match_in_output(visible_ix);
+                self.diff_search_horizontal_reveal = Some((
+                    visible_ix,
+                    super::helpers::DIFF_SEARCH_HORIZONTAL_REVEAL_ATTEMPTS,
+                ));
             } else {
                 self.diff_scroll
                     .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
@@ -2466,6 +2590,10 @@ impl MainPaneView {
 
         self.diff_scroll
             .scroll_to_item_strict(visible_ix, gpui::ScrollStrategy::Center);
+        self.diff_search_horizontal_reveal = Some((
+            visible_ix,
+            super::helpers::DIFF_SEARCH_HORIZONTAL_REVEAL_ATTEMPTS,
+        ));
         self.diff_selection_anchor = Some(visible_ix);
         self.diff_selection_range = Some((visible_ix, visible_ix));
     }

@@ -239,6 +239,184 @@ impl MainPaneView {
         ))
     }
 
+    /// Bring the current quick-search match into view sideways.
+    ///
+    /// Runs from the render pass, just before the hitbox map is rebuilt, so it
+    /// reads the geometry the previous frame painted — which is the first frame
+    /// where the row is at its post-vertical-scroll position. Long lines are the
+    /// whole point: without this, jumping to a match 300 columns out scrolls the
+    /// row into view and leaves the hit off the right edge.
+    ///
+    /// Both split columns are considered: in split view the two sides hold
+    /// different text and scroll independently, so each one is revealed only if
+    /// the match is actually in it.
+    pub(in super::super::super) fn apply_pending_diff_search_horizontal_reveal(
+        &mut self,
+        window: &mut gpui::Window,
+    ) {
+        let Some((visible_ix, attempts_left)) = self.diff_search_horizontal_reveal else {
+            return;
+        };
+        if self.diff_text_hitboxes.is_empty() && self.conflict_text_hitboxes.is_empty() {
+            // Nothing painted at all — the pane has not drawn since the jump.
+            // Keep the request without spending an attempt on it, and ask for
+            // the frame it is waiting on: neither `set_offset` nor
+            // `scroll_to_item_strict` schedules one, so on an idle app the
+            // reveal would simply never happen.
+            window.request_animation_frame();
+            return;
+        }
+
+        let matcher = self.diff_search_current_matcher();
+        if matcher.is_empty() || matcher.regex_error().is_some() {
+            self.diff_search_horizontal_reveal = None;
+            return;
+        }
+
+        let revealed = if self.conflict_text_hitboxes.is_empty() {
+            // Every region, not the first that matches: the split columns are
+            // separate scrollables and a hit can be in both.
+            let mut revealed = false;
+            for region in [
+                DiffTextRegion::Inline,
+                DiffTextRegion::SplitLeft,
+                DiffTextRegion::SplitRight,
+            ] {
+                revealed |= self.reveal_diff_search_match_in_region(visible_ix, region, &matcher);
+            }
+            revealed
+        } else {
+            self.reveal_conflict_search_match_horizontally(visible_ix, &matcher)
+        };
+
+        // A frame that painted the row settles the matter either way: it either
+        // moved or it did not need to. Only a frame that has not painted it yet
+        // is worth retrying.
+        self.diff_search_horizontal_reveal = if revealed || attempts_left <= 1 {
+            None
+        } else {
+            // Still waiting on the frame that paints the row where the vertical
+            // scroll put it, so ask for one.
+            window.request_animation_frame();
+            Some((visible_ix, attempts_left - 1))
+        };
+    }
+
+    /// Find the match inside a row's *painted* text.
+    ///
+    /// With "reveal whitespace characters" on, the painted text has every space
+    /// swapped for `·` and every tab for `→`, so a query holding either would
+    /// never be found again and the reveal would silently do nothing. The query
+    /// is put through the same substitution to match it — literal queries only,
+    /// since rewriting a regex would change what it means.
+    pub(super) fn painted_search_range(
+        &self,
+        painted: &str,
+        matcher: &super::diff_search::DiffSearchMatcher,
+    ) -> Option<Range<usize>> {
+        let mut ranges = Vec::new();
+        matcher.find_ranges_into(painted, &mut ranges, 1);
+        if let Some(range) = ranges.first() {
+            return Some(range.clone());
+        }
+
+        let options = self.diff_search_options_or_default();
+        if !self.reveal_whitespace_chars || options.regex {
+            return None;
+        }
+        let revealed = crate::view::rows::whitespace_visible_line_text(matcher.query())
+            .as_ref()
+            .to_string();
+        if revealed == matcher.query() {
+            return None;
+        }
+        let revealed = super::diff_search::DiffSearchMatcher::new(&revealed, options);
+        ranges.clear();
+        revealed.find_ranges_into(painted, &mut ranges, 1);
+        ranges.first().cloned()
+    }
+
+    /// Reveals the match in one region, reporting whether the row was painted
+    /// there at all — which is what tells the caller to stop retrying.
+    fn reveal_diff_search_match_in_region(
+        &mut self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        matcher: &super::diff_search::DiffSearchMatcher,
+    ) -> bool {
+        let Some(hitbox) = self.diff_text_hitboxes.get(&(visible_ix, region)) else {
+            return false;
+        };
+        // A wrapped row has no off-screen right edge to chase; it already broke
+        // the line to fit the pane.
+        if hitbox.wrapped.is_some() {
+            return true;
+        }
+
+        // Searched against the painted text, so the offsets are the display
+        // offsets `x_for_index` measures in and no source→display remapping is
+        // needed on the way back out.
+        let painted_text = hitbox.painted_text.clone();
+        let Some(range) = self.painted_search_range(painted_text.as_ref(), matcher) else {
+            return true;
+        };
+        let Some(hitbox) = self.diff_text_hitboxes.get(&(visible_ix, region)) else {
+            return true;
+        };
+
+        let (local_left, local_right) =
+            if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
+                (
+                    cell_width * range.start as f32,
+                    cell_width * range.end as f32,
+                )
+            } else {
+                let Some(entry) = self.diff_text_layout_cache.get(&hitbox.layout_key) else {
+                    return true;
+                };
+                let layout = &entry.layout;
+                (
+                    layout.x_for_index(range.start.min(layout.len())),
+                    layout.x_for_index(range.end.min(layout.len())),
+                )
+            };
+
+        let row_left = hitbox.bounds.left();
+        let handle = self.scroll_handle_for_diff_text_autoscroll_target(
+            self.diff_text_autoscroll_target_for_region(region),
+        );
+        let viewport = handle.bounds();
+        let offset = handle.offset();
+        // Hitbox bounds are window space with the scroll already applied.
+        let to_content = |x: Pixels| row_left + x - viewport.origin.x - offset.x;
+        let Some(target_x) = super::helpers::reveal_scroll_x(
+            to_content(local_left),
+            to_content(local_right),
+            viewport.size.width,
+            handle.max_offset().x,
+            offset.x,
+        ) else {
+            return true;
+        };
+        handle.set_offset(point(target_x, offset.y));
+        true
+    }
+
+    /// Which scrollable a region's rows live in, without needing a mouse
+    /// position to disambiguate the split columns.
+    fn diff_text_autoscroll_target_for_region(
+        &self,
+        region: DiffTextRegion,
+    ) -> DiffTextAutoscrollTarget {
+        if self.is_file_preview_active() {
+            return DiffTextAutoscrollTarget::WorktreePreview;
+        }
+        match region {
+            DiffTextRegion::SplitRight => DiffTextAutoscrollTarget::DiffSplitRight,
+            _ => DiffTextAutoscrollTarget::DiffLeftOrInline,
+        }
+    }
+
     fn diff_text_pos_for_mouse(&self, position: Point<Pixels>) -> Option<DiffTextPos> {
         if self.diff_text_hitboxes.is_empty() {
             return None;

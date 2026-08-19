@@ -108,6 +108,18 @@ impl ConflictRowStyledText {
     }
 }
 
+/// Which search wash a row wears: the current match stands out from the rest.
+fn row_emphasis(
+    current_match_row: Option<usize>,
+    visible_row_ix: usize,
+) -> DiffSearchMatchEmphasis {
+    if current_match_row == Some(visible_row_ix) {
+        DiffSearchMatchEmphasis::Current
+    } else {
+        DiffSearchMatchEmphasis::Other
+    }
+}
+
 fn conflict_diff_query_matcher(
     query: &str,
     query_options: DiffSearchOptions,
@@ -341,6 +353,7 @@ fn render_conflict_markdown_preview_rows(
             text_region: DiffTextRegion::Inline,
             wrap_plan: None,
             image_base_dir: None,
+            query: this.markdown_preview_search_query(),
         },
     )
 }
@@ -402,6 +415,68 @@ impl MainPaneView {
         Self::render_conflict_three_way_column_rows(this, range, ThreeWayColumn::Theirs, window, cx)
     }
 
+    /// Query-overlay styled text for one three-way column line, and whether it
+    /// is safe to keep.
+    ///
+    /// Layers the search wash over the line's stable syntax/word-highlight
+    /// entry, or over a freshly built base when the line has neither. The flag
+    /// is false while the line is still waiting on a background parse: the
+    /// stable pass deliberately does not cache a pending line, so the base used
+    /// here is the degraded per-line heuristic, and storing that would pin the
+    /// worse colouring for the life of the query — the render prefers the query
+    /// cache over the stable one.
+    ///
+    /// `None` when the line has no text or no match, so callers keep the
+    /// unwashed entry instead of storing a clone of it.
+    fn conflict_three_way_query_styled(
+        theme: AppTheme,
+        this: &Self,
+        column: ThreeWayColumn,
+        side_line: usize,
+        matcher: &DiffSearchMatcher,
+        emphasis: DiffSearchMatchEmphasis,
+        word_hl_kind: Option<crate::theme::DiffColorKind>,
+        syntax_lang: Option<DiffSyntaxLanguage>,
+    ) -> Option<(CachedDiffStyledText, bool)> {
+        let text = this
+            .conflict_resolver
+            .three_way_line_text(column, side_line)?;
+        if text.is_empty() || !matcher.is_match(text) {
+            return None;
+        }
+        let word_ranges = this.conflict_resolver.three_way_word_highlights[column]
+            .get(&side_line)
+            .map(|v| v.as_slice())
+            .unwrap_or(&[]);
+        let base = this
+            .conflict_three_way_segments_cache
+            .get(&(side_line, column));
+        // A line with neither word highlights nor a language is one the stable
+        // pass skips on purpose, so its absence there is final rather than
+        // pending. Anything else without an entry is still being parsed.
+        let cacheable = base.is_some() || (word_ranges.is_empty() && syntax_lang.is_none());
+        let owned_base;
+        let base = match base {
+            Some(base) => base,
+            None => {
+                owned_base = build_conflict_cached_diff_styled_text(
+                    theme,
+                    text,
+                    word_ranges,
+                    "",
+                    syntax_lang,
+                    DiffSyntaxMode::Auto,
+                    word_hl_kind,
+                );
+                &owned_base
+            }
+        };
+        Some((
+            build_cached_diff_query_overlay_styled_text(theme, base, matcher, emphasis),
+            cacheable,
+        ))
+    }
+
     fn render_conflict_three_way_column_rows(
         this: &mut Self,
         range: Range<usize>,
@@ -414,6 +489,13 @@ impl MainPaneView {
         let ui_scale_percent = crate::ui_scale::current(cx).percent;
         let editor_font_family = crate::font_preferences::current_editor_font_family(cx);
         let show_ws = this.reveal_whitespace_chars;
+        let query = this.diff_search_query_or_empty().as_ref().to_string();
+        let query_options = this.diff_search_options_or_default();
+        this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
+        let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        // The current match wears a different wash, and it moves as the search
+        // cursor steps, so its row is rebuilt every frame instead of cached.
+        let current_match_row = this.diff_search_current_match_row();
         // A three-way conflict column marks changed words, so it takes the
         // "modified" diff palette -- the same amber every bundled theme also
         // uses for status.warning, but themeable as the diff token it is.
@@ -508,6 +590,46 @@ impl MainPaneView {
         }
         if needs_chunk_poll {
             this.ensure_prepared_syntax_chunk_poll(cx);
+        }
+
+        // Search wash, layered over whatever the pass above produced. It needs
+        // its own pass because that one skips lines with no syntax and no word
+        // highlights, and those lines still have to show their matches.
+        if let Some(matcher) = query_matcher.as_ref() {
+            // Built into a batch first: the builder reads all of `this`, so the
+            // cache insert cannot happen while that borrow is live.
+            let built: Vec<_> = range
+                .clone()
+                .filter(|vi| current_match_row != Some(*vi))
+                .filter_map(|vi| {
+                    let conflict_resolver::ThreeWayVisibleItem::Line(row) =
+                        this.conflict_resolver.three_way_visible_item(vi)?
+                    else {
+                        return None;
+                    };
+                    let ix = this
+                        .conflict_resolver
+                        .three_way_side_line_for_row(column, row)?;
+                    if this
+                        .conflict_three_way_query_segments_cache
+                        .contains_key(&(ix, column))
+                    {
+                        return None;
+                    }
+                    let (styled, cacheable) = Self::conflict_three_way_query_styled(
+                        theme,
+                        this,
+                        column,
+                        ix,
+                        matcher,
+                        DiffSearchMatchEmphasis::Other,
+                        word_hl_kind,
+                        syntax_lang,
+                    )?;
+                    cacheable.then_some(((ix, column), styled))
+                })
+                .collect();
+            this.conflict_three_way_query_segments_cache.extend(built);
         }
 
         let chosen_bg = with_alpha(
@@ -698,8 +820,47 @@ impl MainPaneView {
                         ),
                     };
 
-                    let styled = side_line
-                        .and_then(|l| this.conflict_three_way_segments_cache.get(&(l, column)));
+                    // Built here rather than read from the cache in two cases:
+                    // the current match, whose wash follows the search cursor,
+                    // and a line still waiting on a background parse, which the
+                    // pass above refuses to cache so the degraded colouring does
+                    // not outlive the parse.
+                    let inline_styled = match (query_matcher.as_ref(), side_line) {
+                        (Some(matcher), Some(l))
+                            if current_match_row == Some(vi)
+                                || !this
+                                    .conflict_three_way_query_segments_cache
+                                    .contains_key(&(l, column)) =>
+                        {
+                            let emphasis = if current_match_row == Some(vi) {
+                                DiffSearchMatchEmphasis::Current
+                            } else {
+                                DiffSearchMatchEmphasis::Other
+                            };
+                            Self::conflict_three_way_query_styled(
+                                theme,
+                                this,
+                                column,
+                                l,
+                                matcher,
+                                emphasis,
+                                word_hl_kind,
+                                syntax_lang,
+                            )
+                            .map(|(styled, _cacheable)| styled)
+                        }
+                        _ => None,
+                    };
+                    let styled = match inline_styled.as_ref() {
+                        Some(styled) => Some(styled),
+                        None => side_line.and_then(|l| {
+                            this.conflict_three_way_query_segments_cache
+                                .get(&(l, column))
+                                .or_else(|| {
+                                    this.conflict_three_way_segments_cache.get(&(l, column))
+                                })
+                        }),
+                    };
 
                     let bg = if per_side_change_rows && !matches!(column, ThreeWayColumn::Base) {
                         if this
@@ -817,6 +978,7 @@ impl MainPaneView {
                             is_active_conflict,
                             row_selection_enabled.then_some(row_selected),
                             alignment_mark,
+                            Some(column),
                             ui_scale_percent,
                         ));
                         continue;
@@ -1011,6 +1173,7 @@ impl MainPaneView {
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
         let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        let current_match_row = this.diff_search_current_match_row();
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
@@ -1018,6 +1181,10 @@ impl MainPaneView {
         let show_ws = this.reveal_whitespace_chars;
         let query_text = this.conflict_diff_query_cache_query.clone();
         let query = query_text.as_ref();
+        let column = match side {
+            ConflictPickSide::Ours => ThreeWayColumn::Ours,
+            ConflictPickSide::Theirs => ThreeWayColumn::Theirs,
+        };
 
         let (div_id_prefix, canvas_id_prefix, chunk_menu_prefix, input_menu_prefix) = match side {
             ConflictPickSide::Ours => (
@@ -1105,6 +1272,7 @@ impl MainPaneView {
                     query,
                     query_options,
                     query_matcher.as_ref(),
+                    row_emphasis(current_match_row, visible_row_ix),
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(document, line_no),
@@ -1171,6 +1339,7 @@ impl MainPaneView {
                         // both unavailable here.
                         None,
                         None,
+                        Some(column),
                         ui_scale_percent,
                     );
                 }
@@ -1295,6 +1464,7 @@ impl MainPaneView {
         let query = query.as_ref().to_string();
         this.sync_conflict_diff_query_overlay_caches(query.as_str(), query_options);
         let query_matcher = conflict_diff_query_matcher(query.as_str(), query_options);
+        let current_match_row = this.diff_search_current_match_row();
         let syntax_lang = this.conflict_row_syntax_language();
         let syntax_mode = DiffSyntaxMode::Auto;
         let theme = this.theme;
@@ -1526,6 +1696,7 @@ impl MainPaneView {
                         query,
                         query_options,
                         query_matcher.as_ref(),
+                        row_emphasis(current_match_row, vi),
                         syntax_lang,
                         syntax_mode,
                         prepared_diff_syntax_line_for_one_based_line(document, line_no_opt),
@@ -1604,6 +1775,7 @@ impl MainPaneView {
                             // The two-way split shows ours/theirs only; a pin
                             // needs all three source columns to place it.
                             None,
+                            Some(column),
                             ui_scale_percent,
                         ));
                         continue;
@@ -2392,6 +2564,7 @@ impl MainPaneView {
         query: &str,
         _query_options: DiffSearchOptions,
         query_matcher: Option<&DiffSearchMatcher>,
+        emphasis: DiffSearchMatchEmphasis,
         syntax_lang: Option<DiffSyntaxLanguage>,
         syntax_mode: DiffSyntaxMode,
         prepared_line: PreparedDiffSyntaxLine,
@@ -2438,7 +2611,13 @@ impl MainPaneView {
             let Some(query_matcher) = query_matcher else {
                 return result;
             };
-            if !result.pending
+            // The current match is the row the search cursor is on, so it wears
+            // a different wash and moves every time the cursor steps. Caching it
+            // would leave that wash behind on the row it just left, so it is
+            // rebuilt each frame and never stored.
+            let is_current = emphasis == DiffSearchMatchEmphasis::Current;
+            if !is_current
+                && !result.pending
                 && let Some(cached) = query_cache.get(&key)
             {
                 let _ = cached;
@@ -2450,12 +2629,7 @@ impl MainPaneView {
                 Some(ConflictRowStyledTextValue::Owned(styled)) => Some(styled),
                 _ => stable_cache.get(&key),
             } {
-                build_cached_diff_query_overlay_styled_text(
-                    theme,
-                    base,
-                    query_matcher,
-                    DiffSearchMatchEmphasis::Other,
-                )
+                build_cached_diff_query_overlay_styled_text(theme, base, query_matcher, emphasis)
             } else {
                 let base = build_conflict_cached_diff_styled_text_with_source_identity(
                     theme,
@@ -2467,14 +2641,9 @@ impl MainPaneView {
                     syntax_mode,
                     None,
                 );
-                build_cached_diff_query_overlay_styled_text(
-                    theme,
-                    &base,
-                    query_matcher,
-                    DiffSearchMatchEmphasis::Other,
-                )
+                build_cached_diff_query_overlay_styled_text(theme, &base, query_matcher, emphasis)
             };
-            if !result.pending {
+            if !is_current && !result.pending {
                 query_cache.insert(key, styled);
                 result.styled = Some(ConflictRowStyledTextValue::QueryCached);
             } else {
@@ -2548,6 +2717,7 @@ impl MainPaneView {
                     query,
                     query_options,
                     query_matcher,
+                    DiffSearchMatchEmphasis::Other,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(ours_document, row.old_line),
@@ -2563,6 +2733,7 @@ impl MainPaneView {
                     query,
                     query_options,
                     query_matcher,
+                    DiffSearchMatchEmphasis::Other,
                     syntax_lang,
                     syntax_mode,
                     prepared_diff_syntax_line_for_one_based_line(theirs_document, row.new_line),

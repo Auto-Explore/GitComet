@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::mod_helpers::MarkdownSearchSurface;
 use crate::view::panes::main::DiffWrapVisualRow;
 
 #[gpui::test]
@@ -245,7 +246,7 @@ fn worktree_markdown_diff_defaults_to_preview_mode_and_shows_preview_toggle(
 }
 
 #[gpui::test]
-fn secondary_f_from_markdown_file_preview_switches_back_to_text_search(
+fn secondary_f_from_markdown_file_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -314,12 +315,39 @@ fn secondary_f_from_markdown_file_preview_switches_back_to_text_search(
         assert_eq!(
             pane.rendered_preview_modes
                 .get(RenderedPreviewKind::Markdown),
-            RenderedPreviewMode::Source,
-            "secondary-f should switch markdown preview back to source mode before search"
+            RenderedPreviewMode::Rendered,
+            "secondary-f should leave the rendered preview on screen and search it in place"
         );
         assert!(
             pane.diff_search_active,
             "secondary-f should activate diff search from markdown preview"
+        );
+        assert_eq!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::Worktree),
+            "the rendered file preview should be the surface search scans"
+        );
+    });
+
+    // The rendered rows are what gets scanned: `Title` is the heading's text
+    // with the `#` marker already consumed by the renderer.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = "preview body".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("preview body", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.diff_search_matches.is_empty(),
+            "expected the rendered markdown preview to report a match"
         );
     });
 
@@ -731,7 +759,7 @@ fn worktree_markdown_preview_list_text_box_stays_shorter_than_row_shell(
 }
 
 #[gpui::test]
-fn secondary_f_from_conflict_markdown_preview_switches_back_to_text_search(
+fn secondary_f_from_conflict_markdown_preview_searches_the_rendered_rows(
     cx: &mut gpui::TestAppContext,
 ) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -764,6 +792,11 @@ fn secondary_f_from_conflict_markdown_preview_switches_back_to_text_search(
                 "# Remote\n",
                 "<<<<<<< ours\n# Local\n=======\n# Remote\n>>>>>>> theirs\n",
             );
+            // The rendered preview only builds its documents once all three
+            // sides are loaded; without this it sits waiting on a load the test
+            // backend never services.
+            repo.conflict_state.conflict_file_load_mode =
+                gitcomet_state::model::ConflictFileLoadMode::Full;
 
             let next_state = app_state_with_repo(repo, repo_id);
 
@@ -801,12 +834,78 @@ fn secondary_f_from_conflict_markdown_preview_switches_back_to_text_search(
         let pane = view.read(app).main_pane.read(app);
         assert_eq!(
             pane.conflict_resolver.resolver_preview_mode,
-            ConflictResolverPreviewMode::Text,
-            "secondary-f should switch conflict markdown preview back to text mode before search"
+            ConflictResolverPreviewMode::Preview,
+            "secondary-f should leave the rendered conflict preview up and search it in place"
         );
         assert!(
             pane.diff_search_active,
             "secondary-f should activate diff search from conflict markdown preview"
+        );
+        assert_eq!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::Conflict),
+            "the rendered conflict preview should be the surface search scans"
+        );
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "conflict markdown preview documents ready",
+        |pane| {
+            !pane
+                .markdown_search_documents(MarkdownSearchSurface::Conflict)
+                .is_empty()
+        },
+        |pane| {
+            format!(
+                "documents={}",
+                pane.markdown_search_documents(MarkdownSearchSurface::Conflict)
+                    .len()
+            )
+        },
+    );
+
+    // `Local` is heading text in the rendered columns; the `#` that made it a
+    // heading is not, so only the rendered form is findable.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = "Local".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("Local", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.diff_search_matches.is_empty(),
+            "expected the rendered conflict columns to report a match"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_query = "# Local".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("# Local", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "the heading marker is not on screen, so it must not be searchable; got {:?}",
+            pane.diff_search_matches
         );
     });
 
@@ -4357,4 +4456,456 @@ fn markdown_preview_text_box_starts_where_the_text_is_painted(cx: &mut gpui::Tes
     });
 
     fixture.cleanup();
+}
+
+/// Ctrl+F in the rendered file preview has to bring the hit into view.
+///
+/// The flowing document is not a `uniform_list`, so there is no
+/// `scroll_to_item` to hand this to: the renderer measures the target row
+/// during prepaint and sets the offset itself.
+#[gpui::test]
+fn markdown_file_preview_search_scrolls_the_rendered_document_to_the_match(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(471);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_preview_search_scroll",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("long_notes.md");
+    let abs_path = workdir.join(&file_rel);
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+
+    // One unique paragraph far below the fold, so a match there can only be on
+    // screen if the preview actually scrolled.
+    let mut lines: Vec<String> = (0..300).map(|ix| format!("paragraph {ix:03}")).collect();
+    lines.push(String::new());
+    lines.push("the needle paragraph".to_string());
+    let source = lines.join("\n");
+    std::fs::write(&abs_path, &source).expect("write markdown fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    let source_len = source.len();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::new(lines.clone()),
+                    source_len,
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::Worktree),
+            "expected the rendered file preview to be the search surface"
+        );
+        assert_eq!(
+            pane.worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y,
+            px(0.0),
+            "expected the preview to start at the top"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_query = "needle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "expected exactly one rendered row to match, got {:?}",
+            pane.diff_search_matches
+        );
+        assert!(
+            pane.worktree_preview_scroll
+                .0
+                .borrow()
+                .base_handle
+                .offset()
+                .y
+                < px(0.0),
+            "expected the rendered preview to scroll down to the match, offset stayed at {:?}",
+            pane.worktree_preview_scroll.0.borrow().base_handle.offset(),
+        );
+        assert_eq!(
+            pane.markdown_preview_reveal.pending(),
+            None,
+            "the reveal should be claimed once so it stops fighting later scrolling"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown preview scroll fixture");
+}
+
+/// The rendered markdown *diff* is the other in-place search surface. It is a
+/// `uniform_list`, so the reveal is the ordinary scroll-to-row — but the match
+/// list has to be built from the rendered rows and mapped through the wrap plan.
+#[gpui::test]
+fn markdown_diff_preview_search_scrolls_the_list_to_the_match(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(472);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_diff_search_scroll",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("docs/long.md");
+
+    let body: String = (0..300)
+        .map(|ix| format!("entry {ix:03}\n\n"))
+        .collect::<Vec<_>>()
+        .join("");
+    let old_text = format!("# Long\n\n{body}");
+    let new_text = format!("{old_text}\nthe needle entry\n");
+    let target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: file_rel.clone(),
+        area: gitcomet_core::domain::DiffArea::Unstaged,
+    };
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create markdown diff search workdir");
+    seed_file_diff_state(
+        cx, &view, repo_id, &workdir, &file_rel, &old_text, &new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "markdown diff search target activation",
+        |pane| {
+            pane.active_repo()
+                .and_then(|repo| repo.diff_state.diff_target.clone())
+                == Some(target.clone())
+        },
+        |pane| {
+            format!(
+                "diff_target={:?}",
+                pane.active_repo()
+                    .and_then(|repo| repo.diff_state.diff_target.clone())
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.file_markdown_preview_cache_repo_id = Some(repo_id);
+                pane.file_markdown_preview_cache_rev = 1;
+                pane.file_markdown_preview_cache_target = Some(target.clone());
+                pane.file_markdown_preview = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    crate::view::markdown_preview::build_markdown_diff_preview(
+                        &old_text, &new_text,
+                    )
+                    .expect("markdown diff preview should parse"),
+                ));
+                pane.file_markdown_preview_inflight = None;
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.markdown_search_surface(),
+            Some(MarkdownSearchSurface::DiffInline),
+            "expected the inline rendered markdown diff to be the search surface"
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                reset_uniform_list_offsets(&[&pane.diff_scroll]);
+                pane.diff_search_active = true;
+                pane.diff_search_query = "needle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane.diff_search_matches.is_empty(),
+            "expected the rendered markdown diff to report a match"
+        );
+        assert!(
+            uniform_list_offset(&pane.diff_scroll).y < px(0.0),
+            "expected the markdown diff list to scroll to the match, offset stayed at {:?}",
+            uniform_list_offset(&pane.diff_scroll),
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown diff search fixture");
+}
+
+/// Rendered rows and source lines are different row spaces, so toggling the
+/// preview under an open search has to rescan — otherwise the match list keeps
+/// indices that address the view the user just left.
+#[gpui::test]
+fn toggling_the_preview_under_an_open_search_rescans_the_new_row_space(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(473);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_preview_toggle_rescan",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("toggle.md");
+    let abs_path = workdir.join(&file_rel);
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+
+    // `##` survives only in the source: the renderer consumes it into a heading.
+    let lines = vec![
+        "## Heading".to_string(),
+        String::new(),
+        "body text".to_string(),
+    ];
+    let source = lines.join("\n");
+    std::fs::write(&abs_path, &source).expect("write markdown fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    let source_len = source.len();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::new(lines.clone()),
+                    source_len,
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_query = "##".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("##", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "the rendered preview shows no `##`, so nothing should match; got {:?}",
+            pane.diff_search_matches
+        );
+    });
+
+    // Switching to Source puts the markdown itself on screen, and the same
+    // query must now find it.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Source);
+                pane.diff_search_recompute_matches();
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.markdown_search_surface(),
+            None,
+            "source mode is not a markdown search surface"
+        );
+        assert!(
+            !pane.diff_search_matches.is_empty(),
+            "expected the source view to find the `##` the rendered view hid"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup markdown toggle fixture");
+}
+
+/// While the rendered preview is still parsing, the pane paints a notice rather
+/// than the document. Nothing is on screen to find, and the markdown source
+/// underneath is not what the reader is looking at, so search reports nothing
+/// instead of quietly scanning a view that is not there.
+#[gpui::test]
+fn a_markdown_preview_without_a_document_reports_no_matches(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(474);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_markdown_preview_no_document",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("pending.md");
+    let abs_path = workdir.join(&file_rel);
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create workdir");
+
+    let lines = vec!["needle line".to_string()];
+    let source = lines.join("\n");
+    std::fs::write(&abs_path, &source).expect("write markdown fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    let source_len = source.len();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    abs_path.clone(),
+                    Arc::new(lines.clone()),
+                    source_len,
+                    cx,
+                );
+                pane.rendered_preview_modes
+                    .set(RenderedPreviewKind::Markdown, RenderedPreviewMode::Rendered);
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    // Stand in for the window before the parse lands, or after it failed.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.worktree_markdown_preview = gitcomet_state::model::Loadable::Loading;
+                pane.diff_search_active = true;
+                pane.diff_search_query = "needle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.rendered_markdown_preview_owns_view(),
+            "the preview toggle is still on Rendered"
+        );
+        assert_eq!(
+            pane.markdown_search_surface(),
+            None,
+            "a preview with no document is not a searchable surface"
+        );
+        assert!(
+            pane.diff_search_matches.is_empty(),
+            "expected no matches while the document is not on screen, got {}",
+            pane.diff_search_matches.len()
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup pending markdown fixture");
 }

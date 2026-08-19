@@ -326,6 +326,10 @@ pub(super) fn single_column_conflict_canvas(
     row_selection: Option<bool>,
     // kdiff3 manual diff help: `Some` enables Alt+click marking on this row.
     alignment_mark: Option<AlignmentMarkContext>,
+    // Which column this row belongs to, so quick search can find where it
+    // painted its text and scroll sideways to a match. `None` for rows outside
+    // the three shared columns.
+    hitbox_column: Option<ThreeWayColumn>,
     ui_scale_percent: u32,
 ) -> AnyElement {
     let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
@@ -428,7 +432,21 @@ pub(super) fn single_column_conflict_canvas(
                     bounds: text_clip_bounds,
                 }),
                 |window| {
-                    paint_conflict_text(text_bounds, fg, y, line_metrics, &prepared, window, cx);
+                    if let Some(layout) =
+                        paint_conflict_text(text_bounds, fg, y, line_metrics, &prepared, window, cx)
+                        && let Some(column) = hitbox_column
+                    {
+                        view.update(cx, |this, _cx| {
+                            this.set_conflict_text_hitbox(
+                                visible_row_ix,
+                                column,
+                                crate::view::mod_helpers::ConflictTextHitbox {
+                                    bounds: text_bounds,
+                                    layout,
+                                },
+                            );
+                        });
+                    }
                 },
             );
 
@@ -951,6 +969,11 @@ fn paint_gutter_text(
     );
 }
 
+/// Paints one conflict row's text and hands back the line it shaped.
+///
+/// The caller keeps that line so quick search can measure where a match sits
+/// along the row — the columns scroll sideways, and a hit past the right edge
+/// has to be scrolled to like any other.
 fn paint_conflict_text(
     bounds: Bounds<Pixels>,
     fg: gpui::Rgba,
@@ -959,9 +982,9 @@ fn paint_conflict_text(
     prepared: &PreparedConflictText,
     window: &mut Window,
     cx: &mut App,
-) {
+) -> Option<gpui::ShapedLine> {
     if prepared.text.is_empty() {
-        return;
+        return None;
     }
 
     let mut base_style = diff_text_style(window);
@@ -980,7 +1003,7 @@ fn paint_conflict_text(
             window,
             cx,
         );
-        return;
+        return Some(layout);
     }
 
     let _ = layout.paint_background(
@@ -999,6 +1022,7 @@ fn paint_conflict_text(
         window,
         cx,
     );
+    Some(layout)
 }
 
 fn ensure_layout_cached(

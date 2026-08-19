@@ -598,11 +598,30 @@ pub(super) struct DiffTextHitbox {
     pub(super) text_start_offset: usize,
     pub(super) text_len: usize,
     pub(super) offset_map: Option<DiffTextOffsetMap>,
+    /// Exactly the text this row painted, tabs expanded and whitespace revealed
+    /// as they were on screen.
+    ///
+    /// Offsets into it are the display offsets `x_for_index` wants, which is why
+    /// the search reveal measures against this rather than re-deriving the row's
+    /// text: the two do not always agree, and a row whose text cannot be found
+    /// again reveals nothing.
+    pub(super) painted_text: SharedString,
     pub(super) streamed_ascii_monospace_cell_width: Option<Pixels>,
     /// Set by rows that painted their text with wrapping. Those rows cover
     /// several visual lines, so a click resolves through the layout they were
     /// painted with rather than through an x offset along one shaped line.
     pub(super) wrapped: Option<DiffTextWrappedHit>,
+}
+
+/// Where one merge-tool column row painted its text, and the line it shaped.
+///
+/// The conflict columns are their own canvases and register nothing in
+/// [`DiffTextHitbox`], so quick search's sideways reveal measures against this
+/// instead. `layout.text` is exactly what was painted, so offsets into it are
+/// the display offsets `x_for_index` wants.
+pub(super) struct ConflictTextHitbox {
+    pub(super) bounds: Bounds<Pixels>,
+    pub(super) layout: gpui::ShapedLine,
 }
 
 /// The wrapped layout a row painted, plus what it takes to read offsets back
@@ -1195,6 +1214,22 @@ pub(super) type LoadableMarkdownDiff =
     Loadable<Arc<crate::view::markdown_preview::MarkdownPreviewDiff>>;
 
 pub(super) type LoadableImagePreview = Loadable<Option<Arc<gpui::Image>>>;
+
+/// The rendered markdown surface quick search is looking at.
+///
+/// Each shape has its own row space and its own way of being scrolled, which
+/// is why search dispatches on this rather than on the preview kind alone.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::view) enum MarkdownSearchSurface {
+    /// Rendered file preview: one flowing document, no fixed row height.
+    Worktree,
+    /// Rendered markdown diff, inline: one virtualized list on `diff_scroll`.
+    DiffInline,
+    /// Rendered markdown diff, split: two lists sharing one visual row space.
+    DiffSplit,
+    /// Merge tool rendered preview: one unwrapped list per input column.
+    Conflict,
+}
 
 /// Which markdown preview list a wrap plan belongs to. Split view wraps its
 /// two columns to different widths, and the inline and worktree lists have
@@ -1889,6 +1924,89 @@ impl ConflictResolverUiState {
                 || (aligned_rows.is_empty() && aligned_rows.start == aligned_row))
                 .then_some(meta.output_line as usize)
         })
+    }
+
+    /// Map a visible input-column row to the resolved-output line it produced.
+    ///
+    /// Quick search walks the *input* columns, so a hit arrives as a visible
+    /// row rather than a nav target and
+    /// [`Self::output_line_for_nav_target_provenance`] cannot be reused. This
+    /// reads the same provenance table, keyed on the row's own side lines: an
+    /// output line belongs to this row when it names one of them as its origin.
+    /// `meta` is ordered by output line, so the first hit is the earliest line
+    /// the row contributed.
+    ///
+    /// Returns `None` when the outline carries no provenance — large outputs
+    /// skip building it (`should_skip_resolved_outline_provenance`), exactly as
+    /// conflict navigation's output reveal already degrades there.
+    pub(super) fn output_line_for_visible_row(&self, visible_ix: usize) -> Option<usize> {
+        // Indexed by `ResolvedLineSource` A/B/C, which names different columns
+        // per view mode — see `output_line_for_nav_target_provenance`.
+        let source_lines: [Option<usize>; 3] = match self.view_mode {
+            ConflictResolverViewMode::ThreeWay => {
+                let aligned_row = self.three_way_aligned_row_for_visible_row(visible_ix)?;
+                [
+                    self.three_way_aligned
+                        .side_line_for_row(ThreeWayColumn::Base.side_index(), aligned_row),
+                    self.three_way_aligned
+                        .side_line_for_row(ThreeWayColumn::Ours.side_index(), aligned_row),
+                    self.three_way_aligned
+                        .side_line_for_row(ThreeWayColumn::Theirs.side_index(), aligned_row),
+                ]
+            }
+            ConflictResolverViewMode::TwoWayDiff => {
+                // Split rows carry 1-based line numbers: `old` is Ours (source
+                // A here), `new` is Theirs (source B). There is no C.
+                //
+                // Deliberately *not* dispatched on `two_way_uses_aligned_rows`
+                // the way `two_way_visible_len` and friends are: the two-way
+                // scan that produces these indices resolves them through
+                // `two_way_split_projection` unconditionally, so this has to
+                // read the same space to agree with it. Both are wrong together
+                // whenever the aligned rows are in use — a pre-existing gap
+                // between what two-way search indexes and what it renders, which
+                // needs fixing on both sides at once.
+                let row = self.two_way_split_visible_row(visible_ix)?.row;
+                [
+                    row.old_line.and_then(|line| (line as usize).checked_sub(1)),
+                    row.new_line.and_then(|line| (line as usize).checked_sub(1)),
+                    None,
+                ]
+            }
+        };
+
+        if source_lines.iter().all(Option::is_none) {
+            return None;
+        }
+
+        self.resolved_outline.meta.iter().find_map(|meta| {
+            let side_ix = match meta.source {
+                conflict_resolver::ResolvedLineSource::A => 0,
+                conflict_resolver::ResolvedLineSource::B => 1,
+                conflict_resolver::ResolvedLineSource::C => 2,
+                conflict_resolver::ResolvedLineSource::Manual => return None,
+            };
+            let source_line = usize::try_from(meta.input_line?).ok()?.checked_sub(1)?;
+            (source_lines[side_ix] == Some(source_line)).then_some(meta.output_line as usize)
+        })
+    }
+
+    /// The aligned merge-plan row a visible three-way row stands for.
+    ///
+    /// Fold summary rows answer with the first row they cover, so a match
+    /// inside a fold still reveals the right neighbourhood of the output.
+    fn three_way_aligned_row_for_visible_row(&self, visible_ix: usize) -> Option<usize> {
+        match self.three_way_visible_item(visible_ix)? {
+            conflict_resolver::ThreeWayVisibleItem::Line(row) => Some(row),
+            conflict_resolver::ThreeWayVisibleItem::CollapsedContext {
+                source_line_start, ..
+            } => Some(source_line_start),
+            conflict_resolver::ThreeWayVisibleItem::CollapsedBlock(conflict_ix) => {
+                let range =
+                    self.three_way_conflict_ranges[ThreeWayColumn::Ours].get(conflict_ix)?;
+                Some(self.three_way_row_for_side_line(ThreeWayColumn::Ours, range.start))
+            }
+        }
     }
 
     pub(super) fn cached_loaded_file_for_target(

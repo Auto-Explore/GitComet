@@ -800,6 +800,11 @@ impl MainPaneView {
                                             .on_click(theme, cx, |this, _e, _w, cx| {
                                                 this.conflict_resolver.resolver_preview_mode =
                                                     ConflictResolverPreviewMode::Text;
+                                                // Rendered rows and conflict
+                                                // rows are different row
+                                                // spaces; rescan rather than
+                                                // keep the old indices.
+                                                this.diff_search_recompute_matches();
                                                 cx.notify();
                                             }),
                                     )
@@ -823,6 +828,7 @@ impl MainPaneView {
                                             let _ = this.request_conflict_file_load_mode(
                                                 gitcomet_state::model::ConflictFileLoadMode::Full,
                                             );
+                                            this.diff_search_recompute_matches();
                                             cx.notify();
                                         }),
                                     )

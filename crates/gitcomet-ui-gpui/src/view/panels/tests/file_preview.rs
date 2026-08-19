@@ -2198,3 +2198,109 @@ fn file_preview_search_marks_the_current_match_differently_from_the_rest(
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// The read-only file preview scrolls sideways to a match too.
+///
+/// Same reveal as the diff — both paint through `diff_canvas` and leave the
+/// hitbox it measures against — but on its own scroll handle.
+#[gpui::test]
+fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+    cx.simulate_resize(gpui::size(px(900.0), px(600.0)));
+
+    let repo_id = gitcomet_state::model::RepoId(4712);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_search_hscroll",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("wide.rs");
+    let mut rows: Vec<String> = (0..20).map(|ix| format!("fn line_{ix}() {{}}")).collect();
+    // The needle sits well past any plausible viewport width.
+    rows.push(format!("// {}needle", "pad ".repeat(200)));
+    let lines: Arc<Vec<String>> = Arc::new(rows);
+    let preview_text = lines.join("\n");
+
+    let _ = std::fs::create_dir_all(&workdir);
+    std::fs::write(workdir.join(&file_rel), &preview_text).expect("write preview fixture file");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Added,
+                gitcomet_core::domain::DiffArea::Staged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let workdir = workdir.clone();
+            let file_rel = file_rel.clone();
+            let lines = Arc::clone(&lines);
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_word_wrap = false;
+                set_ready_worktree_preview(
+                    pane,
+                    workdir.join(&file_rel),
+                    lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.is_file_preview_active());
+        let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+        assert!(
+            handle.max_offset().x > px(0.0),
+            "the fixture must overflow sideways for this to mean anything; max={:?}",
+            handle.max_offset()
+        );
+    });
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_search_active = true;
+                pane.diff_search_query = "needle".into();
+                pane.diff_search_input
+                    .update(cx, |input, cx| input.set_text("needle", cx));
+                pane.diff_search_recompute_matches_and_scroll_to_first();
+                cx.notify();
+            });
+        });
+    });
+    // The vertical jump lands and the row paints, then the sideways reveal reads
+    // the hitbox that paint left behind.
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "expected the long line to be the only match, got {:?}",
+            pane.diff_search_matches
+        );
+        let handle = pane.worktree_preview_scroll.0.borrow().base_handle.clone();
+        assert!(
+            handle.offset().x < px(0.0),
+            "expected the preview to scroll right to the match, x stayed at {:?}",
+            handle.offset(),
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
