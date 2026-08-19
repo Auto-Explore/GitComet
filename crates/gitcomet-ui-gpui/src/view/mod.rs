@@ -678,6 +678,7 @@ impl GitCometView {
             .update(cx, |host, cx| host.open_popover_centered(kind, window, cx));
     }
 
+    #[cfg(target_os = "macos")]
     pub(crate) fn open_clone_repository_prompt(
         &mut self,
         window: &mut Window,

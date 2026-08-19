@@ -227,6 +227,7 @@ impl GitCometView {
             && self.git_runtime_unavailable()
     }
 
+    #[cfg(test)]
     pub(crate) fn blocks_non_repository_actions(&self) -> bool {
         repository_entry_interstitial_active(self.view_mode, self.has_repo_tabs())
             || matches!(self.view_mode, GitCometViewMode::Normal) && self.git_runtime_unavailable()
