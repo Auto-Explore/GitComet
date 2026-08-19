@@ -321,6 +321,13 @@ pub enum Msg {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    /// Loads the `range..source` commit list shown as the Cherry-pick dialog
+    /// preview.
+    LoadCherryPickRangePreview {
+        repo_id: RepoId,
+        range: String,
+        source: String,
+    },
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -504,6 +511,17 @@ pub enum Msg {
         commit: bool,
         mainline: Option<usize>,
         summary: String,
+    },
+    /// Creates a new branch `new_branch` from `base`'s tip, checks it out,
+    /// and cherry-picks every commit unique to `source` relative to `range`
+    /// (oldest first, merge commits skipped; `range` must be an ancestor of
+    /// `source`) onto it.
+    CherryPickRangeOntoNewBranch {
+        repo_id: RepoId,
+        base: String,
+        range: String,
+        source: String,
+        new_branch: String,
     },
     RevertCommit {
         repo_id: RepoId,
@@ -1071,6 +1089,12 @@ pub enum InternalMsg {
         repo_id: RepoId,
         request_rev: u64,
         result: Result<Vec<RecentCommitMessage>, Error>,
+    },
+    CherryPickRangePreviewLoaded {
+        repo_id: RepoId,
+        range: String,
+        source: String,
+        result: Result<Vec<CommitRefSummary>, Error>,
     },
     RebaseStateLoaded {
         repo_id: RepoId,

@@ -1140,6 +1140,7 @@ fn summarize_command(
             }
             RepoCommandKind::InteractiveCherryPick { .. } => "Cherry-pick",
             RepoCommandKind::CherryPick { .. } => "Cherry-pick",
+            RepoCommandKind::CherryPickRangeOntoNewBranch { .. } => "Cherry-pick",
             RepoCommandKind::MergeAbort => "Merge",
             RepoCommandKind::CreateTag { .. } => "Tag",
             RepoCommandKind::DeleteTag { .. } => "Tag",
@@ -1393,6 +1394,19 @@ fn summarize_command(
                 "Completed"
             };
             format!("Cherry-pick {} commits: {state}", entries.len())
+        }
+        RepoCommandKind::CherryPickRangeOntoNewBranch {
+            source,
+            base,
+            new_branch,
+            ..
+        } => {
+            let state = if sequencer_paused(output) {
+                "Paused at a conflict"
+            } else {
+                "Completed"
+            };
+            format!("Cherry-picked {source} onto {base} as {new_branch}: {state}")
         }
         RepoCommandKind::CherryPick {
             commit_id,
@@ -2583,6 +2597,22 @@ mod tests {
         assert_eq!(
             cherry_pick_already_applied_summary,
             "Current branch already has all the changes from the cherry-picked commit."
+        );
+
+        let (_, range_summary) = summarize_command(
+            &RepoCommandKind::CherryPickRangeOntoNewBranch {
+                base: "main".into(),
+                range: "main".into(),
+                source: "feature".into(),
+                new_branch: "feature-copy".into(),
+            },
+            &command_output("git cherry-pick 3 commits onto feature-copy", "", ""),
+            true,
+            None,
+        );
+        assert_eq!(
+            range_summary,
+            "Cherry-picked feature onto main as feature-copy: Completed"
         );
 
         let (_, merge_abort_summary) = summarize_command(

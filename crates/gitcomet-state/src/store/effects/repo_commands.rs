@@ -1068,6 +1068,35 @@ pub(super) fn schedule_interactive_cherry_pick(
     );
 }
 
+pub(super) fn schedule_cherry_pick_range_onto_new_branch(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    base: String,
+    range: String,
+    source: String,
+    new_branch: String,
+) {
+    let command_base = base.clone();
+    let command_range = range.clone();
+    let command_source = source.clone();
+    let command_new_branch = new_branch.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::CherryPickRangeOntoNewBranch {
+            base: command_base,
+            range: command_range,
+            source: command_source,
+            new_branch: command_new_branch,
+        },
+        move |repo| repo.cherry_pick_range_onto_new_branch(&base, &range, &source, &new_branch),
+    );
+}
+
 pub(super) fn schedule_cherry_pick_commit(
     executor: &TaskExecutor,
     repos: &RepoMap,

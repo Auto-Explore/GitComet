@@ -156,6 +156,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         PopoverKind::CommitPrompt { repo_id }
         | PopoverKind::StashPickerPrompt { repo_id, .. }
         | PopoverKind::CreateBranchFromRefPrompt { repo_id, .. }
+        | PopoverKind::CherryPickRangePrompt { repo_id, .. }
         | PopoverKind::RenameBranchPrompt { repo_id, .. }
         | PopoverKind::ResetPrompt { repo_id, .. }
         | PopoverKind::SquashPrompt { repo_id }
@@ -192,6 +193,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::FileBrowserFileMenu { repo_id, .. }
         | PopoverKind::FileBrowserFolderMenu { repo_id, .. }
         | PopoverKind::BrowseHistoryMenu { repo_id }
+        | PopoverKind::AutomationsMenu { repo_id }
         | PopoverKind::SubmoduleInnerDiffMenu { repo_id, .. }
         | PopoverKind::TagMenu { repo_id, .. }
         | PopoverKind::TerminalMenu { repo_id, .. }
@@ -236,6 +238,25 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         // repaint when it lands rather than keep a label that is now a lie.
         PopoverKind::FileBrowserFolderMenu { .. } => {
             repo.file_browser.file_browser_rev.hash(hasher);
+        }
+
+        // The dialog re-renders when the cherry-pick range preview loads.
+        PopoverKind::CherryPickRangePrompt { .. } => {
+            repo.head_branch_rev.hash(hasher);
+            repo.branches_rev.hash(hasher);
+            repo.remote_branches_rev.hash(hasher);
+            repo.tags_rev.hash(hasher);
+            match &repo.cherry_pick_range_preview {
+                Some(preview) => {
+                    preview.range.hash(hasher);
+                    preview.source.hash(hasher);
+                    view_fingerprint::hash_loadable_kind(&preview.commits, hasher);
+                    if let Loadable::Ready(commits) = &preview.commits {
+                        commits.len().hash(hasher);
+                    }
+                }
+                None => 0u8.hash(hasher),
+            }
         }
 
         PopoverKind::Repo {
@@ -375,6 +396,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::CommitFileMenu { .. }
         | PopoverKind::FileBrowserFileMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. }
+        | PopoverKind::AutomationsMenu { .. }
         | PopoverKind::SubmoduleInnerDiffMenu { .. }
         | PopoverKind::StatusFileMenu { .. }
         | PopoverKind::StageConflictMarkersConfirm { .. }
@@ -436,6 +458,18 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             target.hash(hasher);
             source_selectable.hash(hasher);
             name_prefix.hash(hasher);
+        }
+        PopoverKind::CherryPickRangePrompt {
+            repo_id,
+            prefill_source,
+            prefill_range,
+            prefill_base,
+        } => {
+            103u8.hash(hasher);
+            repo_id.hash(hasher);
+            prefill_source.hash(hasher);
+            prefill_range.hash(hasher);
+            prefill_base.hash(hasher);
         }
         PopoverKind::RenameBranchPrompt {
             repo_id,
@@ -776,6 +810,10 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::BrowseHistoryMenu { repo_id } => {
             63u8.hash(hasher);
+            repo_id.hash(hasher);
+        }
+        PopoverKind::AutomationsMenu { repo_id } => {
+            105u8.hash(hasher);
             repo_id.hash(hasher);
         }
         PopoverKind::SubmoduleInnerDiffMenu {

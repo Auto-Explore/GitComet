@@ -99,6 +99,11 @@ pub enum Effect {
         limit: usize,
         request_rev: u64,
     },
+    LoadCherryPickRangePreview {
+        repo_id: RepoId,
+        range: String,
+        source: String,
+    },
     LoadFileHistory {
         repo_id: RepoId,
         path: PathBuf,
@@ -270,6 +275,13 @@ pub enum Effect {
         commit: bool,
         mainline: Option<usize>,
         summary: String,
+    },
+    CherryPickRangeOntoNewBranch {
+        repo_id: RepoId,
+        base: String,
+        range: String,
+        source: String,
+        new_branch: String,
     },
     RevertCommit {
         repo_id: RepoId,

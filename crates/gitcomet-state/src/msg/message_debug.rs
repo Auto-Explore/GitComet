@@ -171,6 +171,18 @@ impl std::fmt::Debug for InternalMsg {
                 .field("requested_count", &requested_ids.len())
                 .field("ok", &result.is_ok())
                 .finish(),
+            InternalMsg::CherryPickRangePreviewLoaded {
+                repo_id,
+                range,
+                source,
+                result,
+            } => f
+                .debug_struct("CherryPickRangePreviewLoaded")
+                .field("repo_id", repo_id)
+                .field("range", range)
+                .field("source", source)
+                .field("count", &result.as_ref().map_or(0, Vec::len))
+                .finish(),
             InternalMsg::MergeCommitMessageLoaded { repo_id, result } => f
                 .debug_struct("MergeCommitMessageLoaded")
                 .field("repo_id", repo_id)

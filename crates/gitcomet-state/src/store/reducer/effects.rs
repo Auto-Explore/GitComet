@@ -3,9 +3,9 @@ use super::util::{
     push_notification, selected_diff_load_plan,
 };
 use crate::model::{
-    AppNotificationKind, AppState, CommitMultiSelection, ConflictFileLoadMode, DiagnosticKind,
-    ForeignDiffOrigin, Loadable, RangeSelection, RepoId, RepoLoadsInFlight, RepoState,
-    SidebarDataRequest, SidebarMode,
+    AppNotificationKind, AppState, CherryPickRangePreview, CommitMultiSelection,
+    ConflictFileLoadMode, DiagnosticKind, ForeignDiffOrigin, Loadable, RangeSelection, RepoId,
+    RepoLoadsInFlight, RepoState, SidebarDataRequest, SidebarMode,
 };
 use crate::msg::{CommitSelectMode, ConflictAutosolveMode, Effect};
 use gitcomet_core::conflict_session::{
@@ -13,9 +13,9 @@ use gitcomet_core::conflict_session::{
     ConflictResolverStrategy, ConflictSession, reconstruct_conflict_marker_sides,
 };
 use gitcomet_core::domain::{
-    Branch, CommitDetails, CommitFileChange, CommitId, EMPTY_TREE_ID, FileEntry, FileSource,
-    FileStatusKind, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote, RemoteBranch,
-    RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
+    Branch, CommitDetails, CommitFileChange, CommitId, CommitRefSummary, EMPTY_TREE_ID, FileEntry,
+    FileSource, FileStatusKind, LogPage, RecentCommitMessage, RefMetadata, ReflogEntry, Remote,
+    RemoteBranch, RemoteTag, RepoStatus, StashEntry, Submodule, Tag, UpstreamDivergence, Worktree,
     WorktreeDirtySummary,
 };
 use gitcomet_core::error::Error;
@@ -1543,6 +1543,73 @@ pub(super) fn recent_commit_messages_loaded(
         };
         repo_state.set_recent_commit_messages(value);
     }
+    Vec::new()
+}
+
+pub(super) fn load_cherry_pick_range_preview(
+    state: &mut AppState,
+    repo_id: RepoId,
+    range: String,
+    source: String,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    if !matches!(repo_state.open, Loadable::Ready(())) {
+        return Vec::new();
+    }
+    // Reuse an in-flight preview for the same pair instead of restarting it.
+    if repo_state
+        .cherry_pick_range_preview
+        .as_ref()
+        .is_some_and(|preview| {
+            preview.range == range
+                && preview.source == source
+                && matches!(preview.commits, Loadable::Loading)
+        })
+    {
+        return Vec::new();
+    }
+    repo_state.cherry_pick_range_preview = Some(CherryPickRangePreview {
+        range: range.clone(),
+        source: source.clone(),
+        commits: Loadable::Loading,
+    });
+    vec![Effect::LoadCherryPickRangePreview {
+        repo_id,
+        range,
+        source,
+    }]
+}
+
+pub(super) fn cherry_pick_range_preview_loaded(
+    state: &mut AppState,
+    repo_id: RepoId,
+    range: String,
+    source: String,
+    result: std::result::Result<Vec<CommitRefSummary>, Error>,
+) -> Vec<Effect> {
+    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
+        return Vec::new();
+    };
+    // Only apply the result if it still matches the requested pair: a later
+    // request for a different pair supersedes it.
+    if !repo_state
+        .cherry_pick_range_preview
+        .as_ref()
+        .is_some_and(|preview| preview.range == range && preview.source == source)
+    {
+        return Vec::new();
+    }
+    let commits = match result {
+        Ok(commits) => Loadable::Ready(Arc::new(commits)),
+        Err(e) => Loadable::Error(e.to_string()),
+    };
+    repo_state.cherry_pick_range_preview = Some(CherryPickRangePreview {
+        range,
+        source,
+        commits,
+    });
     Vec::new()
 }
 

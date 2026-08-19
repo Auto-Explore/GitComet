@@ -1788,6 +1788,27 @@ pub(super) fn schedule_load_recent_commit_messages(
     });
 }
 
+pub(super) fn schedule_load_cherry_pick_range_preview(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    range: String,
+    source: String,
+) {
+    spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
+        send_or_log(
+            &msg_tx,
+            Msg::Internal(crate::msg::InternalMsg::CherryPickRangePreviewLoaded {
+                repo_id,
+                range: range.clone(),
+                source: source.clone(),
+                result: repo.cherry_pick_range_commits(&range, &source),
+            }),
+        );
+    });
+}
+
 pub(super) fn schedule_load_diff(
     executor: &TaskExecutor,
     repos: &RepoMap,

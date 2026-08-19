@@ -683,6 +683,40 @@ pub trait GitRepository: Send + Sync {
     }
     fn revert(&self, id: &CommitId) -> Result<()>;
 
+    /// Creates a new branch `new_branch` pointing at `base`'s tip, checks it
+    /// out, and cherry-picks every commit reachable from `source` but not from
+    /// `range` (oldest first, merge commits skipped) onto it. `range` must be
+    /// an ancestor of `source`.
+    ///
+    /// Errors without touching anything if `new_branch` already exists, the
+    /// range `range..source` is empty, or `range` is not an ancestor of
+    /// `source`. A cherry-pick conflict stops the sequence and leaves Git's
+    /// sequencer state in progress on `new_branch`, exactly like a regular
+    /// multi-commit cherry-pick.
+    fn cherry_pick_range_onto_new_branch(
+        &self,
+        _base: &str,
+        _range: &str,
+        _source: &str,
+        _new_branch: &str,
+    ) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "cherry-picking a branch range onto a new branch is not implemented for this backend",
+        )))
+    }
+    /// Lists the commits `range..source` would cherry-pick (oldest first,
+    /// merge commits skipped) as a preview. Errors when `range` is not an
+    /// ancestor of `source`.
+    fn cherry_pick_range_commits(
+        &self,
+        _range: &str,
+        _source: &str,
+    ) -> Result<Vec<CommitRefSummary>> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "listing a cherry-pick range is not implemented for this backend",
+        )))
+    }
+
     fn stash_create(&self, message: &str, include_untracked: bool) -> Result<()>;
     fn stash_list(&self) -> Result<Vec<StashEntry>>;
     fn stash_list_cancellable(&self, cancellation: &CancellationToken) -> Result<Vec<StashEntry>> {

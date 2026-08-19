@@ -83,6 +83,15 @@ pub enum RepoCommandKind {
         mainline: Option<usize>,
         summary: String,
     },
+    /// Creates a new branch `new_branch` from `base`, checks it out, and
+    /// cherry-picks `range..source`'s commits (oldest first, merges skipped,
+    /// `range` must be an ancestor of `source`) onto it.
+    CherryPickRangeOntoNewBranch {
+        base: String,
+        range: String,
+        source: String,
+        new_branch: String,
+    },
     MergeAbort,
     CreateTag {
         name: String,
