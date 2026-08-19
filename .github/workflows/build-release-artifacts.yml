@@ -233,7 +233,7 @@ jobs:
         uses: Azure/artifact-signing-action@v2
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.WINDOWS_SIGNING_PROFILE_NAME }}
           files-folder: ${{ github.workspace }}\target\release
           files-folder-filter: gitcomet.exe
@@ -241,6 +241,7 @@ jobs:
           timestamp-rfc3161: ${{ env.WINDOWS_SIGNING_TIMESTAMP_RFC3161 }}
           timestamp-digest: SHA256
           append-signature: false
+          cache-dependencies: false
 
       - name: Verify signed Windows release binary
         shell: pwsh
@@ -310,7 +311,7 @@ jobs:
         uses: Azure/artifact-signing-action@v2
         with:
           endpoint: ${{ env.WINDOWS_SIGNING_ENDPOINT }}
-          trusted-signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
+          signing-account-name: ${{ env.WINDOWS_SIGNING_ACCOUNT_NAME }}
           certificate-profile-name: ${{ env.WINDOWS_SIGNING_PROFILE_NAME }}
           files-folder: ${{ github.workspace }}\dist
           files-folder-filter: gitcomet-v${{ env.VERSION }}-windows-${{ env.ARTIFACT_ARCH }}.msi
@@ -318,6 +319,7 @@ jobs:
           timestamp-rfc3161: ${{ env.WINDOWS_SIGNING_TIMESTAMP_RFC3161 }}
           timestamp-digest: SHA256
           append-signature: false
+          cache-dependencies: false
 
       - name: Verify signed Windows MSI installer
         shell: pwsh
