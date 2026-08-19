@@ -51,6 +51,14 @@ pub(in crate::view) struct MarkdownDocumentContext {
     pub(in crate::view) text_region: DiffTextRegion,
     /// Gutter colour for a wholly added or removed file, `None` otherwise.
     pub(in crate::view) change_bar_color: Option<gpui::Rgba>,
+    /// Quick-search state, when the search box is open over this preview.
+    pub(in crate::view) query: Option<crate::view::rows::MarkdownPreviewQuery>,
+    /// A row the search cursor wants brought into view, and where to report the
+    /// bounds that reveal needs. The flowing document has no fixed row height,
+    /// so the offset can only be computed once the row has been laid out.
+    pub(in crate::view) reveal: crate::view::rows::MarkdownPreviewRevealRequest,
+    /// The container the document scrolls in, which the reveal moves.
+    pub(in crate::view) scroll: Option<gpui::ScrollHandle>,
 }
 
 /// Gap between two blocks, and the extra break a heading opens above itself.
@@ -245,6 +253,49 @@ fn row_scrolls_sideways(kind: MarkdownPreviewRowKind) -> bool {
     )
 }
 
+/// The row div, carrying the quick-search reveal when this is the target row.
+///
+/// The flowing document is not a `uniform_list`, so nothing can compute the
+/// scroll offset from a row index: the row has to be laid out first. The
+/// listener fires during prepaint, once, and clears the request so it does not
+/// keep dragging the view back while the user scrolls away.
+fn reveal_listener(row_ix: usize, context: &MarkdownDocumentContext) -> gpui::Div {
+    let shell = div();
+    if context.reveal.pending() != Some(row_ix) {
+        return shell;
+    }
+    let Some(scroll) = context.scroll.clone() else {
+        return shell;
+    };
+    let reveal = context.reveal.clone();
+    shell.on_children_prepainted(move |children_bounds, window, _app| {
+        if reveal.take() != Some(row_ix) {
+            return;
+        }
+        let Some((row_top, row_height)) =
+            crate::view::rows::markdown_preview_row_extent(&children_bounds)
+        else {
+            return;
+        };
+        let viewport = scroll.bounds();
+        let offset = scroll.offset();
+        // Prepaint bounds are in window space with the scroll already applied,
+        // so undo it to get the row's place in the document.
+        let row_top_in_content = row_top - viewport.origin.y - offset.y;
+        let Some(target_y) = crate::view::rows::markdown_preview_reveal_offset_y(
+            row_top_in_content,
+            row_height,
+            viewport.size.height,
+            scroll.max_offset().y,
+            offset.y,
+        ) else {
+            return;
+        };
+        scroll.set_offset(point(offset.x, target_y));
+        window.refresh();
+    })
+}
+
 /// The container a row's text lives in: it carries the row's index, so mouse
 /// events resolve to the same `(row, region)` pair selection and copy use.
 fn row_shell(
@@ -252,7 +303,7 @@ fn row_shell(
     row: &MarkdownPreviewRow,
     context: &MarkdownDocumentContext,
 ) -> gpui::Stateful<gpui::Div> {
-    let shell = div()
+    let shell = reveal_listener(row_ix, context)
         .id(("md_preview_row", row_ix))
         .debug_selector(move || format!("markdown_preview_row_box_{row_ix}"));
     let shell = if row_scrolls_sideways(row.kind) {
@@ -414,7 +465,15 @@ fn render_row_text(
     row: &MarkdownPreviewRow,
     context: &MarkdownDocumentContext,
 ) -> AnyElement {
-    let styled = crate::view::rows::markdown_preview_styled_row(context.theme, row);
+    // The flowing document renders one element per source row, so the row
+    // index is also the index the search cursor addresses.
+    let styled = crate::view::rows::markdown_preview_styled_row_with_query(
+        context.theme,
+        row,
+        row_ix,
+        context.query.as_ref(),
+    );
+    let styled = styled.as_ref();
 
     // Text that scrolls takes the width it needs; text that wraps takes the
     // width it is given.

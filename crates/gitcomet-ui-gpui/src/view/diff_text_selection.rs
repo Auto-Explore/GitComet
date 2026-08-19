@@ -317,6 +317,7 @@ impl Element for DiffTextSelectionOverlay {
             text_start_offset: visual_range.start,
             text_len: self.text.len(),
             offset_map: None,
+            painted_text: self.text.clone(),
             streamed_ascii_monospace_cell_width: None,
             wrapped: None,
         };

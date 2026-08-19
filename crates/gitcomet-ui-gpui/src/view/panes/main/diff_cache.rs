@@ -1692,6 +1692,11 @@ impl MainPaneView {
                             // with the document that described them.
                             this.worktree_markdown_preview_block_scrolls.clear();
                             this.worktree_markdown_preview = Loadable::Ready(document);
+                            // An open search scanned nothing while this was
+                            // parsing, so without a rescan it would keep
+                            // reporting "no matches" over a document that
+                            // plainly holds the term.
+                            this.diff_search_recompute_matches();
                         }
                         Err(refusal) => {
                             // The document these described is gone too, so they
@@ -2603,6 +2608,9 @@ impl MainPaneView {
                         Ok(preview) => this.file_markdown_preview = Loadable::Ready(preview),
                         Err(error) => this.file_markdown_preview = Loadable::Error(error),
                     }
+                    // See the single-document preview: a search opened while
+                    // this was parsing found nothing and needs to rescan.
+                    this.diff_search_recompute_matches();
                     cx.notify();
                 });
             },

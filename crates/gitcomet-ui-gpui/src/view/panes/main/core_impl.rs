@@ -1688,6 +1688,8 @@ impl MainPaneView {
             diff_text_last_mouse_pos: point(px(0.0), px(0.0)),
             diff_suppress_clicks_remaining: 0,
             diff_text_hitboxes: HashMap::default(),
+            diff_search_horizontal_reveal: None,
+            conflict_text_hitboxes: HashMap::default(),
             diff_text_layout_cache_epoch: 0,
             diff_text_layout_cache: HashMap::default(),
             diff_search_active: false,
@@ -1743,6 +1745,7 @@ impl MainPaneView {
             file_markdown_preview_cache_target: None,
             file_markdown_preview: Loadable::NotLoaded,
             markdown_preview_wrap: MarkdownPreviewWrapCache::default(),
+            markdown_preview_reveal: Default::default(),
             file_markdown_preview_seq: 0,
             file_markdown_preview_inflight: None,
             file_image_diff_cache_repo_id: None,
@@ -1805,6 +1808,7 @@ impl MainPaneView {
             file_editor_search_applied_rev: 0,
             file_editor_search_reveal_rev: 0,
             file_editor_search_reveal_applied_rev: 0,
+            file_editor_search_reveal_x_pending: false,
             file_editor_provider_theme_epoch: 1,
             file_editor_scroll,
             file_editor_gutter_scroll: UniformListScrollHandle::new(),
@@ -1840,6 +1844,7 @@ impl MainPaneView {
             conflict_diff_query_cache_query: SharedString::default(),
             conflict_diff_query_cache_options: Default::default(),
             conflict_three_way_segments_cache: HashMap::default(),
+            conflict_three_way_query_segments_cache: HashMap::default(),
             conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
             conflict_three_way_syntax_inflight: ThreeWaySides::default(),
             conflict_resolved_preview_path: None,
@@ -1932,6 +1937,7 @@ impl MainPaneView {
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_style_caches();
         self.conflict_three_way_segments_cache.clear();
+        self.conflict_three_way_query_segments_cache.clear();
         self.diff_raw_input
             .update(cx, |input, cx| input.set_theme(theme, cx));
         self.diff_search_input
@@ -2003,6 +2009,11 @@ impl MainPaneView {
 
     pub(in crate::view) fn reset_diff_horizontal_scroll_state(&mut self) {
         self.diff_horizontal_scroll.reset();
+        // A reveal names a row in the view it was armed over. That view is gone,
+        // so the request must go with it rather than fire against whatever row
+        // now holds that index.
+        self.diff_search_horizontal_reveal = None;
+        self.markdown_preview_reveal.clear();
     }
 
     pub(in crate::view) fn diff_horizontal_content_width(&self) -> Pixels {
@@ -2904,6 +2915,7 @@ impl MainPaneView {
                         // conflict views instead of per-line fallback styling.
                         this.clear_conflict_diff_style_caches_preserving_query();
                         this.conflict_three_way_segments_cache.clear();
+                        this.conflict_three_way_query_segments_cache.clear();
                         cx.notify();
                     }
                 });
@@ -2958,6 +2970,7 @@ impl MainPaneView {
 
     pub(in crate::view) fn clear_conflict_diff_query_overlay_caches(&mut self) {
         self.conflict_diff_query_segments_cache_split.clear();
+        self.conflict_three_way_query_segments_cache.clear();
         self.conflict_diff_query_cache_query = SharedString::default();
         self.conflict_diff_query_cache_options = Default::default();
     }
@@ -2965,6 +2978,7 @@ impl MainPaneView {
     pub(in crate::view) fn clear_conflict_diff_style_caches_preserving_query(&mut self) {
         self.conflict_diff_segments_cache_split.clear();
         self.conflict_diff_query_segments_cache_split.clear();
+        self.conflict_three_way_query_segments_cache.clear();
     }
 
     pub(in crate::view) fn sync_conflict_diff_query_overlay_caches(
@@ -2978,6 +2992,7 @@ impl MainPaneView {
             self.conflict_diff_query_cache_query = query.to_string().into();
             self.conflict_diff_query_cache_options = options;
             self.conflict_diff_query_segments_cache_split.clear();
+            self.conflict_three_way_query_segments_cache.clear();
         }
     }
 
@@ -3004,6 +3019,7 @@ impl MainPaneView {
         self.conflict_three_way_prepared_syntax_documents = ThreeWaySides::default();
         self.conflict_three_way_syntax_inflight = ThreeWaySides::default();
         self.conflict_three_way_segments_cache.clear();
+        self.conflict_three_way_query_segments_cache.clear();
         self.conflict_resolver.resolved_outline = ResolvedOutlineData::default();
         self.conflict_resolver.resolved_output_visible_dirty = true;
     }
@@ -4083,6 +4099,7 @@ impl MainPaneView {
         self.clear_conflict_diff_style_caches();
         self.clear_conflict_diff_query_overlay_caches();
         self.conflict_three_way_segments_cache.clear();
+        self.conflict_three_way_query_segments_cache.clear();
         self.clear_worktree_preview_segments_cache();
         self.reset_collapsed_diff_projection(false);
         self.diff_visible_cache_len = 0;
@@ -4111,6 +4128,7 @@ impl MainPaneView {
         self.clear_diff_text_style_caches();
         self.clear_conflict_diff_style_caches();
         self.conflict_three_way_segments_cache.clear();
+        self.conflict_three_way_query_segments_cache.clear();
         self.diff_wrap_visible_cache_key = None;
         self.diff_wrap_visible_rows.clear();
         cx.notify();

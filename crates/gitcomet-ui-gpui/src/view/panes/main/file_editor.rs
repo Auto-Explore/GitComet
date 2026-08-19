@@ -265,6 +265,38 @@ fn apply_file_editor_search_highlights(
 }
 
 impl MainPaneView {
+    /// Scroll the editor sideways so the caret the search reveal just placed is
+    /// on screen.
+    ///
+    /// A multiline `TextInput` leaves horizontal scrolling to the container it
+    /// sits in, and its own caret autoscroll is vertical only, so a match far
+    /// along a long line otherwise scrolls into view still off the right edge.
+    fn reveal_file_editor_search_match_horizontally(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(range) = self.file_editor_search_current_range() else {
+            return;
+        };
+        let (Some(left), Some(right)) = self.file_editor_input.read_with(cx, |input, _| {
+            (
+                input.cursor_content_x(range.start),
+                input.cursor_content_x(range.end),
+            )
+        }) else {
+            return;
+        };
+        let scroll = &self.file_editor_scroll;
+        let offset = scroll.offset();
+        let Some(target_x) = super::helpers::reveal_scroll_x(
+            left,
+            right,
+            scroll.bounds().size.width,
+            scroll.max_offset().x,
+            offset.x,
+        ) else {
+            return;
+        };
+        scroll.set_offset(point(target_x, offset.y));
+    }
+
     /// Whether the pane is currently showing the editable buffer.
     pub(in crate::view) fn is_file_editor_active(&self) -> bool {
         self.active_repo()
@@ -1429,7 +1461,14 @@ impl MainPaneView {
                 // scroll handle had been laid out and had bounds to centre against.
                 self.file_editor_input
                     .update(cx, |input, cx| input.set_selected_range(range, true, cx));
+                // The caret has moved but not been laid out at its new place yet,
+                // so the sideways half waits for the frame that paints it. The
+                // input's own caret autoscroll only handles the vertical axis.
+                self.file_editor_search_reveal_x_pending = true;
             }
+        } else if self.file_editor_search_reveal_x_pending {
+            self.file_editor_search_reveal_x_pending = false;
+            self.reveal_file_editor_search_match_horizontally(cx);
         }
 
         // Word wrap is the same preference the diff and preview honour, applied

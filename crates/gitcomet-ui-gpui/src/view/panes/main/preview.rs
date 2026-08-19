@@ -452,6 +452,18 @@ impl MainPaneView {
         })
     }
 
+    /// Whether the merge tool is showing a rendered *markdown* preview.
+    ///
+    /// `is_conflict_rendered_preview_active` is also true for a rendered SVG,
+    /// which is a picture with no text to search; search has to tell the two
+    /// apart or it would report no matches over a file it could have searched.
+    pub(in crate::view) fn is_conflict_rendered_markdown_preview_active(&self) -> bool {
+        self.is_conflict_rendered_preview_active()
+            && self.conflict_resolver.path.as_ref().is_some_and(|path| {
+                crate::view::preview_path_rendered_kind(path) == Some(RenderedPreviewKind::Markdown)
+            })
+    }
+
     pub(in crate::view) fn is_conflict_rendered_preview_active(&self) -> bool {
         self.conflict_resolver.path.as_ref().is_some_and(|path| {
             crate::view::preview_path_rendered_kind(path).is_some()
@@ -490,6 +502,9 @@ impl MainPaneView {
                 &self.conflict_resolver.three_way_text,
             ),
         };
+        // These documents are what an open search scans; until now there were
+        // none, so it found nothing and has to look again.
+        self.diff_search_recompute_matches();
     }
 
     pub(in crate::view) fn ensure_conflict_image_preview_cache(
@@ -1005,6 +1020,115 @@ impl MainPaneView {
                 DiffTextRegion::SplitRight => (MarkdownPreviewList::New, &diff.new),
             },
         })
+    }
+
+    /// Whether a rendered markdown preview owns the view — whether or not it
+    /// actually has a document on screen to search.
+    ///
+    /// The distinction matters while the preview is still parsing, or when it
+    /// failed to: the pane paints a notice, and the markdown source underneath
+    /// is not what the reader is looking at, so search reports nothing rather
+    /// than quietly scanning a view that is not there. (A document that parses
+    /// but is too big to lay out never gets here — `build_single_markdown_preview_document`
+    /// refuses it and the pane switches itself to Source.)
+    pub(in crate::view) fn rendered_markdown_preview_owns_view(&self) -> bool {
+        self.is_conflict_rendered_markdown_preview_active() || self.is_markdown_preview_active()
+    }
+
+    /// Which rendered markdown surface Ctrl+F should search, if any.
+    ///
+    /// Search used to answer this by flipping the preview back to Source and
+    /// searching the markdown text. It searches the rendered rows in place
+    /// instead, so it has to know which of the four list shapes is on screen —
+    /// they have different row spaces and different ways of being scrolled.
+    pub(in crate::view) fn markdown_search_surface(&self) -> Option<MarkdownSearchSurface> {
+        if self.is_conflict_rendered_markdown_preview_active() {
+            return Some(MarkdownSearchSurface::Conflict);
+        }
+        if !self.is_markdown_preview_active() {
+            return None;
+        }
+        if self.is_file_preview_active() {
+            if !matches!(self.worktree_markdown_preview, Loadable::Ready(_)) {
+                return None;
+            }
+            return Some(MarkdownSearchSurface::Worktree);
+        }
+        if !matches!(self.file_markdown_preview, Loadable::Ready(_)) {
+            return None;
+        }
+        Some(match self.diff_view {
+            DiffViewMode::Inline => MarkdownSearchSurface::DiffInline,
+            DiffViewMode::Split => MarkdownSearchSurface::DiffSplit,
+        })
+    }
+
+    /// The quick-search state the markdown preview renderers paint under.
+    ///
+    /// One value for every list on screen: the split diff's two sides share a
+    /// visual row space by construction, and the conflict columns are addressed
+    /// by the same index, so the current-match row means the same thing in each.
+    pub(in crate::view) fn markdown_preview_search_query(
+        &self,
+    ) -> Option<crate::view::rows::MarkdownPreviewQuery> {
+        if !self.diff_search_active || self.markdown_search_surface().is_none() {
+            return None;
+        }
+        let query = self.diff_search_query.clone();
+        let matcher = super::diff_search::DiffSearchMatcher::new(
+            query.as_ref(),
+            self.diff_search_options_or_default(),
+        );
+        if matcher.is_empty() || matcher.regex_error().is_some() {
+            return None;
+        }
+        Some(crate::view::rows::MarkdownPreviewQuery {
+            matcher: std::sync::Arc::new(matcher),
+            current_row: self.diff_search_current_match_row(),
+        })
+    }
+
+    /// The documents a markdown surface shows, in the order their lists are
+    /// laid out, each paired with the wrap plan its list renders through —
+    /// `None` for a list that paints one row per source row.
+    pub(in crate::view) fn markdown_search_documents(
+        &self,
+        surface: MarkdownSearchSurface,
+    ) -> Vec<(Option<MarkdownPreviewList>, &MarkdownPreviewDocument)> {
+        match surface {
+            MarkdownSearchSurface::Worktree => match &self.worktree_markdown_preview {
+                // The flowing renderer wraps natively and keeps no plan.
+                Loadable::Ready(document) => vec![(None, document.as_ref())],
+                _ => Vec::new(),
+            },
+            MarkdownSearchSurface::DiffInline => match &self.file_markdown_preview {
+                Loadable::Ready(diff) => {
+                    vec![(Some(MarkdownPreviewList::Inline), &diff.inline)]
+                }
+                _ => Vec::new(),
+            },
+            MarkdownSearchSurface::DiffSplit => match &self.file_markdown_preview {
+                Loadable::Ready(diff) => vec![
+                    (Some(MarkdownPreviewList::Old), &diff.old),
+                    (Some(MarkdownPreviewList::New), &diff.new),
+                ],
+                _ => Vec::new(),
+            },
+            MarkdownSearchSurface::Conflict => [
+                ThreeWayColumn::Base,
+                ThreeWayColumn::Ours,
+                ThreeWayColumn::Theirs,
+            ]
+            .into_iter()
+            .filter_map(|side| {
+                // The conflict columns are plain unwrapped lists.
+                match self.conflict_resolver.markdown_preview.document(side) {
+                    Loadable::Ready(document) => Some((None, document.as_ref())),
+                    _ => None,
+                }
+            })
+            .collect(),
+        }
     }
 
     pub(in super::super::super) fn untracked_worktree_preview_path(

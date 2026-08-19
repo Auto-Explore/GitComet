@@ -2557,6 +2557,73 @@ async fn file_editor_search_scrolls_a_distant_match_into_view(cx: &mut gpui::Tes
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
+/// A match far along a long line has to be scrolled to sideways too.
+///
+/// A multiline `TextInput` leaves horizontal scrolling to its container, and its
+/// own caret autoscroll only handles the vertical axis, so without the reveal
+/// the line comes into view with the hit still off the right edge.
+#[gpui::test]
+async fn file_editor_search_scrolls_sideways_to_a_match_far_along_a_line(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let mut lines: Vec<String> = (0..20)
+        .map(|line| format!("fn line_{line}() {{}}"))
+        .collect();
+    // The needle sits well past any plausible viewport width.
+    lines.push(format!("// {}needle", "pad ".repeat(200)));
+    let contents = format!("{}\n", lines.join("\n"));
+    let workdir = seed_editor(&view, cx, 986, "file_editor_search_hscroll", &contents);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                // Wrapping would fold the long line into the pane and leave
+                // nothing to scroll sideways to.
+                pane.diff_word_wrap = false;
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.file_editor_scroll.max_offset().x > px(0.0),
+            "the fixture must overflow sideways for this to mean anything; max={:?}",
+            pane.file_editor_scroll.max_offset()
+        );
+        assert_eq!(pane.file_editor_scroll.offset().x, px(0.0));
+    });
+
+    search_the_editor_for(&view, cx, "needle");
+    // One frame places the caret, the next measures it and scrolls to it.
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(pane.file_editor_search_matches.len(), 1);
+        assert!(
+            pane.file_editor_scroll.offset().x < px(0.0),
+            "a match far along the line must scroll the editor sideways, got {:?}",
+            pane.file_editor_scroll.offset()
+        );
+        assert!(
+            !pane.file_editor_search_reveal_x_pending,
+            "the sideways reveal should be claimed once, not retried every frame"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 /// The whole loop, driven by the keys the user actually presses.
 ///
 /// Ctrl+F reaches the search over a focused editor only because its binding

@@ -1704,6 +1704,28 @@ impl TextInput {
         Some((self.index_for_position(target), preferred_x))
     }
 
+    /// The caret's x inside the input's own content, from the layout of the
+    /// frame that last painted it.
+    ///
+    /// A multiline input does not scroll itself sideways — the container it sits
+    /// in does — so the caret's place along its line is the only thing that
+    /// container can steer by. `None` while soft wrap is on, where there is no
+    /// horizontal overflow to reveal into, and before the first layout.
+    pub fn cursor_content_x(&self, cursor: usize) -> Option<Pixels> {
+        let layout = self.layout.last.as_ref()?;
+        let starts = self.layout.line_starts.as_ref()?;
+        match layout {
+            TextInputLayout::Plain(lines) => {
+                let (line_ix, local_ix) = line_for_offset(starts, lines, cursor);
+                lines.get(line_ix).map(|line| line.x_for_index(local_ix))
+            }
+            TextInputLayout::TruncatedSingleLine(line) => {
+                Some(truncated_line_x_for_source_offset(line, cursor))
+            }
+            TextInputLayout::Wrapped { .. } => None,
+        }
+    }
+
     pub(super) fn cursor_vertical_span(&self, cursor: usize) -> Option<(Pixels, Pixels)> {
         let layout = self.layout.last.as_ref()?;
         let starts = self.layout.line_starts.as_ref()?;

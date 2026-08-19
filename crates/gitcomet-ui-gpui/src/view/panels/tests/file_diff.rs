@@ -17840,3 +17840,95 @@ fn toggle_diff_view_command_clears_styled_segment_caches(cx: &mut gpui::TestAppC
         );
     });
 }
+
+/// A match far along a long line has to be scrolled to sideways as well as
+/// down. Without it the row comes into view with the hit still off the right
+/// edge, which reads as "search found it but did not go there".
+fn assert_diff_search_scrolls_sideways(
+    cx: &mut gpui::TestAppContext,
+    repo_id: gitcomet_state::model::RepoId,
+    fixture_name: &str,
+) {
+    let mut unified = concat!(
+        "diff --git a/wide.txt b/wide.txt\n",
+        "--- a/wide.txt\n",
+        "+++ b/wide.txt\n",
+        "@@ -1,12 +1,12 @@\n",
+    )
+    .to_string();
+    for ix in 0..12 {
+        if ix == 6 {
+            // The needle sits well past any plausible viewport width.
+            unified.push_str(&format!(" {}needle tail\n", "pad ".repeat(200)));
+        } else {
+            unified.push_str(&format!(" context {ix}\n"));
+        }
+    }
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    cx.simulate_resize(gpui::size(px(900.0), px(420.0)));
+    push_raw_patch_diff_state_with_rev(cx, &view, repo_id, fixture_name, unified, 1, true);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "wide patch diff ready for horizontal search reveal",
+        |pane| pane.diff_cache_rev == 1 && pane.patch_diff_row_len() > 0,
+        |pane| (pane.diff_cache_rev, pane.patch_diff_row_len()),
+    );
+
+    cx.update(|_window, app| {
+        let main_pane = view.read(app).main_pane.clone();
+        main_pane.update(app, |pane, cx| {
+            pane.diff_view = DiffViewMode::Inline;
+            pane.diff_search_active = true;
+            pane.diff_search_query = "needle tail".into();
+            pane.diff_search_recompute_matches_and_scroll_to_first();
+            cx.notify();
+        });
+    });
+    // Three passes: the vertical jump lands, the row paints its hitbox, and the
+    // sideways reveal reads that hitbox on the frame after.
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+    draw_and_drain_test_window(cx);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert_eq!(
+            pane.diff_search_matches.len(),
+            1,
+            "expected the long line to be the only match, got {:?}",
+            pane.diff_search_matches
+        );
+        let handle = pane.diff_scroll.0.borrow().base_handle.clone();
+        assert!(
+            handle.max_offset().x > px(0.0),
+            "fixture must overflow horizontally for this to mean anything; max={:?}",
+            handle.max_offset()
+        );
+        assert!(
+            handle.offset().x < px(0.0),
+            "expected the diff to scroll right to the match, x stayed at {:?} (mode={:?})",
+            handle.offset(),
+            pane.diff_view,
+        );
+
+        assert_eq!(
+            pane.diff_search_horizontal_reveal, None,
+            "the reveal should be claimed once, not re-applied every frame"
+        );
+    });
+}
+
+#[gpui::test]
+fn diff_search_scrolls_sideways_to_a_match_far_along_a_long_line(cx: &mut gpui::TestAppContext) {
+    assert_diff_search_scrolls_sideways(
+        cx,
+        gitcomet_state::model::RepoId(9141),
+        "search_horizontal_reveal",
+    );
+}

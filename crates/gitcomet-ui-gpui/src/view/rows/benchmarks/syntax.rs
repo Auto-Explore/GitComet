@@ -1599,6 +1599,7 @@ fn render_markdown_preview_window(
             text_region: DiffTextRegion::Inline,
             wrap_plan: None,
             image_base_dir: None,
+            query: None,
         },
     )
 }
