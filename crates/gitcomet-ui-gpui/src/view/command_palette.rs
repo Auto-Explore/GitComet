@@ -267,10 +267,10 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
     },
     CommandEntry {
         id: "locate-file-in-explorer",
-        label: "Show File in Explorer",
+        label: crate::menu_labels::OPEN_IN_FILE_EXPLORER,
         shortcut: Shortcut::Secondary("Shift+L"),
         category: "Navigation",
-        keywords: "locate reveal find sidebar tree folder current",
+        keywords: "show locate reveal find sidebar tree folder current",
         requires_repo: true,
     },
     CommandEntry {
@@ -1200,20 +1200,20 @@ mod tests {
     #[test]
     fn locate_file_in_explorer_is_a_repository_command() {
         assert_eq!(
-            filtered_commands(true, "show file in explorer")
+            filtered_commands(true, "open in file explorer")
                 .first()
                 .map(|command| command.id),
             Some("locate-file-in-explorer")
         );
-        // Also findable by the word the user is more likely to reach for.
+        // Keep the previous label and common synonyms searchable.
         assert!(
-            filtered_commands(true, "locate")
+            filtered_commands(true, "show")
                 .iter()
                 .any(|command| command.id == "locate-file-in-explorer")
         );
         assert!(
-            filtered_commands(false, "show file in explorer").is_empty(),
-            "there is no file to show without a repository"
+            filtered_commands(false, "open in file explorer").is_empty(),
+            "there is no file to open without a repository"
         );
     }
 

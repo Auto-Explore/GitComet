@@ -608,6 +608,15 @@ fn status_row(
         .when(selected, |s| {
             s.bg(theme.colors.interaction.hover_background)
         })
+        // Light themes keep selection legible with a ring: `hover_background`
+        // alone is barely a shade off the panel it sits on, so a selected row
+        // and a merely hovered one look identical.
+        .when_some(
+            selected
+                .then(|| components::light_theme_selection_outline(theme))
+                .flatten(),
+            |s, outline| s.shadow(vec![outline]),
+        )
         .when(context_menu_active, |s| {
             s.bg(theme.colors.interaction.pressed_background)
         })

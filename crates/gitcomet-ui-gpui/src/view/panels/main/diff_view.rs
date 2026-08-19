@@ -1173,6 +1173,14 @@ impl MainPaneView {
         self.clear_diff_text_query_overlay_cache();
         self.clear_worktree_preview_segments_cache();
         self.clear_conflict_diff_query_overlay_caches();
+        // Hand the buffer back, caret still on the match. The panel focus handle
+        // every other view returns to would drop the user out of the text.
+        if self.is_file_editor_active() {
+            self.file_editor_search_clear();
+            let focus = self.file_editor_input.read(cx).focus_handle();
+            window.focus(&focus, cx);
+            return;
+        }
         window.focus(&self.diff_panel_focus_handle, cx);
     }
 

@@ -3245,6 +3245,26 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_live_syntax_reparse: Option<gpui::Task<()>>,
     /// The delimiters currently washed as the caret's bracket pair.
     pub(in crate::view) file_editor_bracket_match: Option<(Range<usize>, Range<usize>)>,
+    /// Byte ranges of every search match in the editor buffer, one per
+    /// occurrence and parallel to `diff_search_matches`, which carries the line
+    /// each of them sits on. Keeping the two parallel is what lets the shared
+    /// `n/N` label and match cursor work over the editor unchanged.
+    pub(in crate::view) file_editor_search_matches: Vec<Range<usize>>,
+    /// The buffer the scan reads. It runs without a `cx` and so cannot reach the
+    /// input; a snapshot is an `Arc` bump and immutable under later edits, which
+    /// makes caching one here the cheap way to hand it the live text.
+    pub(in crate::view) file_editor_search_source: Option<TextModelSnapshot>,
+    /// Bumped whenever the *painted* match set moves — a rescan, a cursor step,
+    /// the search closing. `render_file_editor` rebinds the highlight provider
+    /// when it differs from `file_editor_search_applied_rev`.
+    pub(in crate::view) file_editor_search_rev: u64,
+    pub(in crate::view) file_editor_search_applied_rev: u64,
+    /// Bumped only when the match *cursor* moves. Separate from the rev above
+    /// because it drives the selection, and a rescan alone must not re-select:
+    /// the buffer is rescanned on every keystroke while the search box is open,
+    /// which would drag the caret off what the user is typing.
+    pub(in crate::view) file_editor_search_reveal_rev: u64,
+    pub(in crate::view) file_editor_search_reveal_applied_rev: u64,
     /// Bumped on every theme change: the syntax palette is baked into the
     /// snapshot the provider closes over, so a new theme needs a new binding key.
     pub(in crate::view) file_editor_provider_theme_epoch: u64,
@@ -3387,6 +3407,10 @@ pub(crate) struct MainPaneView {
     /// UI-scaled row height the gutter list paints at, computed by the render
     /// pass so the virtualized row processor can read it without a scale lookup.
     pub(in crate::view) file_editor_gutter_row_height: Pixels,
+    /// The same, for the merge tool's resolved-output gutter. Navigation centres
+    /// the editable output on a row from `&self`, where there is no `cx` to look
+    /// the scale up through, so the render pass leaves it here.
+    pub(in crate::view) conflict_resolved_gutter_row_height: Pixels,
     /// Blame for the edited file, resolved by the render pass so the virtualized
     /// gutter rows can read it without rebuilding the context per row.
     pub(in crate::view) file_editor_blame: Option<rows::BlameRenderCtx>,

@@ -13,10 +13,12 @@ mod syntax;
 
 use build::*;
 
+pub(in crate::view) use build::DiffSearchMatchEmphasis;
 pub(in crate::view) use build::PreparedDocumentByteRangeHighlights;
 #[cfg(feature = "benchmarks")]
 pub(super) use build::build_cached_diff_styled_text_with_palette;
 pub(in crate::view::rows) use build::hash_rgba_bits;
+pub(in crate::view) use build::query_highlight_colors;
 pub(in crate::view) use build::syntax_highlights_for_line;
 pub(in crate::view::rows) use build::word_highlight_colors;
 pub(super) use build::{
@@ -927,8 +929,24 @@ mod tests {
         query: &str,
         options: crate::view::panes::main::diff_search::DiffSearchOptions,
     ) -> CachedDiffStyledText {
+        query_overlay_for_test_with_emphasis(
+            theme,
+            base,
+            query,
+            options,
+            DiffSearchMatchEmphasis::Other,
+        )
+    }
+
+    fn query_overlay_for_test_with_emphasis(
+        theme: AppTheme,
+        base: &CachedDiffStyledText,
+        query: &str,
+        options: crate::view::panes::main::diff_search::DiffSearchOptions,
+        emphasis: DiffSearchMatchEmphasis,
+    ) -> CachedDiffStyledText {
         let matcher = crate::view::panes::main::diff_search::DiffSearchMatcher::new(query, options);
-        build_cached_diff_query_overlay_styled_text(theme, base, &matcher)
+        build_cached_diff_query_overlay_styled_text(theme, base, &matcher, emphasis)
     }
 
     fn test_line_starts(text: &str) -> Arc<[usize]> {
@@ -2747,6 +2765,63 @@ mod tests {
         assert_eq!(overlaid.highlights[4], (7..8, right));
     }
 
+    /// The row the match cursor is on has to be told apart from the others, or
+    /// stepping through matches in a read-only view shows the reader nothing.
+    /// It wears the same token the editable buffer's selection does.
+    #[test]
+    fn query_overlay_marks_the_current_match_with_the_selection_token() {
+        for theme in [AppTheme::gitcomet_dark(), AppTheme::gitcomet_light()] {
+            let base = build_cached_diff_styled_text(
+                theme,
+                "alpha needle beta",
+                &[],
+                "",
+                None,
+                DiffSyntaxMode::Auto,
+                None,
+            );
+
+            let other = query_overlay_for_test(theme, &base, "needle", Default::default());
+            let current = query_overlay_for_test_with_emphasis(
+                theme,
+                &base,
+                "needle",
+                Default::default(),
+                DiffSearchMatchEmphasis::Current,
+            );
+
+            let match_range = 6..12;
+            let background = |styled: &CachedDiffStyledText| {
+                styled
+                    .highlights
+                    .iter()
+                    .find(|(range, _)| *range == match_range)
+                    .and_then(|(_, style)| style.background_color)
+            };
+
+            assert_eq!(
+                background(&other),
+                Some(theme.colors.editor.search_match_background.into_color()),
+                "every other match keeps the plain search wash"
+            );
+            assert_eq!(
+                background(&current),
+                Some(theme.colors.editor.selection_background.into_color()),
+                "the current one wears the selection token, so it reads the same \
+                 as the editable buffer's selected match"
+            );
+            assert_ne!(
+                background(&other),
+                background(&current),
+                "the two washes must actually differ, or stepping is invisible"
+            );
+            assert_ne!(
+                other.highlights_hash, current.highlights_hash,
+                "the hash gates the repaint, so it has to move with the wash"
+            );
+        }
+    }
+
     #[test]
     fn query_overlay_reuses_prebuilt_regex_matcher_for_multiple_rows() {
         let theme = AppTheme::gitcomet_dark();
@@ -2776,8 +2851,18 @@ mod tests {
             None,
         );
 
-        let first = build_cached_diff_query_overlay_styled_text(theme, &first_base, &matcher);
-        let second = build_cached_diff_query_overlay_styled_text(theme, &second_base, &matcher);
+        let first = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &first_base,
+            &matcher,
+            DiffSearchMatchEmphasis::Other,
+        );
+        let second = build_cached_diff_query_overlay_styled_text(
+            theme,
+            &second_base,
+            &matcher,
+            DiffSearchMatchEmphasis::Other,
+        );
 
         let first_ranges: Vec<_> = first
             .highlights

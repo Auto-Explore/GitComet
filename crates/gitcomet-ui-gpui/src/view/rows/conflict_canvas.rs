@@ -70,6 +70,7 @@ pub(super) fn split_conflict_row_canvas(
     right_styled: Option<&CachedDiffStyledText>,
     reveal_whitespace_chars: bool,
     chunk_context: Option<ConflictChunkContext>,
+    ui_scale_percent: u32,
 ) -> AnyElement {
     let left_prepared =
         prepare_conflict_text_for_canvas(left_text, left_styled, reveal_whitespace_chars);
@@ -79,7 +80,7 @@ pub(super) fn split_conflict_row_canvas(
     keyed_canvas(
         ("conflict_resolver_split_row_canvas", visible_row_ix),
         move |bounds, _window, _cx| {
-            let handle_width = px(PANE_RESIZE_HANDLE_PX);
+            let handle_width = conflict_scaled_px(PANE_RESIZE_HANDLE_PX, ui_scale_percent);
             let (left_col, handle_bounds, right_col) = split_columns_with_widths(
                 bounds,
                 left_target_width,
@@ -97,9 +98,12 @@ pub(super) fn split_conflict_row_canvas(
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
             let gap = pad;
+            let line_no_w = conflict_line_no_width(ui_scale_percent);
             let clip_bounds = window.content_mask().bounds;
-            let left_gutter = sticky_gutter_bounds(prepaint.left_col, clip_bounds, pad, gap);
-            let right_gutter = sticky_gutter_bounds(prepaint.right_col, clip_bounds, pad, gap);
+            let left_gutter =
+                sticky_gutter_bounds(prepaint.left_col, clip_bounds, pad, gap, line_no_w);
+            let right_gutter =
+                sticky_gutter_bounds(prepaint.right_col, clip_bounds, pad, gap, line_no_w);
 
             window.paint_quad(fill(prepaint.left_col, left_bg));
             window.paint_quad(fill(prepaint.right_col, right_bg));
@@ -147,14 +151,31 @@ pub(super) fn split_conflict_row_canvas(
                         );
                     },
                 );
-                paint_gutter_divider(left_gutter, pad, theme.colors.stroke.default, window);
-                paint_gutter_divider(right_gutter, pad, theme.colors.stroke.default, window);
+                paint_gutter_divider(
+                    left_gutter,
+                    pad,
+                    line_no_w,
+                    theme.colors.stroke.default,
+                    window,
+                );
+                paint_gutter_divider(
+                    right_gutter,
+                    pad,
+                    line_no_w,
+                    theme.colors.stroke.default,
+                    window,
+                );
             }
 
             let left_text_bounds =
-                split_column_text_bounds(prepaint.left_col, pad, gap, show_line_numbers);
-            let right_text_bounds =
-                split_column_text_bounds(prepaint.right_col, pad, gap, show_line_numbers);
+                split_column_text_bounds(prepaint.left_col, pad, gap, show_line_numbers, line_no_w);
+            let right_text_bounds = split_column_text_bounds(
+                prepaint.right_col,
+                pad,
+                gap,
+                show_line_numbers,
+                line_no_w,
+            );
             let left_text_clip = if show_line_numbers {
                 text_clip_bounds_behind_gutter(left_text_bounds, left_gutter)
             } else {
@@ -271,7 +292,7 @@ pub(super) fn split_conflict_row_canvas(
             }
         },
     )
-    .h(px(20.0))
+    .h(conflict_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
     .text_xs()
@@ -305,6 +326,7 @@ pub(super) fn single_column_conflict_canvas(
     row_selection: Option<bool>,
     // kdiff3 manual diff help: `Some` enables Alt+click marking on this row.
     alignment_mark: Option<AlignmentMarkContext>,
+    ui_scale_percent: u32,
 ) -> AnyElement {
     let prepared = prepare_conflict_text_for_canvas(text, styled, reveal_whitespace_chars);
     let row_selected = row_selection == Some(true);
@@ -318,8 +340,9 @@ pub(super) fn single_column_conflict_canvas(
             let y = center_text_y(bounds, line_metrics.line_height);
             let pad = px_2(window);
             let gap = pad;
+            let line_no_w = conflict_line_no_width(ui_scale_percent);
             let clip_bounds = window.content_mask().bounds;
-            let gutter_bounds = sticky_gutter_bounds(bounds, clip_bounds, pad, gap);
+            let gutter_bounds = sticky_gutter_bounds(bounds, clip_bounds, pad, gap, line_no_w);
 
             window.paint_quad(fill(bounds, bg));
 
@@ -359,7 +382,10 @@ pub(super) fn single_column_conflict_canvas(
                         },
                         bounds.top(),
                     ),
-                    gpui::size(px(3.0), bounds.size.height),
+                    gpui::size(
+                        conflict_scaled_px(CONFLICT_ROW_ACCENT_BAR_WIDTH_PX, ui_scale_percent),
+                        bounds.size.height,
+                    ),
                 );
                 window.paint_quad(fill(bar, theme.colors.accent.foreground));
             }
@@ -381,10 +407,17 @@ pub(super) fn single_column_conflict_canvas(
                         );
                     },
                 );
-                paint_gutter_divider(gutter_bounds, pad, theme.colors.stroke.default, window);
+                paint_gutter_divider(
+                    gutter_bounds,
+                    pad,
+                    line_no_w,
+                    theme.colors.stroke.default,
+                    window,
+                );
             }
 
-            let text_bounds = split_column_text_bounds(bounds, pad, gap, show_line_numbers);
+            let text_bounds =
+                split_column_text_bounds(bounds, pad, gap, show_line_numbers, line_no_w);
             let text_clip_bounds = if show_line_numbers {
                 text_clip_bounds_behind_gutter(text_bounds, gutter_bounds)
             } else {
@@ -539,7 +572,7 @@ pub(super) fn single_column_conflict_canvas(
             }
         },
     )
-    .h(px(20.0))
+    .h(conflict_row_height(ui_scale_percent))
     .min_w(min_width)
     .w_full()
     .text_xs()
@@ -800,19 +833,16 @@ fn split_column_text_bounds(
     pad: Pixels,
     gap: Pixels,
     show_line_numbers: bool,
+    line_no_width: Pixels,
 ) -> Bounds<Pixels> {
     let gutter_width = if show_line_numbers {
-        conflict_line_no_width() + gap
+        line_no_width + gap
     } else {
         px(0.0)
     };
     let left = col.left() + pad + gutter_width;
     let width = (col.size.width - pad * 2.0 - gutter_width).max(px(0.0));
     Bounds::new(point(left, col.top()), size(width, col.size.height))
-}
-
-fn conflict_line_no_width() -> Pixels {
-    px(super::CONFLICT_DIFF_LINE_NO_WIDTH_PX)
 }
 
 /// Paint the vertical divider between the line-number gutter and the code,
@@ -822,10 +852,11 @@ fn conflict_line_no_width() -> Pixels {
 fn paint_gutter_divider(
     gutter_bounds: Bounds<Pixels>,
     pad: Pixels,
+    line_no_width: Pixels,
     color: gpui::Rgba,
     window: &mut Window,
 ) {
-    let x = gutter_bounds.left() + pad + conflict_line_no_width();
+    let x = gutter_bounds.left() + pad + line_no_width;
     window.paint_quad(fill(
         Bounds::new(
             point(x, gutter_bounds.top()),
@@ -843,9 +874,10 @@ fn sticky_gutter_bounds(
     clip_bounds: Bounds<Pixels>,
     pad: Pixels,
     gap: Pixels,
+    line_no_width: Pixels,
 ) -> Bounds<Pixels> {
     let visible_column = column_bounds.intersect(&clip_bounds);
-    let width = (pad + conflict_line_no_width() + gap).min(visible_column.size.width);
+    let width = (pad + line_no_width + gap).min(visible_column.size.width);
     Bounds::new(
         point(visible_column.left(), column_bounds.top()),
         size(width.max(px(0.0)), column_bounds.size.height),
@@ -1096,7 +1128,7 @@ mod tests {
         let column = Bounds::new(point(px(-120.0), px(10.0)), size(px(500.0), px(20.0)));
         let clip = Bounds::new(point(px(0.0), px(0.0)), size(px(300.0), px(200.0)));
 
-        let gutter = sticky_gutter_bounds(column, clip, px(8.0), px(8.0));
+        let gutter = sticky_gutter_bounds(column, clip, px(8.0), px(8.0), px(38.0));
 
         assert_eq!(gutter.left(), clip.left());
         assert_eq!(gutter.size.width, px(54.0));

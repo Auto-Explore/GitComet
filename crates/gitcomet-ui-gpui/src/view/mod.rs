@@ -678,6 +678,14 @@ impl GitCometView {
             .update(cx, |host, cx| host.open_popover_centered(kind, window, cx));
     }
 
+    pub(crate) fn open_clone_repository_prompt(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.open_popover_centered(PopoverKind::CloneRepo, window, cx);
+    }
+
     pub(in crate::view) fn open_popover_for_bounds(
         &mut self,
         kind: PopoverKind,
