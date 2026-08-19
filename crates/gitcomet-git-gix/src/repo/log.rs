@@ -2524,9 +2524,7 @@ mod tests {
 
         let repo = open_repo(workdir);
         // `usize::MAX` reads as "every entry": it must not be reserved up front.
-        let entries = repo
-            .reflog_head_impl(usize::MAX)
-            .expect("reflog_head_impl");
+        let entries = repo.reflog_head_impl(usize::MAX).expect("reflog_head_impl");
         assert_eq!(entries.len(), 1);
     }
 
