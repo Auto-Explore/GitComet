@@ -77,7 +77,7 @@ pub(super) fn reload_repo(state: &mut AppState, repo_id: crate::model::RepoId) -
     repo_state.set_log(Loadable::Loading);
     repo_state.set_log_loading_more(false);
     repo_state.set_stashes(Loadable::NotLoaded);
-    repo_state.reflog = Loadable::NotLoaded;
+    repo_state.set_reflog(Loadable::NotLoaded);
     repo_state.set_rebase_in_progress(Loadable::Loading);
     repo_state.set_sequencer_state(Loadable::Loading);
     repo_state.set_merge_commit_message(Loadable::Loading);

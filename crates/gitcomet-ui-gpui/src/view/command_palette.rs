@@ -413,6 +413,14 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
+        id: "show-reflog",
+        label: "Show Reflog",
+        shortcut: Shortcut::None,
+        category: "History",
+        keywords: "reflog log restore reset recover",
+        requires_repo: true,
+    },
+    CommandEntry {
         id: "back",
         label: "Navigate Back",
         shortcut: Shortcut::Alt("Left"),

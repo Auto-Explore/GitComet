@@ -1441,7 +1441,7 @@ pub(super) fn load_reflog(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> 
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
-    repo_state.reflog = Loadable::Loading;
+    repo_state.set_reflog(Loadable::Loading);
     if repo_state
         .loads_in_flight
         .request(RepoLoadsInFlight::REFLOG)
@@ -2442,13 +2442,14 @@ pub(super) fn reflog_loaded(
 ) -> Vec<Effect> {
     let mut effects = Vec::new();
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        repo_state.reflog = match result {
+        let next = match result {
             Ok(v) => Loadable::Ready(v),
             Err(e) => {
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
                 Loadable::Error(e.to_string())
             }
         };
+        repo_state.set_reflog(next);
         if repo_state.loads_in_flight.finish(RepoLoadsInFlight::REFLOG) {
             effects.push(Effect::LoadReflog {
                 repo_id,

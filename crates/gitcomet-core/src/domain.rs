@@ -923,6 +923,10 @@ pub struct ReflogEntry {
     pub message: Arc<str>,
     pub time: Option<SystemTime>,
     pub selector: Arc<str>,
+    /// The committer name recorded on this reflog line (git stores one
+    /// committer identity per entry, distinct from the commit's own author).
+    /// Empty when the backend could not resolve one.
+    pub author: Arc<str>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -1235,6 +1239,7 @@ index 0000000..1111111 100644
             message: "reflog message".into(),
             time: None,
             selector: "HEAD@{0}".into(),
+            author: "Jane Doe".into(),
         };
         let reflog_clone = reflog.clone();
         assert!(Arc::ptr_eq(&reflog.message, &reflog_clone.message));

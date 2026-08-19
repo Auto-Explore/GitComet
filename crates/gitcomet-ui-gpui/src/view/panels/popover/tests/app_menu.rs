@@ -136,3 +136,29 @@ fn app_menu_owns_keyboard_focus_and_escape_dismisses_it(cx: &mut gpui::TestAppCo
         );
     });
 }
+
+#[gpui::test]
+fn app_menu_offers_the_reflog_panel(cx: &mut gpui::TestAppContext) {
+    let (_view, cx) = open_app_menu(cx);
+
+    let reflog = cx
+        .debug_bounds("app_menu_show_reflog")
+        .expect("app menu should offer Reflog");
+    let locate = cx
+        .debug_bounds("app_menu_locate_file")
+        .expect("app menu should offer Show file in explorer");
+    let apply_patch = cx
+        .debug_bounds("app_menu_apply_patch")
+        .expect("app menu should offer Apply patch");
+
+    // Grouped with the other repository-scoped views, above the separator that
+    // starts the file-operation block.
+    assert!(
+        reflog.top() >= locate.bottom(),
+        "Reflog should follow the file-explorer entry"
+    );
+    assert!(
+        reflog.bottom() <= apply_patch.top(),
+        "Reflog should sit above Apply patch"
+    );
+}

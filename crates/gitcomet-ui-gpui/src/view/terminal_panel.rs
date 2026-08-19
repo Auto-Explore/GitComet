@@ -2130,7 +2130,11 @@ impl GitCometView {
         .detach();
     }
 
-    fn close_terminal_for_repo(&mut self, repo_id: RepoId, cx: &mut gpui::Context<Self>) {
+    pub(super) fn close_terminal_for_repo(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
         if let Some(session) = self.terminal_sessions.remove(&repo_id) {
             for instance in &session.instances {
                 shutdown_terminal_instance(instance, false);
@@ -2538,7 +2542,7 @@ impl GitCometView {
         }
     }
 
-    fn request_close_terminal_for_repo(
+    pub(super) fn request_close_terminal_for_repo(
         &mut self,
         repo_id: RepoId,
         cx: &mut gpui::Context<Self>,

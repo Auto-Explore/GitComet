@@ -179,6 +179,7 @@ pub(in super::super) struct PopoverHost {
     tooltip_host: WeakEntity<TooltipHost>,
     main_pane: Entity<MainPaneView>,
     details_pane: Entity<DetailsPaneView>,
+    reflog_pane: Entity<ReflogPaneView>,
     sidebar_pane: Entity<SidebarPaneView>,
     /// Mirror of the sidebar pane's pinned branches, keyed by repository
     /// workdir. Kept here because context menus are built from click handlers
@@ -470,6 +471,7 @@ fn popover_is_context_menu(kind: &PopoverKind) -> bool {
             | PopoverKind::ConflictResolverChunkMenu { .. }
             | PopoverKind::ConflictResolverOutputMenu { .. }
             | PopoverKind::CommitMenu { .. }
+            | PopoverKind::ReflogEntryMenu { .. }
             | PopoverKind::TagMenu { .. }
             | PopoverKind::TagRefMenu { .. }
             | PopoverKind::StatusFileMenu { .. }
@@ -955,6 +957,7 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::FileBrowserFolderMenu { .. }
         | PopoverKind::BranchGroupMenu { .. }
         | PopoverKind::PinnedSectionMenu { .. }
+        | PopoverKind::ReflogEntryMenu { .. }
         | PopoverKind::BrowseHistoryMenu { .. } => Some(DEFAULT_CONTEXT_MENU_WIDTH),
         PopoverKind::RepoTabMenu { .. } => Some(REPO_TAB_MENU_WIDTH),
         PopoverKind::HistoryBranchFilter { .. }
@@ -1116,6 +1119,7 @@ impl PopoverHost {
         tooltip_host: WeakEntity<TooltipHost>,
         main_pane: Entity<MainPaneView>,
         details_pane: Entity<DetailsPaneView>,
+        reflog_pane: Entity<ReflogPaneView>,
         sidebar_pane: Entity<SidebarPaneView>,
         pinned_branches_by_repo: std::collections::BTreeMap<
             std::path::PathBuf,
@@ -1687,6 +1691,7 @@ impl PopoverHost {
             tooltip_host,
             main_pane,
             details_pane,
+            reflog_pane,
             sidebar_pane,
             pinned_branches_by_repo,
             collapsed_items_by_repo,
@@ -3621,7 +3626,7 @@ impl PopoverHost {
         self.date_time_format = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_date_time_format(next, cx));
-        self.sync_details_pane_date_settings(cx);
+        self.sync_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -3632,7 +3637,7 @@ impl PopoverHost {
         self.timezone = next;
         self.main_pane
             .update(cx, |pane, cx| pane.set_timezone(next, cx));
-        self.sync_details_pane_date_settings(cx);
+        self.sync_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
     }
 
@@ -3647,14 +3652,17 @@ impl PopoverHost {
         self.show_timezone = enabled;
         self.main_pane
             .update(cx, |pane, cx| pane.set_show_timezone(enabled, cx));
-        self.sync_details_pane_date_settings(cx);
+        self.sync_pane_date_settings(cx);
         self.schedule_ui_settings_persist(cx);
     }
 
-    fn sync_details_pane_date_settings(&mut self, cx: &mut gpui::Context<Self>) {
+    fn sync_pane_date_settings(&mut self, cx: &mut gpui::Context<Self>) {
         let (format, timezone, show_timezone) =
             (self.date_time_format, self.timezone, self.show_timezone);
         self.details_pane.update(cx, |pane, cx| {
+            pane.set_date_settings(format, timezone, show_timezone, cx);
+        });
+        self.reflog_pane.update(cx, |pane, cx| {
             pane.set_date_settings(format, timezone, show_timezone, cx);
         });
     }
@@ -4183,6 +4191,18 @@ impl PopoverHost {
             PopoverKind::CommitMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::CommitMenu { repo_id, commit_id }, cx)
             }
+            PopoverKind::ReflogEntryMenu {
+                repo_id,
+                target,
+                selector,
+            } => self.context_menu_view(
+                PopoverKind::ReflogEntryMenu {
+                    repo_id,
+                    target,
+                    selector,
+                },
+                cx,
+            ),
             PopoverKind::TagMenu { repo_id, commit_id } => {
                 self.context_menu_view(PopoverKind::TagMenu { repo_id, commit_id }, cx)
             }
