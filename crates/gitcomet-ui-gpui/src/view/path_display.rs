@@ -1,8 +1,8 @@
 use gpui::SharedString;
 #[cfg(windows)]
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 #[cfg(not(windows))]
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 #[cfg(not(windows))]
 use rustc_hash::FxHasher;
 #[cfg(not(windows))]
@@ -26,9 +26,9 @@ pub(in crate::view) struct PathDisplayBenchSnapshot {
 #[cfg(not(windows))]
 type PathDisplayCacheBucket = SmallVec<[SharedString; 1]>;
 #[cfg(not(windows))]
-type PathDisplayCacheMap = HashMap<u64, PathDisplayCacheBucket>;
+type PathDisplayCacheMap = FxHashMap<u64, PathDisplayCacheBucket>;
 #[cfg(windows)]
-type PathDisplayCacheMap = HashMap<PathBuf, SharedString>;
+type PathDisplayCacheMap = FxHashMap<PathBuf, SharedString>;
 
 /// A bounded two-generation cache. Keeping the previous generation avoids the
 /// all-or-nothing cliff when a large repo first crosses the cache cap.
@@ -38,7 +38,7 @@ pub(super) struct PathDisplayCache {
     recent_entries: usize,
     previous_entries: usize,
     #[cfg(not(windows))]
-    present_hash_counts: HashMap<u64, u16>,
+    present_hash_counts: FxHashMap<u64, u16>,
     #[cfg(not(windows))]
     overflow_tail_active: bool,
 }
@@ -47,23 +47,29 @@ impl Default for PathDisplayCache {
     fn default() -> Self {
         Self {
             #[cfg(not(windows))]
-            recent: HashMap::with_capacity_and_hasher(Self::RECENT_MAX_ENTRIES, Default::default()),
-            #[cfg(windows)]
-            recent: HashMap::with_capacity_and_hasher(Self::RECENT_MAX_ENTRIES, Default::default()),
-            #[cfg(not(windows))]
-            previous: HashMap::with_capacity_and_hasher(
+            recent: FxHashMap::with_capacity_and_hasher(
                 Self::RECENT_MAX_ENTRIES,
                 Default::default(),
             ),
             #[cfg(windows)]
-            previous: HashMap::with_capacity_and_hasher(
+            recent: FxHashMap::with_capacity_and_hasher(
+                Self::RECENT_MAX_ENTRIES,
+                Default::default(),
+            ),
+            #[cfg(not(windows))]
+            previous: FxHashMap::with_capacity_and_hasher(
+                Self::RECENT_MAX_ENTRIES,
+                Default::default(),
+            ),
+            #[cfg(windows)]
+            previous: FxHashMap::with_capacity_and_hasher(
                 Self::RECENT_MAX_ENTRIES,
                 Default::default(),
             ),
             recent_entries: 0,
             previous_entries: 0,
             #[cfg(not(windows))]
-            present_hash_counts: HashMap::with_capacity_and_hasher(
+            present_hash_counts: FxHashMap::with_capacity_and_hasher(
                 Self::MAX_ENTRIES,
                 Default::default(),
             ),
@@ -132,13 +138,13 @@ fn bucket_find<'a>(bucket: &'a PathDisplayCacheBucket, path_key: &str) -> Option
 
 #[cfg(not(windows))]
 #[inline]
-fn hash_counts_contains(hash_counts: &HashMap<u64, u16>, path_key_hash: u64) -> bool {
+fn hash_counts_contains(hash_counts: &FxHashMap<u64, u16>, path_key_hash: u64) -> bool {
     hash_counts.contains_key(&path_key_hash)
 }
 
 #[cfg(not(windows))]
 #[inline]
-fn hash_counts_insert(hash_counts: &mut HashMap<u64, u16>, path_key_hash: u64) {
+fn hash_counts_insert(hash_counts: &mut FxHashMap<u64, u16>, path_key_hash: u64) {
     hash_counts
         .entry(path_key_hash)
         .and_modify(|count| *count = count.saturating_add(1))
@@ -148,7 +154,7 @@ fn hash_counts_insert(hash_counts: &mut HashMap<u64, u16>, path_key_hash: u64) {
 #[cfg(not(windows))]
 #[inline]
 fn hash_counts_remove(
-    hash_counts: &mut HashMap<u64, u16>,
+    hash_counts: &mut FxHashMap<u64, u16>,
     path_key_hash: u64,
     removed_entries: usize,
 ) {
@@ -167,7 +173,7 @@ fn hash_counts_remove(
 }
 
 #[cfg(not(windows))]
-fn remove_generation_hashes(cache: &PathDisplayCacheMap, hash_counts: &mut HashMap<u64, u16>) {
+fn remove_generation_hashes(cache: &PathDisplayCacheMap, hash_counts: &mut FxHashMap<u64, u16>) {
     for (&path_key_hash, bucket) in cache.iter() {
         hash_counts_remove(hash_counts, path_key_hash, bucket.len());
     }
@@ -190,7 +196,7 @@ fn cache_lookup(
 fn cache_remove(
     cache: &mut PathDisplayCacheMap,
     entry_count: &mut usize,
-    hash_counts: &mut HashMap<u64, u16>,
+    hash_counts: &mut FxHashMap<u64, u16>,
     path_key_hash: u64,
     path_key: &str,
 ) -> Option<SharedString> {
@@ -218,7 +224,7 @@ fn cache_remove(
 fn cache_insert(
     cache: &mut PathDisplayCacheMap,
     entry_count: &mut usize,
-    hash_counts: &mut HashMap<u64, u16>,
+    hash_counts: &mut FxHashMap<u64, u16>,
     path_key_hash: u64,
     label: SharedString,
 ) {

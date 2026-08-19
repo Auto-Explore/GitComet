@@ -526,7 +526,7 @@ fn diff_search_resume_match_ix(
 fn inline_patch_diff_search_text<'a>(
     diff: &'a Diff,
     diff_click_kinds: &[DiffClickKind],
-    diff_header_display_cache: &'a HashMap<usize, SharedString>,
+    diff_header_display_cache: &'a FxHashMap<usize, SharedString>,
     src_ix: usize,
 ) -> Option<Cow<'a, str>> {
     let line = diff.lines.get(src_ix)?;
@@ -570,7 +570,7 @@ fn inline_patch_diff_src_ix_for_visible_ix(
 fn inline_patch_diff_visible_ix_matches_query(
     diff: &Diff,
     diff_click_kinds: &[DiffClickKind],
-    diff_header_display_cache: &HashMap<usize, SharedString>,
+    diff_header_display_cache: &FxHashMap<usize, SharedString>,
     diff_visible_inline_map: Option<&super::diff_cache::PatchInlineVisibleMap>,
     diff_visible_indices: &[usize],
     query: AsciiCaseInsensitiveNeedle<'_>,
@@ -590,7 +590,7 @@ fn inline_patch_diff_visible_ix_matches_query(
 fn collect_inline_patch_diff_visible_matches_with_needle(
     diff: &Diff,
     diff_click_kinds: &[DiffClickKind],
-    diff_header_display_cache: &HashMap<usize, SharedString>,
+    diff_header_display_cache: &FxHashMap<usize, SharedString>,
     diff_visible_inline_map: Option<&super::diff_cache::PatchInlineVisibleMap>,
     diff_visible_indices: &[usize],
     query: AsciiCaseInsensitiveNeedle<'_>,

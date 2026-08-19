@@ -11,7 +11,7 @@ use gitcomet_core::mergetool_trace::{
 };
 use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CancellationToken, ConflictFileStages, GitBackend, GitRepository};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 use std::time::Instant;
@@ -1073,7 +1073,7 @@ const WORKTREE_SCAN_HANDLE_LIMIT: usize = 16;
 
 #[derive(Default)]
 struct WorktreeScanHandles {
-    entries: HashMap<(RepoId, PathBuf), WorktreeScanHandle>,
+    entries: FxHashMap<(RepoId, PathBuf), WorktreeScanHandle>,
     /// Ticks once per lookup; the entry holding the highest tick is the hottest.
     clock: u64,
 }
@@ -1115,7 +1115,7 @@ impl WorktreeScanHandles {
     /// wanted next, and nothing about this repo's cycle says which of theirs to
     /// keep.
     fn evict_one_for(&mut self, repo_id: RepoId) -> bool {
-        let mut held: HashMap<RepoId, usize> = HashMap::default();
+        let mut held: FxHashMap<RepoId, usize> = FxHashMap::default();
         for (entry_repo, _) in self.entries.keys() {
             *held.entry(*entry_repo).or_default() += 1;
         }

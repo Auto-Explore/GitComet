@@ -2258,14 +2258,14 @@ impl HistoryView {
 
     pub(in super::super) fn ensure_history_stash_ids_cache(
         &mut self,
-    ) -> Option<Arc<HashSet<CommitId>>> {
+    ) -> Option<Arc<FxHashSet<CommitId>>> {
         enum Action {
             Clear,
-            CacheOk(Arc<HashSet<CommitId>>),
+            CacheOk(Arc<FxHashSet<CommitId>>),
             Rebuild {
                 repo_id: RepoId,
                 stashes_rev: u64,
-                ids: Arc<HashSet<CommitId>>,
+                ids: Arc<FxHashSet<CommitId>>,
             },
         }
 
@@ -2288,7 +2288,7 @@ impl HistoryView {
                 return Action::CacheOk(Arc::clone(&cache.ids));
             }
 
-            let ids: HashSet<_> = stashes.iter().map(|s| s.id.clone()).collect();
+            let ids: FxHashSet<_> = stashes.iter().map(|s| s.id.clone()).collect();
             let ids = Arc::new(ids);
             Action::Rebuild {
                 repo_id: repo.id,
@@ -2575,8 +2575,8 @@ fn build_history_base_cache(
         .unwrap_or(1);
 
     let has_stash_tips = !stash_tips.is_empty();
-    let mut author_cache: HashMap<&str, HistoryTextVm> =
-        HashMap::with_capacity_and_hasher(64, Default::default());
+    let mut author_cache: FxHashMap<&str, HistoryTextVm> =
+        FxHashMap::with_capacity_and_hasher(64, Default::default());
     let mut row_vms = Vec::with_capacity(visible_indices.len());
     if has_stash_tips {
         let mut next_stash_tip_ix = 0usize;
@@ -2637,8 +2637,8 @@ fn build_history_base_cache(
 
     // One entry per visible commit, built here so its readers can look up an id
     // during layout without walking the page.
-    let mut visible_ix_by_commit: rustc_hash::FxHashMap<CommitId, usize> =
-        rustc_hash::FxHashMap::with_capacity_and_hasher(visible_indices.len(), Default::default());
+    let mut visible_ix_by_commit: FxHashMap<CommitId, usize> =
+        FxHashMap::with_capacity_and_hasher(visible_indices.len(), Default::default());
     for (visible_ix, commit_ix) in visible_indices.iter().enumerate() {
         if let Some(commit) = page.commits.get(commit_ix) {
             visible_ix_by_commit
@@ -2696,10 +2696,10 @@ fn build_history_decoration_cache(
     // Owned keys: the names come from per-row `ref_items` that do not outlive
     // the iteration. Only ever written on a *miss*, so the allocations are
     // bounded by the number of distinct branch names rather than by rows.
-    let mut branch_name_ix: HashMap<String, u16> = HashMap::default();
+    let mut branch_name_ix: FxHashMap<String, u16> = FxHashMap::default();
     // Local branches with an upstream, so attribution can prefer shared history
     // over a branch that only exists on this machine.
-    let tracked_local_branches: HashSet<&str> = branches
+    let tracked_local_branches: FxHashSet<&str> = branches
         .iter()
         .filter(|branch| branch.upstream.is_some())
         .map(|branch| branch.name.as_str())
@@ -2847,7 +2847,7 @@ fn build_history_decoration_cache(
 /// the table kept growing, so rows would be labelled with someone else's branch.
 fn intern_branch_name(
     names: &mut Vec<SharedString>,
-    ix_by_name: &mut HashMap<String, u16>,
+    ix_by_name: &mut FxHashMap<String, u16>,
     name: &str,
 ) -> Option<u16> {
     // Probed by `&str` first: on the hit path -- which is nearly every row in a
@@ -2932,7 +2932,7 @@ fn branch_attribution_rank(name: &str, tracked: bool) -> u8 {
 /// when the row carries no branch ref. Ties keep the rendered ref order.
 fn history_row_attribution_branch<'a>(
     ref_items: &'a [HistoryRefListItem],
-    tracked_local_branches: &HashSet<&str>,
+    tracked_local_branches: &FxHashSet<&str>,
 ) -> Option<&'a str> {
     ref_items
         .iter()
@@ -3087,7 +3087,7 @@ mod tests {
         dirty_paths: &[&str],
     ) -> Vec<usize> {
         let visible = HistoryVisibleIndices::all(commits.len());
-        let mut visible_ix_by_commit: HashMap<&str, usize> = HashMap::default();
+        let mut visible_ix_by_commit: FxHashMap<&str, usize> = FxHashMap::default();
         for (visible_ix, commit_ix) in visible.iter().enumerate() {
             visible_ix_by_commit
                 .entry(commits[commit_ix].id.as_ref())
@@ -3358,7 +3358,7 @@ mod tests {
                 },
             },
         ];
-        let tracked = HashSet::from_iter(["dev"]);
+        let tracked = FxHashSet::from_iter(["dev"]);
         assert_eq!(
             history_row_attribution_branch(&ref_items, &tracked),
             Some("dev")
@@ -3366,7 +3366,7 @@ mod tests {
 
         // ...and it must still hold when the feature branch has been pushed, so
         // "is tracked" alone cannot separate them.
-        let tracked = HashSet::from_iter(["dev", "feat/thing"]);
+        let tracked = FxHashSet::from_iter(["dev", "feat/thing"]);
         assert_eq!(
             history_row_attribution_branch(&ref_items, &tracked),
             Some("dev")
@@ -3391,14 +3391,14 @@ mod tests {
                 },
             },
         ];
-        let tracked = HashSet::from_iter(["release/24"]);
+        let tracked = FxHashSet::from_iter(["release/24"]);
         assert_eq!(
             history_row_attribution_branch(&ref_items, &tracked),
             Some("release/24")
         );
 
         // With nothing to separate them, the rendered order decides.
-        let tracked = HashSet::default();
+        let tracked = FxHashSet::default();
         assert_eq!(
             history_row_attribution_branch(&ref_items, &tracked),
             Some("scratch")
@@ -3422,7 +3422,7 @@ mod tests {
             },
         ];
         assert_eq!(
-            history_row_attribution_branch(&ref_items, &HashSet::default()),
+            history_row_attribution_branch(&ref_items, &FxHashSet::default()),
             Some("origin/dev")
         );
     }

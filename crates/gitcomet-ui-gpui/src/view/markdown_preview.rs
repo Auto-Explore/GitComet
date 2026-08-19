@@ -915,7 +915,10 @@ fn align_markdown_diff_rows(
 ) -> Option<()> {
     let old_rows = std::mem::take(&mut old_doc.rows);
     let new_rows = std::mem::take(&mut new_doc.rows);
-    let aligned_capacity = old_rows.len().saturating_add(new_rows.len());
+    // Each side ends up near max(old, new) plus padding rows -- not the sum --
+    // and both vecs are moved into the documents below without shrinking, so an
+    // over-estimate is retained for the cached document's lifetime.
+    let aligned_capacity = old_rows.len().max(new_rows.len());
 
     let (mut old_groups, old_trailing) =
         markdown_rows_grouped_by_diff_anchor(old_rows, old_line_to_diff_row, diff_row_count);
@@ -1224,7 +1227,10 @@ fn flatten_to_rows(source: &str, line_starts: &[usize]) -> Option<Vec<MarkdownPr
 
     let options = markdown_parser_options();
 
-    let mut rows = Vec::with_capacity(line_starts.len());
+    // Rows are per markdown *block*, not per line, and `push_row_with_context`
+    // bails at MAX_PREVIEW_ROWS regardless, so the line count is only an upper
+    // bound worth honouring up to that cap.
+    let mut rows = Vec::with_capacity(line_starts.len().min(MAX_PREVIEW_ROWS));
     let mut text_buf = String::new();
     struct PendingImage {
         source: SharedString,
@@ -2825,9 +2831,11 @@ fn build_aligned_table_row_text(
         .iter()
         .copied()
         .fold(0usize, usize::saturating_add)
-        .saturating_add(cells.iter().fold(0usize, |extra_bytes, cell| {
-            extra_bytes.saturating_add(cell.text.len().saturating_sub(cell.text.chars().count()))
-        }))
+        .saturating_add(
+            cells
+                .iter()
+                .fold(0usize, |bytes, cell| bytes.saturating_add(cell.text.len())),
+        )
         .saturating_add(
             TABLE_COLUMN_SEPARATOR
                 .len()
@@ -3012,6 +3020,24 @@ mod tests {
 
     fn parse(src: &str) -> MarkdownPreviewDocument {
         parse_markdown(src).expect("parse should succeed")
+    }
+
+    #[test]
+    fn parse_does_not_reserve_rows_beyond_the_row_cap() {
+        // Rows are per markdown *block*, so the source line count is unrelated
+        // to how many there will be -- and `MAX_PREVIEW_SOURCE_BYTES` admits a
+        // 1 MiB file of short lines. Reserving one row per line there costs
+        // hundreds of megabytes for a document the parser caps far below it.
+        let source = "\n".repeat(50_000);
+        assert!(source.len() <= MAX_PREVIEW_SOURCE_BYTES);
+
+        let doc = parse_markdown(&source).expect("blank lines parse");
+
+        assert!(
+            doc.rows.capacity() <= MAX_PREVIEW_ROWS,
+            "reserved {} rows for a document capped at {MAX_PREVIEW_ROWS}",
+            doc.rows.capacity()
+        );
     }
 
     fn thematic_break_rows(count: usize) -> String {

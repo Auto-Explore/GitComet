@@ -1,4 +1,5 @@
 use super::*;
+use rustc_hash::FxHasher;
 
 pub(super) struct DiffTextSelectionTracker {
     pub(super) view: Entity<MainPaneView>,
@@ -253,7 +254,7 @@ impl Element for DiffTextSelectionOverlay {
         let style = window.text_style();
         let font_size = style.font_size.to_pixels(window.rem_size());
 
-        let mut hasher = rustc_hash::FxHasher::default();
+        let mut hasher = FxHasher::default();
         self.text.as_ref().hash(&mut hasher);
         font_size.hash(&mut hasher);
         let layout_key = hasher.finish();

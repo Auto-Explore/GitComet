@@ -2,7 +2,7 @@ use gpui::Hsla;
 use gpui::Rgba;
 use gpui::WindowAppearance;
 use palette::IntoColor;
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -29,7 +29,7 @@ struct EmbeddedThemeFile {
 
 include!(concat!(env!("OUT_DIR"), "/embedded_themes.rs"));
 
-static EMBEDDED_THEME_CACHE: OnceLock<HashMap<String, RuntimeThemeSpec>> = OnceLock::new();
+static EMBEDDED_THEME_CACHE: OnceLock<FxHashMap<String, RuntimeThemeSpec>> = OnceLock::new();
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AppTheme {
@@ -1239,9 +1239,9 @@ pub(crate) fn shadow_modal(theme: AppTheme) -> Vec<gpui::BoxShadow> {
     ]
 }
 
-fn embedded_theme_cache() -> &'static HashMap<String, RuntimeThemeSpec> {
+fn embedded_theme_cache() -> &'static FxHashMap<String, RuntimeThemeSpec> {
     EMBEDDED_THEME_CACHE.get_or_init(|| {
-        let mut themes = HashMap::default();
+        let mut themes = FxHashMap::default();
         for file in EMBEDDED_THEME_FILES {
             let specs = load_theme_specs_from_json(file.json).unwrap_or_else(|err| {
                 panic!("failed to load built-in theme file {}: {err}", file.stem)
@@ -1286,7 +1286,7 @@ fn merged_theme_options(runtime_dir: Option<&Path>) -> Vec<ThemeOption> {
     options.into_values().collect()
 }
 
-fn runtime_themes() -> Arc<HashMap<String, RuntimeThemeSpec>> {
+fn runtime_themes() -> Arc<FxHashMap<String, RuntimeThemeSpec>> {
     runtime_themes_with_dir(None)
 }
 
@@ -1299,7 +1299,7 @@ fn runtime_themes() -> Arc<HashMap<String, RuntimeThemeSpec>> {
 /// while that dropdown is open. Theme authors still expect an edit to show up
 /// without a restart, so the cache is validated against a cheap stat of the
 /// directory rather than held forever.
-fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<HashMap<String, RuntimeThemeSpec>> {
+fn runtime_themes_with_dir(runtime_dir: Option<&Path>) -> Arc<FxHashMap<String, RuntimeThemeSpec>> {
     runtime_theme_cache_entry(runtime_dir)
         .map(|entry| entry.themes)
         .unwrap_or_default()
@@ -1326,7 +1326,7 @@ fn runtime_theme_cache_entry(runtime_dir: Option<&Path>) -> Option<RuntimeThemeC
     let dir = resolved_runtime_themes_dir(runtime_dir)?;
 
     let signature = runtime_themes_dir_signature(&dir);
-    let cache = RUNTIME_THEME_CACHE.get_or_init(|| Mutex::new(HashMap::default()));
+    let cache = RUNTIME_THEME_CACHE.get_or_init(|| Mutex::new(FxHashMap::default()));
     {
         let cached = cache
             .lock()
@@ -1367,7 +1367,7 @@ pub(crate) struct RuntimeThemeIssue {
 #[derive(Clone)]
 struct RuntimeThemeCache {
     signature: u64,
-    themes: Arc<HashMap<String, RuntimeThemeSpec>>,
+    themes: Arc<FxHashMap<String, RuntimeThemeSpec>>,
     issues: Arc<[RuntimeThemeIssue]>,
 }
 
@@ -1375,7 +1375,8 @@ struct RuntimeThemeCache {
 /// evicted by any interleaved load of a *different* directory, which would drop
 /// the memoization the settings dropdown depends on the moment anything else
 /// asks for themes elsewhere.
-static RUNTIME_THEME_CACHE: OnceLock<Mutex<HashMap<PathBuf, RuntimeThemeCache>>> = OnceLock::new();
+static RUNTIME_THEME_CACHE: OnceLock<Mutex<FxHashMap<PathBuf, RuntimeThemeCache>>> =
+    OnceLock::new();
 
 const MAX_CACHED_RUNTIME_THEME_DIRS: usize = 16;
 
@@ -1401,7 +1402,7 @@ fn runtime_themes_dir_signature(dir: &Path) -> u64 {
         .collect();
     files.sort();
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     for (path, len, modified) in files {
         path.hash(&mut hasher);
         len.hash(&mut hasher);
@@ -1428,9 +1429,9 @@ fn resolved_runtime_themes_dir(runtime_dir: Option<&Path>) -> Option<PathBuf> {
 
 fn load_runtime_themes_from_dir(
     dir: &Path,
-) -> (HashMap<String, RuntimeThemeSpec>, Vec<RuntimeThemeIssue>) {
+) -> (FxHashMap<String, RuntimeThemeSpec>, Vec<RuntimeThemeIssue>) {
     let Ok(entries) = fs::read_dir(dir) else {
-        return (HashMap::default(), Vec::new());
+        return (FxHashMap::default(), Vec::new());
     };
 
     let mut files = entries
@@ -1440,7 +1441,7 @@ fn load_runtime_themes_from_dir(
         .collect::<Vec<_>>();
     files.sort();
 
-    let mut themes = HashMap::default();
+    let mut themes = FxHashMap::default();
     let mut issues = Vec::new();
     let reject = |issues: &mut Vec<RuntimeThemeIssue>, path: &Path, message: String| {
         eprintln!("Ignoring custom theme {}: {message}", path.display());
@@ -1507,7 +1508,7 @@ fn collect_theme_specs(
         ));
     }
 
-    let mut seen_keys = HashSet::<String>::default();
+    let mut seen_keys = FxHashSet::<String>::default();
     let mut themes = Vec::with_capacity(bundle.themes.len());
 
     for entry in bundle.themes {
@@ -1542,7 +1543,7 @@ fn collect_theme_specs(
 /// silently repaint its graph.
 const UNFILLED_COLOR_TOKENS: &[&str] = &["graph_lane_palette", "graph_lane_hues"];
 
-static BUNDLED_COLOR_TOKENS: OnceLock<HashMap<&'static str, serde_json::Value>> = OnceLock::new();
+static BUNDLED_COLOR_TOKENS: OnceLock<FxHashMap<&'static str, serde_json::Value>> = OnceLock::new();
 
 /// The `colors` object of the bundled theme for `appearance`, as raw JSON.
 ///
@@ -1556,7 +1557,7 @@ fn bundled_color_tokens(appearance: &str) -> Option<&'static serde_json::Value> 
     };
     BUNDLED_COLOR_TOKENS
         .get_or_init(|| {
-            let mut tokens = HashMap::default();
+            let mut tokens = FxHashMap::default();
             for file in EMBEDDED_THEME_FILES {
                 let Ok(bundle) = serde_json::from_str::<serde_json::Value>(file.json) else {
                     continue;

@@ -12,6 +12,7 @@ use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceRenderingMode, MergetoolTraceSideStats,
     MergetoolTraceStage,
 };
+use rustc_hash::{FxHashMap, FxHasher};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -142,7 +143,7 @@ const CONFLICT_SOURCE_FINGERPRINT_WINDOW_BYTES: usize = 256;
 fn sampled_content_fingerprint(bytes: &[u8], domain: &str) -> u64 {
     use std::hash::Hasher;
 
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     hasher.write_usize(domain.len());
     hasher.write(domain.as_bytes());
     hasher.write_usize(bytes.len());
@@ -1275,7 +1276,7 @@ impl MainPaneView {
         // runs even for both-added conflicts where the three-way pass stays empty.
         let two_way_word_highlights_started = Instant::now();
         let two_way_aligned_word_highlights = if three_way_aligned.is_identity() {
-            rustc_hash::FxHashMap::default()
+            FxHashMap::default()
         } else {
             conflict_resolver::compute_aligned_two_way_word_highlights(
                 &three_way_aligned,
@@ -1447,14 +1448,14 @@ impl MainPaneView {
             context_fold_reveals: if is_same_conflict {
                 std::mem::take(&mut self.conflict_resolver.context_fold_reveals)
             } else {
-                HashMap::default()
+                FxHashMap::default()
             },
             resolved_output_visible: None,
             resolved_output_visible_dirty: true,
             output_context_fold_reveals: if is_same_conflict {
                 std::mem::take(&mut self.conflict_resolver.output_context_fold_reveals)
             } else {
-                HashMap::default()
+                FxHashMap::default()
             },
             conflict_region_indices,
             display_plan_block_indices,
@@ -1482,7 +1483,7 @@ impl MainPaneView {
             three_way_horizontal_measure_rows: [0; 3],
             conflict_has_base: Vec::new(),
             conflict_choices: Vec::new(),
-            two_way_split_visual_kind_cache: HashMap::default(),
+            two_way_split_visual_kind_cache: FxHashMap::default(),
             two_way_horizontal_measure_rows: [0; 2],
             three_way_word_highlights,
             two_way_aligned_word_highlights,

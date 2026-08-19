@@ -6,6 +6,7 @@ use gitcomet_core::domain::{Diff, FileDiffImage, FileDiffText, LogScope};
 use gitcomet_core::mergetool_trace::{
     self, MergetoolTraceEvent, MergetoolTraceSideStats, MergetoolTraceStage,
 };
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -272,7 +273,7 @@ fn compute_resolved_outline_computation(
             outline: ResolvedOutlineData {
                 meta: Vec::new(),
                 markers,
-                sources_index: HashSet::default(),
+                sources_index: FxHashSet::default(),
             },
         };
     }
@@ -343,7 +344,7 @@ fn compute_resolved_outline_computation_from_projection(
             outline: ResolvedOutlineData {
                 meta: Vec::new(),
                 markers,
-                sources_index: HashSet::default(),
+                sources_index: FxHashSet::default(),
             },
         };
     }
@@ -354,12 +355,12 @@ fn compute_resolved_outline_computation_from_projection(
             outline: ResolvedOutlineData {
                 meta: Vec::new(),
                 markers,
-                sources_index: HashSet::default(),
+                sources_index: FxHashSet::default(),
             },
         };
     };
-    let mut source_lookup: HashMap<&str, (conflict_resolver::ResolvedLineSource, Option<u32>)> =
-        HashMap::default();
+    let mut source_lookup: FxHashMap<&str, (conflict_resolver::ResolvedLineSource, Option<u32>)> =
+        FxHashMap::default();
     match sources {
         ResolvedOutlineSourceView::ThreeWay {
             base_text,
@@ -431,7 +432,7 @@ fn compute_resolved_outline_computation_from_projection(
         view_mode,
     );
 
-    let mut sources_index = HashSet::default();
+    let mut sources_index = FxHashSet::default();
     sources_index.reserve(meta.len());
     for (line_ix, line_meta) in meta.iter().enumerate() {
         if line_meta.source == conflict_resolver::ResolvedLineSource::Manual {
@@ -462,7 +463,7 @@ fn compute_resolved_outline_computation_from_projection(
 }
 
 fn insert_lookup_from_indexed_text<'a>(
-    lookup: &mut HashMap<&'a str, (conflict_resolver::ResolvedLineSource, Option<u32>)>,
+    lookup: &mut FxHashMap<&'a str, (conflict_resolver::ResolvedLineSource, Option<u32>)>,
     source: conflict_resolver::ResolvedLineSource,
     text: &'a str,
     line_starts: &[usize],
@@ -481,7 +482,7 @@ fn insert_lookup_from_indexed_text<'a>(
 }
 
 fn update_line_sources_index_for_range(
-    index: &mut HashSet<conflict_resolver::SourceLineKey>,
+    index: &mut FxHashSet<conflict_resolver::SourceLineKey>,
     view_mode: ConflictResolverViewMode,
     meta: &[conflict_resolver::ResolvedLineMeta],
     text: &str,
@@ -948,7 +949,7 @@ impl MainPaneView {
                     .source_colors
                     .iter()
                     .cloned()
-                    .collect::<HashMap<_, _>>();
+                    .collect::<FxHashMap<_, _>>();
                 // A repeated state application for the same setup must not
                 // replace view-local reordering or action edits. A different
                 // id set is a genuinely new setup.
@@ -1000,7 +1001,7 @@ impl MainPaneView {
     pub(super) fn notify_fingerprint_for(state: &AppState) -> u64 {
         use std::hash::{Hash, Hasher};
 
-        let mut hasher = rustc_hash::FxHasher::default();
+        let mut hasher = FxHasher::default();
         state.active_repo.hash(&mut hasher);
 
         if let Some(repo_id) = state.active_repo
@@ -1618,7 +1619,7 @@ impl MainPaneView {
             annotate_resize: None,
             blame_annot_hover: None,
             diff_stage_gutter_hover: None,
-            diff_stage_gutter_cells: HashMap::default(),
+            diff_stage_gutter_cells: FxHashMap::default(),
             blame_time_range_cache: None,
             rendered_preview_modes: RenderedPreviewModes::default(),
             diff_word_wrap,
@@ -1645,7 +1646,7 @@ impl MainPaneView {
             diff_line_kind_for_src_ix: Vec::new(),
             diff_visual_line_kind_for_src_ix: Vec::new(),
             diff_hide_unified_header_for_src_ix: Vec::new(),
-            diff_header_display_cache: HashMap::default(),
+            diff_header_display_cache: FxHashMap::default(),
             diff_split_cache: Vec::new(),
             diff_split_cache_len: 0,
             diff_panel_focus_handle,
@@ -1657,11 +1658,11 @@ impl MainPaneView {
             diff_wrap_visible_rows: Vec::new(),
             diff_wrap_visible_cache_key: None,
             collapsed_diff_hunks: Vec::new(),
-            collapsed_diff_hunk_ix_by_src_ix: HashMap::default(),
-            collapsed_diff_reveals: HashMap::default(),
+            collapsed_diff_hunk_ix_by_src_ix: FxHashMap::default(),
+            collapsed_diff_reveals: FxHashMap::default(),
             collapsed_diff_visible_rows: Vec::new(),
             collapsed_diff_hunk_visible_indices: Vec::new(),
-            collapsed_diff_header_display_cache: HashMap::default(),
+            collapsed_diff_header_display_cache: FxHashMap::default(),
             collapsed_diff_projection_identity: None,
             diff_visible_cache_len: 0,
             diff_visible_view: DiffViewMode::Split,
@@ -1687,11 +1688,11 @@ impl MainPaneView {
             diff_text_autoscroll_target: None,
             diff_text_last_mouse_pos: point(px(0.0), px(0.0)),
             diff_suppress_clicks_remaining: 0,
-            diff_text_hitboxes: HashMap::default(),
+            diff_text_hitboxes: FxHashMap::default(),
             diff_search_horizontal_reveal: None,
-            conflict_text_hitboxes: HashMap::default(),
+            conflict_text_hitboxes: FxHashMap::default(),
             diff_text_layout_cache_epoch: 0,
-            diff_text_layout_cache: HashMap::default(),
+            diff_text_layout_cache: FxHashMap::default(),
             diff_search_active: false,
             diff_search_query: "".into(),
             diff_search_options: Default::default(),
@@ -1736,7 +1737,7 @@ impl MainPaneView {
             file_diff_syntax_generation: 0,
             file_diff_style_cache_epochs: FileDiffStyleCacheEpochs::default(),
             syntax_chunk_poll_task: None,
-            prepared_syntax_documents: HashMap::default(),
+            prepared_syntax_documents: FxHashMap::default(),
             #[cfg(test)]
             diff_syntax_budget_override: None,
             file_markdown_preview_cache_repo_id: None,
@@ -1774,14 +1775,14 @@ impl MainPaneView {
             worktree_markdown_preview_picture_sizes: Default::default(),
             worktree_markdown_preview_block_scrolls: Default::default(),
             worktree_markdown_preview_blocks: Default::default(),
-            worktree_markdown_preview_image_waits: HashSet::default(),
+            worktree_markdown_preview_image_waits: FxHashSet::default(),
             worktree_markdown_preview_seq: 0,
             worktree_markdown_preview_inflight: None,
             worktree_preview_segments_cache_path: None,
             worktree_preview_syntax_language: None,
             worktree_preview_style_cache_epoch: 0,
             worktree_preview_cache_write_blocked_until_rev: None,
-            worktree_preview_segments_cache: HashMap::default(),
+            worktree_preview_segments_cache: FxHashMap::default(),
             diff_preview_is_new_file: false,
             file_editor_input,
             _file_editor_input_subscription: file_editor_subscription,
@@ -1794,7 +1795,7 @@ impl MainPaneView {
             file_editor_first_dirty_line: None,
             unsaved_file_edits_rev: 0,
             file_editor_saved_fingerprint: None,
-            file_editor_stash: HashMap::default(),
+            file_editor_stash: FxHashMap::default(),
             file_editor_autosave: None,
             file_editor_live_syntax: None,
             file_editor_live_syntax_source: None,
@@ -1827,7 +1828,7 @@ impl MainPaneView {
             conflict_resolver_input,
             _conflict_resolver_input_subscription: conflict_resolver_subscription,
             conflict_resolver: ConflictResolverUiState::default(),
-            conflict_open_summary_toasted_files: HashSet::default(),
+            conflict_open_summary_toasted_files: FxHashSet::default(),
             conflict_resolver_vsplit_ratio: 0.6,
             conflict_resolver_vsplit_resize: None,
             conflict_three_way_col_ratios: [1.0 / 3.0, 2.0 / 3.0],
@@ -1843,8 +1844,8 @@ impl MainPaneView {
                 conflict_resolver::ConflictSplitStyledTextCache::default(),
             conflict_diff_query_cache_query: SharedString::default(),
             conflict_diff_query_cache_options: Default::default(),
-            conflict_three_way_segments_cache: HashMap::default(),
-            conflict_three_way_query_segments_cache: HashMap::default(),
+            conflict_three_way_segments_cache: FxHashMap::default(),
+            conflict_three_way_query_segments_cache: FxHashMap::default(),
             conflict_three_way_prepared_syntax_documents: ThreeWaySides::default(),
             conflict_three_way_syntax_inflight: ThreeWaySides::default(),
             conflict_resolved_preview_path: None,
@@ -1888,7 +1889,7 @@ impl MainPaneView {
             conflict_resolved_preview_gutter_last_synced_y: [px(0.0); 2],
             worktree_preview_scroll: UniformListScrollHandle::default(),
             path_display_cache: std::cell::RefCell::new(path_display::PathDisplayCache::default()),
-            interactive_rebase_states: HashMap::default(),
+            interactive_rebase_states: FxHashMap::default(),
         };
 
         pane.set_theme(theme, cx);
@@ -3315,7 +3316,7 @@ impl MainPaneView {
             return false;
         }
 
-        let mut touched_conflicts: HashSet<usize> = HashSet::default();
+        let mut touched_conflicts: FxHashSet<usize> = FxHashSet::default();
         for (conflict_ix, range) in old_block_ranges.iter().enumerate() {
             if line_ranges_intersect(range, &old_affected) {
                 touched_conflicts.insert(conflict_ix);
@@ -3356,10 +3357,10 @@ impl MainPaneView {
         let old_view_mode = base.view_mode;
         let new_view_mode = self.conflict_resolver.view_mode;
         let middle_meta = {
-            let mut source_lookup: HashMap<
+            let mut source_lookup: FxHashMap<
                 &str,
                 (conflict_resolver::ResolvedLineSource, Option<u32>),
-            > = HashMap::default();
+            > = FxHashMap::default();
             match new_view_mode {
                 ConflictResolverViewMode::ThreeWay => {
                     insert_lookup_from_indexed_text(

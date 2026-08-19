@@ -395,8 +395,8 @@ fn parse_injection_layers(
     // Collect first, parse second: the query cursor is a thread-local, so
     // parsing a layer while still holding it would re-enter the borrow.
     let mut found: Vec<(DiffSyntaxLanguage, Range<usize>)> = Vec::new();
-    let mut combined_ranges: HashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>> =
-        HashMap::default();
+    let mut combined_ranges: FxHashMap<(DiffSyntaxLanguage, usize), Vec<Range<usize>>> =
+        FxHashMap::default();
     let mut truncated = false;
     catch_treesitter_query_panic(|| {
         TS_CURSOR.with(|cursor| {

@@ -2,6 +2,7 @@ mod split_row_index;
 mod word_highlight;
 
 use super::CachedDiffStyledText;
+use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use split_row_index::SparseLineIndex;
 #[cfg(test)]
 use split_row_index::{CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES, CONFLICT_SPLIT_PAGE_SIZE};
@@ -12,7 +13,6 @@ pub use word_highlight::compute_three_way_word_highlights;
 pub use word_highlight::{TwoWayWordHighlights, compute_two_way_word_highlights};
 pub use word_highlight::{compute_word_highlights_for_row, compute_word_highlights_for_texts};
 
-use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use std::ops::Range;
 use std::sync::Arc;
@@ -821,7 +821,7 @@ impl SourceLineKey {
         content: &str,
     ) -> Self {
         use std::hash::{Hash, Hasher};
-        let mut hasher = rustc_hash::FxHasher::default();
+        let mut hasher = FxHasher::default();
         content.hash(&mut hasher);
         Self {
             view_mode,
@@ -6161,8 +6161,8 @@ pub struct SourceLines<'a> {
 #[cfg(any(test, feature = "benchmarks"))]
 fn build_source_line_lookup<'a>(
     sources: &'a SourceLines<'a>,
-) -> rustc_hash::FxHashMap<&'a str, (ResolvedLineSource, u32)> {
-    let mut lookup = rustc_hash::FxHashMap::default();
+) -> FxHashMap<&'a str, (ResolvedLineSource, u32)> {
+    let mut lookup = FxHashMap::default();
 
     // Insert in reverse order so duplicates keep the first line number within a side.
     // Later sides overwrite earlier ones to enforce priority A > B > C.
@@ -6199,7 +6199,7 @@ fn build_source_line_lookup<'a>(
 
 fn compute_resolved_line_provenance_from_iter<'a>(
     output_lines: impl Iterator<Item = &'a str>,
-    lookup: &rustc_hash::FxHashMap<&str, (ResolvedLineSource, u32)>,
+    lookup: &FxHashMap<&str, (ResolvedLineSource, u32)>,
 ) -> Vec<ResolvedLineMeta> {
     let mut result = Vec::new();
     for (out_ix, out_line) in output_lines.enumerate() {
@@ -6231,7 +6231,7 @@ pub fn compute_resolved_line_provenance(
 }
 
 fn insert_indexed_source_lines<'a>(
-    lookup: &mut rustc_hash::FxHashMap<&'a str, (ResolvedLineSource, u32)>,
+    lookup: &mut FxHashMap<&'a str, (ResolvedLineSource, u32)>,
     source: ResolvedLineSource,
     text: &'a str,
     line_starts: &[usize],
@@ -6259,7 +6259,7 @@ pub fn compute_resolved_line_provenance_from_text_with_indexed_sources(
     c_text: &str,
     c_line_starts: &[usize],
 ) -> Vec<ResolvedLineMeta> {
-    let mut lookup = rustc_hash::FxHashMap::default();
+    let mut lookup = FxHashMap::default();
     insert_indexed_source_lines(&mut lookup, ResolvedLineSource::C, c_text, c_line_starts);
     insert_indexed_source_lines(&mut lookup, ResolvedLineSource::B, b_text, b_line_starts);
     insert_indexed_source_lines(&mut lookup, ResolvedLineSource::A, a_text, a_line_starts);
@@ -6273,7 +6273,7 @@ pub fn compute_resolved_line_provenance_from_text_two_way_indexed_sources(
     theirs_text: &str,
     theirs_line_starts: &[usize],
 ) -> Vec<ResolvedLineMeta> {
-    let mut lookup = rustc_hash::FxHashMap::default();
+    let mut lookup = FxHashMap::default();
     insert_indexed_source_lines(
         &mut lookup,
         ResolvedLineSource::B,
@@ -6302,8 +6302,8 @@ pub fn build_resolved_output_line_sources_index(
     meta: &[ResolvedLineMeta],
     output_lines: &[String],
     view_mode: ConflictResolverViewMode,
-) -> rustc_hash::FxHashSet<SourceLineKey> {
-    let mut index = rustc_hash::FxHashSet::with_capacity_and_hasher(meta.len(), Default::default());
+) -> FxHashSet<SourceLineKey> {
+    let mut index = FxHashSet::with_capacity_and_hasher(meta.len(), Default::default());
     for m in meta {
         if m.source == ResolvedLineSource::Manual {
             continue;
@@ -6324,8 +6324,8 @@ pub fn build_resolved_output_line_sources_index_from_text(
     meta: &[ResolvedLineMeta],
     output_text: &str,
     view_mode: ConflictResolverViewMode,
-) -> rustc_hash::FxHashSet<SourceLineKey> {
-    let mut index = rustc_hash::FxHashSet::with_capacity_and_hasher(meta.len(), Default::default());
+) -> FxHashSet<SourceLineKey> {
+    let mut index = FxHashSet::with_capacity_and_hasher(meta.len(), Default::default());
     for (ix, line) in output_text.split('\n').enumerate() {
         let Some(m) = meta.get(ix) else {
             break;
@@ -6347,7 +6347,7 @@ pub fn build_resolved_output_line_sources_index_from_text(
 /// the plus-icon for that row should be hidden.
 #[cfg(test)]
 pub fn is_source_line_in_output(
-    index: &rustc_hash::FxHashSet<SourceLineKey>,
+    index: &FxHashSet<SourceLineKey>,
     view_mode: ConflictResolverViewMode,
     side: ResolvedLineSource,
     line_no: u32,

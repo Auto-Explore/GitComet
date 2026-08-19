@@ -680,7 +680,7 @@ pub(super) struct LayoutState {
     pub(super) bounds: Option<Bounds<Pixels>>,
     pub(super) line_height: Pixels,
     pub(super) shape_style_epoch: u64,
-    pub(super) plain_line_cache: HashMap<ShapedRowCacheKey, ShapedLine>,
+    pub(super) plain_line_cache: FxHashMap<ShapedRowCacheKey, ShapedLine>,
 }
 
 impl LayoutState {
@@ -692,7 +692,7 @@ impl LayoutState {
             bounds: None,
             line_height: px(0.0),
             shape_style_epoch: 1,
-            plain_line_cache: HashMap::default(),
+            plain_line_cache: FxHashMap::default(),
         }
     }
 }

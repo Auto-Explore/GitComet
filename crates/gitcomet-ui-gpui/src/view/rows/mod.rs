@@ -1,5 +1,6 @@
 use super::*;
 use gpui::Pixels;
+use rustc_hash::FxHasher;
 use std::cell::RefCell;
 use std::hash::{BuildHasherDefault, Hash, Hasher};
 use std::num::NonZeroUsize;
@@ -130,7 +131,7 @@ fn non_zero_lru_capacity(cap: usize) -> NonZeroUsize {
 pub(in crate::view) type LruCache<K, V> = InstrumentedLruCache<K, V>;
 /// LRU cache backed by FxHasher for fast hashing of u64 keys (text layout caches).
 pub(in crate::view) type FxLruCache<K, V> =
-    InstrumentedLruCache<K, V, BuildHasherDefault<rustc_hash::FxHasher>>;
+    InstrumentedLruCache<K, V, BuildHasherDefault<FxHasher>>;
 
 pub(in crate::view) fn new_lru_cache<K: std::hash::Hash + Eq, V>(cap: usize) -> LruCache<K, V> {
     InstrumentedLruCache::new(cap)
@@ -160,8 +161,8 @@ struct CommitFileRowPresentationSignature {
 fn commit_file_row_presentation_signature(
     files: &[gitcomet_core::domain::CommitFileChange],
 ) -> CommitFileRowPresentationSignature {
-    let mut primary = rustc_hash::FxHasher::default();
-    let mut secondary = rustc_hash::FxHasher::default();
+    let mut primary = FxHasher::default();
+    let mut secondary = FxHasher::default();
     0x9e37_79b9_7f4a_7c15u64.hash(&mut secondary);
 
     let mut total_path_bytes = 0usize;

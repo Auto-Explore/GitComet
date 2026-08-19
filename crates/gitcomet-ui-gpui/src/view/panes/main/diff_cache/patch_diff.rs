@@ -67,7 +67,7 @@ pub(in crate::view) struct PagedPatchDiffRows {
     diff: Arc<gitcomet_core::domain::Diff>,
     page_size: usize,
     page_start_states: std::sync::Mutex<Vec<DiffLineNumberState>>,
-    pages: std::sync::Mutex<HashMap<usize, Arc<[AnnotatedDiffLine]>>>,
+    pages: std::sync::Mutex<FxHashMap<usize, Arc<[AnnotatedDiffLine]>>>,
 }
 
 impl PagedPatchDiffRows {
@@ -77,7 +77,7 @@ impl PagedPatchDiffRows {
             diff,
             page_size,
             page_start_states: std::sync::Mutex::new(vec![DiffLineNumberState::default()]),
-            pages: std::sync::Mutex::new(HashMap::default()),
+            pages: std::sync::Mutex::new(FxHashMap::default()),
         }
     }
 

@@ -3,7 +3,7 @@ use crate::msg::{Msg, RepoExternalChange, RepoWatchDegradedReason};
 use gix::index::entry::Mode as GitIndexMode;
 use notify::event::{AccessKind, AccessMode, EventKindMask};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
-use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
+use rustc_hash::{FxHashMap, FxHashSet};
 use std::any::Any;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -284,13 +284,13 @@ impl DebouncedChange {
 }
 
 pub(super) struct RepoMonitorManager {
-    handles: HashMap<RepoId, RepoMonitorHandle>,
+    handles: FxHashMap<RepoId, RepoMonitorHandle>,
 }
 
 impl RepoMonitorManager {
     pub(super) fn new() -> Self {
         Self {
-            handles: HashMap::default(),
+            handles: FxHashMap::default(),
         }
     }
 
@@ -466,7 +466,7 @@ impl GitignoreMatcher {
 struct GitignoreRules {
     workdir: Option<PathBuf>,
     matcher: Option<GitignoreMatcher>,
-    cache: HashMap<IgnoreCacheKey, CachedIgnoreResult>,
+    cache: FxHashMap<IgnoreCacheKey, CachedIgnoreResult>,
     last_prune_at: Option<Instant>,
 }
 
@@ -475,7 +475,7 @@ impl GitignoreRules {
         Self {
             workdir: Some(workdir.to_path_buf()),
             matcher: GitignoreMatcher::load(workdir),
-            cache: HashMap::default(),
+            cache: FxHashMap::default(),
             last_prune_at: None,
         }
     }
@@ -657,7 +657,7 @@ fn build_workdir_watcher(
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
-    watched_dirs: &mut HashSet<PathBuf>,
+    watched_dirs: &mut FxHashSet<PathBuf>,
     monitor_tx: &mpsc::Sender<MonitorMsg>,
     monitor_enabled: &Arc<AtomicBool>,
 ) -> Option<(RecommendedWatcher, WatchSetupOutcome)> {
@@ -779,7 +779,7 @@ fn attempt_degraded_watch_recovery(
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
-    watched_dirs: &mut HashSet<PathBuf>,
+    watched_dirs: &mut FxHashSet<PathBuf>,
     monitor_tx: &mpsc::Sender<MonitorMsg>,
     monitor_enabled: &Arc<AtomicBool>,
 ) -> Option<(RecommendedWatcher, WatchSetupOutcome)> {
@@ -823,7 +823,7 @@ fn attempt_degraded_watch_recovery(
     _workdir: &Path,
     _git_dir: Option<&Path>,
     _gitignore: &mut GitignoreRules,
-    _watched_dirs: &mut HashSet<PathBuf>,
+    _watched_dirs: &mut FxHashSet<PathBuf>,
     _monitor_tx: &mpsc::Sender<MonitorMsg>,
     _monitor_enabled: &Arc<AtomicBool>,
 ) -> Option<(RecommendedWatcher, WatchSetupOutcome)> {
@@ -850,7 +850,7 @@ fn repo_monitor_thread(
     // The set of worktree subdirectories currently watched per-directory, kept in sync as the tree
     // changes (deduped on re-watch, pruned on deletion). `build_workdir_watcher` repopulates it; its
     // length is the live-watch count enforced against the budget.
-    let mut watched_dirs: HashSet<PathBuf> = HashSet::default();
+    let mut watched_dirs: FxHashSet<PathBuf> = FxHashSet::default();
 
     let Some((mut watcher, mut watch_outcome)) = build_workdir_watcher(
         repo_id,
@@ -1138,7 +1138,7 @@ fn collect_watchable_dirs_capped(
 #[cfg(target_os = "linux")]
 fn add_subtree_watches(
     watcher: &mut RecommendedWatcher,
-    watched_dirs: &mut HashSet<PathBuf>,
+    watched_dirs: &mut FxHashSet<PathBuf>,
     max_dirs: usize,
     start: &Path,
     workdir: &Path,
@@ -1215,7 +1215,7 @@ impl WatchSetupOutcome {
 #[cfg(target_os = "linux")]
 fn setup_workdir_watch(
     watcher: &mut RecommendedWatcher,
-    watched_dirs: &mut HashSet<PathBuf>,
+    watched_dirs: &mut FxHashSet<PathBuf>,
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
@@ -1238,7 +1238,7 @@ fn setup_workdir_watch(
 #[cfg(target_os = "linux")]
 fn setup_workdir_watch_with_limit(
     watcher: &mut RecommendedWatcher,
-    watched_dirs: &mut HashSet<PathBuf>,
+    watched_dirs: &mut FxHashSet<PathBuf>,
     workdir: &Path,
     git_dir: Option<&Path>,
     gitignore: &mut GitignoreRules,
@@ -1338,7 +1338,7 @@ fn setup_workdir_watch_with_limit(
 #[cfg(not(target_os = "linux"))]
 fn setup_workdir_watch(
     watcher: &mut RecommendedWatcher,
-    _watched_dirs: &mut HashSet<PathBuf>,
+    _watched_dirs: &mut FxHashSet<PathBuf>,
     workdir: &Path,
     _git_dir: Option<&Path>,
     _gitignore: &mut GitignoreRules,
@@ -1379,7 +1379,7 @@ fn event_brings_in_new_dir(event: &notify::Event) -> bool {
 #[cfg(target_os = "linux")]
 fn watch_created_dirs(
     watcher: &mut RecommendedWatcher,
-    watched_dirs: &mut HashSet<PathBuf>,
+    watched_dirs: &mut FxHashSet<PathBuf>,
     max_dirs: usize,
     workdir: &Path,
     git_dir: Option<&Path>,
@@ -1410,7 +1410,7 @@ fn watch_created_dirs(
 #[cfg(not(target_os = "linux"))]
 fn watch_created_dirs(
     _watcher: &mut RecommendedWatcher,
-    _watched_dirs: &mut HashSet<PathBuf>,
+    _watched_dirs: &mut FxHashSet<PathBuf>,
     _max_dirs: usize,
     _workdir: &Path,
     _git_dir: Option<&Path>,
@@ -1424,7 +1424,7 @@ fn watch_created_dirs(
 /// deleted, but our budget counter would otherwise keep counting it and prematurely refuse new
 /// watches. No-op off Linux (no per-directory set is tracked there).
 #[cfg(target_os = "linux")]
-fn prune_removed_worktree_dirs(watched_dirs: &mut HashSet<PathBuf>, event: &notify::Event) {
+fn prune_removed_worktree_dirs(watched_dirs: &mut FxHashSet<PathBuf>, event: &notify::Event) {
     if !matches!(event.kind, notify::EventKind::Remove(_)) {
         return;
     }
@@ -1434,7 +1434,7 @@ fn prune_removed_worktree_dirs(watched_dirs: &mut HashSet<PathBuf>, event: &noti
 }
 
 #[cfg(not(target_os = "linux"))]
-fn prune_removed_worktree_dirs(_watched_dirs: &mut HashSet<PathBuf>, _event: &notify::Event) {}
+fn prune_removed_worktree_dirs(_watched_dirs: &mut FxHashSet<PathBuf>, _event: &notify::Event) {}
 
 /// Adds a recursive watch for a git-dir subdirectory that appears at runtime — e.g. `rebase-merge/`,
 /// `rebase-apply/`, or `sequencer/`, created when an interactive rebase / cherry-pick / revert
@@ -2305,7 +2305,7 @@ mod tests {
             matches!(
                 setup_workdir_watch(
                     &mut watcher,
-                    &mut HashSet::default(),
+                    &mut FxHashSet::default(),
                     &workdir,
                     git_dir.as_deref(),
                     &mut gitignore,
@@ -2466,7 +2466,7 @@ mod tests {
             matches!(
                 setup_workdir_watch(
                     &mut ignore_watcher,
-                    &mut HashSet::default(),
+                    &mut FxHashSet::default(),
                     &workdir,
                     git_dir.as_deref(),
                     &mut gitignore,
@@ -2543,7 +2543,7 @@ mod tests {
 
         let (monitor_tx, monitor_rx) = mpsc::channel::<MonitorMsg>();
         let monitor_enabled = Arc::new(AtomicBool::new(true));
-        let mut watched_dirs: HashSet<PathBuf> = HashSet::default();
+        let mut watched_dirs: FxHashSet<PathBuf> = FxHashSet::default();
 
         // vendor/ is not yet ignored, so the initial setup watches it.
         let (_initial, _) = build_workdir_watcher(
@@ -2705,7 +2705,7 @@ mod tests {
             notify::recommended_watcher(move |_res: notify::Result<notify::Event>| {})
                 .expect("create watcher");
 
-        let mut watched: HashSet<PathBuf> = HashSet::default();
+        let mut watched: FxHashSet<PathBuf> = FxHashSet::default();
         add_subtree_watches(
             &mut watcher,
             &mut watched,
@@ -2742,7 +2742,7 @@ mod tests {
         // budget reflects reality — the kernel auto-removes the inotify watch, but the set would
         // otherwise keep counting it and prematurely refuse new watches.
         let root = PathBuf::from("/repo");
-        let mut watched: HashSet<PathBuf> = HashSet::default();
+        let mut watched: FxHashSet<PathBuf> = FxHashSet::default();
         watched.insert(root.join("src"));
         watched.insert(root.join("src/sub"));
         watched.insert(root.join("docs"));
@@ -2796,7 +2796,7 @@ mod tests {
         .expect("create watcher");
 
         // Budget of 0 forces the "too many folders" path: any worktree subdir exceeds it.
-        let mut watched_dirs: HashSet<PathBuf> = HashSet::default();
+        let mut watched_dirs: FxHashSet<PathBuf> = FxHashSet::default();
         let outcome = setup_workdir_watch_with_limit(
             &mut watcher,
             &mut watched_dirs,

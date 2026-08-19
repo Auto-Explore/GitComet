@@ -2115,6 +2115,18 @@ impl<T> Loadable<T> {
     pub fn is_loading(&self) -> bool {
         matches!(self, Self::Loading)
     }
+
+    /// The loaded value, if there is one.
+    ///
+    /// Exists so the ~160 sites that only care about the `Ready` arm can say so
+    /// in one line instead of spelling out a `match` with a `_ => ..` fallback,
+    /// which is how the same five-line block ended up copied across the pickers.
+    pub fn ready(&self) -> Option<&T> {
+        match self {
+            Self::Ready(value) => Some(value),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3431,5 +3443,13 @@ mod tests {
         assert!(!repo.conflict_state.conflict_hide_resolved);
         assert!(repo.detached_head_commit.is_none());
         assert_eq!(repo.sidebar_data_request, SidebarDataRequest::default());
+    }
+
+    #[test]
+    fn loadable_ready_exposes_only_the_loaded_arm() {
+        assert_eq!(Loadable::Ready(vec![1, 2, 3]).ready(), Some(&vec![1, 2, 3]));
+        assert_eq!(Loadable::<Vec<u8>>::NotLoaded.ready(), None);
+        assert_eq!(Loadable::<Vec<u8>>::Loading.ready(), None);
+        assert_eq!(Loadable::<Vec<u8>>::Error("boom".into()).ready(), None);
     }
 }

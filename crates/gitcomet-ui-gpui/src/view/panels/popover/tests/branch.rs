@@ -6,6 +6,7 @@ use gitcomet_core::path_utils::canonicalize_or_original;
 use gitcomet_core::services::{CommandOutput, PullMode};
 use gitcomet_state::model::Loadable;
 use gitcomet_state::msg::{Msg, StoreEvent};
+use rustc_hash::FxHashMap;
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -1081,7 +1082,6 @@ mod checkout_picker {
     use crate::view::test_support::{push_test_state, redraw};
     use gitcomet_core::domain::{RefMetadata, RemoteBranch};
     use gitcomet_state::model::{RepoId, RepoState};
-    use rustc_hash::FxHashMap as HashMap;
 
     fn commit_id(hex: &str) -> CommitId {
         CommitId(Arc::from(hex))
@@ -1114,7 +1114,7 @@ mod checkout_picker {
             remote("origin", "main"),
             remote("origin", "HEAD"),
         ]));
-        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::from_iter([
+        repo.ref_metadata = Loadable::Ready(Arc::new(FxHashMap::from_iter([
             (
                 "main".to_string(),
                 RefMetadata {
@@ -1260,7 +1260,7 @@ mod checkout_picker {
     fn rows_stay_name_only_when_the_backend_has_no_ref_metadata(cx: &mut gpui::TestAppContext) {
         let repo_id = RepoId(1);
         let mut repo = repo_with_branches(repo_id);
-        repo.ref_metadata = Loadable::Ready(Arc::new(HashMap::default()));
+        repo.ref_metadata = Loadable::Ready(Arc::new(FxHashMap::default()));
         let (view, cx) = open_checkout_picker(cx, repo, repo_id);
 
         let details = cx.update(|_window, app| {

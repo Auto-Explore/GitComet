@@ -157,35 +157,49 @@ pub fn append_patterns(existing: &str, patterns: &[String]) -> Option<String> {
     // Indexed rather than rescanned per pattern: a 500-file selection against a
     // 2000-line `.gitignore` is a plausible bulk case, and the naive form walks
     // both strings a million times on the store's worker thread.
-    let existing_line_count = existing.lines().count();
-    let mut present = FxHashSet::with_capacity_and_hasher(existing_line_count, Default::default());
+    let mut present = FxHashSet::default();
     present.extend(existing.lines().map(trim_trailing_spaces));
 
+    // `seen` dedupes within `patterns` itself: two selected files in the
+    // same folder both produce `/build/`.
     let mut seen = FxHashSet::with_capacity_and_hasher(patterns.len(), Default::default());
-    let capacity = patterns.iter().fold(existing.len(), |capacity, pattern| {
-        capacity.saturating_add(pattern.len().saturating_add(terminator.len()))
-    });
-    let mut out = String::with_capacity(capacity);
-    out.push_str(existing);
-    let mut appended = false;
+    let mut to_append = Vec::new();
     for pattern in patterns {
         let pattern = trim_trailing_spaces(pattern);
         if pattern.is_empty() {
             continue;
         }
-        // `seen` dedupes within `patterns` itself: two selected files in the
-        // same folder both produce `/build/`.
         if !present.contains(pattern) && seen.insert(pattern) {
-            if !appended && !out.is_empty() && !out.ends_with('\n') {
-                out.push_str(terminator);
-            }
-            out.push_str(pattern);
-            out.push_str(terminator);
-            appended = true;
+            to_append.push(pattern);
         }
     }
-    if !appended {
+
+    // Decided before allocating: re-ignoring already-ignored files is the common
+    // bulk case, and it used to copy the whole file into a fresh String only to
+    // throw it away here.
+    if to_append.is_empty() {
         return None;
+    }
+
+    // Git treats a file whose last line has no terminator as needing one before
+    // anything is appended after it.
+    let leading_terminator = !existing.is_empty() && !existing.ends_with('\n');
+    let capacity = to_append.iter().fold(
+        existing.len().saturating_add(if leading_terminator {
+            terminator.len()
+        } else {
+            0
+        }),
+        |capacity, pattern| capacity.saturating_add(pattern.len().saturating_add(terminator.len())),
+    );
+    let mut out = String::with_capacity(capacity);
+    out.push_str(existing);
+    if leading_terminator {
+        out.push_str(terminator);
+    }
+    for pattern in to_append {
+        out.push_str(pattern);
+        out.push_str(terminator);
     }
     Some(out)
 }
@@ -643,6 +657,23 @@ mod tests {
             trim_trailing_spaces("/über  "),
             "/über",
             "multi-byte characters must not shift the slice off a boundary"
+        );
+    }
+
+    #[test]
+    fn append_adds_the_missing_newline_only_for_patterns_that_survive_filtering() {
+        // The already-present patterns are dropped before anything is written,
+        // so the decision to terminate the last existing line has to be made
+        // against what is actually left to append.
+        assert_eq!(
+            append_patterns("/target", &patterns(&["/target", "/build/"])).as_deref(),
+            Some("/target\n/build/\n"),
+            "the surviving pattern still needs the missing newline first"
+        );
+        assert_eq!(
+            append_patterns("/target", &patterns(&["/target"])),
+            None,
+            "nothing survives, so the file must be left exactly as it was"
         );
     }
 

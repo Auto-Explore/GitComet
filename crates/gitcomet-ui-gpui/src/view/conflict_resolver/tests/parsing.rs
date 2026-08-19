@@ -597,8 +597,8 @@ fn split_and_inline_views_consistent_for_mixed_mode_conflicts() {
         "inline should have at least as many rows as split"
     );
     // Both should cover the same line range
-    let split_lines: rustc_hash::FxHashSet<_> = rows.iter().filter_map(|r| r.new_line).collect();
-    let inline_lines: rustc_hash::FxHashSet<_> = inline.iter().filter_map(|r| r.new_line).collect();
+    let split_lines: FxHashSet<_> = rows.iter().filter_map(|r| r.new_line).collect();
+    let inline_lines: FxHashSet<_> = inline.iter().filter_map(|r| r.new_line).collect();
     assert!(
         split_lines.is_subset(&inline_lines),
         "inline should cover all new lines that split covers"

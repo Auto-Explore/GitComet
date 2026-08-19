@@ -55,10 +55,11 @@ pub(super) fn suggested_worktree_path(repo: &RepoState, query: &str) -> String {
 /// its inputs, which is what lets [`rows_cache`](super::rows_cache) memoise it
 /// across frames.
 pub(super) fn rows(repo: &RepoState, query: &str) -> WorkspaceRows {
-    let capacity = match &repo.worktrees {
-        Loadable::Ready(worktrees) => worktrees.len().saturating_add(1),
-        _ => 1,
-    };
+    let capacity = repo
+        .worktrees
+        .ready()
+        .map_or(0usize, |values| values.len())
+        .saturating_add(1);
     let mut items = Vec::with_capacity(capacity);
     let mut rows = Vec::with_capacity(capacity);
     let mut marked_index = None;

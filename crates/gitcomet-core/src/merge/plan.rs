@@ -6,8 +6,7 @@
 
 use super::{DiffAlgorithm, MergeOptions};
 use crate::file_diff::{Edit, EditKind, histogram_edits, myers_edits, split_lines};
-use rustc_hash::FxHashSet;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
@@ -228,7 +227,10 @@ pub fn interactive_merge_plan_is_practical(
     };
 
     if let Some(base) = base {
-        let mut base_lines = FxHashSet::with_capacity_and_hasher(base_count, Default::default());
+        // `std`'s seeded `HashSet`, not `FxHashSet`: the keys are raw file
+        // lines an untrusted repository controls, and this is the guard that
+        // bounds pathological input -- it must not be what degrades on it.
+        let mut base_lines = HashSet::with_capacity(base_count);
         base_lines.extend(base.lines());
         let local_shared = local
             .lines()
@@ -240,7 +242,7 @@ pub fn interactive_merge_plan_is_practical(
             .count();
         shared_enough(local_shared, local_count) && shared_enough(remote_shared, remote_count)
     } else {
-        let mut local_lines = FxHashSet::with_capacity_and_hasher(local_count, Default::default());
+        let mut local_lines = HashSet::with_capacity(local_count);
         local_lines.extend(local.lines());
         let remote_shared = remote
             .lines()

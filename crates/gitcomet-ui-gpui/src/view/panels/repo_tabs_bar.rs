@@ -11,7 +11,7 @@ pub(in super::super) struct RepoTabsBarView {
     theme: AppTheme,
     _ui_model_subscription: gpui::Subscription,
     root_view: WeakEntity<GitCometView>,
-    open_terminal_repo_ids: HashSet<RepoId>,
+    open_terminal_repo_ids: FxHashSet<RepoId>,
 
     hovered_repo_tab: Option<RepoId>,
     /// Left-pressed tab, tracked so its text fade matches the tab's active fill.
@@ -405,7 +405,7 @@ impl RepoTabsBarView {
             theme,
             _ui_model_subscription: subscription,
             root_view,
-            open_terminal_repo_ids: HashSet::default(),
+            open_terminal_repo_ids: FxHashSet::default(),
             hovered_repo_tab: None,
             pressed_repo_tab: None,
             active_context_menu_invoker: None,
@@ -429,7 +429,7 @@ impl RepoTabsBarView {
 
     pub(in super::super) fn set_open_terminal_repo_ids(
         &mut self,
-        next: HashSet<RepoId>,
+        next: FxHashSet<RepoId>,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.open_terminal_repo_ids == next {

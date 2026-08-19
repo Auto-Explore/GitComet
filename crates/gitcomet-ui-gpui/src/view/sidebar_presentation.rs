@@ -6,7 +6,7 @@ use super::caches::{
 };
 use super::*;
 use gitcomet_state::model::SidebarDataRequest;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub(in crate::view) struct WorkspaceBadgeIndex {
-    listed_paths_by_branch: Arc<HashMap<String, PathBuf>>,
-    active_paths_by_branch: Arc<HashMap<String, PathBuf>>,
+    listed_paths_by_branch: Arc<FxHashMap<String, PathBuf>>,
+    active_paths_by_branch: Arc<FxHashMap<String, PathBuf>>,
 }
 
 impl WorkspaceBadgeIndex {

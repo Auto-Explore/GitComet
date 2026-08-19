@@ -8,7 +8,7 @@
 #[cfg(test)]
 use crate::file_diff::{Edit, EditKind, myers_edits};
 #[cfg(test)]
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashSet;
 #[cfg(test)]
 use std::fmt;
 
@@ -372,7 +372,7 @@ fn preprocess_discard_nonmatching<'a>(
 
 #[cfg(test)]
 fn index_matching<'a>(a: &[&'a str], b: &[&'a str]) -> (Vec<&'a str>, Vec<usize>) {
-    let aset: HashSet<&str> = a.iter().copied().collect();
+    let aset: FxHashSet<&str> = a.iter().copied().collect();
     let mut matches = Vec::new();
     let mut index = Vec::new();
     for (i, &token) in b.iter().enumerate() {
@@ -386,7 +386,7 @@ fn index_matching<'a>(a: &[&'a str], b: &[&'a str]) -> (Vec<&'a str>, Vec<usize>
 
 #[cfg(test)]
 fn index_matching_kmers<'a>(a: &[&'a str], b: &[&'a str]) -> (Vec<&'a str>, Vec<usize>) {
-    let mut aset: HashSet<(&str, &str, &str)> = HashSet::default();
+    let mut aset: FxHashSet<(&str, &str, &str)> = FxHashSet::default();
     for i in 0..a.len().saturating_sub(2) {
         aset.insert((a[i], a[i + 1], a[i + 2]));
     }

@@ -7,7 +7,7 @@ use gitcomet_core::domain::{
 
 #[test]
 fn select_diff_sets_loading_and_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -52,7 +52,7 @@ fn select_diff_sets_loading_and_emits_effect() {
 
 #[test]
 fn select_diff_for_image_sets_loading_and_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -101,7 +101,7 @@ fn select_diff_for_image_sets_loading_and_emits_effect() {
 
 #[test]
 fn select_diff_for_ico_sets_loading_and_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -150,7 +150,7 @@ fn select_diff_for_ico_sets_loading_and_emits_effect() {
 
 #[test]
 fn select_diff_for_svg_loads_image_and_text() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -196,7 +196,7 @@ fn select_diff_for_svg_loads_image_and_text() {
 
 #[test]
 fn select_diff_for_untracked_file_skips_patch_diff_and_loads_file_preview() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -259,7 +259,7 @@ fn select_diff_for_deleted_file_replaced_by_directory_loads_deleted_preview() {
     let dir = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(dir.path().join("report.json")).expect("replacement directory");
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -328,7 +328,7 @@ fn select_diff_for_checked_out_submodule_marker_loads_summary_before_submodules_
     )
     .expect("submodule gitdir marker");
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -400,7 +400,7 @@ fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
     );
     run_git(dir.path(), &["commit", "-q", "-m", "add submodule gitlink"]);
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -458,7 +458,7 @@ fn select_diff_for_staged_deleted_head_gitlink_loads_submodule_summary() {
 
 #[test]
 fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -528,7 +528,7 @@ fn select_diff_for_deleted_commit_file_skips_patch_diff_and_loads_file_preview()
 
 #[test]
 fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -591,7 +591,7 @@ fn open_inline_submodule_diff_loads_patch_and_file_text_for_text_targets() {
 
 #[test]
 fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -655,7 +655,7 @@ fn open_inline_submodule_diff_loads_patch_file_and_image_for_svg_targets() {
 
 #[test]
 fn stale_inline_submodule_file_load_is_ignored() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -720,7 +720,7 @@ fn stale_inline_submodule_file_load_is_ignored() {
 
 #[test]
 fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -838,7 +838,7 @@ fn stale_inline_submodule_file_load_after_reopen_is_ignored() {
 
 #[test]
 fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remains() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let parent_path = PathBuf::from("vendor/submodule");
@@ -979,7 +979,7 @@ fn submodule_summary_refresh_reloads_open_inline_diff_when_selected_target_remai
 
 #[test]
 fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_file() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1070,7 +1070,7 @@ fn commit_details_loaded_replans_selected_deleted_commit_file_to_preview_text_fi
 
 #[test]
 fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1131,7 +1131,7 @@ fn select_diff_for_conflicted_file_skips_patch_and_file_diff_loads() {
 
 #[test]
 fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1186,7 +1186,7 @@ fn select_diff_for_conflicted_svg_prefers_conflict_loader_over_preview_effects()
 
 #[test]
 fn select_diff_for_commit_without_path_only_loads_patch() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1238,7 +1238,7 @@ fn select_diff_for_commit_without_path_only_loads_patch() {
 
 #[test]
 fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1284,7 +1284,7 @@ fn select_diff_for_commit_svg_path_loads_text_and_image_previews() {
 
 #[test]
 fn stage_hunk_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1316,7 +1316,7 @@ fn stage_hunk_emits_effect() {
 
 #[test]
 fn unstage_hunk_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1348,7 +1348,7 @@ fn unstage_hunk_emits_effect() {
 
 #[test]
 fn stage_hunk_command_finished_reloads_current_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1394,7 +1394,7 @@ fn stage_hunk_command_finished_reloads_current_diff() {
 
 #[test]
 fn stage_hunk_command_finished_keeps_loaded_diff_visible_while_reloading() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1501,7 +1501,7 @@ fn stage_hunk_command_finished_keeps_loaded_diff_visible_while_reloading() {
 /// and the flag must not be left set by a reload that will never land.
 #[test]
 fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1533,7 +1533,7 @@ fn selecting_a_different_diff_clears_the_reload_in_flight_flag() {
 
 #[test]
 fn clear_diff_selection_resets_diff_state() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1570,7 +1570,7 @@ fn clear_diff_selection_resets_diff_state() {
 
 #[test]
 fn diff_loaded_err_records_diagnostic_when_target_matches() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1614,7 +1614,7 @@ fn diff_loaded_err_records_diagnostic_when_target_matches() {
 
 #[test]
 fn select_diff_bumps_diff_state_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1649,7 +1649,7 @@ fn select_diff_bumps_diff_state_rev() {
 
 #[test]
 fn select_and_clear_diff_update_diff_target_rev_only_when_target_changes() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1716,7 +1716,7 @@ fn select_and_clear_diff_update_diff_target_rev_only_when_target_changes() {
 
 #[test]
 fn clear_diff_selection_bumps_diff_state_rev() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1759,7 +1759,7 @@ fn clear_diff_selection_bumps_diff_state_rev() {
 
 #[test]
 fn select_diff_does_not_bump_unrelated_revs() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1795,7 +1795,7 @@ fn select_diff_does_not_bump_unrelated_revs() {
 
 #[test]
 fn select_and_clear_diff_are_noops_for_unknown_repo() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1828,7 +1828,7 @@ fn select_and_clear_diff_are_noops_for_unknown_repo() {
 
 #[test]
 fn apply_worktree_patch_emits_effect() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -1862,7 +1862,7 @@ fn apply_worktree_patch_emits_effect() {
 
 #[test]
 fn diff_loaded_ok_sets_ready_when_target_matches() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -1958,7 +1958,7 @@ fn diff_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
     // A refresh that found no change must not churn the UI: window focus (and,
     // before the fix, every window drag) reloads the working-tree diff, and
     // bumping the revs would blank and re-run the expensive blame.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, target, blame) = state_with_loaded_diff_and_blame(unstaged_diff("let x = 1;"));
     let diff_rev = state.repos[0].diff_state.diff_rev;
@@ -1994,7 +1994,7 @@ fn diff_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
 
 #[test]
 fn diff_loaded_changed_content_bumps_revs_and_invalidates_blame() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, target, blame) = state_with_loaded_diff_and_blame(unstaged_diff("let x = 1;"));
     let diff_rev = state.repos[0].diff_state.diff_rev;
@@ -2038,7 +2038,7 @@ fn diff_loaded_changed_content_bumps_revs_and_invalidates_blame() {
 
 #[test]
 fn diff_loaded_error_after_ready_still_bumps_revs() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, target, _) = state_with_loaded_diff_and_blame(unstaged_diff("let x = 1;"));
     let diff_state_rev = state.repos[0].diff_state.diff_state_rev;
@@ -2095,7 +2095,7 @@ fn state_with_loaded_file_text_and_blame(
 
 #[test]
 fn diff_file_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, target, blame) = state_with_loaded_file_text_and_blame(file_diff_text("a"));
     let diff_file_rev = state.repos[0].diff_state.diff_file_rev;
@@ -2122,7 +2122,7 @@ fn diff_file_loaded_identical_content_skips_rev_bumps_and_keeps_blame() {
 
 #[test]
 fn diff_file_loaded_changed_content_bumps_revs_and_invalidates_blame() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let (mut state, target, _) = state_with_loaded_file_text_and_blame(file_diff_text("a"));
     let diff_file_rev = state.repos[0].diff_state.diff_file_rev;
@@ -2151,7 +2151,7 @@ fn diff_file_loaded_changed_content_bumps_revs_and_invalidates_blame() {
 
 #[test]
 fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -2257,7 +2257,7 @@ fn diff_file_loaded_and_image_loaded_cover_success_and_error_paths() {
 
 #[test]
 fn diff_results_are_ignored_for_non_matching_target() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -2324,7 +2324,7 @@ fn diff_results_are_ignored_for_non_matching_target() {
 
 #[test]
 fn open_file_content_sets_diff_target_and_content_preview() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     state.repos.push(RepoState::new_opening(
@@ -2396,7 +2396,7 @@ fn open_file_content_sets_diff_target_and_content_preview() {
 
 #[test]
 fn open_file_editor_targets_the_working_tree_from_any_source() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2454,7 +2454,7 @@ fn open_file_editor_targets_the_working_tree_from_any_source() {
 
 #[test]
 fn selecting_another_view_leaves_edit_mode() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2521,7 +2521,7 @@ fn selecting_another_view_leaves_edit_mode() {
 
 #[test]
 fn exiting_edit_mode_keeps_the_file_on_screen() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2572,7 +2572,7 @@ fn exiting_edit_mode_keeps_the_file_on_screen() {
 
 #[test]
 fn exiting_edit_mode_restores_the_originating_diff_or_content_preview() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2662,7 +2662,7 @@ fn global_nav_realigns_viewer_history_onto_restored_file_view() {
     // must reposition the in-viewer file-version history (`view_history`) onto
     // the file now shown, so the viewer's prev/next-version buttons step relative
     // to it rather than a stale cursor left behind by earlier file opens.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2759,7 +2759,7 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
     // id-guard, so trusting `is_loading()` would leave the details pane stuck
     // forever. global_nav must reload because the details shown are not for this
     // commit.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2829,7 +2829,7 @@ fn global_nav_reloads_commit_details_when_a_stale_load_is_in_flight() {
 /// including re-issuing the file-list load, since leaving dropped the list.
 #[test]
 fn global_nav_enters_and_leaves_a_range_comparison() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -2910,7 +2910,7 @@ fn global_nav_enters_and_leaves_a_range_comparison() {
 
 #[test]
 fn open_file_content_skips_conflict_path_during_browse() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -2964,7 +2964,7 @@ fn open_file_content_skips_conflict_path_during_browse() {
 
 #[test]
 fn clear_diff_selection_resets_content_preview_and_ancillary_fields() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -3018,7 +3018,7 @@ fn clear_diff_selection_resets_content_preview_and_ancillary_fields() {
 
 #[test]
 fn select_conflict_diff_sets_target_and_resets_content_preview() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -3078,7 +3078,7 @@ fn select_conflict_diff_sets_target_and_resets_content_preview() {
 
 #[test]
 fn diff_file_image_loaded_drops_old_side_when_content_preview() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -3131,7 +3131,7 @@ fn global_nav_steps_into_and_out_of_edit_mode() {
     // Opening the editor on the file already on screen changes nothing the
     // snapshot used to record, so it deduped away and back/forward could not
     // cross the boundary in either direction.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let repo_id = RepoId(1);
@@ -3228,7 +3228,7 @@ fn global_nav_steps_into_and_out_of_edit_mode() {
 /// has nothing highlighted.
 #[test]
 fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let worktree_a = PathBuf::from("/tmp/wt/a");
@@ -3319,7 +3319,7 @@ fn selecting_another_worktree_retires_the_previous_worktrees_inline_diff() {
 /// diff by hand (`CloseInlineSubmoduleDiff`) does.
 #[test]
 fn retiring_a_worktrees_inline_diff_leaves_the_commit_diff_behind_it_intact() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let worktree = PathBuf::from("/tmp/wt/a");
@@ -3419,7 +3419,7 @@ fn a_selection_on_a_worktree_that_went_clean_is_dropped() {
         "a scan that no longer lists it",
         Ok(vec![dirty("/tmp/wt/other")]),
     )] {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(2);
         let mut state = AppState::default();
         let mut repo_state = RepoState::new_opening(
@@ -3456,7 +3456,7 @@ fn a_selection_on_a_worktree_that_went_clean_is_dropped() {
 fn a_selection_on_a_still_dirty_worktree_survives_a_rescan() {
     use gitcomet_core::domain::WorktreeDirtySummary;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let selected = PathBuf::from("/tmp/wt/a");
@@ -3504,7 +3504,7 @@ fn a_selection_on_a_still_dirty_worktree_survives_a_rescan() {
 fn a_failed_worktree_scan_keeps_the_rows_and_the_selection() {
     use gitcomet_core::domain::WorktreeDirtySummary;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let selected = PathBuf::from("/tmp/wt/a");
@@ -3608,7 +3608,7 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
     };
 
     let rescan = |state: &mut AppState, files: &[&str]| {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(2);
         reduce(
             &mut repos,
@@ -3675,7 +3675,7 @@ fn a_rescan_re_resolves_an_open_worktree_diff_against_the_new_file_list() {
 fn a_rescan_reloads_the_open_worktree_patch_even_when_nothing_moved() {
     let (mut state, _) = worktree_inline_diff_fixture(&["a.rs"], 0, "side");
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let effects = reduce(
         &mut repos,
@@ -3772,7 +3772,7 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
     state.repos.push(repo_state);
     state.active_repo = Some(RepoId(1));
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     reduce(
         &mut repos,
@@ -3810,7 +3810,7 @@ fn a_rescan_keeps_the_worktree_diff_on_the_half_it_was_opened_from() {
 fn a_rescan_refreshes_the_branch_the_worktree_diff_is_labelled_with() {
     let (mut state, _) = worktree_inline_diff_fixture(&["a.rs"], 0, "side");
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     reduce(
         &mut repos,
@@ -3913,7 +3913,7 @@ fn worktree_inline_diff_fixture(
 /// `git status` walk across every linked worktree.
 #[test]
 fn reselecting_the_same_worktree_row_is_a_no_op() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let path = PathBuf::from("/tmp/wt/a");
@@ -4029,7 +4029,7 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
     ];
 
     for (label, msg) in exits {
-        let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+        let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
         let id_alloc = AtomicU64::new(2);
         let mut state = state_with_open_worktree_diff();
 
@@ -4043,7 +4043,7 @@ fn every_way_out_of_a_worktree_selection_retires_its_inline_diff() {
 
     // The counterpart: a message that leaves the selection intact leaves the diff
     // intact too, or every unrelated refresh would close the file being read.
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = state_with_open_worktree_diff();
     reduce(
@@ -4070,7 +4070,7 @@ fn a_submodule_inline_diff_survives_the_worktree_invariant() {
         path: PathBuf::from("src/lib.rs"),
         area: gitcomet_core::domain::DiffArea::Unstaged,
     };
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -4114,7 +4114,7 @@ fn a_submodule_inline_diff_survives_the_worktree_invariant() {
 /// worktree that was just selected, not whichever one was selected before.
 #[test]
 fn selecting_a_worktree_requests_a_scan_for_its_own_files() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(
@@ -4156,7 +4156,7 @@ fn selecting_a_worktree_requests_a_scan_for_its_own_files() {
 /// carry whatever is selected at the time — including nothing.
 #[test]
 fn a_scan_with_no_worktree_selected_asks_for_counts_alone() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(2);
     let mut state = AppState::default();
     let mut repo_state = RepoState::new_opening(

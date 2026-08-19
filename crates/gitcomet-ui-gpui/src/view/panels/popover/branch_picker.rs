@@ -143,14 +143,11 @@ fn branch_row(
 /// — the relative dates on the detail line would otherwise make every call
 /// distinct.
 pub(super) fn rows(repo: &RepoState, query: &str, now: std::time::SystemTime) -> BranchRows {
-    let local_count = match &repo.branches {
-        Loadable::Ready(branches) => branches.len(),
-        _ => 0,
-    };
-    let remote_count = match &repo.remote_branches {
-        Loadable::Ready(branches) => branches.len(),
-        _ => 0,
-    };
+    let local_count = repo.branches.ready().map_or(0usize, |values| values.len());
+    let remote_count = repo
+        .remote_branches
+        .ready()
+        .map_or(0usize, |values| values.len());
     let capacity = local_count.saturating_add(remote_count).saturating_add(1);
     let mut items = Vec::with_capacity(capacity);
     let mut rows = Vec::with_capacity(capacity);
@@ -323,19 +320,10 @@ pub(super) fn ref_rows_cached(
         query,
     );
     super::rows_cache::get_or_build(&this.branch_ref_rows_cache, key, |_now| {
-        let head_branch = match &repo.head_branch {
-            Loadable::Ready(head) => Some(head.as_str()),
-            _ => None,
-        };
-        let branch_count = match &repo.branches {
-            Loadable::Ready(branches) => branches.len(),
-            _ => 0,
-        };
+        let head_branch = repo.head_branch.ready().map(String::as_str);
+        let branch_count = repo.branches.ready().map_or(0usize, |values| values.len());
         let tag_count = if spec.with_refs {
-            match &repo.tags {
-                Loadable::Ready(tags) => tags.len(),
-                _ => 0,
-            }
+            repo.tags.ready().map_or(0usize, |values| values.len())
         } else {
             0
         };

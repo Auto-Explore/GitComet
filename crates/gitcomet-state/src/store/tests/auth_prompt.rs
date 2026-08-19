@@ -12,8 +12,8 @@ fn auth_error(message: &str) -> Error {
 fn setup_open_repo(
     repo_id: RepoId,
     workdir: &str,
-) -> (HashMap<RepoId, Arc<dyn GitRepository>>, AppState) {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+) -> (FxHashMap<RepoId, Arc<dyn GitRepository>>, AppState) {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     repos.insert(repo_id, Arc::new(DummyRepo::new(workdir)));
 
     let mut state = AppState::default();
@@ -339,7 +339,7 @@ fn safe_push_after_commit_auth_error_uses_safe_push_retry() {
 
 #[test]
 fn clone_finished_auth_error_sets_clone_retry_prompt() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let url = "https://example.com/private/repo.git".to_string();
@@ -372,7 +372,7 @@ fn clone_finished_auth_error_sets_clone_retry_prompt() {
 
 #[test]
 fn clone_finished_ssh_publickey_error_sets_passphrase_prompt() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let url = "git@github.com:private/repo.git".to_string();
@@ -686,7 +686,7 @@ fn submit_auth_prompt_replays_clone_operation() {
     let _lock = super::staged_auth_test_lock();
     clear_staged_git_auth();
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let url = "ssh://git@example.com/private/repo.git".to_string();
@@ -782,7 +782,7 @@ fn submit_auth_prompt_preserves_non_clone_banner_when_replaying_clone() {
     let _lock = super::staged_auth_test_lock();
     clear_staged_git_auth();
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let url = "ssh://git@example.com/private/repo.git".to_string();

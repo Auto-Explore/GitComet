@@ -1,8 +1,8 @@
 use crate::theme::{AppTheme, GRAPH_LANE_PALETTE_SIZE};
 use gitcomet_core::domain::{Commit, CommitId};
 use gpui::Rgba;
-use rustc_hash::FxHashMap as HashMap;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashMap;
+use rustc_hash::FxHashSet;
 use smallvec::SmallVec;
 
 const LANE_COLOR_PALETTE_SIZE: usize = GRAPH_LANE_PALETTE_SIZE;
@@ -318,7 +318,7 @@ where
         return graph;
     }
 
-    let mut required_lookup_ids: HashSet<&str> = HashSet::with_capacity_and_hasher(
+    let mut required_lookup_ids: FxHashSet<&str> = FxHashSet::with_capacity_and_hasher(
         branch_heads.len() + usize::from(active_head_target.is_some()) + commits.len().min(256),
         Default::default(),
     );
@@ -341,11 +341,11 @@ where
         }
     }
 
-    let id_to_index: HashMap<&str, usize> = if required_lookup_ids.is_empty() {
-        HashMap::default()
+    let id_to_index: FxHashMap<&str, usize> = if required_lookup_ids.is_empty() {
+        FxHashMap::default()
     } else if required_lookup_ids.len().saturating_mul(2) < commits.len() {
         let mut id_to_index =
-            HashMap::with_capacity_and_hasher(required_lookup_ids.len(), Default::default());
+            FxHashMap::with_capacity_and_hasher(required_lookup_ids.len(), Default::default());
         for (ix, commit) in commits.iter().enumerate() {
             let id = commit.id_str();
             if required_lookup_ids.remove(id) {
@@ -357,7 +357,8 @@ where
         }
         id_to_index
     } else {
-        let mut id_to_index = HashMap::with_capacity_and_hasher(commits.len(), Default::default());
+        let mut id_to_index =
+            FxHashMap::with_capacity_and_hasher(commits.len(), Default::default());
         for (ix, commit) in commits.iter().enumerate() {
             id_to_index.insert(commit.id_str(), ix);
         }
@@ -733,7 +734,7 @@ where
 
 fn resolve_first_parent_ix<C: GraphCommitLike>(
     commits: &[C],
-    id_to_index: &HashMap<&str, usize>,
+    id_to_index: &FxHashMap<&str, usize>,
     commit_ix: usize,
     parent_id: &str,
 ) -> Option<usize> {

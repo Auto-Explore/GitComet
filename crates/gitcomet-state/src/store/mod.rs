@@ -2,7 +2,7 @@ use crate::model::{AppState, RepoId};
 use crate::msg::{Msg, RepoExternalChange, StoreEvent};
 use gitcomet_core::path_utils::{canonicalize_or_original, git_dir_for_workdir};
 use gitcomet_core::services::{GitBackend, GitRepository};
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -163,8 +163,8 @@ struct ReducerEffectsContext<'a> {
     active_repo_id: &'a Arc<AtomicU64>,
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
-    repos: &'a HashMap<RepoId, Arc<dyn GitRepository>>,
-    repo_task_tokens: &'a mut HashMap<RepoId, RepoTaskToken>,
+    repos: &'a FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    repo_task_tokens: &'a mut FxHashMap<RepoId, RepoTaskToken>,
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
     repo_load_executor: &'a TaskExecutor,
@@ -346,8 +346,8 @@ impl AppStore {
                 TaskExecutor::shared_for_store(StoreExecutorPool::SessionPersist, 1);
             #[cfg(not(any(test, feature = "test-support")))]
             let session_persist_executor = TaskExecutor::new(1);
-            let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
-            let mut repo_task_tokens: HashMap<RepoId, RepoTaskToken> = HashMap::default();
+            let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+            let mut repo_task_tokens: FxHashMap<RepoId, RepoTaskToken> = FxHashMap::default();
             let mut repo_monitors = RepoMonitorManager::new();
             let id_alloc = AtomicU64::new(1);
             let active_repo_id = Arc::new(AtomicU64::new(0));
@@ -815,7 +815,7 @@ impl AppStore {
 
 #[cfg(feature = "benchmarks")]
 pub fn dispatch_sync_for_bench(state: &mut AppState, msg: Msg) -> Vec<crate::msg::Effect> {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let reduce_started = Instant::now();
     let effects = reduce(&mut repos, &id_alloc, state, msg);

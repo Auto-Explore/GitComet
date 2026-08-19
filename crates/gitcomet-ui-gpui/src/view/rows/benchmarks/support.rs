@@ -1,14 +1,14 @@
 use super::*;
 use palette::IntoColor;
 
-pub(crate) fn empty_history_graph_heads<'a>() -> HashSet<&'a str> {
-    HashSet::default()
+pub(crate) fn empty_history_graph_heads<'a>() -> FxHashSet<&'a str> {
+    FxHashSet::default()
 }
 
 pub(crate) fn history_graph_heads_from_indices<'a>(
     commits: &'a [Commit],
     branch_head_indices: &[usize],
-) -> HashSet<&'a str> {
+) -> FxHashSet<&'a str> {
     branch_head_indices
         .iter()
         .filter_map(|&ix| commits.get(ix).map(|commit| commit.id.as_ref()))
@@ -18,7 +18,7 @@ pub(crate) fn history_graph_heads_from_indices<'a>(
 pub(crate) fn history_graph_heads_from_branches<'a>(
     branches: &'a [Branch],
     remote_branches: &'a [RemoteBranch],
-) -> HashSet<&'a str> {
+) -> FxHashSet<&'a str> {
     branches
         .iter()
         .map(|branch| branch.target.as_ref())

@@ -6,6 +6,7 @@ use crate::view::components::{
 };
 use crate::view::panels::{benchmark_branch_checkout_rows, benchmark_workspace_rows};
 use gpui::{Entity, IntoElement, Render, ScrollHandle, Window, px};
+use rustc_hash::{FxHashMap, FxHasher};
 
 /// Which badge picker a run measures.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -223,8 +224,8 @@ impl PickerPromptFrameFixture {
 /// picker's detail lines need it.
 fn build_synthetic_ref_metadata(
     repo: &RepoState,
-) -> rustc_hash::FxHashMap<String, gitcomet_core::domain::RefMetadata> {
-    let mut metadata = rustc_hash::FxHashMap::default();
+) -> FxHashMap<String, gitcomet_core::domain::RefMetadata> {
+    let mut metadata = FxHashMap::default();
     let mut insert = |name: String, ix: usize| {
         metadata.insert(
             name,

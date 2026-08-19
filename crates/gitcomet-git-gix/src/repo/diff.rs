@@ -18,6 +18,7 @@ use gitcomet_core::domain::{
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::path_utils::strip_windows_verbatim_prefix;
 use gitcomet_core::services::{CancellationToken, ConflictFileStages, Result};
+use rustc_hash::FxHasher;
 use std::hash::{Hash, Hasher};
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
@@ -226,7 +227,7 @@ impl GixRepo {
 
         let mut tmp_file =
             tempfile::NamedTempFile::new_in(std::env::temp_dir()).map_err(io_err_to_error)?;
-        let mut content_hasher = rustc_hash::FxHasher::default();
+        let mut content_hasher = FxHasher::default();
         match normalized {
             gix::filter::plumbing::pipeline::convert::ToGitOutcome::Unchanged(mut file) => {
                 copy_and_hash(&mut file, &mut tmp_file, &mut content_hasher)?;
@@ -1174,7 +1175,7 @@ fn worktree_file_path_optional(workdir: &Path, path: &Path) -> Option<std::path:
 fn copy_and_hash(
     reader: &mut impl Read,
     writer: &mut impl Write,
-    hasher: &mut rustc_hash::FxHasher,
+    hasher: &mut FxHasher,
 ) -> Result<()> {
     let mut buffer = [0u8; 64 * 1024];
     loop {
@@ -1209,7 +1210,7 @@ fn persist_worktree_git_cache_file(
 }
 
 fn hash_worktree_source_identity(
-    hasher: &mut rustc_hash::FxHasher,
+    hasher: &mut FxHasher,
     workdir: &Path,
     logical_path: &Path,
     normalized_content_hash: u64,
@@ -1224,7 +1225,7 @@ fn worktree_source_identity(
     logical_path: &Path,
     normalized_content_hash: u64,
 ) -> String {
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     hash_worktree_source_identity(&mut hasher, workdir, logical_path, normalized_content_hash);
     format!("{:016x}", hasher.finish())
 }
@@ -1244,7 +1245,7 @@ fn preview_blob_cache_path(
     logical_path: &Path,
     blob_id: &gix::ObjectId,
 ) -> std::path::PathBuf {
-    let mut hasher = rustc_hash::FxHasher::default();
+    let mut hasher = FxHasher::default();
     workdir.hash(&mut hasher);
     logical_path.hash(&mut hasher);
     blob_id.to_string().hash(&mut hasher);

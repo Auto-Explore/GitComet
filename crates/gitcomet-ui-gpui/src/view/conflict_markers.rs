@@ -40,7 +40,7 @@ pub(in crate::view) fn unresolved_conflict_marker_paths(
 
     // Set rather than a scan of `paths` per entry: "stage all" during a large
     // merge puts every changed path in both lists.
-    let requested: HashSet<&std::path::Path> =
+    let requested: FxHashSet<&std::path::Path> =
         paths.iter().map(std::path::PathBuf::as_path).collect();
     let workdir = &repo.spec.workdir;
     status

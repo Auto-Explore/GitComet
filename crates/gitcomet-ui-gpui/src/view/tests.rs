@@ -587,7 +587,7 @@ fn command_palette_close_falls_back_to_diff_panel_when_saved_focus_is_stale(
 fn window_activation_dispatches_repo_activated_message() {
     let repo_id = RepoId(1);
     let state = view_state_with_active_ready_repo(repo_id);
-    let mut last_activation_dispatch = HashMap::default();
+    let mut last_activation_dispatch = FxHashMap::default();
     let now = Instant::now();
 
     let msg = repo_activation_msg(&state, &mut last_activation_dispatch, now)
@@ -601,7 +601,7 @@ fn window_activation_dispatches_repo_activated_message() {
 fn window_activation_dispatch_is_throttled_per_repo() {
     let repo_id = RepoId(1);
     let state = view_state_with_active_ready_repo(repo_id);
-    let mut last_activation_dispatch = HashMap::default();
+    let mut last_activation_dispatch = FxHashMap::default();
     let now = Instant::now();
 
     assert!(repo_activation_msg(&state, &mut last_activation_dispatch, now).is_some());
@@ -679,7 +679,7 @@ fn unsuppressed_activation_still_dispatches_repo_activated() {
     // throttle map — a genuine alt-tab right after a drag still refreshes.
     let repo_id = RepoId(1);
     let state = view_state_with_active_ready_repo(repo_id);
-    let mut last_activation_dispatch = HashMap::default();
+    let mut last_activation_dispatch = FxHashMap::default();
     let now = Instant::now();
 
     let mut suppressed_at = None;
@@ -3477,7 +3477,7 @@ fn loading_repo_tab_close_button_closes_repo(cx: &mut gpui::TestAppContext) {
         view.update(app, |this, cx| test_support::sync_store_snapshot(this, cx));
         let repo_tabs_bar = view.read(app).repo_tabs_bar.clone();
         repo_tabs_bar.update(app, |bar, cx| {
-            let mut open_terminal_repo_ids = HashSet::default();
+            let mut open_terminal_repo_ids = FxHashSet::default();
             open_terminal_repo_ids.insert(ready_repo_id);
             bar.set_open_terminal_repo_ids(open_terminal_repo_ids, cx);
         });

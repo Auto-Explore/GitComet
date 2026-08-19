@@ -1,5 +1,5 @@
 use super::*;
-use rustc_hash::FxHashSet as HashSet;
+use rustc_hash::FxHashSet;
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
     let sha = commit_id.as_ref().to_string();
@@ -83,7 +83,7 @@ fn comparison_mark_pair(repo: Option<&RepoState>) -> Option<(CommitId, String)> 
     })
 }
 
-fn remote_tag_context(repo: Option<&RepoState>) -> (Vec<String>, HashSet<(&str, &str)>) {
+fn remote_tag_context(repo: Option<&RepoState>) -> (Vec<String>, FxHashSet<(&str, &str)>) {
     let mut remote_names = repo
         .and_then(|r| match &r.remotes {
             Loadable::Ready(remotes) => Some(
@@ -97,12 +97,12 @@ fn remote_tag_context(repo: Option<&RepoState>) -> (Vec<String>, HashSet<(&str, 
         .unwrap_or_default();
     remote_names.sort_unstable();
     remote_names.dedup();
-    let remote_tags: HashSet<(&str, &str)> = repo
+    let remote_tags: FxHashSet<(&str, &str)> = repo
         .and_then(|r| match &r.remote_tags {
             Loadable::Ready(tags) => Some(
                 tags.iter()
                     .map(|tag| (tag.remote.as_str(), tag.name.as_str()))
-                    .collect::<HashSet<_>>(),
+                    .collect::<FxHashSet<_>>(),
             ),
             _ => None,
         })
@@ -117,7 +117,7 @@ fn tag_names_model(
     title: SharedString,
     tag_names: Vec<String>,
     remote_names: Vec<String>,
-    remote_tags: HashSet<(&str, &str)>,
+    remote_tags: FxHashSet<(&str, &str)>,
     commit_id: &CommitId,
     compare_label: String,
     comparison_mark: Option<(CommitId, String)>,

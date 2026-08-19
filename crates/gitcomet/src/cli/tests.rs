@@ -1,16 +1,16 @@
 use super::*;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::io::Write;
 
 /// Test-only environment that avoids calling the unsafe `std::env::set_var`.
 struct TestEnv {
-    vars: HashMap<String, OsString>,
+    vars: FxHashMap<String, OsString>,
 }
 
 impl TestEnv {
     fn new() -> Self {
         Self {
-            vars: HashMap::default(),
+            vars: FxHashMap::default(),
         }
     }
 
@@ -2874,7 +2874,7 @@ fn mergetool_args_no_style(dir: &tempfile::TempDir) -> MergetoolArgs {
     }
 }
 
-fn mock_git_config(map: &HashMap<String, String>) -> impl Fn(&str) -> Option<String> + '_ {
+fn mock_git_config(map: &FxHashMap<String, String>) -> impl Fn(&str) -> Option<String> + '_ {
     move |key: &str| map.get(key).cloned()
 }
 
@@ -2883,7 +2883,7 @@ fn git_config_fallback_reads_merge_conflictstyle_zdiff3() {
     let dir = tempfile::tempdir().unwrap();
     let args = mergetool_args_no_style(&dir);
     let env = TestEnv::new();
-    let mut git_cfg = HashMap::default();
+    let mut git_cfg = FxHashMap::default();
     git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
 
     let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
@@ -2895,7 +2895,7 @@ fn git_config_fallback_reads_merge_conflictstyle_diff3() {
     let dir = tempfile::tempdir().unwrap();
     let args = mergetool_args_no_style(&dir);
     let env = TestEnv::new();
-    let mut git_cfg = HashMap::default();
+    let mut git_cfg = FxHashMap::default();
     git_cfg.insert("merge.conflictstyle".into(), "diff3".into());
 
     let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
@@ -2907,7 +2907,7 @@ fn git_config_fallback_reads_diff_algorithm_histogram() {
     let dir = tempfile::tempdir().unwrap();
     let args = mergetool_args_no_style(&dir);
     let env = TestEnv::new();
-    let mut git_cfg = HashMap::default();
+    let mut git_cfg = FxHashMap::default();
     git_cfg.insert("diff.algorithm".into(), "histogram".into());
 
     let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
@@ -2919,7 +2919,7 @@ fn git_config_fallback_reads_diff_algorithm_patience_as_histogram() {
     let dir = tempfile::tempdir().unwrap();
     let args = mergetool_args_no_style(&dir);
     let env = TestEnv::new();
-    let mut git_cfg = HashMap::default();
+    let mut git_cfg = FxHashMap::default();
     git_cfg.insert("diff.algorithm".into(), "patience".into());
 
     let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
@@ -2933,7 +2933,7 @@ fn git_config_fallback_explicit_cli_overrides_git_config() {
     args.conflict_style = Some("merge".into()); // explicit CLI flag
     args.diff_algorithm = Some("myers".into()); // explicit CLI flag
     let env = TestEnv::new();
-    let mut git_cfg = HashMap::default();
+    let mut git_cfg = FxHashMap::default();
     git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
     git_cfg.insert("diff.algorithm".into(), "histogram".into());
 
@@ -2948,7 +2948,7 @@ fn git_config_fallback_no_git_config_uses_defaults() {
     let dir = tempfile::tempdir().unwrap();
     let args = mergetool_args_no_style(&dir);
     let env = TestEnv::new();
-    let git_cfg: HashMap<String, String> = HashMap::default();
+    let git_cfg: FxHashMap<String, String> = FxHashMap::default();
 
     let config = resolve_mergetool_with_config(args, &env, &mock_git_config(&git_cfg)).unwrap();
     assert_eq!(config.conflict_style, ConflictStyle::Merge);
@@ -2960,7 +2960,7 @@ fn git_config_fallback_unknown_values_ignored() {
     let dir = tempfile::tempdir().unwrap();
     let args = mergetool_args_no_style(&dir);
     let env = TestEnv::new();
-    let mut git_cfg = HashMap::default();
+    let mut git_cfg = FxHashMap::default();
     git_cfg.insert("merge.conflictstyle".into(), "some_future_style".into());
     git_cfg.insert("diff.algorithm".into(), "some_future_algo".into());
 
@@ -2975,7 +2975,7 @@ fn git_config_fallback_combined_style_and_algorithm() {
     let dir = tempfile::tempdir().unwrap();
     let args = mergetool_args_no_style(&dir);
     let env = TestEnv::new();
-    let mut git_cfg = HashMap::default();
+    let mut git_cfg = FxHashMap::default();
     git_cfg.insert("merge.conflictstyle".into(), "zdiff3".into());
     git_cfg.insert("diff.algorithm".into(), "histogram".into());
 

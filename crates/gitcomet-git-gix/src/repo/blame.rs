@@ -11,7 +11,7 @@ use gitcomet_core::domain::{DiffArea, is_uncommitted_commit_id};
 use gitcomet_core::error::{Error, ErrorKind};
 use gitcomet_core::services::{BlameLine, CommandOutput, ConflictSide, Result};
 use gix::bstr::ByteSlice as _;
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::hash_map::Entry;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -152,7 +152,7 @@ fn configured_rewrites(repo: &gix::Repository) -> Option<gix::diff::Rewrites> {
 
 fn blame_commit_metadata<'a>(
     repo: &gix::Repository,
-    cache: &'a mut HashMap<(gix::ObjectId, Option<PathBuf>), BlameCommitMetadata>,
+    cache: &'a mut FxHashMap<(gix::ObjectId, Option<PathBuf>), BlameCommitMetadata>,
     commit_id: gix::ObjectId,
     source_path: Option<&Path>,
     blamed_path: &Path,
@@ -401,7 +401,7 @@ impl GixRepo {
             }
         };
 
-        let mut metadata_cache = HashMap::default();
+        let mut metadata_cache = FxHashMap::default();
         let total_lines = outcome
             .entries
             .last()

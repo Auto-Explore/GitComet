@@ -75,7 +75,7 @@ pub(in super::super) struct ActionBarView {
     root_view: WeakEntity<GitCometView>,
     notify_fingerprint: u64,
     active_context_menu_invoker: Option<SharedString>,
-    open_terminal_repo_ids: HashSet<RepoId>,
+    open_terminal_repo_ids: FxHashSet<RepoId>,
     action_bar_terminal_target: ActionBarTerminalTarget,
 }
 
@@ -133,7 +133,7 @@ impl ActionBarView {
             root_view,
             notify_fingerprint,
             active_context_menu_invoker: None,
-            open_terminal_repo_ids: HashSet::default(),
+            open_terminal_repo_ids: FxHashSet::default(),
             action_bar_terminal_target: ActionBarTerminalTarget::default(),
         }
     }
@@ -157,7 +157,7 @@ impl ActionBarView {
 
     pub(in super::super) fn set_open_terminal_repo_ids(
         &mut self,
-        next: HashSet<RepoId>,
+        next: FxHashSet<RepoId>,
         cx: &mut gpui::Context<Self>,
     ) {
         if self.open_terminal_repo_ids == next {

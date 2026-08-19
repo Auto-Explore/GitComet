@@ -1826,9 +1826,9 @@ impl MainPaneView {
 
         struct FileDiffSrcLookup {
             file_rel: std::path::PathBuf,
-            add_by_new_line: HashMap<u32, usize>,
-            remove_by_old_line: HashMap<u32, usize>,
-            context_by_old_line: HashMap<u32, usize>,
+            add_by_new_line: FxHashMap<u32, usize>,
+            remove_by_old_line: FxHashMap<u32, usize>,
+            context_by_old_line: FxHashMap<u32, usize>,
         }
 
         let file_diff_lookup = if self.is_file_diff_view_active() {
@@ -1842,12 +1842,12 @@ impl MainPaneView {
                     DiffViewMode::Inline => self.file_diff_inline_row_len(),
                     DiffViewMode::Split => self.file_diff_split_row_len(),
                 };
-                let mut add_by_new_line: HashMap<u32, usize> =
-                    HashMap::with_capacity_and_hasher(approx_map_len, Default::default());
-                let mut remove_by_old_line: HashMap<u32, usize> =
-                    HashMap::with_capacity_and_hasher(approx_map_len, Default::default());
-                let mut context_by_old_line: HashMap<u32, usize> =
-                    HashMap::with_capacity_and_hasher(approx_map_len, Default::default());
+                let mut add_by_new_line: FxHashMap<u32, usize> =
+                    FxHashMap::with_capacity_and_hasher(approx_map_len, Default::default());
+                let mut remove_by_old_line: FxHashMap<u32, usize> =
+                    FxHashMap::with_capacity_and_hasher(approx_map_len, Default::default());
+                let mut context_by_old_line: FxHashMap<u32, usize> =
+                    FxHashMap::with_capacity_and_hasher(approx_map_len, Default::default());
 
                 for ix in 0..self.patch_diff_row_len() {
                     let Some(line) = self.patch_diff_row(ix) else {
@@ -2001,10 +2001,10 @@ impl MainPaneView {
                     .saturating_sub(sel_a)
                     .saturating_add(1)
                     .saturating_mul(2);
-                let mut selected_src_ixs: HashSet<usize> =
-                    HashSet::with_capacity_and_hasher(approx_selected, Default::default());
-                let mut selected_change_src_ixs: HashSet<usize> =
-                    HashSet::with_capacity_and_hasher(approx_selected, Default::default());
+                let mut selected_src_ixs: FxHashSet<usize> =
+                    FxHashSet::with_capacity_and_hasher(approx_selected, Default::default());
+                let mut selected_change_src_ixs: FxHashSet<usize> =
+                    FxHashSet::with_capacity_and_hasher(approx_selected, Default::default());
 
                 for vix in sel_a..=sel_b {
                     for src_ix in src_ixs_for_visible_ix(vix) {

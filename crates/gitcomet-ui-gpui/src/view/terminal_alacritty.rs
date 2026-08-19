@@ -939,8 +939,12 @@ pub(super) fn build_alacritty_row(
     let palette = TerminalAnsiPalette::from_theme(theme);
 
     let mut text = String::with_capacity(cols);
-    let mut runs = Vec::with_capacity(cols);
-    let mut background_rects: Vec<TerminalBackgroundRect> = Vec::with_capacity(cols);
+    // `runs` holds *merged* style spans (a handful for ordinary output) and
+    // `background_rects` only non-default backgrounds, so neither tracks `cols`.
+    // `terminal_panel` retains both per cached row, so an over-estimate is held
+    // for the lifetime of the render cache rather than just this call.
+    let mut runs = Vec::new();
+    let mut background_rects: Vec<TerminalBackgroundRect> = Vec::new();
     let mut active_style: Option<TerminalCellStyle> = None;
     let mut active_len = 0usize;
 
@@ -1046,10 +1050,11 @@ pub(super) fn build_alacritty_row(
             active_len = pushed_len;
         }
 
+        // A WIDE_CHAR occupies two columns, but the second one has its own
+        // WIDE_CHAR_SPACER cell. Advancing `col` past it here would leave that
+        // cell unconsumed, pinning the cursor behind `col` for the rest of the
+        // row; let the spacer branch above skip it instead.
         col += 1;
-        if cell.cell.flags.contains(Flags::WIDE_CHAR) && col < cols {
-            col += 1;
-        }
     }
 
     if let Some(previous) = active_style.take()
@@ -1782,6 +1787,71 @@ mod tests {
         let (text, _runs, _bg_rects) =
             build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
         assert_eq!(text, "a", "wide char spacer at col 0 must be skipped");
+    }
+
+    #[test]
+    fn build_row_keeps_reading_cells_after_a_wide_char() {
+        let base = default_text_style();
+        let mut wide = make_cell('\u{5360}', 1);
+        wide.cell.flags = Flags::WIDE_CHAR;
+        let mut spacer = make_cell(' ', 2);
+        spacer.cell.flags = Flags::WIDE_CHAR_SPACER;
+        let cells = vec![make_cell('A', 0), wide, spacer, make_cell('B', 3)];
+
+        let (text, _runs, _bg_rects) =
+            build_alacritty_row(&cells, 0, 4, &base, AppTheme::gitcomet_dark());
+
+        // The row walk holds a single forward cursor over `cells`, so a column
+        // it advances past without consuming the matching cell strands that
+        // cursor and silently drops the rest of the line.
+        assert_eq!(
+            text, "A\u{5360}B",
+            "cells after a wide char must still render"
+        );
+    }
+
+    #[test]
+    fn build_row_does_not_reserve_per_column_for_runs_and_backgrounds() {
+        // `terminal_panel` stores both vecs on the cached row, so anything
+        // reserved here is held for the render cache's lifetime rather than
+        // freed with the call. `runs` holds *merged* style spans and
+        // `background_rects` only non-default backgrounds -- neither is per-column.
+        let base = default_text_style();
+        let cols = 200usize;
+        let cells = vec![make_cell('a', 0), make_cell('b', 1)];
+
+        let (_text, runs, backgrounds) =
+            build_alacritty_row(&cells, 0, cols, &base, AppTheme::gitcomet_dark());
+
+        assert!(
+            backgrounds.is_empty(),
+            "default backgrounds are not emitted"
+        );
+        assert_eq!(
+            backgrounds.capacity(),
+            0,
+            "an empty background vec must not hold a per-column allocation"
+        );
+        assert!(
+            runs.capacity() < cols,
+            "reserved {} runs for {} merged span(s)",
+            runs.capacity(),
+            runs.len()
+        );
+    }
+
+    #[test]
+    fn build_row_keeps_reading_cells_across_an_empty_column() {
+        let base = default_text_style();
+        let cells = vec![make_cell('A', 0), make_cell('B', 2)];
+
+        let (text, _runs, _bg_rects) =
+            build_alacritty_row(&cells, 0, 3, &base, AppTheme::gitcomet_dark());
+
+        assert_eq!(
+            text, "AB",
+            "a column with no cell must not strand the cursor"
+        );
     }
 
     #[test]

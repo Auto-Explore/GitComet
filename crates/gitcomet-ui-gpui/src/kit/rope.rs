@@ -399,7 +399,7 @@ impl Rope {
     pub fn text_for_range(&self, range: Range<usize>) -> String {
         let range = self.clip_range(range);
         let mut out = String::with_capacity(range.len());
-        for chunk in Chunks::new(&self.chunks, range) {
+        for chunk in self.chunks_in_range(range) {
             out.push_str(chunk);
         }
         out

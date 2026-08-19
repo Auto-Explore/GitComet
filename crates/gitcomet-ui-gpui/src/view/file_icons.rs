@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::path::Path;
 use std::sync::LazyLock;
 
@@ -363,12 +363,12 @@ const FILE_ICONS: &[(&str, &str)] = &[
 
 fn icon_keys_by_association(
     associations_by_icon_key: &[(&'static str, &'static [&'static str])],
-) -> HashMap<&'static str, &'static str> {
+) -> FxHashMap<&'static str, &'static str> {
     let capacity = associations_by_icon_key
         .iter()
         .map(|(_, associations)| associations.len())
         .sum();
-    let mut map = HashMap::with_capacity_and_hasher(capacity, Default::default());
+    let mut map = FxHashMap::with_capacity_and_hasher(capacity, Default::default());
     for (icon_key, associations) in associations_by_icon_key {
         for association in *associations {
             map.insert(*association, *icon_key);
@@ -377,13 +377,13 @@ fn icon_keys_by_association(
     map
 }
 
-static FILE_STEMS: LazyLock<HashMap<&'static str, &'static str>> =
+static FILE_STEMS: LazyLock<FxHashMap<&'static str, &'static str>> =
     LazyLock::new(|| icon_keys_by_association(FILE_STEMS_BY_ICON_KEY));
 
-static FILE_SUFFIXES: LazyLock<HashMap<&'static str, &'static str>> =
+static FILE_SUFFIXES: LazyLock<FxHashMap<&'static str, &'static str>> =
     LazyLock::new(|| icon_keys_by_association(FILE_SUFFIXES_BY_ICON_KEY));
 
-static FILE_ICON_PATHS: LazyLock<HashMap<&'static str, &'static str>> =
+static FILE_ICON_PATHS: LazyLock<FxHashMap<&'static str, &'static str>> =
     LazyLock::new(|| FILE_ICONS.iter().copied().collect());
 
 fn default_file_icon() -> &'static str {

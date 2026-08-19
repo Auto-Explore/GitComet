@@ -1,6 +1,7 @@
 use super::super::super::*;
 use super::helpers::{ICommitEditorMode, IRebaseDragState, IRebaseViewState};
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+use rustc_hash::{FxHashMap, FxHasher};
 use std::{cell::RefCell, rc::Rc};
 
 const ACTION_BTN_W: f32 = 76.0;
@@ -86,8 +87,7 @@ fn autosquash_folds(
         AutosquashMode::ToTop | AutosquashMode::ToBottom => {
             // Group indices by normalized summary, preserving first-seen order.
             let mut order: Vec<&str> = Vec::with_capacity(entries.len());
-            let mut groups =
-                rustc_hash::FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
+            let mut groups = FxHashMap::with_capacity_and_hasher(entries.len(), Default::default());
             for (i, e) in entries.iter().enumerate() {
                 let key = autosquash_group_key(e.summary.as_str());
                 if key.trim().is_empty() {
@@ -152,12 +152,12 @@ fn compute_autosquash(
     mode: AutosquashMode,
 ) -> (
     Vec<InteractiveRebaseEntry>,
-    rustc_hash::FxHashMap<String, Vec<InteractiveRebaseEntry>>,
+    FxHashMap<String, Vec<InteractiveRebaseEntry>>,
 ) {
     let folded_into = autosquash_folds(original, mode);
     let mut collapsed = Vec::with_capacity(original.len());
-    let mut folded: rustc_hash::FxHashMap<String, Vec<InteractiveRebaseEntry>> =
-        rustc_hash::FxHashMap::with_capacity_and_hasher(original.len(), Default::default());
+    let mut folded: FxHashMap<String, Vec<InteractiveRebaseEntry>> =
+        FxHashMap::with_capacity_and_hasher(original.len(), Default::default());
     for (i, e) in original.iter().enumerate() {
         match folded_into[i] {
             Some(survivor) => {
@@ -182,7 +182,7 @@ fn compute_autosquash(
 /// the planned entries cover the live range exactly.
 fn expand_folded(
     entries: &[InteractiveRebaseEntry],
-    folded: &rustc_hash::FxHashMap<String, Vec<InteractiveRebaseEntry>>,
+    folded: &FxHashMap<String, Vec<InteractiveRebaseEntry>>,
 ) -> Vec<InteractiveRebaseEntry> {
     let capacity = folded.values().fold(entries.len(), |len, fixups| {
         len.saturating_add(fixups.len())
@@ -347,7 +347,7 @@ fn insertion_data_ix_for_display(
 /// `ListState` remeasure/reset in `interactive_rebase_view`.
 fn irebase_list_sig(st: &IRebaseViewState) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut h = rustc_hash::FxHasher::default();
+    let mut h = FxHasher::default();
     for e in &st.entries {
         e.commit_id.hash(&mut h);
         (e.action as u8).hash(&mut h);

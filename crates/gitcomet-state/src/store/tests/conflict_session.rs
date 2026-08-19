@@ -7,7 +7,7 @@ use gitcomet_core::services::ConflictSide;
 /// Helper: set up a repo state with a conflicted status entry.
 fn setup_repo_with_conflict(
     state: &mut AppState,
-    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
     path: &str,
     conflict_kind: FileConflictKind,
@@ -89,7 +89,7 @@ fn two_region_marker_conflict_file(path: &str, current: &str) -> ConflictFile {
 
 #[test]
 fn conflict_file_loaded_builds_session_with_regions() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -157,7 +157,7 @@ fn conflict_file_loaded_builds_session_with_regions() {
 fn current_only_session_preserves_first_paint_pick_on_full_upgrade() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_repo_with_conflict(
@@ -261,7 +261,7 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
     use gitcomet_core::merge::MergeSource;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_repo_with_conflict(
@@ -375,7 +375,7 @@ fn current_only_pick_maps_across_partitioned_stage_plan_boundaries() {
 fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_repo_with_conflict(
@@ -479,7 +479,7 @@ fn current_only_upgrade_keeps_whitespace_conflicts_manual_on_full_regions() {
 
 #[test]
 fn conflict_file_loaded_builds_session_for_delete_conflict() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -533,7 +533,7 @@ fn conflict_file_loaded_builds_session_for_delete_conflict() {
 
 #[test]
 fn conflict_file_loaded_builds_binary_session() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -588,7 +588,7 @@ fn conflict_file_loaded_builds_binary_session() {
 
 #[test]
 fn conflict_file_loaded_clears_session_on_error() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -618,7 +618,7 @@ fn conflict_file_loaded_clears_session_on_error() {
 
 #[test]
 fn load_conflict_file_clears_previous_session() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -703,7 +703,7 @@ fn load_conflict_file_clears_previous_session() {
 
 #[test]
 fn status_loaded_clears_conflict_context_when_path_is_resolved() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -771,7 +771,7 @@ fn status_loaded_clears_conflict_context_when_path_is_resolved() {
 
 #[test]
 fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -835,7 +835,7 @@ fn status_loaded_keeps_conflict_context_for_same_conflicted_path() {
 
 #[test]
 fn conflict_file_loaded_prefers_backend_session_when_provided() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -899,7 +899,7 @@ fn conflict_file_loaded_prefers_backend_session_when_provided() {
 
 #[test]
 fn conflict_set_hide_resolved_updates_repo_state() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -937,7 +937,7 @@ fn conflict_set_hide_resolved_updates_repo_state() {
 
 #[test]
 fn conflict_apply_bulk_choice_rewrites_every_marker_region() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1030,7 +1030,7 @@ theirs two\n\
 fn conflict_apply_bulk_choice_rewrites_automatic_plan_deltas_too() {
     use gitcomet_core::merge::MergeSource;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_repo_with_conflict(
@@ -1081,7 +1081,7 @@ fn conflict_apply_bulk_choice_rewrites_automatic_plan_deltas_too() {
 
 #[test]
 fn conflict_set_region_choice_updates_target_session_region() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1161,7 +1161,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
     use gitcomet_core::merge::{MergeSource, OrderedSelection};
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_repo_with_conflict(
@@ -1295,7 +1295,7 @@ fn conflict_ordered_source_messages_toggle_append_and_replace_manual_content() {
 
 #[test]
 fn conflict_set_region_choice_base_noops_when_region_has_no_base() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1374,7 +1374,7 @@ theirs only\n\
 
 #[test]
 fn conflict_reset_resolutions_clears_all_region_choices() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1471,7 +1471,7 @@ theirs two\n\
 
 #[test]
 fn conflict_reset_resolutions_noops_when_already_unresolved() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1546,7 +1546,7 @@ theirs one\n\
 
 #[test]
 fn conflict_file_loaded_uses_plan_default_for_identical_sides() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1631,7 +1631,7 @@ same content\n\
 /// bulk choice is how the user then clears them all at once.
 #[test]
 fn whitespace_only_conflicts_stay_manual_until_the_bulk_choice_clears_them() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1769,7 +1769,7 @@ fn history_conflict_file() -> ConflictFile {
 
 #[test]
 fn conflict_apply_autosolve_history_stays_manual_and_updates_session() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1831,7 +1831,7 @@ fn conflict_apply_autosolve_history_stays_manual_and_updates_session() {
 
 #[test]
 fn conflict_file_reload_keeps_identical_plan_clean() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1862,7 +1862,7 @@ same content\n\
         current: Some(current.to_string().into()),
     };
 
-    let load = |repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    let load = |repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
                 state: &mut AppState,
                 file: ConflictFile| {
         reduce(
@@ -1896,7 +1896,7 @@ same content\n\
 
 #[test]
 fn conflict_sync_region_resolutions_updates_manual_edit_and_pick() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -1987,7 +1987,7 @@ theirs two\n\
 
 #[test]
 fn conflict_sync_region_resolutions_noops_when_resolution_is_unchanged() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2067,7 +2067,7 @@ theirs one\n\
 
 #[test]
 fn repo_command_finished_checkout_conflict_side_syncs_all_session_regions() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2154,7 +2154,7 @@ theirs two\n\
 
 #[test]
 fn repo_command_finished_checkout_conflict_base_syncs_regions_with_base() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2244,7 +2244,7 @@ theirs two\n\
 
 #[test]
 fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolution() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2315,7 +2315,7 @@ fn repo_command_finished_accept_conflict_deletion_syncs_two_way_region_resolutio
 
 #[test]
 fn repo_command_finished_launch_mergetool_clears_conflict_context() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2383,7 +2383,7 @@ fn repo_command_finished_launch_mergetool_clears_conflict_context() {
 
 #[test]
 fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2465,7 +2465,7 @@ fn repo_command_finished_checkout_conflict_side_clears_binary_conflict_context()
 
 #[test]
 fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2546,7 +2546,7 @@ fn repo_command_finished_checkout_conflict_base_clears_binary_conflict_context()
 
 #[test]
 fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2683,7 +2683,7 @@ fn repo_command_finished_conflict_sync_noops_when_paths_or_session_do_not_match(
 
 #[test]
 fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2739,7 +2739,7 @@ fn repo_command_finished_checkout_conflict_side_ours_syncs_region_resolution() {
 
 #[test]
 fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_ours() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2804,7 +2804,7 @@ fn repo_command_finished_accept_conflict_deletion_maps_added_by_them_to_pick_our
 
 #[test]
 fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_ours() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2857,7 +2857,7 @@ fn repo_command_finished_accept_conflict_deletion_maps_both_modified_to_pick_our
 
 #[test]
 fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -2932,7 +2932,7 @@ fn repo_command_finished_checkout_conflict_base_noops_for_regions_without_base()
 /// side (so it can be split) and the second block has one. Returns the repo id.
 fn setup_two_conflict_file(
     state: &mut AppState,
-    repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>,
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
     id_alloc: &AtomicU64,
 ) -> RepoId {
     let repo_id = setup_repo_with_conflict(
@@ -2993,7 +2993,7 @@ fn conflict_split_region_stays_in_memory_and_carries_over_resolutions() {
         ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3107,7 +3107,7 @@ fn conflict_split_partitions_source_backed_autosolved_content() {
         AutosolveRule, ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3169,7 +3169,7 @@ fn conflict_split_preserves_arbitrary_manual_content_by_refusing_the_split() {
         ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3219,7 +3219,7 @@ fn conflict_split_preserves_arbitrary_manual_content_by_refusing_the_split() {
 fn conflict_split_geometry_survives_same_path_reload() {
     use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3288,7 +3288,7 @@ fn conflict_split_geometry_survives_same_path_reload() {
 fn conflict_join_regions_merges_blocks_without_writing() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3360,7 +3360,7 @@ fn conflict_join_regions_merges_blocks_without_writing() {
 
 #[test]
 fn conflict_join_geometry_survives_same_path_reload() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3426,7 +3426,7 @@ fn conflict_join_regions_carries_following_resolution_to_shifted_index() {
         ConflictRegionResolution, ConflictRegionSplitBoundaries,
     };
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3503,7 +3503,7 @@ fn conflict_join_regions_carries_following_resolution_to_shifted_index() {
 fn conflict_split_noops_on_degenerate_selection() {
     use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3543,7 +3543,7 @@ fn conflict_split_noops_on_degenerate_selection() {
 fn conflict_split_region_rejects_stale_revision() {
     use gitcomet_core::conflict_session::ConflictRegionSplitBoundaries;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3585,7 +3585,7 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
     use gitcomet_core::domain::{DiffArea, DiffTarget};
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
@@ -3610,7 +3610,7 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
         theirs: Some("remote\n".to_string().into()),
         current: Some(current.to_string().into()),
     };
-    let load = |repos: &mut HashMap<RepoId, Arc<dyn GitRepository>>, state: &mut AppState| {
+    let load = |repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>, state: &mut AppState| {
         reduce(
             repos,
             &id_alloc,
@@ -3694,7 +3694,7 @@ fn conflict_reload_via_stash_keeps_ordered_resolution() {
 fn same_path_explicit_full_load_restores_session_resolutions() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3765,7 +3765,7 @@ fn same_path_explicit_full_load_restores_session_resolutions() {
 fn failed_same_path_reload_keeps_stash_for_retry() {
     use gitcomet_core::conflict_session::ConflictRegionResolution;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3858,7 +3858,7 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
             .collect()
     }
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_repo_with_conflict(
@@ -3943,7 +3943,7 @@ fn resolution_restore_finds_unique_regions_after_large_prefix_deletion() {
 
 #[test]
 fn clearing_conflict_context_drops_pending_restore_session() {
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -3989,7 +3989,7 @@ fn clearing_conflict_context_drops_pending_restore_session() {
 fn conflict_manual_alignment_replans_in_memory_and_clears_back() {
     use gitcomet_core::merge::ManualAlignment;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);
@@ -4049,7 +4049,7 @@ fn conflict_manual_alignment_replans_in_memory_and_clears_back() {
 fn conflict_manual_alignment_rejects_a_stale_revision() {
     use gitcomet_core::merge::ManualAlignment;
 
-    let mut repos: HashMap<RepoId, Arc<dyn GitRepository>> = HashMap::default();
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
     let repo_id = setup_two_conflict_file(&mut state, &mut repos, &id_alloc);

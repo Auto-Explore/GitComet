@@ -1,5 +1,6 @@
 use super::*;
 use gpui::{AnyElement, Div, Stateful};
+use rustc_hash::FxHashSet;
 
 const STATUS_SECTION_MIN_HEIGHT_PX: f32 = 80.0;
 
@@ -870,7 +871,7 @@ impl DetailsPaneView {
         // per visible row batch) over the whole loaded page, and
         // `CommitMultiSelection::contains` is a linear scan — so a large
         // selection against a large page would be quadratic on every repaint.
-        let selected: rustc_hash::FxHashSet<&CommitId> = selection.commits.iter().collect();
+        let selected: FxHashSet<&CommitId> = selection.commits.iter().collect();
         page.commits
             .iter()
             .filter(|commit| selected.contains(&commit.id))

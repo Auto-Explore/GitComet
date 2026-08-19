@@ -557,8 +557,8 @@ fn highlight_spec_warmup_sender() -> Option<&'static std::sync::mpsc::Sender<Dif
 /// status quo and the common case (a `.vue` opens showing its template, and the
 /// script block is not drawn until the user scrolls) hides the cost entirely.
 pub(super) fn request_highlight_spec_warmup(language: DiffSyntaxLanguage) {
-    static REQUESTED: OnceLock<Mutex<HashSet<DiffSyntaxLanguage>>> = OnceLock::new();
-    let requested = REQUESTED.get_or_init(|| Mutex::new(HashSet::default()));
+    static REQUESTED: OnceLock<Mutex<FxHashSet<DiffSyntaxLanguage>>> = OnceLock::new();
+    let requested = REQUESTED.get_or_init(|| Mutex::new(FxHashSet::default()));
     {
         let Ok(mut requested) = requested.lock() else {
             return;
