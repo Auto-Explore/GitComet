@@ -136,6 +136,38 @@ impl std::fmt::Debug for InternalMsg {
                 .field("repo_id", repo_id)
                 .field("result", result)
                 .finish(),
+            InternalMsg::VirtualBranchUnapplied {
+                repo_id,
+                branch_id,
+                result,
+            } => f
+                .debug_struct("VirtualBranchUnapplied")
+                .field("repo_id", repo_id)
+                .field("branch_id", branch_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::VirtualBranchApplied {
+                repo_id,
+                branch_id,
+                result,
+            } => f
+                .debug_struct("VirtualBranchApplied")
+                .field("repo_id", repo_id)
+                .field("branch_id", branch_id)
+                .field("result", result)
+                .finish(),
+            InternalMsg::VirtualBranchHunkMoved {
+                repo_id,
+                branch_id,
+                path,
+                result,
+            } => f
+                .debug_struct("VirtualBranchHunkMoved")
+                .field("repo_id", repo_id)
+                .field("branch_id", branch_id)
+                .field("path", path)
+                .field("result", result)
+                .finish(),
             InternalMsg::RecentCommitMessagesLoaded {
                 repo_id,
                 request_rev,

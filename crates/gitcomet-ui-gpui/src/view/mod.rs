@@ -158,6 +158,7 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+mod dnd;
 mod file_diff_display;
 mod file_icons;
 mod fingerprint;
@@ -1071,6 +1072,17 @@ impl GitCometView {
             }
             "delete-tag" => {
                 // TODO: Implement delete tag
+            }
+            "virtual-branches" => {
+                if let Some(repo_id) = self.active_repo_id()
+                    && let Some(window) = window
+                {
+                    self.open_popover_centered(
+                        PopoverKind::VirtualBranchesPrompt { repo_id },
+                        window,
+                        cx,
+                    );
+                }
             }
             "add-remote" => {
                 if let Some(repo_id) = self.active_repo_id()

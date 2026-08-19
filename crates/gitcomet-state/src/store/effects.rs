@@ -206,6 +206,7 @@ fn effect_requires_available_git(effect: &Effect) -> bool {
             | Effect::PersistRecentRepo { .. }
             | Effect::PersistRepoHistoryMode { .. }
             | Effect::PersistRepoHistoryModesBatch { .. }
+            | Effect::PersistVirtualBranches { .. }
             | Effect::CancelRepoLoads { .. }
             | Effect::AbortCloneRepo { .. }
     )
@@ -247,6 +248,7 @@ fn send_unavailable_git_effect_result(
         | Effect::PersistRepoHistoryMode { .. }
         | Effect::PersistRepoHistoryModesBatch { .. }
         | Effect::PersistRepoHistoryAuthorFilter { .. }
+        | Effect::PersistVirtualBranches { .. }
         | Effect::CancelRepoLoads { .. } => {}
         Effect::OpenRepo { repo_id, path } => {
             send(Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
@@ -346,6 +348,37 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             }))
         }
+        Effect::UnapplyVirtualBranch {
+            repo_id, branch_id, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchUnapplied {
+                repo_id,
+                branch_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::ApplyVirtualBranch {
+            repo_id, branch_id, ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchApplied {
+                repo_id,
+                branch_id,
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
+        Effect::MoveHunkToVirtualBranch {
+            repo_id,
+            branch_id,
+            path,
+            ..
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::VirtualBranchHunkMoved {
+                repo_id,
+                branch_id,
+                path: path.clone(),
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::LoadRecentCommitMessages {
             repo_id,
             request_rev,
@@ -1459,6 +1492,30 @@ pub(super) fn schedule_effect(
                 }
             });
         }
+        Effect::PersistVirtualBranches {
+            repo_id,
+            workdir,
+            data,
+            action,
+        } => {
+            let Some(session_file_path) = session::default_session_file_path_for_effect() else {
+                return;
+            };
+            session_persist_executor.spawn(move || {
+                if let Err(error) =
+                    session::persist_virtual_branches_to_path(&workdir, &data, &session_file_path)
+                {
+                    util::send_or_log(
+                        &msg_tx,
+                        Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
+                            repo_id,
+                            action,
+                            error: error.to_string(),
+                        }),
+                    );
+                }
+            });
+        }
         Effect::OpenRepo { repo_id, path } => {
             if let Some((msg_tx, cancellation)) =
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
@@ -1681,6 +1738,46 @@ pub(super) fn schedule_effect(
                 repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
             {
                 repo_load::schedule_load_reflog(executor, repos, msg_tx, repo_id, limit);
+            }
+        }
+        Effect::UnapplyVirtualBranch {
+            repo_id,
+            branch_id,
+            paths,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_unapply_virtual_branch(
+                    executor, repos, msg_tx, repo_id, branch_id, paths,
+                );
+            }
+        }
+        Effect::ApplyVirtualBranch {
+            repo_id,
+            branch_id,
+            patch,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_apply_virtual_branch(
+                    executor, repos, msg_tx, repo_id, branch_id, patch,
+                );
+            }
+        }
+        Effect::MoveHunkToVirtualBranch {
+            repo_id,
+            branch_id,
+            patch,
+            path,
+        } => {
+            if let Some((msg_tx, _)) =
+                repo_load_context(thread_state, repo_task_tokens, msg_tx, repo_id)
+            {
+                repo_load::schedule_move_hunk_to_virtual_branch(
+                    executor, repos, msg_tx, repo_id, branch_id, patch, path,
+                );
             }
         }
         Effect::SaveWorktreeFile {

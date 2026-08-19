@@ -413,6 +413,14 @@ pub(crate) const COMMANDS: &[CommandEntry] = &[
         requires_repo: true,
     },
     CommandEntry {
+        id: "virtual-branches",
+        label: "Virtual Branches",
+        shortcut: Shortcut::None,
+        category: "Working Copy",
+        keywords: "virtual branch workspace changeset",
+        requires_repo: true,
+    },
+    CommandEntry {
         id: "back",
         label: "Navigate Back",
         shortcut: Shortcut::Alt("Left"),

@@ -81,6 +81,27 @@ fn persist_session_effect(
     Effect::PersistSession { repo_id, action }
 }
 
+/// Restores the persisted virtual branch workspace (path assignments + parked
+/// patches) onto a freshly opened repo state.
+fn restore_virtual_branches_from_session(
+    repo_state: &mut crate::model::RepoState,
+    session_preferences: &session::RepoSessionPreferences,
+    workdir_key: &str,
+) {
+    let Some(data) = session_preferences.virtual_branches.get(workdir_key) else {
+        return;
+    };
+    repo_state.virtual_branches = data.branches.iter().map(Into::into).collect::<Vec<_>>();
+    repo_state.next_virtual_branch_id = data.next_id.max(
+        repo_state
+            .virtual_branches
+            .iter()
+            .map(|branch| branch.id.saturating_add(1))
+            .max()
+            .unwrap_or(1),
+    );
+}
+
 fn persist_recent_repo_effect(repo_id: Option<RepoId>, workdir: PathBuf) -> Effect {
     Effect::PersistRecentRepo {
         repo_id,
@@ -384,6 +405,7 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         {
             repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
         }
+        restore_virtual_branches_from_session(&mut repo_state, &session_preferences, &workdir_key);
         repo_state.last_active_at = Some(now);
         repo_state
     });
@@ -478,6 +500,11 @@ pub(super) fn restore_session(
             {
                 repo_state.fetch_prune_deleted_remote_tracking_branches = enabled;
             }
+            restore_virtual_branches_from_session(
+                &mut repo_state,
+                &session_preferences,
+                &workdir_key,
+            );
             repo_state
         };
         repo_state.set_open(Loadable::NotLoaded);

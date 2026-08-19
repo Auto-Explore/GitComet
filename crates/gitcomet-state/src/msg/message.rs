@@ -738,6 +738,55 @@ pub enum Msg {
         target: String,
         mode: ResetMode,
     },
+    CreateVirtualBranch {
+        repo_id: RepoId,
+        name: String,
+    },
+    RenameVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        name: String,
+    },
+    DeleteVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+    },
+    /// Moves `path` into the branch: it is removed from every other virtual
+    /// branch first, since a path belongs to at most one.
+    AssignPathToVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        path: std::path::PathBuf,
+    },
+    UnassignPathFromVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        path: std::path::PathBuf,
+    },
+    UnapplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+    },
+    ApplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+    },
+    /// Moves a single diff hunk out of the worktree into a virtual branch's
+    /// parked patch collection. The patch is built by the UI from the loaded
+    /// diff (`build_unified_patch_for_hunk_src_ix`) and reverse-applied to the
+    /// worktree by the worker; on success it is recorded in `stored_patch`.
+    MoveHunkToVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        patch: String,
+        path: std::path::PathBuf,
+    },
+    /// Removes the given virtual branches (computed stale by the UI via
+    /// `stale_virtual_branch_ids` and confirmed by the user).
+    PruneVirtualBranches {
+        repo_id: RepoId,
+        branch_ids: Vec<u64>,
+    },
     /// Builds the squash message preview for the current multi-selection so
     /// the squash prompt can prefill its message input.
     PrepareSquash {
@@ -1066,6 +1115,26 @@ pub enum InternalMsg {
     ReflogLoaded {
         repo_id: RepoId,
         result: Result<Vec<ReflogEntry>, Error>,
+    },
+    VirtualBranchUnapplied {
+        repo_id: RepoId,
+        branch_id: u64,
+        /// Ok(patch) is the captured unified diff, stored for re-apply.
+        result: Result<String, Error>,
+    },
+    VirtualBranchApplied {
+        repo_id: RepoId,
+        branch_id: u64,
+        result: Result<(), Error>,
+    },
+    /// Result of a hunk move. `Ok(patch)` is the patch that was successfully
+    /// reverse-applied; the reducer records it (and the hunk's path) in the
+    /// branch's parked patch collection.
+    VirtualBranchHunkMoved {
+        repo_id: RepoId,
+        branch_id: u64,
+        path: std::path::PathBuf,
+        result: Result<String, Error>,
     },
     RecentCommitMessagesLoaded {
         repo_id: RepoId,

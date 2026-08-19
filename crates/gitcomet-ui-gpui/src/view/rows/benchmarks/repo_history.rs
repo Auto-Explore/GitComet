@@ -559,6 +559,27 @@ pub(in crate::view) fn hash_branch_sidebar_rows(rows: &[BranchSidebarRow]) -> u6
             BranchSidebarRow::PinnedHeader { collapsed, .. } => {
                 collapsed.hash(&mut h);
             }
+            BranchSidebarRow::VirtualBranchesHeader {
+                top_border,
+                collapsed,
+                ..
+            } => {
+                top_border.hash(&mut h);
+                collapsed.hash(&mut h);
+            }
+            BranchSidebarRow::VirtualBranchItem {
+                branch_id,
+                name,
+                path_count,
+                applied,
+                pending,
+            } => {
+                branch_id.hash(&mut h);
+                name.len().hash(&mut h);
+                path_count.hash(&mut h);
+                applied.hash(&mut h);
+                pending.hash(&mut h);
+            }
             BranchSidebarRow::SectionSpacer
             | BranchSidebarRow::WorktreesHeader { .. }
             | BranchSidebarRow::WorktreePlaceholder { .. }

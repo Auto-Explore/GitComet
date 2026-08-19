@@ -416,3 +416,4 @@ mod reducer_diagnostics;
 mod repo_management;
 mod repo_monitor;
 mod send_failures;
+mod virtual_branches;

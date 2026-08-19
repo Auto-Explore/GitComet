@@ -37,6 +37,14 @@ pub enum Effect {
         author: Option<String>,
         action: &'static str,
     },
+    /// Persists the virtual branch workspace (path assignments + parked
+    /// patches) for a repo, keyed by workdir in the session file.
+    PersistVirtualBranches {
+        repo_id: Option<RepoId>,
+        workdir: PathBuf,
+        data: crate::session::VirtualBranchesSessionFile,
+        action: &'static str,
+    },
     OpenRepo {
         repo_id: RepoId,
         path: PathBuf,
@@ -93,6 +101,29 @@ pub enum Effect {
     LoadReflog {
         repo_id: RepoId,
         limit: usize,
+    },
+    /// Capture the branch's diff (worktree + index vs HEAD) and reverse-apply
+    /// it so the changes leave the worktree.
+    UnapplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        paths: Vec<std::path::PathBuf>,
+    },
+    /// Re-apply a previously captured branch diff to the worktree.
+    ApplyVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        patch: String,
+    },
+    /// Reverse-apply a single hunk patch to the worktree (removing the hunk's
+    /// changes) so the hunk can be parked in the branch's stored patch. The
+    /// path is echoed back in the completion message so the reducer can assign
+    /// the file to the branch only on success.
+    MoveHunkToVirtualBranch {
+        repo_id: RepoId,
+        branch_id: u64,
+        patch: String,
+        path: std::path::PathBuf,
     },
     LoadRecentCommitMessages {
         repo_id: RepoId,

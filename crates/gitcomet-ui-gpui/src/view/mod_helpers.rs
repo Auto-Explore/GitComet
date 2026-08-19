@@ -4370,6 +4370,30 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         path: std::path::PathBuf,
     },
+    /// Prototype virtual-branch workspace panel: lists virtual branches with
+    /// their assigned paths and apply/unapply/commit actions.
+    VirtualBranchesPrompt {
+        repo_id: RepoId,
+    },
+    /// Pick the virtual branch to assign a worktree path to.
+    VirtualBranchPicker {
+        repo_id: RepoId,
+        path: std::path::PathBuf,
+    },
+    /// Pick the virtual branch to move a diff hunk into: the hunk's unified
+    /// patch is previewed and, on selection, reverse-applied to the worktree
+    /// and parked in the branch's stored patch collection.
+    VirtualBranchMovePicker {
+        repo_id: RepoId,
+        patch: String,
+        path: std::path::PathBuf,
+    },
+    /// Confirms bulk removal of stale virtual branches (assigned paths with no
+    /// remaining worktree changes).
+    PruneVirtualBranchesConfirm {
+        repo_id: RepoId,
+        branch_ids: Vec<u64>,
+    },
     PushSetUpstreamPrompt {
         repo_id: RepoId,
         remote: String,

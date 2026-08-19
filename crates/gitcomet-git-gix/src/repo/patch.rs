@@ -66,6 +66,15 @@ impl GixRepo {
         run_git_with_output(cmd, &label)
     }
 
+    pub(super) fn diff_paths_vs_head_impl(&self, paths: &[std::path::PathBuf]) -> Result<String> {
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("diff").arg("HEAD").arg("--");
+        for path in paths {
+            cmd.arg(path);
+        }
+        run_git_capture(cmd, "git diff HEAD -- <paths>")
+    }
+
     pub(super) fn apply_unified_patch_to_worktree_with_output_impl(
         &self,
         patch: &str,

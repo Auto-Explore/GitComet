@@ -18,6 +18,7 @@ const PIN_REMOTE_PREFIX: &str = "remote:";
 const WORKTREES_SECTION_KEY: &str = "section:worktrees";
 const SUBMODULES_SECTION_KEY: &str = "section:submodules";
 const STASH_SECTION_KEY: &str = "section:stash";
+const VIRTUAL_BRANCHES_SECTION_KEY: &str = "section:virtual-branches";
 const EXPANDED_DEFAULT_SECTION_PREFIX: &str = "expanded:";
 const TRAILING_BOTTOM_SPACERS: usize = 3;
 const REMOTE_HEADER_GROUP_PREFIX: &str = "group:remote-header:";
@@ -120,6 +121,10 @@ pub(super) const fn submodules_section_storage_key() -> &'static str {
 
 pub(super) const fn stash_section_storage_key() -> &'static str {
     STASH_SECTION_KEY
+}
+
+pub(super) const fn virtual_branches_section_storage_key() -> &'static str {
+    VIRTUAL_BRANCHES_SECTION_KEY
 }
 
 pub(super) fn remote_header_storage_key(name: &str) -> String {
@@ -239,6 +244,18 @@ pub(super) enum BranchSidebarRow {
         message: SharedString,
         tooltip: SharedString,
         created_at: Option<std::time::SystemTime>,
+    },
+    VirtualBranchesHeader {
+        top_border: bool,
+        collapsed: bool,
+        collapse_key: SharedString,
+    },
+    VirtualBranchItem {
+        branch_id: u64,
+        name: SharedString,
+        path_count: usize,
+        applied: bool,
+        pending: bool,
     },
 }
 
@@ -372,6 +389,8 @@ pub(in crate::view) struct BranchSidebarSourceFingerprintParts {
     stash_rev: u64,
     stash_hash: u64,
     stash_reuse_identity: fingerprint::LoadableArcIdentity,
+    virtual_branches_rev: u64,
+    virtual_branches_hash: u64,
 }
 
 impl BranchSidebarSourceFingerprintParts {
@@ -391,6 +410,8 @@ impl BranchSidebarSourceFingerprintParts {
         let submodule_reuse_identity = fingerprint::loadable_arc_identity(&repo.submodules);
         let stash_rev = repo.stashes_rev;
         let stash_reuse_identity = fingerprint::loadable_arc_identity(&repo.stashes);
+        let virtual_branches_rev = repo.virtual_branches_rev;
+        let virtual_branches_hash = branch_sidebar_virtual_branches_source_hash(repo);
 
         Self {
             local_revs,
@@ -446,6 +467,8 @@ impl BranchSidebarSourceFingerprintParts {
                     || branch_sidebar_stash_source_hash(repo),
                     |parts| parts.stash_hash,
                 ),
+            virtual_branches_rev,
+            virtual_branches_hash,
         }
     }
 
@@ -461,6 +484,8 @@ impl BranchSidebarSourceFingerprintParts {
         self.submodule_hash.hash(&mut hasher);
         4u8.hash(&mut hasher);
         self.stash_hash.hash(&mut hasher);
+        5u8.hash(&mut hasher);
+        self.virtual_branches_hash.hash(&mut hasher);
         BranchSidebarSourceFingerprint(hasher.finish())
     }
 }
@@ -518,6 +543,10 @@ pub(in crate::view) fn branch_sidebar_source_matches_cached(
     if cached.stash_rev != stash_rev
         && cached.stash_reuse_identity != fingerprint::loadable_arc_identity(&repo.stashes)
     {
+        return false;
+    }
+
+    if cached.virtual_branches_rev != repo.virtual_branches_rev {
         return false;
     }
 
@@ -685,6 +714,27 @@ fn branch_sidebar_stash_source_hash(repo: &RepoState) -> u64 {
     hasher.finish()
 }
 
+fn branch_sidebar_virtual_branches_source_hash(repo: &RepoState) -> u64 {
+    let mut hasher = FxHasher::default();
+    repo.virtual_branches.len().hash(&mut hasher);
+    for branch in repo.virtual_branches.iter() {
+        branch.id.hash(&mut hasher);
+        branch.name.hash(&mut hasher);
+        branch.applied.hash(&mut hasher);
+        branch.pending.hash(&mut hasher);
+        branch.paths.len().hash(&mut hasher);
+        for path in branch.paths.iter() {
+            path.hash(&mut hasher);
+        }
+        branch
+            .stored_patch
+            .as_ref()
+            .map(|p| p.len())
+            .hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
 fn cmp_ascii_case_insensitive(left: &[u8], right: &[u8]) -> Ordering {
     for (&left, &right) in left.iter().zip(right.iter()) {
         let ordering = left.to_ascii_lowercase().cmp(&right.to_ascii_lowercase());
@@ -835,6 +885,8 @@ pub(super) fn branch_sidebar_rows(
     let worktrees_collapsed = is_collapsed(collapsed_items, worktrees_section_storage_key());
     let submodules_collapsed = is_collapsed(collapsed_items, submodules_section_storage_key());
     let stash_collapsed = is_collapsed(collapsed_items, stash_section_storage_key());
+    let virtual_branches_collapsed =
+        is_collapsed(collapsed_items, virtual_branches_section_storage_key());
     let visible_rows = if local_collapsed {
         0
     } else {
@@ -870,6 +922,10 @@ pub(super) fn branch_sidebar_rows(
             Loadable::Ready(stashes) => stashes.len(),
             _ => 0,
         }
+    } + if virtual_branches_collapsed {
+        0
+    } else {
+        repo.virtual_branches.len()
     };
     let approx_rows = 16 + visible_rows + visible_rows / 8;
     let mut rows = Vec::with_capacity(approx_rows);
@@ -1225,6 +1281,24 @@ pub(super) fn branch_sidebar_rows(
             Loadable::Error(error) => rows.push(BranchSidebarRow::StashPlaceholder {
                 message: error.clone().into(),
             }),
+        }
+    }
+
+    rows.push(BranchSidebarRow::VirtualBranchesHeader {
+        top_border: true,
+        collapsed: virtual_branches_collapsed,
+        collapse_key: virtual_branches_section_storage_key().into(),
+    });
+
+    if !virtual_branches_collapsed {
+        for branch in repo.virtual_branches.iter() {
+            rows.push(BranchSidebarRow::VirtualBranchItem {
+                branch_id: branch.id,
+                name: branch.name.clone().into(),
+                path_count: branch.paths.len(),
+                applied: branch.applied,
+                pending: branch.pending,
+            });
         }
     }
 
