@@ -108,6 +108,10 @@ pub enum RepoCommandKind {
     RemoveRemote {
         name: String,
     },
+    RenameRemote {
+        old_name: String,
+        new_name: String,
+    },
     SetRemoteUrl {
         name: String,
         url: String,

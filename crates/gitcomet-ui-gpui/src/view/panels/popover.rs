@@ -28,6 +28,7 @@ mod pull_reconcile_prompt;
 mod push_set_upstream_prompt;
 mod rebase_onto_confirm;
 mod remote_add_prompt;
+mod remote_edit_prompt;
 mod remote_edit_url_prompt;
 mod remote_remove_confirm;
 mod rename_branch_prompt;
@@ -300,6 +301,10 @@ pub(in super::super) struct PopoverHost {
     remote_name_input: Entity<components::TextInput>,
     remote_url_input: Entity<components::TextInput>,
     remote_url_edit_input: Entity<components::TextInput>,
+    remote_edit_username_input: Entity<components::TextInput>,
+    remote_edit_push_url_input: Entity<components::TextInput>,
+    remote_edit_same_push_url: bool,
+    remote_edit_same_push_toggle_focus_handle: FocusHandle,
     create_branch_input: Entity<components::TextInput>,
     create_branch_checkout_enabled: bool,
     create_branch_source_target: String,
@@ -868,7 +873,9 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::Repo {
             kind:
                 RepoPopoverKind::Remote(
-                    RemotePopoverKind::AddPrompt | RemotePopoverKind::EditUrlPrompt { .. },
+                    RemotePopoverKind::AddPrompt
+                    | RemotePopoverKind::EditPrompt { .. }
+                    | RemotePopoverKind::EditUrlPrompt { .. },
                 ),
             ..
         }
@@ -1293,6 +1300,31 @@ impl PopoverHost {
             )
         });
 
+        let remote_edit_username_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "username (optional)".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_edit_push_url_input = cx.new(|cx| {
+            components::TextInput::new(
+                components::TextInputOptions {
+                    placeholder: "https://example.com/org/repo.git".into(),
+                    ..Default::default()
+                },
+                window,
+                cx,
+            )
+        });
+
+        let remote_edit_same_push_toggle_focus_handle =
+            cx.focus_handle().tab_index(0).tab_stop(true);
+
         let create_branch_input = cx.new(|cx| {
             components::TextInput::new(
                 components::TextInputOptions {
@@ -1485,6 +1517,86 @@ impl PopoverHost {
                 }
             },
         ));
+        prompt_input_subscriptions.push(cx.observe(
+            &remote_edit_username_input,
+            |this, input, cx| {
+                if matches!(
+                    this.popover,
+                    Some(PopoverKind::Repo {
+                        kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { .. }),
+                        ..
+                    })
+                ) {
+                    let user_text = input.read(cx).text().trim().to_string();
+                    let current_fetch = this
+                        .remote_url_edit_input
+                        .read_with(cx, |i, _| i.text().trim().to_string());
+                    let new_fetch = gitcomet_core::url_utils::embed_username_into_url(
+                        &current_fetch,
+                        if user_text.is_empty() {
+                            None
+                        } else {
+                            Some(&user_text)
+                        },
+                    );
+                    if new_fetch != current_fetch {
+                        let theme = this.theme;
+                        this.remote_url_edit_input.update(cx, |i, cx| {
+                            i.set_theme(theme, cx);
+                            i.set_text(new_fetch.clone(), cx);
+                            cx.notify();
+                        });
+                        if this.remote_edit_same_push_url {
+                            this.remote_edit_push_url_input.update(cx, |i, cx| {
+                                i.set_theme(theme, cx);
+                                i.set_text(new_fetch, cx);
+                                cx.notify();
+                            });
+                        }
+                    }
+                    cx.notify();
+                }
+            },
+        ));
+        prompt_input_subscriptions.push(cx.observe(&remote_url_edit_input, |this, input, cx| {
+            if matches!(
+                this.popover,
+                Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { .. }),
+                    ..
+                })
+            ) {
+                let fetch_text = input.read(cx).text().trim().to_string();
+                let (user, _) =
+                    gitcomet_core::url_utils::extract_username_and_base_url(&fetch_text);
+                let user_str = user.unwrap_or_default();
+                let current_user = this
+                    .remote_edit_username_input
+                    .read_with(cx, |i, _| i.text().trim().to_string());
+                if user_str != current_user {
+                    let theme = this.theme;
+                    this.remote_edit_username_input.update(cx, |i, cx| {
+                        i.set_theme(theme, cx);
+                        i.set_text(user_str, cx);
+                        cx.notify();
+                    });
+                }
+                if this.remote_edit_same_push_url {
+                    let current_push = this
+                        .remote_edit_push_url_input
+                        .read_with(cx, |i, _| i.text().trim().to_string());
+                    if current_push != fetch_text {
+                        let theme = this.theme;
+                        this.remote_edit_push_url_input.update(cx, |i, cx| {
+                            i.set_theme(theme, cx);
+                            i.set_text(fetch_text, cx);
+                            cx.notify();
+                        });
+                    }
+                }
+                cx.notify();
+            }
+        }));
         for input in [&clone_repo_url_input, &clone_repo_parent_dir_input] {
             prompt_input_subscriptions.push(Self::prompt_enter_subscription(
                 input,
@@ -1582,6 +1694,28 @@ impl PopoverHost {
             },
             |this, _window, cx| this.submit_remote_edit_url(cx),
         ));
+        for input in [
+            &remote_name_input,
+            &remote_url_edit_input,
+            &remote_edit_username_input,
+            &remote_edit_push_url_input,
+        ] {
+            prompt_input_subscriptions.push(Self::prompt_enter_subscription(
+                input,
+                window,
+                cx,
+                |this| {
+                    matches!(
+                        this.popover,
+                        Some(PopoverKind::Repo {
+                            kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { .. }),
+                            ..
+                        })
+                    )
+                },
+                |this, _window, cx| this.submit_remote_edit(cx),
+            ));
+        }
         prompt_input_subscriptions.push(Self::prompt_enter_subscription(
             &push_upstream_branch_input,
             window,
@@ -1755,6 +1889,10 @@ impl PopoverHost {
             remote_name_input,
             remote_url_input,
             remote_url_edit_input,
+            remote_edit_username_input,
+            remote_edit_push_url_input,
+            remote_edit_same_push_url: true,
+            remote_edit_same_push_toggle_focus_handle,
             create_branch_input,
             create_branch_checkout_enabled: true,
             create_branch_source_target: String::new(),
@@ -1819,6 +1957,8 @@ impl PopoverHost {
             &self.remote_name_input,
             &self.remote_url_input,
             &self.remote_url_edit_input,
+            &self.remote_edit_username_input,
+            &self.remote_edit_push_url_input,
             &self.create_branch_input,
             &self.stash_message_input,
             &self.commit_prompt_message_input,
@@ -2083,6 +2223,10 @@ impl PopoverHost {
                     ..
                 })
                 | Some(PopoverKind::Repo {
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { .. }),
+                    ..
+                })
+                | Some(PopoverKind::Repo {
                     kind: RepoPopoverKind::Remote(RemotePopoverKind::EditUrlPrompt { .. }),
                     ..
                 })
@@ -2184,6 +2328,10 @@ impl PopoverHost {
             | Some(PopoverKind::PushSetUpstreamPrompt { .. })
             | Some(PopoverKind::Repo {
                 kind: RepoPopoverKind::Remote(RemotePopoverKind::AddPrompt),
+                ..
+            })
+            | Some(PopoverKind::Repo {
+                kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { .. }),
                 ..
             })
             | Some(PopoverKind::Repo {
@@ -2715,6 +2863,81 @@ impl PopoverHost {
     pub(super) fn can_submit_remote_edit_url(&self, cx: &mut gpui::Context<Self>) -> bool {
         self.remote_url_edit_input
             .read_with(cx, |i, _| !i.text().trim().is_empty())
+    }
+
+    pub(super) fn can_submit_remote_edit(&self, cx: &mut gpui::Context<Self>) -> bool {
+        let name_valid = self
+            .remote_name_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty());
+        let fetch_valid = self
+            .remote_url_edit_input
+            .read_with(cx, |i, _| !i.text().trim().is_empty());
+        let push_valid = if self.remote_edit_same_push_url {
+            true
+        } else {
+            self.remote_edit_push_url_input
+                .read_with(cx, |i, _| !i.text().trim().is_empty())
+        };
+        name_valid && fetch_valid && push_valid
+    }
+
+    pub(super) fn submit_remote_edit(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::Repo {
+            repo_id,
+            kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { name: old_name }),
+        }) = self.popover.clone()
+        else {
+            return;
+        };
+        if !self.can_submit_remote_edit(cx) {
+            return;
+        }
+
+        let new_name = self
+            .remote_name_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let fetch_url = self
+            .remote_url_edit_input
+            .read_with(cx, |i, _| i.text().trim().to_string());
+        let push_url = if self.remote_edit_same_push_url {
+            fetch_url.clone()
+        } else {
+            self.remote_edit_push_url_input
+                .read_with(cx, |i, _| i.text().trim().to_string())
+        };
+
+        // If name changed, rename remote first
+        if new_name != old_name {
+            self.store.dispatch(Msg::RenameRemote {
+                repo_id,
+                old_name: old_name.clone(),
+                new_name: new_name.clone(),
+            });
+        }
+
+        let effective_name = if new_name != old_name {
+            new_name
+        } else {
+            old_name
+        };
+
+        // Set Fetch URL
+        self.store.dispatch(Msg::SetRemoteUrl {
+            repo_id,
+            name: effective_name.clone(),
+            url: fetch_url,
+            kind: RemoteUrlKind::Fetch,
+        });
+
+        // Set Push URL
+        self.store.dispatch(Msg::SetRemoteUrl {
+            repo_id,
+            name: effective_name,
+            url: push_url,
+            kind: RemoteUrlKind::Push,
+        });
+
+        self.close_popover(cx);
     }
 
     pub(super) fn submit_remote_edit_url(&mut self, cx: &mut gpui::Context<Self>) {
@@ -3251,6 +3474,60 @@ impl PopoverHost {
                         input.set_text("", cx);
                         cx.notify();
                     });
+                    let focus = self
+                        .remote_name_input
+                        .read_with(cx, |i, _| i.focus_handle());
+                    window.focus(&focus, cx);
+                }
+                PopoverKind::Repo {
+                    repo_id,
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { name }),
+                } => {
+                    let theme = self.theme;
+                    let fetch_url = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|r| r.id == *repo_id)
+                        .and_then(|r| match &r.remotes {
+                            Loadable::Ready(remotes) => remotes
+                                .iter()
+                                .find(|remote| remote.name.as_str() == name.as_str())
+                                .and_then(|remote| remote.url.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or_default();
+
+                    let (username, _) =
+                        gitcomet_core::url_utils::extract_username_and_base_url(&fetch_url);
+                    let username_str = username.unwrap_or_default();
+
+                    self.remote_name_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(name.clone(), cx);
+                        cx.notify();
+                    });
+
+                    self.remote_edit_username_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(username_str, cx);
+                        cx.notify();
+                    });
+
+                    self.remote_url_edit_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(fetch_url.clone(), cx);
+                        cx.notify();
+                    });
+
+                    self.remote_edit_push_url_input.update(cx, |input, cx| {
+                        input.set_theme(theme, cx);
+                        input.set_text(fetch_url, cx);
+                        cx.notify();
+                    });
+
+                    self.remote_edit_same_push_url = true;
+
                     let focus = self
                         .remote_name_input
                         .read_with(cx, |i, _| i.focus_handle());
@@ -4029,6 +4306,9 @@ impl PopoverHost {
             PopoverKind::Repo { repo_id, kind } => match kind {
                 RepoPopoverKind::Remote(remote_kind) => match remote_kind {
                     RemotePopoverKind::AddPrompt => remote_add_prompt::panel(self, repo_id, cx),
+                    RemotePopoverKind::EditPrompt { name } => {
+                        remote_edit_prompt::panel(self, repo_id, name, cx)
+                    }
                     RemotePopoverKind::EditUrlPrompt { name, kind } => {
                         remote_edit_url_prompt::panel(self, repo_id, name, kind, cx)
                     }

@@ -27,6 +27,20 @@ pub(super) fn model(_this: &PopoverHost, repo_id: RepoId, name: &str) -> Context
     });
     items.push(ContextMenuItem::Separator);
 
+    items.push(ContextMenuItem::Entry {
+        label: "Edit remote…".into(),
+        icon: Some("icons/pencil.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::remote(
+                repo_id,
+                RemotePopoverKind::EditPrompt {
+                    name: name.to_owned(),
+                },
+            ),
+        }),
+    });
     for (label, kind) in [
         ("Edit fetch URL…", RemoteUrlKind::Fetch),
         ("Edit push URL…", RemoteUrlKind::Push),

@@ -923,6 +923,23 @@ impl GixRepo {
         run_git_with_output(cmd, &format!("git remote remove {name}"))
     }
 
+    pub(super) fn rename_remote_with_output_impl(
+        &self,
+        old_name: &str,
+        new_name: &str,
+    ) -> Result<CommandOutput> {
+        validate_ref_like_arg(old_name, "remote old name")?;
+        validate_ref_like_arg(new_name, "remote new name")?;
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("remote")
+            .arg("rename")
+            .arg("--")
+            .arg(old_name)
+            .arg(new_name);
+        run_git_with_output(cmd, &format!("git remote rename {old_name} {new_name}"))
+    }
+
     pub(super) fn set_remote_url_with_output_impl(
         &self,
         name: &str,

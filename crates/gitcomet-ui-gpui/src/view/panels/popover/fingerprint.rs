@@ -880,6 +880,11 @@ fn hash_repo_popover_kind<H: Hasher>(repo_id: RepoId, kind: &RepoPopoverKind, ha
                 9u8.hash(hasher);
                 repo_id.hash(hasher);
             }
+            RemotePopoverKind::EditPrompt { name } => {
+                54u8.hash(hasher);
+                repo_id.hash(hasher);
+                name.hash(hasher);
+            }
             RemotePopoverKind::EditUrlPrompt { name, kind } => {
                 13u8.hash(hasher);
                 repo_id.hash(hasher);

@@ -1245,6 +1245,29 @@ pub(super) fn schedule_remove_remote(
     );
 }
 
+pub(super) fn schedule_rename_remote(
+    executor: &TaskExecutor,
+    repos: &RepoMap,
+    msg_tx: StoreWorkerSender,
+    repo_id: RepoId,
+    old_name: String,
+    new_name: String,
+) {
+    let command_old_name = old_name.clone();
+    let command_new_name = new_name.clone();
+    schedule_repo_command(
+        executor,
+        repos,
+        msg_tx,
+        repo_id,
+        RepoCommandKind::RenameRemote {
+            old_name: command_old_name,
+            new_name: command_new_name,
+        },
+        move |repo| repo.rename_remote_with_output(&old_name, &new_name),
+    );
+}
+
 pub(super) fn schedule_set_remote_url(
     executor: &TaskExecutor,
     repos: &RepoMap,

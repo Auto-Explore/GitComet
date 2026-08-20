@@ -1265,6 +1265,17 @@ fn send_unavailable_git_effect_result(
                 result: Err(git_unavailable_error(runtime)),
             },
         )),
+        Effect::RenameRemote {
+            repo_id,
+            old_name,
+            new_name,
+        } => send(Msg::Internal(
+            crate::msg::InternalMsg::RepoCommandFinished {
+                repo_id,
+                command: RepoCommandKind::RenameRemote { old_name, new_name },
+                result: Err(git_unavailable_error(runtime)),
+            },
+        )),
         Effect::SetRemoteUrl {
             repo_id,
             name,
@@ -2518,6 +2529,15 @@ pub(super) fn schedule_effect(
         }
         Effect::RemoveRemote { repo_id, name } => {
             repo_commands::schedule_remove_remote(executor, repos, msg_tx, repo_id, name);
+        }
+        Effect::RenameRemote {
+            repo_id,
+            old_name,
+            new_name,
+        } => {
+            repo_commands::schedule_rename_remote(
+                executor, repos, msg_tx, repo_id, old_name, new_name,
+            );
         }
         Effect::SetRemoteUrl {
             repo_id,

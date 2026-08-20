@@ -842,6 +842,11 @@ pub trait GitRepository: Send + Sync {
             "git remote remove is not implemented for this backend",
         )))
     }
+    fn rename_remote_with_output(&self, _old_name: &str, _new_name: &str) -> Result<CommandOutput> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "git remote rename is not implemented for this backend",
+        )))
+    }
     fn set_remote_url_with_output(
         &self,
         _name: &str,
