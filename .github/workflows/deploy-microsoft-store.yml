@@ -25,8 +25,12 @@ on:
       store_listing_languages:
         required: false
         type: string
-        default: "en-us,en"
+        default: "en"
       dry_run:
+        required: false
+        type: boolean
+        default: false
+      store_preflight:
         required: false
         type: boolean
         default: false
@@ -65,12 +69,17 @@ on:
         default: "en"
         type: string
       store_listing_languages:
-        description: "Comma-separated Store listing languages to fetch when updating the listing metadata. Defaults to repository variable MICROSOFT_STORE_LISTING_LANGUAGES or en-us,en."
+        description: "Comma-separated Store listing languages to fetch one at a time when updating listing metadata. Defaults to repository variable MICROSOFT_STORE_LISTING_LANGUAGES or en."
         required: false
-        default: "en-us,en"
+        default: "en"
         type: string
       dry_run:
         description: "Validate the hosted MSI URLs, GitHub release notes, and generated submission payload without submitting to Microsoft Store"
+        required: true
+        default: false
+        type: boolean
+      store_preflight:
+        description: "Use live Store credentials to validate listing access and metadata generation without updating packages, metadata, or publishing"
         required: true
         default: false
         type: boolean
@@ -85,7 +94,7 @@ concurrency:
 jobs:
   deploy:
     name: Submit Windows MSI update to Microsoft Store
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       GH_TOKEN: ${{ github.token }}
@@ -113,6 +122,8 @@ jobs:
           VAR_STORE_LISTING_LANGUAGES: ${{ vars.MICROSOFT_STORE_LISTING_LANGUAGES }}
           INPUT_DRY_RUN: ${{ inputs.dry_run }}
           DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          INPUT_STORE_PREFLIGHT: ${{ inputs.store_preflight }}
+          DISPATCH_STORE_PREFLIGHT: ${{ github.event.inputs.store_preflight }}
         run: |
           set -euo pipefail
 
@@ -121,8 +132,9 @@ jobs:
           package_base_url="${INPUT_PACKAGE_BASE_URL:-${DISPATCH_PACKAGE_BASE_URL:-${VAR_PACKAGE_BASE_URL:-https://apt.gitcomet.dev/windows}}}"
           product_id="${INPUT_PRODUCT_ID:-${DISPATCH_PRODUCT_ID:-${VAR_PRODUCT_ID:-}}}"
           package_languages="${INPUT_PACKAGE_LANGUAGES:-${DISPATCH_PACKAGE_LANGUAGES:-${VAR_PACKAGE_LANGUAGES:-en}}}"
-          store_listing_languages="${INPUT_STORE_LISTING_LANGUAGES:-${DISPATCH_STORE_LISTING_LANGUAGES:-${VAR_STORE_LISTING_LANGUAGES:-en-us,en}}}"
+          store_listing_languages="${INPUT_STORE_LISTING_LANGUAGES:-${DISPATCH_STORE_LISTING_LANGUAGES:-${VAR_STORE_LISTING_LANGUAGES:-en}}}"
           dry_run="${INPUT_DRY_RUN:-${DISPATCH_DRY_RUN:-false}}"
+          store_preflight="${INPUT_STORE_PREFLIGHT:-${DISPATCH_STORE_PREFLIGHT:-false}}"
 
           tag="$(echo "$tag" | tr -d '[:space:]')"
           version="$(echo "$version" | tr -d '[:space:]')"
@@ -131,6 +143,7 @@ jobs:
           package_languages="$(echo "$package_languages" | tr '\n' ' ' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
           store_listing_languages="$(echo "$store_listing_languages" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
           dry_run="$(echo "$dry_run" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+          store_preflight="$(echo "$store_preflight" | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
 
           if [ -z "$tag" ] && [ -z "$version" ]; then
             echo "::error title=Missing release metadata::Provide at least version or tag."
@@ -162,6 +175,16 @@ jobs:
 
           if [[ "$dry_run" != "true" && "$dry_run" != "false" ]]; then
             echo "::error title=Invalid dry_run::dry_run must be true or false."
+            exit 1
+          fi
+
+          if [[ "$store_preflight" != "true" && "$store_preflight" != "false" ]]; then
+            echo "::error title=Invalid store_preflight::store_preflight must be true or false."
+            exit 1
+          fi
+
+          if [ "$dry_run" = "true" ] && [ "$store_preflight" = "true" ]; then
+            echo "::error title=Conflicting validation modes::dry_run and store_preflight cannot both be true."
             exit 1
           fi
 
@@ -261,6 +284,7 @@ jobs:
           echo "product_update=$product_update" >> "$GITHUB_OUTPUT"
           echo "release_url=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${tag}" >> "$GITHUB_OUTPUT"
           echo "dry_run=$dry_run" >> "$GITHUB_OUTPUT"
+          echo "store_preflight=$store_preflight" >> "$GITHUB_OUTPUT"
 
       - name: Validate live Microsoft Store credentials
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
@@ -361,7 +385,35 @@ jobs:
 
               sleep 10
             done
+
+            # A successful HEAD can still point at an HTML error document. Read the
+            # first eight bytes and require the OLE Compound File signature used by MSI.
+            signature_file="${RUNNER_TEMP}/$(basename "$package_url").signature"
+            curl --fail --silent --show-error --location --range 0-7 \
+              --output "$signature_file" "$package_url"
+            signature="$(od -An -tx1 -N8 "$signature_file" | tr -d ' \n')"
+            if [ "$signature" != "d0cf11e0a1b11ae1" ]; then
+              echo "::error title=Hosted package is not an MSI::Package URL '${package_url}' does not begin with the MSI/OLE file signature."
+              exit 1
+            fi
           done
+
+      - name: Install .NET 9 for Microsoft Store CLI
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0
+        with:
+          dotnet-version: "9.0.x"
+
+      - name: Verify Microsoft Store CLI runtime
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        run: |
+          set -euo pipefail
+
+          dotnet --list-runtimes
+          if ! dotnet --list-runtimes | grep -Eq '^Microsoft\.NETCore\.App 9\.'; then
+            echo "::error title=Missing .NET 9 runtime::Microsoft Store CLI v0.3.9 requires Microsoft.NETCore.App 9.x."
+            exit 1
+          fi
 
       - name: Install Microsoft Store CLI Linux dependencies
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
@@ -405,7 +457,19 @@ jobs:
 
       - name: Install Microsoft Store CLI
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
-        uses: microsoft/microsoft-store-apppublisher@v1.4
+        uses: microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4
+        with:
+          version: v0.3.9
+
+      - name: Report Microsoft Store CLI version
+        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        id: store_cli
+        run: |
+          set -euo pipefail
+
+          cli_version="$(msstore --version 2>&1 | tail -n 1)"
+          echo "Microsoft Store CLI: $cli_version"
+          echo "version=$cli_version" >> "$GITHUB_OUTPUT"
 
       - name: Configure Microsoft Store CLI
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
@@ -423,8 +487,61 @@ jobs:
             --clientId "$MICROSOFT_STORE_CLIENT_ID" \
             --clientSecret "$MICROSOFT_STORE_CLIENT_SECRET"
 
-      - name: Update Microsoft Store draft submission packages
+      - name: Prepare Microsoft Store listing metadata
         if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        id: metadata_prepare
+        continue-on-error: ${{ steps.norm.outputs.store_preflight != 'true' }}
+        env:
+          PRODUCT_ID: ${{ steps.norm.outputs.product_id }}
+          LISTING_LANGUAGES: ${{ steps.norm.outputs.store_listing_languages }}
+          RELEASE_URL: ${{ steps.norm.outputs.release_url }}
+          STORE_PREFLIGHT: ${{ steps.norm.outputs.store_preflight }}
+        run: |
+          set -euo pipefail
+
+          prepare_dir="dist/microsoft-store-preflight"
+          prepare_summary="$prepare_dir/summary.json"
+          mkdir -p "$prepare_dir"
+          prepare_failed=false
+          if ! scripts/microsoft-store-prepare-metadata.sh \
+            --product-id "$PRODUCT_ID" \
+            --languages "$LISTING_LANGUAGES" \
+            --release-notes dist/microsoft-store-release-notes.txt \
+            --release-url "$RELEASE_URL" \
+            --output-dir "$prepare_dir" \
+            > "$prepare_summary"; then
+            prepare_failed=true
+          fi
+
+          if ! jq -e . "$prepare_summary" >/dev/null 2>&1; then
+            echo "::warning title=Invalid Store preflight summary::The read-only listing preflight did not produce valid summary JSON. Package publishing may continue without a listing metadata update."
+            prepare_failed=true
+            prepare_status="unavailable"
+            payload_count=0
+            matched_languages=""
+          else
+            prepare_status="$(jq -r '.status // "unavailable"' "$prepare_summary")"
+            payload_count="$(jq -r '.payloadFiles | length' "$prepare_summary")"
+            matched_languages="$(jq -r '.matchedLanguages | join(",")' "$prepare_summary")"
+          fi
+
+          if [ "$prepare_failed" = "true" ]; then
+            echo "::warning title=Store listing metadata preparation incomplete::The requested listing metadata ('$LISTING_LANGUAGES') could not be prepared completely. Package publishing may continue with any valid payloads."
+          fi
+
+          {
+            echo "status=$prepare_status"
+            echo "payload_count=$payload_count"
+            echo "matched_languages=$matched_languages"
+          } >> "$GITHUB_OUTPUT"
+
+          if [ "$prepare_failed" = "true" ] && [ "$STORE_PREFLIGHT" = "true" ]; then
+            echo "::error title=Microsoft Store preflight failed::Live listing access and payload generation must succeed in store_preflight mode."
+            exit 1
+          fi
+
+      - name: Update Microsoft Store draft submission packages
+        if: ${{ steps.norm.outputs.dry_run != 'true' && steps.norm.outputs.store_preflight != 'true' }}
         env:
           PRODUCT_ID: ${{ steps.norm.outputs.product_id }}
           PRODUCT_UPDATE: ${{ steps.norm.outputs.product_update }}
@@ -434,58 +551,48 @@ jobs:
           msstore submission update "$PRODUCT_ID" "$PRODUCT_UPDATE" --verbose
 
       - name: Update Microsoft Store draft submission metadata
-        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        if: ${{ steps.norm.outputs.dry_run != 'true' && steps.norm.outputs.store_preflight != 'true' && steps.metadata_prepare.outputs.payload_count != '' && steps.metadata_prepare.outputs.payload_count != '0' }}
+        id: metadata_update
+        continue-on-error: true
         env:
           PRODUCT_ID: ${{ steps.norm.outputs.product_id }}
-          LISTING_LANGUAGES: ${{ steps.norm.outputs.store_listing_languages }}
-          RELEASE_URL: ${{ steps.norm.outputs.release_url }}
         run: |
           set -euo pipefail
 
-          listings_count() {
-            jq '
-              [.. | objects | to_entries[]
-               | select(.key | ascii_downcase == "listings")
-               | .value
-               | select(type == "array")]
-              | first // []
-              | length
-            ' "$1"
-          }
-
-          msstore submission get "$PRODUCT_ID" --module listings --language "$LISTING_LANGUAGES" \
-            > dist/microsoft-store-listings.json
-
-          # The language filter is passed straight through to the Store API. If it matched
-          # no listing, retry unfiltered before giving up so a listing language that differs
-          # from the configured one still succeeds.
-          if [ "$(listings_count dist/microsoft-store-listings.json)" -eq 0 ]; then
-            echo "::warning title=No Store listing matched::No listing matched languages '${LISTING_LANGUAGES}'. Retrying without a language filter."
-            msstore submission get "$PRODUCT_ID" --module listings --language "" \
-              > dist/microsoft-store-listings.json
-          fi
-
-          scripts/microsoft-store-listing-metadata.sh \
-            --listings-json dist/microsoft-store-listings.json \
-            --release-notes dist/microsoft-store-release-notes.txt \
-            --release-url "$RELEASE_URL" \
-            --output-dir dist/microsoft-store-metadata \
-            > dist/microsoft-store-metadata-payloads.txt
-
-          mapfile -t payload_files < dist/microsoft-store-metadata-payloads.txt
-
-          if [ "${#payload_files[@]}" -eq 0 ]; then
-            echo "::error title=No listing metadata payloads::No Store listing metadata payloads were generated."
-            exit 1
-          fi
+          mapfile -t payload_files < dist/microsoft-store-preflight/payloads.txt
+          updated_languages=()
+          failed_languages=()
 
           for payload_file in "${payload_files[@]}"; do
-            echo "Updating listing metadata from ${payload_file}"
-            msstore submission updateMetadata "$PRODUCT_ID" "$(cat "$payload_file")" --verbose
+            [ -n "$payload_file" ] || continue
+            language="$(jq -r '.Listings | .Language // .language // "unknown"' "$payload_file")"
+            echo "Updating '$language' listing metadata from ${payload_file}"
+            if msstore submission updateMetadata "$PRODUCT_ID" "$(cat "$payload_file")" --verbose; then
+              updated_languages+=("$language")
+            else
+              failed_languages+=("$language")
+              echo "::warning title=Store listing metadata update failed::The '$language' listing was not updated. Package publishing will continue."
+            fi
           done
 
+          updated_csv="$(IFS=,; echo "${updated_languages[*]}")"
+          failed_csv="$(IFS=,; echo "${failed_languages[*]}")"
+          if [ "${#failed_languages[@]}" -eq 0 ]; then
+            update_status="updated"
+          elif [ "${#updated_languages[@]}" -eq 0 ]; then
+            update_status="failed"
+          else
+            update_status="partial"
+          fi
+
+          {
+            echo "status=$update_status"
+            echo "updated_languages=$updated_csv"
+            echo "failed_languages=$failed_csv"
+          } >> "$GITHUB_OUTPUT"
+
       - name: Publish Microsoft Store submission
-        if: ${{ steps.norm.outputs.dry_run != 'true' }}
+        if: ${{ steps.norm.outputs.dry_run != 'true' && steps.norm.outputs.store_preflight != 'true' }}
         id: publish
         env:
           PRODUCT_ID: ${{ steps.norm.outputs.product_id }}
@@ -506,17 +613,38 @@ jobs:
           echo "submission_id=${submission_id}" >> "$GITHUB_OUTPUT"
 
       - name: Emit deployment summary
+        if: ${{ always() }}
         env:
           PRODUCT_ID: ${{ steps.norm.outputs.product_id }}
           SUBMISSION_ID: ${{ steps.publish.outputs.submission_id }}
+          DRY_RUN: ${{ steps.norm.outputs.dry_run }}
+          STORE_PREFLIGHT: ${{ steps.norm.outputs.store_preflight }}
+          STORE_CLI_VERSION: ${{ steps.store_cli.outputs.version }}
+          METADATA_PREPARE_OUTCOME: ${{ steps.metadata_prepare.outcome }}
+          METADATA_PREPARE_STATUS: ${{ steps.metadata_prepare.outputs.status }}
+          MATCHED_LISTING_LANGUAGES: ${{ steps.metadata_prepare.outputs.matched_languages }}
+          METADATA_UPDATE_OUTCOME: ${{ steps.metadata_update.outcome }}
+          METADATA_UPDATE_STATUS: ${{ steps.metadata_update.outputs.status }}
+          UPDATED_LISTING_LANGUAGES: ${{ steps.metadata_update.outputs.updated_languages }}
+          FAILED_LISTING_LANGUAGES: ${{ steps.metadata_update.outputs.failed_languages }}
+          PUBLISH_OUTCOME: ${{ steps.publish.outcome }}
         run: |
           set -euo pipefail
 
-          if [ "${{ steps.norm.outputs.dry_run }}" = "true" ]; then
+          if [ "$DRY_RUN" = "true" ]; then
             mode="Validated Microsoft Store submission payload without submitting"
             product_id_display="${PRODUCT_ID:-n/a (dry run without product id)}"
-          else
+          elif [ "$STORE_PREFLIGHT" = "true" ] && [ "$METADATA_PREPARE_OUTCOME" = "success" ]; then
+            mode="Validated live Microsoft Store listing access without mutating the submission"
+            product_id_display="$PRODUCT_ID"
+          elif [ "$STORE_PREFLIGHT" = "true" ]; then
+            mode="Live Microsoft Store preflight failed without mutating the submission"
+            product_id_display="$PRODUCT_ID"
+          elif [ "$PUBLISH_OUTCOME" = "success" ]; then
             mode="Submitted Microsoft Store update"
+            product_id_display="$PRODUCT_ID"
+          else
+            mode="Microsoft Store submission did not complete"
             product_id_display="$PRODUCT_ID"
           fi
 
@@ -529,7 +657,20 @@ jobs:
             echo "- Hosted x64 MSI URL: \`${{ steps.norm.outputs.x64_package_url }}\`"
             echo "- Hosted ARM64 MSI URL: \`${{ steps.norm.outputs.arm64_package_url }}\`"
             echo "- Package languages: \`${{ steps.norm.outputs.package_languages }}\`"
-            echo "- Store listing languages: \`${{ steps.norm.outputs.store_listing_languages }}\`"
+            echo "- Requested Store listing languages: \`${{ steps.norm.outputs.store_listing_languages }}\`"
+            if [ -n "${STORE_CLI_VERSION:-}" ]; then
+              echo "- Microsoft Store CLI: \`${STORE_CLI_VERSION}\`"
+            fi
+            if [ "$DRY_RUN" != "true" ]; then
+              echo "- Listing preparation: \`${METADATA_PREPARE_STATUS:-unknown}\` (step outcome: \`${METADATA_PREPARE_OUTCOME:-unknown}\`)"
+              echo "- Matched Store listing languages: \`${MATCHED_LISTING_LANGUAGES:-none}\`"
+              if [ "$STORE_PREFLIGHT" != "true" ]; then
+                echo "- Listing update: \`${METADATA_UPDATE_STATUS:-not attempted}\` (step outcome: \`${METADATA_UPDATE_OUTCOME:-skipped}\`)"
+                echo "- Updated Store listing languages: \`${UPDATED_LISTING_LANGUAGES:-none}\`"
+                echo "- Failed Store listing languages: \`${FAILED_LISTING_LANGUAGES:-none}\`"
+                echo "- Publish step outcome: \`${PUBLISH_OUTCOME:-skipped}\`"
+              fi
+            fi
             echo "- Changelog source: \`GitHub release body for ${{ steps.norm.outputs.tag }}\` (Store listing \`WhatsNew\`)"
             if [ -n "${SUBMISSION_ID:-}" ]; then
               echo "- Store submission id: \`${SUBMISSION_ID}\`"

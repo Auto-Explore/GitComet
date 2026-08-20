@@ -235,8 +235,8 @@ jobs:
       dry_run: false
     secrets: inherit
 
-  deploy_microsoft_store:
-    name: Submit Microsoft Store update
+  preflight_microsoft_store:
+    name: Preflight Microsoft Store update
     needs: [validate, build_and_upload, publish_release, deploy_windows_installer]
     if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' && needs.deploy_windows_installer.result == 'success' }}
     uses: ./.github/workflows/deploy-microsoft-store.yml
@@ -248,6 +248,23 @@ jobs:
       package_languages: ${{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}
       store_listing_languages: ${{ vars.MICROSOFT_STORE_LISTING_LANGUAGES }}
       dry_run: false
+      store_preflight: true
+    secrets: inherit
+
+  deploy_microsoft_store:
+    name: Submit Microsoft Store update
+    needs: [validate, build_and_upload, publish_release, deploy_windows_installer, preflight_microsoft_store]
+    if: ${{ fromJSON(needs.validate.outputs.draft) == false && needs.build_and_upload.result == 'success' && needs.deploy_windows_installer.result == 'success' && needs.preflight_microsoft_store.result == 'success' }}
+    uses: ./.github/workflows/deploy-microsoft-store.yml
+    with:
+      tag: ${{ needs.validate.outputs.tag }}
+      version: ${{ needs.validate.outputs.version }}
+      package_base_url: "https://apt.gitcomet.dev/windows"
+      product_id: ${{ vars.MICROSOFT_STORE_PRODUCT_ID }}
+      package_languages: ${{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}
+      store_listing_languages: ${{ vars.MICROSOFT_STORE_LISTING_LANGUAGES }}
+      dry_run: false
+      store_preflight: false
     secrets: inherit
 
   cleanup_failed_release:

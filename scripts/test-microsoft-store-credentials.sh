@@ -10,12 +10,15 @@ Usage: scripts/test-microsoft-store-credentials.sh \
   --product-id PRODUCT_ID
 
 Validates Microsoft Store credentials by requesting an Entra ID token and then
-performing a read-only request for the Partner Center product's draft metadata.
-The client secret is read from a hidden prompt, never from a command-line option.
+performing a read-only request for the Partner Center product's listing languages.
+The safe listing language codes are printed on success. The client secret is read
+from a hidden prompt, never from a command-line option.
 
-Requires: curl, jq
+Requires: curl, jq, paste
 USAGE
 }
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 stop_with_diagnostic() {
   local message="$1"
@@ -107,6 +110,7 @@ temp_dir=""
 token_body=""
 token_error=""
 store_headers=""
+store_body=""
 store_error=""
 
 cleanup() {
@@ -114,7 +118,7 @@ cleanup() {
   access_token=""
 
   if [[ -n "$temp_dir" && -d "$temp_dir" ]]; then
-    rm -f -- "$token_body" "$token_error" "$store_headers" "$store_error"
+    rm -f -- "$token_body" "$token_error" "$store_headers" "$store_body" "$store_error"
     rmdir -- "$temp_dir" 2>/dev/null || true
   fi
 }
@@ -156,7 +160,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-for dependency in curl jq awk grep mktemp; do
+for dependency in curl jq awk grep mktemp paste; do
   command -v "$dependency" >/dev/null 2>&1 ||
     stop_with_diagnostic "Required command not found: $dependency" 1
 done
@@ -197,6 +201,7 @@ chmod 700 "$temp_dir"
 token_body="$temp_dir/token-body.json"
 token_error="$temp_dir/token-error.txt"
 store_headers="$temp_dir/store-headers.txt"
+store_body="$temp_dir/store-body.json"
 store_error="$temp_dir/store-error.txt"
 
 printf '%s\n' 'Requesting a Microsoft Store API token from Microsoft Entra ID...'
@@ -241,7 +246,7 @@ fi
 client_secret=""
 printf '%s\n' 'Token issued successfully. Checking read-only access to the Partner Center product...'
 
-store_uri="https://api.store.microsoft.com/submission/v1/product/$product_id/metadata"
+store_uri="https://api.store.microsoft.com/submission/v1/product/$product_id/metadata/listings?includelanguagelist=true"
 if ! store_status="$({
   curl \
     --silent \
@@ -250,7 +255,7 @@ if ! store_status="$({
     --request GET \
     --header @<(printf 'Authorization: Bearer %s\nX-Seller-Account-Id: %s\n' "$access_token" "$seller_id") \
     --dump-header "$store_headers" \
-    --output /dev/null \
+    --output "$store_body" \
     --write-out '%{http_code}' \
     "$store_uri" 2>"$store_error"
 })"; then
@@ -271,7 +276,7 @@ if [[ ! "$store_status" =~ ^2[0-9][0-9]$ ]]; then
       diagnostic='The product was not found. Verify ProductId and confirm that the Entra application can access that product.'
       ;;
     *)
-      diagnostic='The Microsoft Store API rejected the read-only metadata request.'
+      diagnostic='The Microsoft Store API rejected the read-only listing-language request.'
       ;;
   esac
 
@@ -282,8 +287,15 @@ if [[ ! "$store_status" =~ ^2[0-9][0-9]$ ]]; then
   stop_with_diagnostic "Store access check failed with HTTP $store_status. $diagnostic$correlation_suffix" 3
 fi
 
+if ! listing_languages="$({
+  "$script_dir/microsoft-store-listing-languages.sh" --response-json "$store_body" | paste -sd, -
+})"; then
+  stop_with_diagnostic 'Store access succeeded, but the response did not contain usable listing languages. Share the redacted response shape so the parser fixture can be updated.' 3
+fi
+
 access_token=""
 printf '%s\n' 'Microsoft Store credentials are valid: token issuance, seller authorization, and read-only product access all succeeded.'
+printf 'Microsoft Store listing languages: %s\n' "$listing_languages"
 if [[ -n "$correlation_id" ]]; then
   printf 'Microsoft correlation ID: %s\n' "$correlation_id"
 fi
