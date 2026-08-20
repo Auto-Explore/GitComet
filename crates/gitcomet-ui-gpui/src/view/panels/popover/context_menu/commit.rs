@@ -1,5 +1,6 @@
 use super::*;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 type InteractiveRebaseSourceColor = (String, u8);
 type MultiCherryPickPlan = (
@@ -82,6 +83,47 @@ fn multi_cherry_pick_plan(
     }
 
     Some((entries, source_colors))
+}
+
+/// Returns `true` when `commit_id` is already reachable from HEAD — i.e. it is
+/// part of the current branch's history (including HEAD itself). The check walks
+/// the parents of the loaded log page from HEAD. The right-clicked commit is by
+/// construction present in that page, so a path through the page reaching it
+/// proves ancestry; a truncated page can only produce a false negative, which
+/// git corrects at merge time with "Already up to date".
+fn commit_is_ancestor_of_head(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> bool {
+    let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return false;
+    };
+    let Some(head) = repo.head_commit_id() else {
+        return false;
+    };
+    if head == *commit_id {
+        return true;
+    }
+    let Loadable::Ready(page) = &repo.log else {
+        return false;
+    };
+    let mut by_id: HashMap<CommitId, &Commit> = HashMap::new();
+    for commit in &page.commits {
+        by_id.insert(commit.id.clone(), commit);
+    }
+    let mut seen: HashSet<CommitId> = HashSet::new();
+    let mut queue: VecDeque<CommitId> = VecDeque::from([head]);
+    while let Some(current) = queue.pop_front() {
+        if current == *commit_id {
+            return true;
+        }
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        if let Some(commit) = by_id.get(&current) {
+            for parent in &commit.parent_ids {
+                queue.push_back(parent.clone());
+            }
+        }
+    }
+    false
 }
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
@@ -405,6 +447,24 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             }),
         });
     }
+
+    // "Merge into current" merges the right-clicked commit into the checked-out
+    // branch through the shared MergeRef pipeline. It is a no-op when the commit
+    // is already part of HEAD's history (including HEAD itself), so it is
+    // disabled rather than letting git reject it as "Already up to date".
+    let merge_into_current_disabled = commit_is_ancestor_of_head(this, repo_id, commit_id);
+    items.push(ContextMenuItem::Entry {
+        label: format!("Merge {short} into {current_branch}").into(),
+        icon: Some("icons/swap.svg".into()),
+        shortcut: Some("M".into()),
+        disabled: merge_into_current_disabled,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::MergeCommitConfirm {
+                repo_id,
+                commit_id: commit_id.clone(),
+            },
+        }),
+    });
 
     items.push(ContextMenuItem::Separator);
     for (label, icon, mode) in [
