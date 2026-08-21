@@ -312,6 +312,20 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
             commit_id: commit_id.clone(),
         }),
     });
+    items.push(ContextMenuItem::Entry {
+        label: "Create branch from this commit".into(),
+        icon: Some("icons/git_branch.svg".into()),
+        shortcut: None,
+        disabled: false,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::CreateBranchFromRefPrompt {
+                repo_id,
+                target: sha.clone(),
+                source_selectable: false,
+                name_prefix: String::new(),
+            },
+        }),
+    });
     if !has_multi_cherry_pick && !is_head_commit {
         items.push(ContextMenuItem::Entry {
             label: "Cherry-pick".into(),
