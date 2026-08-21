@@ -1367,7 +1367,9 @@ fn parse_interactive_rebase_log(output: &str) -> Result<Vec<InteractiveRebaseEnt
     }
 
     fields
-        .as_chunks::<3>().0.iter()
+        .as_chunks::<3>()
+        .0
+        .iter()
         .map(|record| {
             let (sha, summary, message) = (record[0], record[1], record[2]);
             let full_hex_id =
