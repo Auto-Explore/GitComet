@@ -797,10 +797,11 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         }
         | PopoverKind::PushSetUpstreamPrompt { .. }
         | PopoverKind::ForcePushConfirm { .. }
-        | PopoverKind::CherryPickCommitConfirm { .. }            | PopoverKind::MergeCommitConfirm { .. }
-            | PopoverKind::MergeAbortConfirm { .. }
-            | PopoverKind::BranchExistsPrompt { .. }
-            | PopoverKind::ForceDeleteBranchConfirm { .. }
+        | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::MergeCommitConfirm { .. }
+        | PopoverKind::MergeAbortConfirm { .. }
+        | PopoverKind::BranchExistsPrompt { .. }
+        | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }

@@ -1049,9 +1049,7 @@ fn create_branch_popover_existing_name_offers_overwrite_and_checkout(
 /// The other BranchExistsPrompt choice: check out the existing branch as-is
 /// rather than moving it.
 #[gpui::test]
-fn create_branch_popover_existing_name_can_checkout_existing_branch(
-    cx: &mut gpui::TestAppContext,
-) {
+fn create_branch_popover_existing_name_can_checkout_existing_branch(cx: &mut gpui::TestAppContext) {
     let (store, events, repo, _workdir) = create_tracking_store("branch-exists-checkout");
     let repo_id = store.snapshot().active_repo.expect("expected active repo");
     wait_until("tracked repo branches to load", || {

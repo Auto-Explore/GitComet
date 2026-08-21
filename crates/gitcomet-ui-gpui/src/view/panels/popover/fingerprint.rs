@@ -564,7 +564,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id.hash(hasher);
             commit_id.hash(hasher);
         }
-        PopoverKind::BranchExistsPrompt { repo_id, name, target } => {
+        PopoverKind::BranchExistsPrompt {
+            repo_id,
+            name,
+            target,
+        } => {
             84u8.hash(hasher);
             repo_id.hash(hasher);
             name.hash(hasher);

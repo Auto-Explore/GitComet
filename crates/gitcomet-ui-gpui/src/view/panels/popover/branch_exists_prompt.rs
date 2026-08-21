@@ -50,7 +50,12 @@ pub(super) fn panel(
         )
         .render(
             theme,
-            dialog_cancel_button("branch_exists_cancel", "branch_exists_cancel_hint", theme, cx),
+            dialog_cancel_button(
+                "branch_exists_cancel",
+                "branch_exists_cancel_hint",
+                theme,
+                cx,
+            ),
             div()
                 .flex()
                 .items_center()

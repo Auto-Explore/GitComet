@@ -3921,7 +3921,10 @@ impl GitRepository for RecordingCheckoutRepo {
         self.calls
             .lock()
             .expect("checkout recording mutex")
-            .push(format!("force-create-and-checkout {name} {}", target.as_ref()));
+            .push(format!(
+                "force-create-and-checkout {name} {}",
+                target.as_ref()
+            ));
         Ok(())
     }
     fn delete_branch(&self, _name: &str) -> Result<()> {
