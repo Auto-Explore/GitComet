@@ -210,7 +210,7 @@ pub(in crate::view) fn render_svg_image_diff_preview(
     resvg::render(&tree, transform, &mut pixmap.as_mut());
 
     let mut buffer = image::ImageBuffer::from_raw(pixmap.width(), pixmap.height(), pixmap.take())?;
-    for pixel in buffer.chunks_exact_mut(4) {
+    for pixel in buffer.as_chunks_mut::<4>().0 {
         swap_rgba_pa_to_bgra(pixel);
     }
 
@@ -233,7 +233,7 @@ fn render_raster_image_diff_preview(
     };
 
     let mut data = decoded.into_rgba8();
-    for pixel in data.chunks_exact_mut(4) {
+    for pixel in data.as_chunks_mut::<4>().0 {
         swap_rgba_to_bgra(pixel);
     }
 
