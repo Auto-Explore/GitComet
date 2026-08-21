@@ -18,7 +18,15 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
+      - "scripts/microsoft-store-fetch-listings.sh"
+      - "scripts/microsoft-store-listing-languages.sh"
       - "scripts/microsoft-store-listing-metadata.sh"
+      - "scripts/microsoft-store-normalize-json.sh"
+      - "scripts/microsoft-store-prepare-metadata.sh"
+      - "scripts/test-microsoft-store-credentials.sh"
+      - "scripts/test-microsoft-store-fetch-listings.sh"
+      - "scripts/test-microsoft-store-listing-languages.sh"
+      - "scripts/test-microsoft-store-workflow.sh"
   push:
     branches: ["main", "dev"]
     paths:
@@ -36,7 +44,15 @@ on:
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
+      - "scripts/microsoft-store-fetch-listings.sh"
+      - "scripts/microsoft-store-listing-languages.sh"
       - "scripts/microsoft-store-listing-metadata.sh"
+      - "scripts/microsoft-store-normalize-json.sh"
+      - "scripts/microsoft-store-prepare-metadata.sh"
+      - "scripts/test-microsoft-store-credentials.sh"
+      - "scripts/test-microsoft-store-fetch-listings.sh"
+      - "scripts/test-microsoft-store-listing-languages.sh"
+      - "scripts/test-microsoft-store-workflow.sh"
   workflow_dispatch:
 
 permissions:
@@ -53,6 +69,22 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      - name: Lint GitHub Actions workflows
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+        run: |
+          set -euo pipefail
+
+          installer="$RUNNER_TEMP/download-actionlint.bash"
+          curl --fail --silent --show-error --location \
+            "https://raw.githubusercontent.com/rhysd/actionlint/v${ACTIONLINT_VERSION}/scripts/download-actionlint.bash" \
+            --output "$installer"
+          bash "$installer" "$ACTIONLINT_VERSION" "$RUNNER_TEMP"
+          # Shell scripts are checked separately below. Disabling actionlint's
+          # ShellCheck integration keeps this gate focused on workflow syntax,
+          # expressions, events, reusable-workflow inputs, and action metadata.
+          "$RUNNER_TEMP/actionlint" -color -shellcheck=""
+
       - name: Validate shell scripts syntax
         run: |
           bash -n scripts/cargo-flatten-dupes.sh
@@ -62,7 +94,15 @@ jobs:
           bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+          bash -n scripts/microsoft-store-fetch-listings.sh
+          bash -n scripts/microsoft-store-listing-languages.sh
           bash -n scripts/microsoft-store-listing-metadata.sh
+          bash -n scripts/microsoft-store-normalize-json.sh
+          bash -n scripts/microsoft-store-prepare-metadata.sh
+          bash -n scripts/test-microsoft-store-credentials.sh
+          bash -n scripts/test-microsoft-store-fetch-listings.sh
+          bash -n scripts/test-microsoft-store-listing-languages.sh
+          bash -n scripts/test-microsoft-store-workflow.sh
 
       - name: Validate Windows PowerShell helper syntax
         run: |
@@ -123,13 +163,24 @@ jobs:
           grep -Fq 'dbus-launch --sh-syntax' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'gnome-keyring-daemon --start --components=secrets' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'libsecret-1-0' .github/workflows/deploy-microsoft-store.yml
-          grep -Fq 'microsoft/microsoft-store-apppublisher@v1.4' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'runs-on: ubuntu-24.04' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7 # v5.2.0' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'dotnet-version: "9.0.x"' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq "Microsoft.NETCore.App 9" .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'microsoft/microsoft-store-apppublisher@cc9910a8d59f2eb55cbb83df0a3800cf3b5300e0 # v1.4' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'version: v0.3.9' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'store_preflight:' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'gh release view' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission update' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission updateMetadata' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'msstore submission publish' .github/workflows/deploy-microsoft-store.yml
-          grep -Fq -e '--module listings' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'd0cf11e0a1b11ae1' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq -e '--module listings' scripts/microsoft-store-fetch-listings.sh
+          grep -Fq 'microsoft-store-fetch-listings.sh' scripts/microsoft-store-prepare-metadata.sh
           grep -Fq 'scripts/microsoft-store-listing-metadata.sh' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'scripts/microsoft-store-prepare-metadata.sh' .github/workflows/deploy-microsoft-store.yml
+          grep -Fq 'microsoft-store-listing-languages.sh' scripts/test-microsoft-store-credentials.sh
+          ! grep -Fq 'en-us,en' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'vars.MICROSOFT_STORE_LISTING_LANGUAGES' .github/workflows/deploy-microsoft-store.yml
           grep -Fq 'WhatsNew' scripts/microsoft-store-listing-metadata.sh
           ! grep -Fq 'msstore submission commit' .github/workflows/deploy-microsoft-store.yml
@@ -142,6 +193,8 @@ jobs:
           grep -Fq 'product_id: $''{{ vars.MICROSOFT_STORE_PRODUCT_ID }}' .github/workflows/release-manual-main.yml
           grep -Fq 'package_languages: $''{{ vars.MICROSOFT_STORE_PACKAGE_LANGUAGES }}' .github/workflows/release-manual-main.yml
           grep -Fq 'store_listing_languages: $''{{ vars.MICROSOFT_STORE_LISTING_LANGUAGES }}' .github/workflows/release-manual-main.yml
+          grep -Fq 'store_preflight: true' .github/workflows/release-manual-main.yml
+          grep -Fq 'store_preflight: false' .github/workflows/release-manual-main.yml
           grep -Fq 'vars.AUR_GIT_REPOSITORY' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.AUR_GIT_BRANCH' .github/workflows/deploy-aur.yml
           grep -Fq 'vars.WINDOWS_SIGNING_ENDPOINT' .github/workflows/build-release-artifacts.yml
@@ -160,6 +213,12 @@ jobs:
           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
+
+      - name: Test Microsoft Store deployment workflow
+        env:
+          ACTIONLINT: ${{ runner.temp }}/actionlint
+        run: |
+          scripts/test-microsoft-store-workflow.sh
 
       - name: Generate Microsoft Store listing metadata from synthetic draft
         run: |
