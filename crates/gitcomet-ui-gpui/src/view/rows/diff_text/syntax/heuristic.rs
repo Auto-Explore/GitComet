@@ -12,6 +12,7 @@ enum HeuristicBlockCommentKind {
     Lua,
     C,
     PowerShell,
+    Haskell,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -117,6 +118,11 @@ pub(super) struct HeuristicCommentConfig {
     pub(super) hash_comment: bool,
     pub(super) block_comment: Option<HeuristicBlockCommentSpec>,
     pub(super) visual_basic_line_comment: bool,
+    /// Haskell spells a comment `--`, but a run of dashes followed by a symbol
+    /// character is an *operator* (`-->`, `--|`), not a comment. Lua and SQL share
+    /// the `--` prefix with no such rule, so this cannot be keyed off
+    /// `line_comment`.
+    pub(super) haskell_dashes_line_comment: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -150,6 +156,10 @@ const HEURISTIC_LUA_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCom
     start: "--[[",
     end: "]]",
 };
+const HEURISTIC_HASKELL_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
+    start: "{-",
+    end: "-}",
+};
 const HEURISTIC_C_BLOCK_COMMENT: HeuristicBlockCommentSpec = HeuristicBlockCommentSpec {
     start: "/*",
     end: "*/",
@@ -173,11 +183,13 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
+        | DiffSyntaxLanguage::Svelte
         | DiffSyntaxLanguage::Jinja => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: false,
             block_comment: Some(HEURISTIC_HTML_BLOCK_COMMENT),
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         // A text-bodied template has no markup to comment, so `<!-- -->` would be
         // wrong; its body is yaml, shell, nginx.conf or dotenv, and all four use
@@ -187,18 +199,62 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             hash_comment: true,
             block_comment: None,
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
-        DiffSyntaxLanguage::FSharp => HeuristicCommentConfig {
+        DiffSyntaxLanguage::FSharp
+        | DiffSyntaxLanguage::OCaml
+        | DiffSyntaxLanguage::OCamlInterface => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: false,
             block_comment: Some(HEURISTIC_FSHARP_BLOCK_COMMENT),
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
+        DiffSyntaxLanguage::Haskell => HeuristicCommentConfig {
+            // `line_comment` stays None: `haskell_dashes_line_comment` replaces the
+            // plain `--` prefix with a rule that knows `-->` is an operator.
+            line_comment: None,
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_HASKELL_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: true,
+        },
+        DiffSyntaxLanguage::Erlang => HeuristicCommentConfig {
+            line_comment: Some("%"),
+            hash_comment: false,
+            block_comment: None,
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
+        DiffSyntaxLanguage::Clojure => HeuristicCommentConfig {
+            line_comment: Some(";"),
+            hash_comment: false,
+            block_comment: None,
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
+        // Assembly takes `;` (MASM/NASM) and `/* */` (GAS, every target).
+        //
+        // Neither GAS line-comment spelling is here. `#` is out because ARM writes
+        // immediates as `mov r0, #1`, so a hash comment would grey the operand of
+        // every such instruction -- see `assembly_hash_immediate_is_not_a_comment`.
+        // `//` (GAS on arm64) has no such conflict and is simply unreachable:
+        // HeuristicCommentConfig carries one `line_comment`, the right choice is
+        // dialect-dependent, and nothing here knows the target. `/* */` covers GAS
+        // block comments and the tree-sitter path handles the rest.
+        DiffSyntaxLanguage::Assembly => HeuristicCommentConfig {
+            line_comment: Some(";"),
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::Lua => HeuristicCommentConfig {
             line_comment: Some("--"),
             hash_comment: false,
             block_comment: Some(HEURISTIC_LUA_BLOCK_COMMENT),
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::Python
         | DiffSyntaxLanguage::Toml
@@ -208,23 +264,31 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Ruby
         | DiffSyntaxLanguage::R
         | DiffSyntaxLanguage::GitCommit
+        | DiffSyntaxLanguage::Elixir
+        // Julia's block comment is `#= ... =#`; only the `#=` opener is modelled
+        // here, which greys the opening line to its end and leaves the rest of the
+        // block plain. The tree-sitter path has the real rule.
+        | DiffSyntaxLanguage::Julia
         | DiffSyntaxLanguage::Perl => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: true,
             block_comment: None,
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::PowerShell => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: true,
             block_comment: Some(HEURISTIC_POWERSHELL_BLOCK_COMMENT),
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::Sql => HeuristicCommentConfig {
             line_comment: Some("--"),
             hash_comment: false,
             block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::Rust
         | DiffSyntaxLanguage::JavaScript
@@ -243,6 +307,8 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         | DiffSyntaxLanguage::Dart
         | DiffSyntaxLanguage::Scala
         | DiffSyntaxLanguage::Zig
+        | DiffSyntaxLanguage::Groovy
+        | DiffSyntaxLanguage::Solidity
         | DiffSyntaxLanguage::Bicep => HeuristicCommentConfig {
             line_comment: Some("//"),
             hash_comment: false,
@@ -251,12 +317,14 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
                 _ => Some(HEURISTIC_C_BLOCK_COMMENT),
             },
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::Hcl | DiffSyntaxLanguage::Php => HeuristicCommentConfig {
             line_comment: Some("//"),
             hash_comment: true,
             block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         // Nix looks like the Hcl arm above but must NOT take its `//` line
         // comment: `//` is Nix's attribute-set update operator, so
@@ -267,12 +335,14 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             hash_comment: true,
             block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::VisualBasic => HeuristicCommentConfig {
             line_comment: None,
             hash_comment: false,
             block_comment: None,
             visual_basic_line_comment: true,
+            haskell_dashes_line_comment: false,
         },
         DiffSyntaxLanguage::Markdown
         | DiffSyntaxLanguage::MarkdownInline
@@ -285,6 +355,7 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             hash_comment: false,
             block_comment: None,
             visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
         },
     }
 }
@@ -294,8 +365,12 @@ fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<Heuristi
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
+        | DiffSyntaxLanguage::Svelte
         | DiffSyntaxLanguage::Jinja => Some(HeuristicBlockCommentKind::Html),
-        DiffSyntaxLanguage::FSharp => Some(HeuristicBlockCommentKind::FSharp),
+        DiffSyntaxLanguage::FSharp
+        | DiffSyntaxLanguage::OCaml
+        | DiffSyntaxLanguage::OCamlInterface => Some(HeuristicBlockCommentKind::FSharp),
+        DiffSyntaxLanguage::Haskell => Some(HeuristicBlockCommentKind::Haskell),
         DiffSyntaxLanguage::Lua => Some(HeuristicBlockCommentKind::Lua),
         DiffSyntaxLanguage::PowerShell => Some(HeuristicBlockCommentKind::PowerShell),
         DiffSyntaxLanguage::Sql
@@ -315,6 +390,9 @@ fn heuristic_block_comment_kind(language: DiffSyntaxLanguage) -> Option<Heuristi
         | DiffSyntaxLanguage::Scala
         | DiffSyntaxLanguage::Zig
         | DiffSyntaxLanguage::Bicep
+        | DiffSyntaxLanguage::Groovy
+        | DiffSyntaxLanguage::Solidity
+        | DiffSyntaxLanguage::Assembly
         | DiffSyntaxLanguage::Hcl
         | DiffSyntaxLanguage::Nix
         | DiffSyntaxLanguage::Php => Some(HeuristicBlockCommentKind::C),
@@ -329,6 +407,7 @@ fn heuristic_block_comment_start_bytes(kind: HeuristicBlockCommentKind) -> &'sta
         HeuristicBlockCommentKind::Lua => b"--[[",
         HeuristicBlockCommentKind::C => b"/*",
         HeuristicBlockCommentKind::PowerShell => b"<#",
+        HeuristicBlockCommentKind::Haskell => b"{-",
     }
 }
 
@@ -339,6 +418,7 @@ fn heuristic_block_comment_end_bytes(kind: HeuristicBlockCommentKind) -> &'stati
         HeuristicBlockCommentKind::Lua => b"]]",
         HeuristicBlockCommentKind::C => b"*/",
         HeuristicBlockCommentKind::PowerShell => b"#>",
+        HeuristicBlockCommentKind::Haskell => b"-}",
     }
 }
 
@@ -366,6 +446,30 @@ fn visual_basic_line_comment_start_len(bytes: &[u8], start: usize) -> Option<usi
     visual_basic_rem_comment_prefix_len(bytes, start)
 }
 
+/// Length of the dash run opening a Haskell line comment, if it opens one.
+///
+/// Per the Haskell report a `dashes` lexeme is two or more consecutive dashes
+/// *not* followed by a symbol character; otherwise the run is part of an operator.
+/// `-- note` and `--- note` are comments, `-->` and `--|` are not.
+fn haskell_dashes_line_comment_start_len(bytes: &[u8], start: usize) -> Option<usize> {
+    // Haskell's symbol set minus `-` itself: the dash run is consumed first, so a
+    // trailing dash can never be the character that disqualifies the run.
+    const SYMBOL: &[u8] = b"!#$%&*+./<=>?@\\^|~:";
+
+    let mut end = start;
+    while bytes.get(end) == Some(&b'-') {
+        end = end.saturating_add(1);
+    }
+    let run = end.saturating_sub(start);
+    if run < 2 {
+        return None;
+    }
+    match bytes.get(end) {
+        Some(next) if SYMBOL.contains(next) => None,
+        _ => Some(run),
+    }
+}
+
 fn line_comment_start_len(
     bytes: &[u8],
     start: usize,
@@ -373,6 +477,9 @@ fn line_comment_start_len(
 ) -> Option<usize> {
     if config.visual_basic_line_comment {
         return visual_basic_line_comment_start_len(bytes, start);
+    }
+    if config.haskell_dashes_line_comment {
+        return haskell_dashes_line_comment_start_len(bytes, start);
     }
     if let Some(prefix) = config.line_comment
         && matches_ascii_bytes_at(bytes, start, prefix.as_bytes())
@@ -417,6 +524,9 @@ fn potential_open_state_lead(config: HeuristicOpenStateScanConfig, byte: u8) -> 
     if config.block_comment_kind.is_some_and(|kind| {
         heuristic_block_comment_start_bytes(kind).first().copied() == Some(byte)
     }) {
+        return true;
+    }
+    if config.comment.haskell_dashes_line_comment && byte == b'-' {
         return true;
     }
     config.comment.visual_basic_line_comment && (byte == b'\'' || byte.eq_ignore_ascii_case(&b'r'))
@@ -892,26 +1002,11 @@ fn heuristic_comment_range(
         return Some(start..end);
     }
 
-    if let Some(prefix) = config.line_comment
-        && rest.starts_with(prefix)
-    {
-        return Some(start..text.len());
-    }
-
-    if config.visual_basic_line_comment
-        && (rest.starts_with('\'')
-            || rest
-                .get(..4)
-                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("rem ")))
-    {
-        return Some(start..text.len());
-    }
-
-    if config.hash_comment && rest.starts_with('#') {
-        return Some(start..text.len());
-    }
-
-    None
+    // Every line-comment spelling is decided by `line_comment_start_len`, the same
+    // function the streamed scanner uses. Two independent copies of "does a comment
+    // start here" is how Haskell's dash rule ended up applying on one path and not
+    // the other.
+    line_comment_start_len(text.as_bytes(), start, config).map(|_| start..text.len())
 }
 
 fn heuristic_string_end(text: &str, start: usize, quote: char) -> usize {
@@ -971,10 +1066,23 @@ pub(super) enum HeuristicSingleQuote {
 
 pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> HeuristicSingleQuote {
     match language {
-        DiffSyntaxLanguage::Nix => HeuristicSingleQuote::Identifier,
+        // Haskell primes an identifier (`foldl'`, `go'`), OCaml opens a type
+        // variable with one (`'a list`), and Clojure quotes a form (`'sym`). All
+        // three would otherwise run a string to the end of the line. The char
+        // literals they also spell with `'` are the cost, exactly as for Nix.
+        DiffSyntaxLanguage::Nix
+        | DiffSyntaxLanguage::Haskell
+        | DiffSyntaxLanguage::OCaml
+        | DiffSyntaxLanguage::OCamlInterface
+        | DiffSyntaxLanguage::Clojure => HeuristicSingleQuote::Identifier,
+        // Julia's postfix `'` is the adjoint operator: `A'` transposes, `'c'` is a
+        // character. The two are told apart by what precedes the quote, which is
+        // what ValuePositionOnly already tests for.
+        DiffSyntaxLanguage::Julia => HeuristicSingleQuote::ValuePositionOnly,
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
+        | DiffSyntaxLanguage::Svelte
         | DiffSyntaxLanguage::Jinja => HeuristicSingleQuote::ValuePositionOnly,
         _ => HeuristicSingleQuote::String,
     }
@@ -1229,6 +1337,7 @@ pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
             || (comment_config.hash_comment && byte == b'#')
             || (comment_config.visual_basic_line_comment
                 && (byte == b'\'' || byte.eq_ignore_ascii_case(&b'r')))
+            || (comment_config.haskell_dashes_line_comment && byte == b'-')
     };
 
     while i < len {
@@ -2262,6 +2371,395 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                 | "return"
                 | "break"
                 | "continue"
+        ),
+        DiffSyntaxLanguage::Svelte => matches!(
+            ident,
+            "if" | "else" | "each" | "await" | "then" | "catch" | "key" | "snippet" | "render"
+        ),
+        DiffSyntaxLanguage::Groovy => matches!(
+            ident,
+            "abstract"
+                | "as"
+                | "assert"
+                | "boolean"
+                | "break"
+                | "byte"
+                | "case"
+                | "catch"
+                | "char"
+                | "class"
+                | "continue"
+                | "def"
+                | "default"
+                | "do"
+                | "double"
+                | "else"
+                | "enum"
+                | "extends"
+                | "false"
+                | "final"
+                | "finally"
+                | "float"
+                | "for"
+                | "if"
+                | "implements"
+                | "import"
+                | "in"
+                | "instanceof"
+                | "int"
+                | "interface"
+                | "long"
+                | "new"
+                | "null"
+                | "package"
+                | "private"
+                | "protected"
+                | "public"
+                | "return"
+                | "short"
+                | "static"
+                | "super"
+                | "switch"
+                | "this"
+                | "throw"
+                | "throws"
+                | "trait"
+                | "true"
+                | "try"
+                | "void"
+                | "while"
+        ),
+        // Head-position-only forms such as `defn` and `let` are keywords wherever
+        // they appear here -- the heuristic is line-based and has no notion of
+        // position. `if`, `do` and `when` are common enough as bare symbols that
+        // the trade is worth stating: this list is the tree-sitter query's
+        // `#any-of?` set minus the entries that read as ordinary English.
+        DiffSyntaxLanguage::Clojure => matches!(
+            ident,
+            "def"
+                | "defn"
+                | "defn-"
+                | "defmacro"
+                | "defmulti"
+                | "defmethod"
+                | "defprotocol"
+                | "defrecord"
+                | "deftype"
+                | "defonce"
+                | "declare"
+                | "ns"
+                | "require"
+                | "import"
+                | "let"
+                | "letfn"
+                | "binding"
+                | "loop"
+                | "recur"
+                | "fn"
+                | "if-let"
+                | "if-not"
+                | "when-let"
+                | "when-not"
+                | "cond"
+                | "condp"
+                | "doseq"
+                | "dotimes"
+                | "throw"
+                | "nil"
+                | "true"
+                | "false"
+        ),
+        DiffSyntaxLanguage::Elixir => matches!(
+            ident,
+            "def"
+                | "defp"
+                | "defmodule"
+                | "defstruct"
+                | "defprotocol"
+                | "defimpl"
+                | "defmacro"
+                | "defmacrop"
+                | "defdelegate"
+                | "defguard"
+                | "defexception"
+                | "do"
+                | "end"
+                | "fn"
+                | "case"
+                | "cond"
+                | "if"
+                | "unless"
+                | "else"
+                | "receive"
+                | "after"
+                | "rescue"
+                | "catch"
+                | "raise"
+                | "try"
+                | "with"
+                | "for"
+                | "when"
+                | "import"
+                | "alias"
+                | "require"
+                | "use"
+                | "quote"
+                | "unquote"
+                | "true"
+                | "false"
+                | "nil"
+        ),
+        // Erlang's reserved words include its word-spelled operators, which is
+        // why `div`, `band` and `not` sit here next to `case` and `end`.
+        DiffSyntaxLanguage::Erlang => matches!(
+            ident,
+            "after"
+                | "and"
+                | "andalso"
+                | "band"
+                | "begin"
+                | "bnot"
+                | "bor"
+                | "bsl"
+                | "bsr"
+                | "bxor"
+                | "case"
+                | "catch"
+                | "cond"
+                | "div"
+                | "end"
+                | "fun"
+                | "if"
+                | "let"
+                | "maybe"
+                | "not"
+                | "of"
+                | "or"
+                | "orelse"
+                | "receive"
+                | "rem"
+                | "try"
+                | "when"
+                | "xor"
+                | "true"
+                | "false"
+                // Not reserved, but the conventional "no value" atom and worth
+                // telling apart from an ordinary one.
+                | "undefined"
+        ),
+        DiffSyntaxLanguage::Haskell => matches!(
+            ident,
+            "case"
+                | "class"
+                | "data"
+                | "deriving"
+                | "do"
+                | "else"
+                | "family"
+                | "forall"
+                | "foreign"
+                | "default"
+                | "if"
+                | "import"
+                | "in"
+                | "infix"
+                | "infixl"
+                | "infixr"
+                | "instance"
+                | "let"
+                | "module"
+                | "newtype"
+                | "of"
+                | "then"
+                | "type"
+                | "where"
+                | "True"
+                | "False"
+        ),
+        DiffSyntaxLanguage::Julia => matches!(
+            ident,
+            "abstract"
+                | "baremodule"
+                | "begin"
+                | "break"
+                | "catch"
+                | "const"
+                | "continue"
+                | "do"
+                | "else"
+                | "elseif"
+                | "end"
+                | "export"
+                | "finally"
+                | "for"
+                | "function"
+                | "global"
+                | "if"
+                | "import"
+                | "let"
+                | "local"
+                | "macro"
+                | "module"
+                | "mutable"
+                | "primitive"
+                | "quote"
+                | "return"
+                | "struct"
+                | "try"
+                | "using"
+                | "where"
+                | "while"
+                | "true"
+                | "false"
+                | "nothing"
+        ),
+        DiffSyntaxLanguage::OCaml | DiffSyntaxLanguage::OCamlInterface => matches!(
+            ident,
+            "and"
+                | "as"
+                | "assert"
+                | "begin"
+                | "class"
+                | "constraint"
+                | "done"
+                | "downto"
+                | "else"
+                | "end"
+                | "exception"
+                | "external"
+                | "for"
+                | "fun"
+                | "function"
+                | "functor"
+                | "if"
+                | "in"
+                | "include"
+                | "inherit"
+                | "initializer"
+                | "lazy"
+                | "let"
+                | "match"
+                | "method"
+                | "module"
+                | "mutable"
+                | "new"
+                | "nonrec"
+                | "object"
+                | "of"
+                | "open"
+                | "private"
+                | "rec"
+                | "sig"
+                | "struct"
+                | "then"
+                | "to"
+                | "try"
+                | "type"
+                | "val"
+                | "virtual"
+                | "when"
+                | "while"
+                | "with"
+                | "true"
+                | "false"
+        ),
+        DiffSyntaxLanguage::Solidity => matches!(
+            ident,
+            "abstract"
+                | "address"
+                | "assembly"
+                | "bool"
+                | "bytes"
+                | "calldata"
+                | "constant"
+                | "constructor"
+                | "contract"
+                | "delete"
+                | "do"
+                | "else"
+                | "emit"
+                | "enum"
+                | "error"
+                | "event"
+                | "external"
+                | "fallback"
+                | "for"
+                | "function"
+                | "if"
+                | "immutable"
+                | "import"
+                | "indexed"
+                | "interface"
+                | "internal"
+                | "is"
+                | "library"
+                | "mapping"
+                | "memory"
+                | "modifier"
+                | "new"
+                | "override"
+                | "payable"
+                | "pragma"
+                | "private"
+                | "public"
+                | "pure"
+                | "receive"
+                | "require"
+                | "return"
+                | "returns"
+                | "revert"
+                | "storage"
+                | "string"
+                | "struct"
+                | "throw"
+                | "try"
+                | "type"
+                // Base names only. Solidity has 32 `bytesN`, 32 `uintN` and 32
+                // `intN` spellings; listing exactly one of them (`uint256` was
+                // here) makes adjacent field declarations highlight differently
+                // for no reason a reader could infer. The tree-sitter path types
+                // all of them.
+                | "uint"
+                | "unchecked"
+                | "using"
+                | "view"
+                | "virtual"
+                | "while"
+                | "true"
+                | "false"
+        ),
+        // Directive names only. Mnemonics are deliberately absent: `add`, `and`,
+        // `or`, `not`, `call` and `ret` all double as ordinary identifiers, and
+        // the heuristic has no notion of operand position.
+        //
+        // Written *without* the leading dot on purpose. `is_ident_start` admits
+        // `_` and letters but not `.`, so a GAS directive reaches this function as
+        // its bare tail: `.text` is looked up as `text`, `.globl` as `globl`, and a
+        // dotted entry here could never match. The cost is that a symbol *named*
+        // `text` highlights too; the tree-sitter path, which sees the dot, does not
+        // have that problem.
+        DiffSyntaxLanguage::Assembly => matches!(
+            ident,
+            "align"
+                | "ascii"
+                | "asciz"
+                | "bss"
+                | "byte"
+                | "data"
+                | "dword"
+                | "extern"
+                | "global"
+                | "globl"
+                | "long"
+                | "proc"
+                | "ptr"
+                | "qword"
+                | "quad"
+                | "section"
+                | "segment"
+                | "short"
+                | "text"
+                | "word"
         ),
     }
 }
