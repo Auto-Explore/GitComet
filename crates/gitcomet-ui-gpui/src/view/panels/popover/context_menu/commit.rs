@@ -1,6 +1,7 @@
 use super::*;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
-use std::collections::{HashMap, HashSet, VecDeque};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 type InteractiveRebaseSourceColor = (String, u8);
 type MultiCherryPickPlan = (
@@ -95,6 +96,10 @@ fn commit_is_ancestor_of_head(this: &PopoverHost, repo_id: RepoId, commit_id: &C
     let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
         return false;
     };
+    repo_commit_is_ancestor_of_head(repo, commit_id)
+}
+
+fn repo_commit_is_ancestor_of_head(repo: &RepoState, commit_id: &CommitId) -> bool {
     let Some(head) = repo.head_commit_id() else {
         return false;
     };
@@ -104,11 +109,11 @@ fn commit_is_ancestor_of_head(this: &PopoverHost, repo_id: RepoId, commit_id: &C
     let Loadable::Ready(page) = &repo.log else {
         return false;
     };
-    let mut by_id: HashMap<CommitId, &Commit> = HashMap::new();
+    let mut by_id: FxHashMap<CommitId, &Commit> = FxHashMap::default();
     for commit in &page.commits {
         by_id.insert(commit.id.clone(), commit);
     }
-    let mut seen: HashSet<CommitId> = HashSet::new();
+    let mut seen: FxHashSet<CommitId> = FxHashSet::default();
     let mut queue: VecDeque<CommitId> = VecDeque::from([head]);
     while let Some(current) = queue.pop_front() {
         if current == *commit_id {
@@ -500,4 +505,113 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     }
 
     ContextMenuModel::new(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{CommitParentIds, LogPage, RepoSpec};
+    use gitcomet_state::model::{Loadable, RepoId, RepoState};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+
+    fn repo_state() -> RepoState {
+        RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        )
+    }
+
+    fn commit(id: &str, parents: &[&str]) -> Commit {
+        Commit {
+            id: CommitId(id.into()),
+            parent_ids: parents
+                .iter()
+                .map(|p| CommitId((*p).into()))
+                .collect::<CommitParentIds>(),
+            summary: "summary".into(),
+            author: "author".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn with_log(mut repo: RepoState, head: &str, commits: Vec<Commit>) -> RepoState {
+        repo.detached_head_commit = Some(CommitId(head.into()));
+        repo.log = Loadable::Ready(Arc::new(LogPage {
+            commits,
+            next_cursor: None,
+        }));
+        repo
+    }
+
+    #[test]
+    fn head_commit_is_its_own_ancestor() {
+        let repo = with_log(repo_state(), "a", vec![commit("a", &[])]);
+
+        assert!(repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("a".into())
+        ));
+    }
+
+    #[test]
+    fn commit_reachable_through_parent_chain_is_ancestor() {
+        // c -> b -> a (HEAD is c)
+        let repo = with_log(
+            repo_state(),
+            "c",
+            vec![commit("c", &["b"]), commit("b", &["a"]), commit("a", &[])],
+        );
+
+        assert!(repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("a".into())
+        ));
+    }
+
+    #[test]
+    fn commit_on_unrelated_branch_is_not_ancestor() {
+        // HEAD is b, which does not descend from the side-branch commit x
+        let repo = with_log(
+            repo_state(),
+            "b",
+            vec![commit("b", &["a"]), commit("a", &[])],
+        );
+
+        assert!(!repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("x".into())
+        ));
+    }
+
+    #[test]
+    fn no_head_commit_is_not_ancestor() {
+        let repo = repo_state();
+
+        assert!(!repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("a".into())
+        ));
+    }
+
+    #[test]
+    fn merge_entry_disabled_when_commit_is_ancestor_of_head() {
+        let repo = with_log(
+            repo_state(),
+            "c",
+            vec![commit("c", &["b"]), commit("b", &[])],
+        );
+
+        assert!(repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("b".into())
+        ));
+        assert!(!repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("missing".into())
+        ));
+    }
 }
