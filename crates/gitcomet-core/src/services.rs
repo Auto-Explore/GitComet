@@ -645,6 +645,14 @@ pub trait GitRepository: Send + Sync {
     }
 
     fn create_branch(&self, name: &str, target: &CommitId) -> Result<()>;
+    /// Create the local branch `name` at `target`, or reset it there when a
+    /// branch with that name already exists, and check it out. The git
+    /// equivalent is `git checkout -B <name> <target>`.
+    fn create_branch_force_and_checkout(&self, _name: &str, _target: &CommitId) -> Result<()> {
+        Err(Error::new(ErrorKind::Unsupported(
+            "force branch creation and checkout is not implemented for this backend",
+        )))
+    }
     fn rename_branch(&self, _old_name: &str, _new_name: &str) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "branch renaming is not implemented for this backend",

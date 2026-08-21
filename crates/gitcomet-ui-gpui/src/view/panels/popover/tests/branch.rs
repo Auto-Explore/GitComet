@@ -133,6 +133,26 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
+    fn create_branch_force_and_checkout(&self, name: &str, _target: &CommitId) -> Result<()> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(format!("force-create-and-checkout:{name}"));
+
+        let mut branches = self
+            .branches
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if !branches.iter().any(|branch| branch == name) {
+            branches.push(name.to_string());
+        }
+        *self
+            .current_branch
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = name.to_string();
+        Ok(())
+    }
+
     fn delete_branch(&self, name: &str) -> Result<()> {
         let mut branches = self
             .branches
@@ -919,6 +939,160 @@ fn create_branch_popover_enter_creates_and_closes(cx: &mut gpui::TestAppContext)
     wait_until("create-branch repo actions", || {
         repo.actions() == vec!["create:feature".to_string(), "checkout:feature".to_string()]
     });
+}
+
+fn open_create_branch_prompt_for_enter_test(
+    cx: &mut gpui::VisualTestContext,
+    view: &gpui::Entity<GitCometView>,
+    repo_id: RepoId,
+) {
+    cx.update(|window, app| {
+        app.bind_keys([gpui::KeyBinding::new(
+            "enter",
+            crate::kit::Enter,
+            Some("TextInput"),
+        )]);
+        let _ = window.draw(app);
+    });
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CreateBranchFromRefPrompt {
+                        repo_id,
+                        target: "HEAD".to_string(),
+                        source_selectable: false,
+                        name_prefix: String::new(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+}
+
+/// Typing an existing branch name into "Create branch from…" with Checkout on
+/// used to fail with git's "already exists" error. Instead the prompt should
+/// hand over to the BranchExistsPrompt, and "Overwrite & checkout" should
+/// dispatch the force create-and-checkout action.
+#[gpui::test]
+fn create_branch_popover_existing_name_offers_overwrite_and_checkout(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events, repo, _workdir) = create_tracking_store("branch-exists-overwrite");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    wait_until("tracked repo branches to load", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .is_some_and(|r| matches!(r.branches, Loadable::Ready(_)))
+    });
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_create_branch_prompt_for_enter_test(cx, &view, repo_id);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("main", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.update(|_window, app| {
+        let host = view.read(app).popover_host.read(app);
+        assert!(
+            host.is_open(),
+            "expected the existing-name submit to keep a popover open"
+        );
+        assert!(
+            matches!(host.popover, Some(PopoverKind::BranchExistsPrompt { .. })),
+            "expected the BranchExistsPrompt, got {:?}",
+            host.popover
+        );
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    assert!(
+        repo.actions().is_empty(),
+        "expected no git actions before the user chooses"
+    );
+
+    click_debug_selector(cx, "branch_exists_overwrite");
+
+    wait_until("force create-and-checkout repo action", || {
+        repo.actions() == vec!["force-create-and-checkout:main".to_string()]
+    });
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Overwrite to close the popover");
+}
+
+/// The other BranchExistsPrompt choice: check out the existing branch as-is
+/// rather than moving it.
+#[gpui::test]
+fn create_branch_popover_existing_name_can_checkout_existing_branch(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events, repo, _workdir) = create_tracking_store("branch-exists-checkout");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    wait_until("tracked repo branches to load", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|r| r.id == repo_id)
+            .is_some_and(|r| matches!(r.branches, Loadable::Ready(_)))
+    });
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_create_branch_prompt_for_enter_test(cx, &view, repo_id);
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("main", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+
+    click_debug_selector(cx, "branch_exists_checkout_existing");
+
+    wait_until("checkout-existing repo action", || {
+        repo.actions() == vec!["checkout:main".to_string()]
+    });
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Checkout existing to close the popover");
 }
 
 #[gpui::test]

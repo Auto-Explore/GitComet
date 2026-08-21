@@ -2134,9 +2134,10 @@ pub(super) fn schedule_effect(
             repo_id,
             name,
             target,
+            force,
         } => {
             repo_actions::schedule_create_branch_and_checkout(
-                executor, repos, msg_tx, repo_id, name, target,
+                executor, repos, msg_tx, repo_id, name, target, force,
             );
         }
         Effect::RenameBranch {

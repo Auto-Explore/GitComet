@@ -519,6 +519,26 @@ impl GixRepo {
         run_git_simple(cmd, "git checkout")
     }
 
+    /// `git checkout -B <name> <target>`: create the branch at `target`, or
+    /// reset an existing branch of that name to `target`, then check it out.
+    ///
+    /// Unlike a `git branch -f` + `git checkout` pair this also handles the
+    /// branch that is checked out in this worktree (the reset then behaves like
+    /// `git reset --hard <target>`), which is exactly the "overwrite and
+    /// checkout" case the caller offers the user.
+    pub(super) fn create_branch_force_and_checkout_impl(
+        &self,
+        name: &str,
+        target: &CommitId,
+    ) -> Result<()> {
+        validate_ref_like_arg(name, "branch name")?;
+        validate_ref_like_arg(target.as_ref(), "branch target")?;
+
+        let mut cmd = self.git_workdir_cmd();
+        cmd.arg("checkout").arg("-B").arg(name).arg(target.as_ref());
+        run_git_simple(cmd, "git checkout -B")
+    }
+
     pub(super) fn checkout_remote_branch_impl(
         &self,
         remote: &str,

@@ -284,6 +284,9 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
         target: String,
+        /// Reset the branch to `target` first when a branch with this name
+        /// already exists, instead of failing with "already exists".
+        force: bool,
     },
     RenameBranch {
         repo_id: RepoId,

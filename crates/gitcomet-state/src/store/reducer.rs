@@ -1183,12 +1183,13 @@ fn reduce_inner(
             repo_id,
             name,
             target,
+            force,
         } => {
             if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
                 repo_state.set_detached_head_commit(None);
             }
             begin_head_changing_local_action(state, repo_id);
-            actions_emit_effects::create_branch_and_checkout(repo_id, name, target)
+            actions_emit_effects::create_branch_and_checkout(repo_id, name, target, force)
         }
         Msg::RenameBranch {
             repo_id,

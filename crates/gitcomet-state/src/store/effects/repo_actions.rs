@@ -233,12 +233,21 @@ pub(super) fn schedule_create_branch_and_checkout(
     repo_id: RepoId,
     name: String,
     target: String,
+    force: bool,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
         let target = gitcomet_core::domain::CommitId(target.into());
-        let created = repo.create_branch(&name, &target);
+        let created = if force {
+            repo.create_branch_force_and_checkout(&name, &target)
+        } else {
+            repo.create_branch(&name, &target)
+        };
         let refresh = created.is_ok();
-        let result = created.and_then(|()| repo.checkout_branch(&name));
+        let result = if force {
+            created
+        } else {
+            created.and_then(|()| repo.checkout_branch(&name))
+        };
         if refresh {
             send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
         }

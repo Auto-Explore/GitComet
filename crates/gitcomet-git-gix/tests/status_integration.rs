@@ -5846,6 +5846,93 @@ fn checkout_branch_switches_head_to_target_branch() {
 }
 
 #[test]
+fn create_branch_force_and_checkout_resets_existing_branch_and_checks_it_out() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+    let first_commit = run_git_output(repo, &["rev-parse", "HEAD"]);
+
+    write(repo, "b.txt", "two\n");
+    run_git(repo, &["add", "b.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "second"],
+    );
+
+    // `feature` exists and points at the second commit while main stays there.
+    run_git(repo, &["branch", "feature"]);
+    run_git(repo, &["checkout", "main"]);
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened
+        .create_branch_force_and_checkout(
+            "feature",
+            &gitcomet_core::domain::CommitId(first_commit.clone().into()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        run_git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feature"
+    );
+    assert_eq!(
+        run_git_output(repo, &["rev-parse", "HEAD"]),
+        first_commit,
+        "the existing branch was moved to the target commit"
+    );
+}
+
+#[test]
+fn create_branch_force_and_checkout_creates_missing_branch_and_checks_it_out() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened
+        .create_branch_force_and_checkout(
+            "feature",
+            &gitcomet_core::domain::CommitId("HEAD".into()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        run_git_output(repo, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "feature"
+    );
+}
+
+#[test]
 fn delete_branch_force_removes_unmerged_branch() {
     if !require_git_shell_for_status_integration_tests() {
         return;

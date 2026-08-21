@@ -2061,6 +2061,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             repo_id,
             name: "feature/new".to_string(),
             target: "HEAD".to_string(),
+            force: false,
         },
     );
     assert!(matches!(
@@ -2068,8 +2069,31 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
         [Effect::CreateBranchAndCheckout {
             repo_id: RepoId(1),
             target,
+            force: false,
             ..
         }] if target == "HEAD"
+    ));
+
+    // The force flag travels with the message: an overwrite request still
+    // reaches the effect layer, just marked.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature/new".to_string(),
+            target: "HEAD".to_string(),
+            force: true,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateBranchAndCheckout {
+            repo_id: RepoId(1),
+            force: true,
+            ..
+        }]
     ));
 
     let effects = reduce(

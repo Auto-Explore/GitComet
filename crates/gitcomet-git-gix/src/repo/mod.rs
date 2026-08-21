@@ -582,6 +582,10 @@ impl GitRepository for GixRepo {
         self.checkout_branch_impl(name)
     }
 
+    fn create_branch_force_and_checkout(&self, name: &str, target: &CommitId) -> Result<()> {
+        self.create_branch_force_and_checkout_impl(name, target)
+    }
+
     fn checkout_remote_branch(&self, remote: &str, branch: &str, local_branch: &str) -> Result<()> {
         self.checkout_remote_branch_impl(remote, branch, local_branch)
     }

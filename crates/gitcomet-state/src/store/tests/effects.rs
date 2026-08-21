@@ -3917,6 +3917,13 @@ impl GitRepository for RecordingCheckoutRepo {
             .push(format!("create {name} {}", target.as_ref()));
         Ok(())
     }
+    fn create_branch_force_and_checkout(&self, name: &str, target: &CommitId) -> Result<()> {
+        self.calls
+            .lock()
+            .expect("checkout recording mutex")
+            .push(format!("force-create-and-checkout {name} {}", target.as_ref()));
+        Ok(())
+    }
     fn delete_branch(&self, _name: &str) -> Result<()> {
         unsupported_repo_result()
     }
@@ -4189,6 +4196,7 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
             repo_id,
             name: "feature".to_string(),
             target: "HEAD".to_string(),
+            force: false,
         },
     );
 
@@ -4199,6 +4207,46 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
             "create feature HEAD".to_string(),
             "checkout feature".to_string()
         ]
+    );
+}
+
+#[test]
+fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() {
+    let repo_id = RepoId(704);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingCheckoutRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-create-branch-and-checkout-force-effect"),
+        },
+        calls: Arc::clone(&calls),
+    });
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature".to_string(),
+            target: "HEAD".to_string(),
+            force: true,
+        },
+    );
+
+    wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec!["force-create-and-checkout feature HEAD".to_string()]
     );
 }
 
@@ -5154,6 +5202,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 repo_id,
                 name: "topic2".to_string(),
                 target: "HEAD".to_string(),
+                force: false,
             },
             1,
         ),

@@ -5,6 +5,7 @@ mod add_repo_menu;
 mod add_to_gitignore_prompt;
 mod app_menu;
 mod author_filter;
+mod branch_exists_prompt;
 mod branch_picker;
 mod checkout_remote_branch_prompt;
 mod cherry_pick_commit_confirm;
@@ -796,10 +797,10 @@ fn popover_anchor_corner(kind: &PopoverKind) -> Anchor {
         }
         | PopoverKind::PushSetUpstreamPrompt { .. }
         | PopoverKind::ForcePushConfirm { .. }
-        | PopoverKind::CherryPickCommitConfirm { .. }
-        | PopoverKind::MergeCommitConfirm { .. }
-        | PopoverKind::MergeAbortConfirm { .. }
-        | PopoverKind::ForceDeleteBranchConfirm { .. }
+        | PopoverKind::CherryPickCommitConfirm { .. }            | PopoverKind::MergeCommitConfirm { .. }
+            | PopoverKind::MergeAbortConfirm { .. }
+            | PopoverKind::BranchExistsPrompt { .. }
+            | PopoverKind::ForceDeleteBranchConfirm { .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { .. }
         | PopoverKind::PullReconcilePrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
@@ -863,7 +864,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
-        | PopoverKind::MergeCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
+        | PopoverKind::MergeCommitConfirm { .. }
+        | PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_380_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {
@@ -2513,6 +2515,26 @@ impl PopoverHost {
         }
     }
 
+    /// Whether a local branch with this name is already known for the repo.
+    ///
+    /// `repo.branches` is loaded for every open repo well before the user can
+    /// reach the create-branch prompt, so a missing load means "unknown" and
+    /// the caller falls back to the plain create (git then reports the
+    /// collision itself) rather than blocking on a load.
+    fn local_branch_exists(&self, repo_id: RepoId, name: &str) -> bool {
+        self.state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| match &repo.branches {
+                Loadable::Ready(branches) => {
+                    Some(branches.iter().any(|branch| branch.name == name))
+                }
+                _ => None,
+            })
+            .unwrap_or(false)
+    }
+
     fn can_submit_create_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
         self.create_branch_prompt_repo_and_target().is_some()
             && self
@@ -2560,10 +2582,26 @@ impl PopoverHost {
         };
 
         if checkout {
+            // A branch with this name may already exist. Ask first instead of
+            // letting git fail with "already exists": the user may want to
+            // check out the existing branch, or overwrite it with this commit.
+            if self.local_branch_exists(repo_id, &name) {
+                self.open_popover_centered(
+                    PopoverKind::BranchExistsPrompt {
+                        repo_id,
+                        name,
+                        target,
+                    },
+                    window,
+                    cx,
+                );
+                return;
+            }
             self.store.dispatch(Msg::CreateBranchAndCheckout {
                 repo_id,
                 name,
                 target,
+                force: false,
             });
         } else {
             self.store.dispatch(Msg::CreateBranch {
@@ -4010,6 +4048,11 @@ impl PopoverHost {
                 remote,
                 branch,
             } => checkout_remote_branch_prompt::panel(self, repo_id, remote, branch, cx),
+            PopoverKind::BranchExistsPrompt {
+                repo_id,
+                name,
+                target,
+            } => branch_exists_prompt::panel(self, repo_id, name, target, cx),
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {

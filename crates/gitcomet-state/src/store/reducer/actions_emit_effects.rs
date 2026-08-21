@@ -82,11 +82,13 @@ pub(super) fn create_branch_and_checkout(
     repo_id: RepoId,
     name: String,
     target: String,
+    force: bool,
 ) -> Vec<Effect> {
     vec![Effect::CreateBranchAndCheckout {
         repo_id,
         name,
         target,
+        force,
     }]
 }
 
