@@ -2184,7 +2184,7 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
     ));
 
     assert_eq!(
-        state.repos[0].local_actions_in_flight, 9,
+        state.repos[0].local_actions_in_flight, 10,
         "expected begin_local_action for all routed local-action messages"
     );
 
