@@ -4505,6 +4505,10 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
         commit_id: CommitId,
     },
+    MergeCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
     MergeAbortConfirm {
         repo_id: RepoId,
     },

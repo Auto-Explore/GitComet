@@ -1,5 +1,7 @@
 use super::*;
 use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::VecDeque;
 
 type InteractiveRebaseSourceColor = (String, u8);
 type MultiCherryPickPlan = (
@@ -82,6 +84,51 @@ fn multi_cherry_pick_plan(
     }
 
     Some((entries, source_colors))
+}
+
+/// Returns `true` when `commit_id` is already reachable from HEAD — i.e. it is
+/// part of the current branch's history (including HEAD itself). The check walks
+/// the parents of the loaded log page from HEAD. The right-clicked commit is by
+/// construction present in that page, so a path through the page reaching it
+/// proves ancestry; a truncated page can only produce a false negative, which
+/// git corrects at merge time with "Already up to date".
+fn commit_is_ancestor_of_head(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> bool {
+    let Some(repo) = this.state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return false;
+    };
+    repo_commit_is_ancestor_of_head(repo, commit_id)
+}
+
+fn repo_commit_is_ancestor_of_head(repo: &RepoState, commit_id: &CommitId) -> bool {
+    let Some(head) = repo.head_commit_id() else {
+        return false;
+    };
+    if head == *commit_id {
+        return true;
+    }
+    let Loadable::Ready(page) = &repo.log else {
+        return false;
+    };
+    let mut by_id: FxHashMap<CommitId, &Commit> = FxHashMap::default();
+    for commit in &page.commits {
+        by_id.insert(commit.id.clone(), commit);
+    }
+    let mut seen: FxHashSet<CommitId> = FxHashSet::default();
+    let mut queue: VecDeque<CommitId> = VecDeque::from([head]);
+    while let Some(current) = queue.pop_front() {
+        if current == *commit_id {
+            return true;
+        }
+        if !seen.insert(current.clone()) {
+            continue;
+        }
+        if let Some(commit) = by_id.get(&current) {
+            for parent in &commit.parent_ids {
+                queue.push_back(parent.clone());
+            }
+        }
+    }
+    false
 }
 
 pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -> ContextMenuModel {
@@ -420,6 +467,24 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
         });
     }
 
+    // "Merge into current" merges the right-clicked commit into the checked-out
+    // branch through the shared MergeRef pipeline. It is a no-op when the commit
+    // is already part of HEAD's history (including HEAD itself), so it is
+    // disabled rather than letting git reject it as "Already up to date".
+    let merge_into_current_disabled = commit_is_ancestor_of_head(this, repo_id, commit_id);
+    items.push(ContextMenuItem::Entry {
+        label: format!("Merge {short} into {current_branch}").into(),
+        icon: Some("icons/swap.svg".into()),
+        shortcut: Some("M".into()),
+        disabled: merge_into_current_disabled,
+        action: Box::new(ContextMenuAction::OpenPopover {
+            kind: PopoverKind::MergeCommitConfirm {
+                repo_id,
+                commit_id: commit_id.clone(),
+            },
+        }),
+    });
+
     items.push(ContextMenuItem::Separator);
     for (label, icon, mode) in [
         (
@@ -454,4 +519,113 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     }
 
     ContextMenuModel::new(items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use gitcomet_core::domain::{CommitParentIds, LogPage, RepoSpec};
+    use gitcomet_state::model::{Loadable, RepoId, RepoState};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::SystemTime;
+
+    fn repo_state() -> RepoState {
+        RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        )
+    }
+
+    fn commit(id: &str, parents: &[&str]) -> Commit {
+        Commit {
+            id: CommitId(id.into()),
+            parent_ids: parents
+                .iter()
+                .map(|p| CommitId((*p).into()))
+                .collect::<CommitParentIds>(),
+            summary: "summary".into(),
+            author: "author".into(),
+            time: SystemTime::UNIX_EPOCH,
+        }
+    }
+
+    fn with_log(mut repo: RepoState, head: &str, commits: Vec<Commit>) -> RepoState {
+        repo.detached_head_commit = Some(CommitId(head.into()));
+        repo.log = Loadable::Ready(Arc::new(LogPage {
+            commits,
+            next_cursor: None,
+        }));
+        repo
+    }
+
+    #[test]
+    fn head_commit_is_its_own_ancestor() {
+        let repo = with_log(repo_state(), "a", vec![commit("a", &[])]);
+
+        assert!(repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("a".into())
+        ));
+    }
+
+    #[test]
+    fn commit_reachable_through_parent_chain_is_ancestor() {
+        // c -> b -> a (HEAD is c)
+        let repo = with_log(
+            repo_state(),
+            "c",
+            vec![commit("c", &["b"]), commit("b", &["a"]), commit("a", &[])],
+        );
+
+        assert!(repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("a".into())
+        ));
+    }
+
+    #[test]
+    fn commit_on_unrelated_branch_is_not_ancestor() {
+        // HEAD is b, which does not descend from the side-branch commit x
+        let repo = with_log(
+            repo_state(),
+            "b",
+            vec![commit("b", &["a"]), commit("a", &[])],
+        );
+
+        assert!(!repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("x".into())
+        ));
+    }
+
+    #[test]
+    fn no_head_commit_is_not_ancestor() {
+        let repo = repo_state();
+
+        assert!(!repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("a".into())
+        ));
+    }
+
+    #[test]
+    fn merge_entry_disabled_when_commit_is_ancestor_of_head() {
+        let repo = with_log(
+            repo_state(),
+            "c",
+            vec![commit("c", &["b"]), commit("b", &[])],
+        );
+
+        assert!(repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("b".into())
+        ));
+        assert!(!repo_commit_is_ancestor_of_head(
+            &repo,
+            &CommitId("missing".into())
+        ));
+    }
 }
