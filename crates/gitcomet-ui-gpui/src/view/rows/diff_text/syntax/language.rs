@@ -8,6 +8,7 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "markdown-inline" | "markdown_inline" => DiffSyntaxLanguage::MarkdownInline,
         "html" | "htm" => DiffSyntaxLanguage::Html,
         "vue" => DiffSyntaxLanguage::Vue,
+        "svelte" => DiffSyntaxLanguage::Svelte,
         // The first six are the grammar's own declared file-types; `dj` is the
         // Django addition. The markup-bodied reading is the right default for a bare
         // identifier; `diff_syntax_language_for_path` splits off the rest.
@@ -23,6 +24,25 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "mk" | "make" | "makefile" | "gnumakefile" => DiffSyntaxLanguage::Makefile,
         "kt" | "kts" | "kotlin" => DiffSyntaxLanguage::Kotlin,
         "zig" => DiffSyntaxLanguage::Zig,
+        // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
+        // to `kts` before this arm is ever reached. `Jenkinsfile` has no extension
+        // and matches on the file-name pass.
+        "groovy" | "gvy" | "gy" | "gsh" | "gradle" | "jenkinsfile" => DiffSyntaxLanguage::Groovy,
+        "clj" | "cljs" | "cljc" | "cljd" | "edn" | "clojure" => DiffSyntaxLanguage::Clojure,
+        "ex" | "exs" | "elixir" => DiffSyntaxLanguage::Elixir,
+        "erl" | "hrl" | "escript" | "erlang" | "rebar.config" | "rebar.lock" => {
+            DiffSyntaxLanguage::Erlang
+        }
+        // Not `.lhs`: literate Haskell is bird tracks or LaTeX with Haskell inside,
+        // and the grammar parses neither.
+        "hs" | "hs-boot" | "haskell" => DiffSyntaxLanguage::Haskell,
+        "jl" | "julia" => DiffSyntaxLanguage::Julia,
+        "ml" | "ocaml" => DiffSyntaxLanguage::OCaml,
+        "mli" => DiffSyntaxLanguage::OCamlInterface,
+        "sol" | "solidity" => DiffSyntaxLanguage::Solidity,
+        // `.s` is lowercased from `.S` (preprocessed assembly) by the caller, which
+        // is what we want -- both are assembly. `.asm` covers the MASM/NASM side.
+        "asm" | "s" | "nasm" | "assembly" => DiffSyntaxLanguage::Assembly,
         "rs" | "rust" => DiffSyntaxLanguage::Rust,
         "py" | "python" | "pyi" | "mpy" => DiffSyntaxLanguage::Python,
         "js" | "mjs" | "cjs" | "javascript" => DiffSyntaxLanguage::JavaScript,
@@ -254,6 +274,10 @@ pub(super) fn tree_sitter_grammar(
             tree_sitter_vue::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(VUE_HIGHLIGHTS_QUERY, VUE_INJECTIONS_QUERY),
         )),
+        DiffSyntaxLanguage::Svelte => Some((
+            tree_sitter_svelte_ng::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(SVELTE_HIGHLIGHTS_QUERY, SVELTE_INJECTIONS_QUERY),
+        )),
         DiffSyntaxLanguage::Css => Some((
             tree_sitter_css::LANGUAGE.into(),
             TreesitterQueryAsset::highlights(CSS_HIGHLIGHTS_QUERY),
@@ -290,6 +314,55 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_zig::HIGHLIGHTS_QUERY,
                 tree_sitter_zig::INJECTIONS_QUERY,
             ),
+        )),
+        DiffSyntaxLanguage::Groovy => Some((
+            dekobon_tree_sitter_groovy::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Clojure => Some((
+            tree_sitter_clojure_orchard::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CLOJURE_HIGHLIGHTS_QUERY),
+        )),
+        // Highlights only. `tree_sitter_elixir::INJECTIONS_QUERY` sets
+        // `injection.combined` on every one of its seven sigil patterns, and a
+        // combined layer is parsed as one document via set_included_ranges -- see
+        // `combined_injection_declarations_are_exactly_the_known_set`. Wiring it up
+        // is a deliberate decision about clipping and cache behaviour, not a
+        // drop-in, and `~H` sigils need a HEEx grammar we do not have anyway.
+        DiffSyntaxLanguage::Elixir => Some((
+            tree_sitter_elixir::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_elixir::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Erlang => Some((
+            tree_sitter_erlang::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_erlang::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Haskell => Some((
+            tree_sitter_haskell::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(
+                tree_sitter_haskell::HIGHLIGHTS_QUERY,
+                tree_sitter_haskell::INJECTIONS_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Julia => Some((
+            tree_sitter_julia::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(JULIA_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::OCaml => Some((
+            tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            TreesitterQueryAsset::highlights(OCAML_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::OCamlInterface => Some((
+            tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into(),
+            TreesitterQueryAsset::highlights(OCAML_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Solidity => Some((
+            tree_sitter_solidity::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(SOLIDITY_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Assembly => Some((
+            tree_sitter_asm::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_asm::HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Rust => Some((
             tree_sitter_rust::LANGUAGE.into(),
@@ -580,6 +653,7 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::MarkdownInline => highlight_spec_entry!(MarkdownInline),
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
+        DiffSyntaxLanguage::Svelte => highlight_spec_entry!(Svelte),
         DiffSyntaxLanguage::Jinja => highlight_spec_entry!(Jinja),
         DiffSyntaxLanguage::JinjaText => highlight_spec_entry!(JinjaText),
         DiffSyntaxLanguage::Css => highlight_spec_entry!(Css),
@@ -589,6 +663,16 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Makefile => highlight_spec_entry!(Makefile),
         DiffSyntaxLanguage::Kotlin => highlight_spec_entry!(Kotlin),
         DiffSyntaxLanguage::Zig => highlight_spec_entry!(Zig),
+        DiffSyntaxLanguage::Groovy => highlight_spec_entry!(Groovy),
+        DiffSyntaxLanguage::Clojure => highlight_spec_entry!(Clojure),
+        DiffSyntaxLanguage::Elixir => highlight_spec_entry!(Elixir),
+        DiffSyntaxLanguage::Erlang => highlight_spec_entry!(Erlang),
+        DiffSyntaxLanguage::Haskell => highlight_spec_entry!(Haskell),
+        DiffSyntaxLanguage::Julia => highlight_spec_entry!(Julia),
+        DiffSyntaxLanguage::OCaml => highlight_spec_entry!(OCaml),
+        DiffSyntaxLanguage::OCamlInterface => highlight_spec_entry!(OCamlInterface),
+        DiffSyntaxLanguage::Solidity => highlight_spec_entry!(Solidity),
+        DiffSyntaxLanguage::Assembly => highlight_spec_entry!(Assembly),
         DiffSyntaxLanguage::Rust => highlight_spec_entry!(Rust),
         DiffSyntaxLanguage::Python => highlight_spec_entry!(Python),
         DiffSyntaxLanguage::Go => highlight_spec_entry!(Go),
