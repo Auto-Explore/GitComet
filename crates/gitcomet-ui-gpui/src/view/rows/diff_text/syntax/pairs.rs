@@ -50,7 +50,20 @@ impl SyntaxPair {
 /// in most grammars and only sometimes delimiters, so pairing them lights up
 /// arithmetic. Tag angle brackets are covered by [`TAG_PAIRS`] instead, which
 /// keys on the element node and so cannot make that mistake.
-const BRACKET_PAIRS: [(&str, &str); 3] = [("(", ")"), ("[", "]"), ("{", "}")];
+const BRACKET_PAIRS: [(&str, &str); 6] = [
+    ("(", ")"),
+    ("[", "]"),
+    ("{", "}"),
+    // Some grammars wrap their delimiters in named nodes instead of exposing the
+    // punctuation as anonymous siblings, which puts the `{` a level too deep for
+    // the sibling scan to see. HCL is the in-tree example: a `block`'s children
+    // are `block_start`, `body`, `block_end`. Naming the wrappers here matches
+    // them at the level they actually live at, and since each wrapper spans just
+    // its delimiter the highlight still covers only the brace.
+    ("block_start", "block_end"),
+    ("object_start", "object_end"),
+    ("tuple_start", "tuple_end"),
+];
 
 /// Element tag pairs, by node kind.
 ///
@@ -84,7 +97,11 @@ const TAG_PAIRS: [(&str, &str); 3] = [
 ///
 /// Grammars that instead flank the content with identical anonymous quote
 /// tokens are handled by [`QUOTE_CHARS`].
-const QUOTE_MARKER_PAIRS: [(&str, &str); 1] = [("string_start", "string_end")];
+const QUOTE_MARKER_PAIRS: [(&str, &str); 2] = [
+    ("string_start", "string_end"),
+    // HCL wraps its quotes the same way it wraps its braces.
+    ("quoted_template_start", "quoted_template_end"),
+];
 
 /// Quote characters that appear as identical anonymous siblings flanking a
 /// string's content, as in JSON's `(string "\"" (string_content) "\"")` and
@@ -120,7 +137,8 @@ fn pair_role(node: &tree_sitter::Node<'_>) -> Option<PairRole> {
     let kind = node.kind();
     if node.is_named() {
         return table_role(kind, SyntaxPairKind::Tag)
-            .or_else(|| table_role(kind, SyntaxPairKind::Quote));
+            .or_else(|| table_role(kind, SyntaxPairKind::Quote))
+            .or_else(|| table_role(kind, SyntaxPairKind::Bracket));
     }
     if QUOTE_CHARS.contains(&kind) {
         return Some(PairRole::Ambiguous(SyntaxPairKind::Quote));

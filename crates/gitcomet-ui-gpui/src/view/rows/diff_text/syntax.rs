@@ -39,6 +39,7 @@ const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
 const GOMOD_HIGHLIGHTS_QUERY: &str = include_str!("queries/gomod_highlights.scm");
 const GOWORK_HIGHLIGHTS_QUERY: &str = include_str!("queries/gowork_highlights.scm");
+const HCL_HIGHLIGHTS_QUERY: &str = include_str!("queries/hcl_highlights.scm");
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
 const JINJA_HIGHLIGHTS_QUERY: &str = include_str!("queries/jinja_highlights.scm");
@@ -851,6 +852,206 @@ mod tests {
                 .map(|r| &text[r.clone()])
                 .collect::<Vec<_>>()
         );
+    }
+
+    /// Terraform gets real syntax, and with it the tree that delimiter matching
+    /// and name highlighting need.
+    ///
+    /// `tree-sitter-hcl` ships no highlights query, so `.tf` was heuristic-only
+    /// and had no document tree at all: no bracket pairs, no occurrences.
+    /// `queries/hcl_highlights.scm` is authored in-tree for exactly that.
+    #[test]
+    fn terraform_files_get_tree_sitter_tokens() {
+        let text = concat!(
+            "# managed by terraform\n",
+            "resource \"aws_instance\" \"web\" {\n",
+            "  ami           = var.ami_id\n",
+            "  count         = 2\n",
+            "  enabled       = true\n",
+            "  name          = \"web-${var.env}\"\n",
+            "  user_data     = file(\"init.sh\")\n",
+            "}\n",
+        );
+        assert_eq!(
+            diff_syntax_language_for_path(std::path::Path::new("main.tf")),
+            Some(DiffSyntaxLanguage::Hcl)
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+        let kinds = |ix: usize| -> Vec<(String, SyntaxTokenKind)> {
+            let line = text.lines().nth(ix).expect("line");
+            syntax_tokens_for_prepared_document_line(document, ix)
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .map(|t| (line[t.range.clone()].to_string(), t.kind))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        assert_eq!(
+            kinds(0),
+            vec![("# managed by terraform".into(), SyntaxTokenKind::Comment)]
+        );
+        let header = kinds(1);
+        assert!(
+            header.contains(&("resource".into(), SyntaxTokenKind::Keyword))
+                && header.contains(&("\"aws_instance\"".into(), SyntaxTokenKind::String)),
+            "block header should name its type and labels, got {header:?}"
+        );
+        assert!(
+            kinds(3).contains(&("2".into(), SyntaxTokenKind::Number)),
+            "numbers should be numbers, got {:?}",
+            kinds(3)
+        );
+        assert!(
+            kinds(4).contains(&("true".into(), SyntaxTokenKind::Boolean)),
+            "booleans should be booleans, got {:?}",
+            kinds(4)
+        );
+        // An interpolated string keeps its literal halves coloured around `${}`.
+        let interpolated = kinds(5);
+        assert!(
+            interpolated.contains(&("\"web-".into(), SyntaxTokenKind::String))
+                && interpolated.contains(&("${".into(), SyntaxTokenKind::PunctuationSpecial))
+                && interpolated.contains(&("var".into(), SyntaxTokenKind::Variable)),
+            "interpolation should split string from code, got {interpolated:?}"
+        );
+        assert!(
+            kinds(6).contains(&("file".into(), SyntaxTokenKind::Function)),
+            "calls should be functions, got {:?}",
+            kinds(6)
+        );
+    }
+
+    /// And with a tree in hand, both click features work in Terraform.
+    #[test]
+    fn terraform_supports_pairs_and_occurrences() {
+        let text = concat!(
+            "resource \"aws_instance\" \"web\" {\n",
+            "  ami   = var.ami_id\n",
+            "  other = var.ami_id\n",
+            "}\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+
+        // The block braces pair across the whole resource.
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 1, 4)
+            .expect("the resource block braces should pair");
+        assert_eq!(hit.kind, SyntaxPairKind::Bracket);
+        assert_eq!(hit.open[0].line_ix, 0);
+        assert_eq!(hit.close[0].line_ix, 3);
+
+        // And `ami_id` is a name with two uses.
+        let column = text
+            .lines()
+            .nth(1)
+            .expect("line")
+            .find("ami_id")
+            .expect("name");
+        let spans = prepared_document_occurrences_at_display_offset(document, 1, column);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    /// A prose-only `/** ... */` must still read as a comment.
+    ///
+    /// The jsdoc injection subtracts the host's `(comment) @comment` from the
+    /// document before painting its own captures, so a doc comment with no
+    /// `@tag` in it used to come out with no colour at all -- plain foreground
+    /// text in the middle of a file. The base capture in `jsdoc_highlights.scm`
+    /// is what puts the comment colour back.
+    #[test]
+    fn jsdoc_comments_keep_their_comment_colour() {
+        let text = concat!(
+            "/**\n",
+            " * Where to go after signing in.\n",
+            " *\n",
+            " * Same-origin paths only, so no open redirect.\n",
+            " */\n",
+            "export function f() {}\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Tsx, text);
+        for (ix, line) in text.lines().enumerate().take(5) {
+            let tokens = syntax_tokens_for_prepared_document_line(document, ix)
+                .map(|chunk| chunk.to_vec())
+                .unwrap_or_default();
+            assert!(
+                !tokens.is_empty(),
+                "line {ix} ({line:?}) of a doc comment has no tokens at all"
+            );
+            assert!(
+                tokens
+                    .iter()
+                    .all(|token| token.kind == SyntaxTokenKind::Comment),
+                "line {ix} ({line:?}) should be all comment, got {tokens:?}"
+            );
+        }
+    }
+
+    /// ...and a tagged one still gets its tag, type and name picked out of it.
+    #[test]
+    fn jsdoc_tags_still_win_over_the_comment_base() {
+        let text = "/**\n * @param {string} search - the query.\n */\nlet a = 1;\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Tsx, text);
+        let line = text.lines().nth(1).expect("tag line");
+        let tokens = syntax_tokens_for_prepared_document_line(document, 1)
+            .map(|chunk| chunk.to_vec())
+            .unwrap_or_default();
+        let kinds: Vec<(&str, SyntaxTokenKind)> = tokens
+            .iter()
+            .map(|token| (&line[token.range.clone()], token.kind))
+            .collect();
+        assert!(
+            kinds.contains(&("@param", SyntaxTokenKind::Keyword)),
+            "expected the tag to stay a keyword, got {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&("string", SyntaxTokenKind::Type)),
+            "expected the type to stay a type, got {kinds:?}"
+        );
+        assert!(
+            kinds
+                .iter()
+                .any(|(text, kind)| *kind == SyntaxTokenKind::Comment && text.contains("query")),
+            "the prose around the tag should still be comment, got {kinds:?}"
+        );
+    }
+
+    /// A JSX expression comment spans several rows, and every one of them is
+    /// comment -- backticks and quotes inside it are prose, not code.
+    #[test]
+    fn jsx_expression_comments_stay_comments_on_every_line() {
+        let text = concat!(
+            "const a = (\n",
+            "  <div>\n",
+            "    {/* `exact` matters: `/app/device` is a prefix of\n",
+            "    `/app/devices`, so a user clicking \"Devices\" would land\n",
+            "    on the wrong page. */}\n",
+            "  </div>\n",
+            ");\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Tsx, text);
+        for ix in 2..=4 {
+            let line = text.lines().nth(ix).expect("comment line");
+            let tokens = syntax_tokens_for_prepared_document_line(document, ix)
+                .map(|chunk| chunk.to_vec())
+                .unwrap_or_default();
+            let non_comment: Vec<_> = tokens
+                .iter()
+                .filter(|token| token.kind != SyntaxTokenKind::Comment)
+                .map(|token| (&line[token.range.clone()], token.kind))
+                .collect();
+            // Only the braces holding the expression may be anything else.
+            assert!(
+                non_comment
+                    .iter()
+                    .all(|(text, _)| *text == "{" || *text == "}"),
+                "line {ix} ({line:?}) coloured non-comment spans: {non_comment:?}"
+            );
+        }
     }
 
     #[test]

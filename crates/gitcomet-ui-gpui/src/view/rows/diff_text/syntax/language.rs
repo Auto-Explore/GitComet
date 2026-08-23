@@ -258,6 +258,10 @@ pub(super) fn tree_sitter_grammar(
             tree_sitter_md::INLINE_LANGUAGE.into(),
             TreesitterQueryAsset::highlights(MARKDOWN_INLINE_HIGHLIGHTS_QUERY),
         )),
+        DiffSyntaxLanguage::Hcl => Some((
+            tree_sitter_hcl::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(HCL_HIGHLIGHTS_QUERY),
+        )),
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
@@ -651,6 +655,7 @@ pub(super) fn tree_sitter_highlight_spec(
     match language {
         DiffSyntaxLanguage::Markdown => highlight_spec_entry!(Markdown),
         DiffSyntaxLanguage::MarkdownInline => highlight_spec_entry!(MarkdownInline),
+        DiffSyntaxLanguage::Hcl => highlight_spec_entry!(Hcl),
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
         DiffSyntaxLanguage::Svelte => highlight_spec_entry!(Svelte),

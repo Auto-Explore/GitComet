@@ -88,7 +88,7 @@
           "selection_background": "#d6e3f8ff",
           "search_match_background": "#f8edcfff",
           "search_match_foreground": "#76510fff",
-          "bracket_match_background": "#e7effcff",
+          "bracket_match_background": "#cbe0fcff",
           "occurrence_highlight_background": "#ece4f7ff",
           "indent_guide": "#d3d9e2ff"
         },
@@ -378,7 +378,10 @@
             "alpha": 0.22
           },
           "search_match_foreground": "#f2a53aff",
-          "bracket_match_background": "#ffffff26",
+          "bracket_match_background": {
+            "hex": "#ffd166ff",
+            "alpha": 0.32
+          },
           "occurrence_highlight_background": {
             "hex": "#a78bfaff",
             "alpha": 0.26
