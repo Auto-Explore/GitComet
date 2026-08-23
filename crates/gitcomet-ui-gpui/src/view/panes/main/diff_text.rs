@@ -868,52 +868,179 @@ impl MainPaneView {
         self.theme.colors.editor.bracket_match_background
     }
 
-    /// The matching delimiter pair for a click, projected onto rows.
+    /// Whether the row's painted text is a truncated stand-in for its line.
     ///
-    /// Only the file preview is wired so far: its rows map one-to-one onto
-    /// document lines in both directions, so no row model is involved. The diff
-    /// views need `file_diff_{old,new}_line_to_row` and the collapsed-hunk
-    /// projection to get an answer back onto a row, which is a separate step.
-    fn diff_text_pair_match_for_pos(&self, pos: &DiffTextPos) -> Option<DiffTextPairMatch> {
-        // Same order the row-text dispatch uses: the markdown rendered preview
-        // wins over the file preview and supplies its own rows, so a raw-file
-        // line index means nothing there even though `is_file_preview_active`
-        // is still true underneath it.
+    /// `file_diff_display_text` replaces lines past a size gate with a prefix
+    /// plus an ellipsis, so display offsets into them do not convert back to
+    /// real bytes.
+    fn diff_text_row_is_display_truncated(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> bool {
+        use crate::view::file_diff_display::should_truncate_file_diff_display as truncated;
+        if self.is_file_preview_active() {
+            return self
+                .worktree_preview_line_raw_text(source_visible_ix)
+                .is_some_and(|raw| truncated(&raw));
+        }
+        let Some(row_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
+            return false;
+        };
+        match self.diff_view {
+            DiffViewMode::Inline => self
+                .file_diff_inline_render_data(row_ix)
+                .is_some_and(|row| truncated(&row.text)),
+            DiffViewMode::Split => self
+                .file_diff_split_render_data(row_ix)
+                .and_then(|row| match region {
+                    DiffTextRegion::SplitLeft => row.old,
+                    DiffTextRegion::SplitRight => row.new,
+                    DiffTextRegion::Inline => None,
+                })
+                .is_some_and(|text| truncated(&text)),
+        }
+    }
+
+    /// Which real document a row's text came from.
+    ///
+    /// A diff interleaves two file versions, so a pair found in one of them can
+    /// only ever be projected back through that same side's line map. This is
+    /// also why a pair can never span the two halves of a split view: the two
+    /// sides are different documents and the matcher only ever walks one tree.
+    fn diff_text_pair_document_for_row(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> Option<(rows::PreparedDiffSyntaxDocument, usize, DiffTextPairSide)> {
         if self.is_markdown_preview_active() {
             return None;
         }
-        if !self.is_file_preview_active() || pos.region != DiffTextRegion::Inline {
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return None;
+            }
+            let document = self.worktree_preview_prepared_syntax_document()?;
+            return Some((document, source_visible_ix, DiffTextPairSide::Preview));
+        }
+
+        if !self.is_file_diff_view_active() {
             return None;
         }
+        let row_ix = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix)?;
+        // `line_to_row` maps are indexed by 0-based line; the row models carry
+        // 1-based diff line numbers.
+        let zero_based = |line: Option<u32>| usize::try_from(line?).ok()?.checked_sub(1);
+
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                if region != DiffTextRegion::Inline {
+                    return None;
+                }
+                use gitcomet_core::domain::DiffLineKind;
+                let row = self.file_diff_inline_render_data(row_ix)?;
+                let (side, line) = match row.kind {
+                    DiffLineKind::Remove => (DiffTextPairSide::Old, row.old_line),
+                    DiffLineKind::Add | DiffLineKind::Context => {
+                        (DiffTextPairSide::New, row.new_line)
+                    }
+                    // Headers and hunk markers are not document text.
+                    DiffLineKind::Header | DiffLineKind::Hunk => return None,
+                };
+                let document = self.file_diff_split_prepared_syntax_document(match side {
+                    DiffTextPairSide::Old => DiffTextRegion::SplitLeft,
+                    _ => DiffTextRegion::SplitRight,
+                })?;
+                Some((document, zero_based(line)?, side))
+            }
+            DiffViewMode::Split => {
+                let row = self.file_diff_split_render_data(row_ix)?;
+                let (side, line) = match region {
+                    DiffTextRegion::SplitLeft => (DiffTextPairSide::Old, row.old_line),
+                    DiffTextRegion::SplitRight => (DiffTextPairSide::New, row.new_line),
+                    DiffTextRegion::Inline => return None,
+                };
+                let document = self.file_diff_split_prepared_syntax_document(region)?;
+                Some((document, zero_based(line)?, side))
+            }
+        }
+    }
+
+    /// The inverse: a document line back onto the row rendering it, if any.
+    ///
+    /// `None` means that end is simply not on screen as a row -- outside the
+    /// diff, or folded into a collapsed hunk. Its partner is still painted.
+    fn diff_text_pair_row_for_document_line(
+        &self,
+        side: DiffTextPairSide,
+        line_ix: usize,
+    ) -> Option<(usize, DiffTextRegion)> {
+        if side == DiffTextPairSide::Preview {
+            return Some((line_ix, DiffTextRegion::Inline));
+        }
+        let inline = self.diff_view == DiffViewMode::Inline;
+        let map: &[Option<usize>] = match (side, inline) {
+            (DiffTextPairSide::Old, true) => self.file_diff_old_line_to_inline_row.as_ref(),
+            (DiffTextPairSide::Old, false) => self.file_diff_old_line_to_row.as_ref(),
+            (_, true) => self.file_diff_new_line_to_inline_row.as_ref(),
+            (_, false) => self.file_diff_new_line_to_row.as_ref(),
+        };
+        let row_ix = (*map.get(line_ix)?)?;
+        let source_visible_ix = self.diff_text_pair_source_visible_ix_for_row(row_ix)?;
+        let region = match (inline, side) {
+            (true, _) => DiffTextRegion::Inline,
+            (false, DiffTextPairSide::Old) => DiffTextRegion::SplitLeft,
+            (false, _) => DiffTextRegion::SplitRight,
+        };
+        Some((source_visible_ix, region))
+    }
+
+    /// The inverse of [`Self::diff_source_mapped_ix_for_visible_ix`].
+    ///
+    /// Only the collapsed arm is new: that projection keeps no reverse index, so
+    /// it scans. Everything else delegates to the existing inverse rather than
+    /// growing a second one, and the scan runs twice per click, never per frame.
+    fn diff_text_pair_source_visible_ix_for_row(&self, row_ix: usize) -> Option<usize> {
+        if self.is_collapsed_diff_projection_active() {
+            return self
+                .collapsed_diff_visible_rows
+                .iter()
+                .position(|row| row.row_ix() == Some(row_ix));
+        }
+        self.diff_source_visible_ix_for_mapped_ix(row_ix)
+    }
+
+    /// The matching delimiter pair for a click, projected onto rows.
+    fn diff_text_pair_match_for_pos(&self, pos: &DiffTextPos) -> Option<DiffTextPairMatch> {
         // A row the display truncated is not the tab-expansion of its line, so
         // offsets into it do not convert. Better no answer than a confident one
         // pointing at the wrong character.
-        if self
-            .worktree_preview_line_raw_text(pos.source_visible_ix)
-            .is_some_and(|raw| {
-                crate::view::file_diff_display::should_truncate_file_diff_display(&raw)
-            })
-        {
+        if self.diff_text_row_is_display_truncated(pos.source_visible_ix, pos.region) {
             return None;
         }
-        let document = self.worktree_preview_prepared_syntax_document()?;
-        let hit = rows::prepared_diff_syntax_pair_at_display_offset(
-            document,
-            pos.source_visible_ix,
-            pos.offset,
-        )?;
-        Some(DiffTextPairMatch {
-            kind: hit.kind,
-            spans: hit
-                .open
-                .into_iter()
-                .chain(hit.close)
-                .map(|end| DiffTextPairSpan {
-                    source_visible_ix: end.line_ix,
-                    region: DiffTextRegion::Inline,
+        let (document, line_ix, side) =
+            self.diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)?;
+        let hit = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, pos.offset)?;
+
+        let spans: Vec<DiffTextPairSpan> = hit
+            .open
+            .into_iter()
+            .chain(hit.close)
+            .filter_map(|end| {
+                let (source_visible_ix, region) =
+                    self.diff_text_pair_row_for_document_line(side, end.line_ix)?;
+                Some(DiffTextPairSpan {
+                    source_visible_ix,
+                    region,
                     range: end.display_range,
                 })
-                .collect(),
+            })
+            .collect();
+        // Both ends off-screen is not a pair worth remembering.
+        (!spans.is_empty()).then_some(DiffTextPairMatch {
+            kind: hit.kind,
+            spans,
         })
     }
 

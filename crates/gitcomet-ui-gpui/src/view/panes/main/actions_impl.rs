@@ -204,7 +204,7 @@ impl MainPaneView {
         }
     }
 
-    fn diff_source_visible_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
+    pub(super) fn diff_source_visible_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
         if let Some(map) = self.diff_visible_inline_map.as_ref() {
             return map.visible_ix_for_src_ix(mapped_ix);
         }

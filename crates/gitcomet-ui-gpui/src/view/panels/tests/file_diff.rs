@@ -4282,6 +4282,106 @@ fn diff_content_mode_inline_submodule_persist_path_does_not_panic(cx: &mut gpui:
     );
 }
 
+/// Clicking a delimiter in the split file diff lights it and its partner.
+///
+/// The projection has to route through the *side's* real document: a diff
+/// interleaves two file versions, so a raw row index says nothing on its own.
+#[gpui::test]
+fn split_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(931);
+    let path = PathBuf::from("config.json");
+    let old_text = "{\n  \"items\": [1, 2],\n  \"name\": \"old\"\n}\n".to_string();
+    let new_text = "{\n  \"items\": [1, 2],\n  \"name\": \"new\"\n}\n".to_string();
+    let unified = concat!(
+        "@@ -1,4 +1,4 @@\n",
+        " {\n",
+        "   \"items\": [1, 2],\n",
+        "-  \"name\": \"old\"\n",
+        "+  \"name\": \"new\"\n",
+        " }\n",
+    )
+    .to_string();
+
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "split_pair_json",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "split file diff with prepared syntax on the new side",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.diff_view == DiffViewMode::Split
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "file_diff_active={} view={:?} doc={}",
+                pane.is_file_diff_view_active(),
+                pane.diff_view,
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some(),
+            )
+        },
+    );
+
+    // Row 1 on the right side is `  "items": [1, 2],` -- brackets at 11 and 16.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        1,
+        DiffTextRegion::SplitRight,
+        11..12,
+        "split diff pair bracket hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("clicking `[` in the split diff should light its pair");
+        assert_eq!(pair.kind, rows::SyntaxPairKind::Bracket);
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| (span.source_visible_ix, span.region, span.range.clone()))
+                .collect::<Vec<_>>(),
+            vec![
+                (1, DiffTextRegion::SplitRight, 11..12),
+                (1, DiffTextRegion::SplitRight, 16..17),
+            ],
+            "both ends land on the right-hand side, never across the split"
+        );
+        assert_eq!(
+            pane.diff_text_local_pair_ranges(1, DiffTextRegion::SplitRight)
+                .into_vec(),
+            vec![11..12, 16..17]
+        );
+        assert!(
+            pane.diff_text_local_pair_ranges(1, DiffTextRegion::SplitLeft)
+                .is_empty(),
+            "the left side renders the old document and must not be washed"
+        );
+    });
+}
+
 #[gpui::test]
 fn collapsed_diff_hunk_header_click_does_not_create_row_selection(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));

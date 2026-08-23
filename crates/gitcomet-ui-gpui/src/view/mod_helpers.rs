@@ -591,6 +591,19 @@ impl DiffTextPos {
     }
 }
 
+/// Which of the two real documents behind a diff a row's text came from.
+///
+/// A pair is always found in one document, so this is what says which line map
+/// projects it back onto rows -- and why a pair can never span the two halves of
+/// a split view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DiffTextPairSide {
+    Old,
+    New,
+    /// The file preview, where rows are document lines one-to-one.
+    Preview,
+}
+
 /// One end of a matched delimiter pair, projected onto a rendered row.
 ///
 /// `range` is in the same tab-expanded display space as [`DiffTextPos::offset`],
