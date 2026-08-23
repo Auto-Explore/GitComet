@@ -39,7 +39,12 @@ const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
 const GOMOD_HIGHLIGHTS_QUERY: &str = include_str!("queries/gomod_highlights.scm");
 const GOWORK_HIGHLIGHTS_QUERY: &str = include_str!("queries/gowork_highlights.scm");
+const GROOVY_SUPPLEMENT_QUERY: &str = include_str!("queries/groovy_supplement.scm");
 const HCL_HIGHLIGHTS_QUERY: &str = include_str!("queries/hcl_highlights.scm");
+const JAVA_SUPPLEMENT_QUERY: &str = include_str!("queries/java_supplement.scm");
+const OBJC_SUPPLEMENT_QUERY: &str = include_str!("queries/objc_supplement.scm");
+const PHP_SUPPLEMENT_QUERY: &str = include_str!("queries/php_supplement.scm");
+const POWERSHELL_SUPPLEMENT_QUERY: &str = include_str!("queries/powershell_supplement.scm");
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
 const JINJA_HIGHLIGHTS_QUERY: &str = include_str!("queries/jinja_highlights.scm");
@@ -851,6 +856,114 @@ mod tests {
                 .iter()
                 .map(|r| &text[r.clone()])
                 .collect::<Vec<_>>()
+        );
+    }
+
+    /// The kinds a language must be able to colour before it counts as wired.
+    ///
+    /// Not a style preference: each of these is something a reader looks for. A
+    /// grammar whose query cannot emit `Comment` leaves comments the same colour
+    /// as code; one with no `PunctuationBracket` leaves every brace flat.
+    fn assert_language_colours(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        required: &[SyntaxTokenKind],
+    ) {
+        let document = prepare_test_document(language, text);
+        let mut seen: Vec<SyntaxTokenKind> = Vec::new();
+        for ix in 0..text.lines().count() {
+            if let Some(chunk) = syntax_tokens_for_prepared_document_line(document, ix) {
+                seen.extend(chunk.iter().map(|token| token.kind));
+            }
+        }
+        for kind in required {
+            assert!(
+                seen.contains(kind),
+                "{language:?} never produced {kind:?}; it emitted {seen:?}"
+            );
+        }
+    }
+
+    /// Objective-C's own query captures neither comments, strings nor numbers,
+    /// so a `.m` file used to render those as plain code.
+    #[test]
+    fn objective_c_colours_comments_strings_and_numbers() {
+        assert_language_colours(
+            DiffSyntaxLanguage::ObjectiveC,
+            "// a comment\n@implementation Foo\n- (void)bar {\n  NSString *s = @\"hi\";\n  int n = 42;\n}\n@end\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::String,
+                SyntaxTokenKind::Number,
+                SyntaxTokenKind::Type,
+                SyntaxTokenKind::PunctuationBracket,
+            ],
+        );
+    }
+
+    /// Java, PHP and Groovy all use queries that capture no punctuation at all.
+    #[test]
+    fn jvm_and_php_family_colour_their_brackets() {
+        assert_language_colours(
+            DiffSyntaxLanguage::Java,
+            "// c\nclass Foo {\n  int count = 1;\n  void bar() {\n    this.count = other.value;\n  }\n}\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::PunctuationBracket,
+                SyntaxTokenKind::PunctuationDelimiter,
+                SyntaxTokenKind::Property,
+            ],
+        );
+        assert_language_colours(
+            DiffSyntaxLanguage::Php,
+            "<?php\n// c\nclass Foo {\n  public $count = 1;\n  function bar() { return $this->count; }\n}\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::PunctuationBracket,
+                SyntaxTokenKind::PunctuationDelimiter,
+                SyntaxTokenKind::Property,
+            ],
+        );
+        assert_language_colours(
+            DiffSyntaxLanguage::Groovy,
+            "// c\nclass Foo {\n  int count = 1\n  def bar() { return this.count }\n}\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::PunctuationBracket,
+                SyntaxTokenKind::Keyword,
+            ],
+        );
+    }
+
+    /// PowerShell's query tags `(array_expression)` `@array`, which spans the
+    /// whole `@(1, 2)` -- parens, commas and the spaces between. Mapping that to
+    /// a type made an array literal read as one long type name.
+    #[test]
+    fn powershell_array_literals_are_not_one_long_type() {
+        let text = "# c\nfunction Get-Thing {\n  $x = @(1, 2)\n  return $x.Count\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::PowerShell, text);
+        let line = text.lines().nth(2).expect("array line");
+        let tokens = syntax_tokens_for_prepared_document_line(document, 2)
+            .map(|chunk| chunk.to_vec())
+            .unwrap_or_default();
+        let rendered: Vec<(&str, SyntaxTokenKind)> = tokens
+            .iter()
+            .map(|token| (&line[token.range.clone()], token.kind))
+            .collect();
+        assert!(
+            !rendered
+                .iter()
+                .any(|(_, kind)| *kind == SyntaxTokenKind::Type),
+            "nothing on an array literal line is a type, got {rendered:?}"
+        );
+        assert!(
+            rendered.contains(&("@(", SyntaxTokenKind::PunctuationBracket))
+                && rendered.contains(&(")", SyntaxTokenKind::PunctuationBracket)),
+            "the array's own brackets should be brackets, got {rendered:?}"
+        );
+        assert!(
+            rendered.contains(&("1", SyntaxTokenKind::Number)),
+            "its elements keep their own colours, got {rendered:?}"
         );
     }
 
@@ -5497,7 +5610,12 @@ mod tests {
     }
 
     fn capture_name_is_intentionally_ignored(name: &str) -> bool {
-        name == "none"
+        // PowerShell tags `(array_expression)` `@array`, which spans the whole
+        // `@(1, 2)` including the parens and the spaces between elements. There
+        // is no kind that span should take -- colouring it at all swallows the
+        // elements' own colours -- so it is left unmapped on purpose.
+        name == "array"
+            || name == "none"
             || name == "clean"
             || name == "assignvalue"
             || name == "embedded"

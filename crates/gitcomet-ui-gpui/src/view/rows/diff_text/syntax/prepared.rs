@@ -2795,6 +2795,16 @@ pub(super) struct CachedInjectionTokens {
 pub(super) struct TreesitterQueryAsset {
     pub(super) highlights: &'static str,
     pub(super) injections: Option<&'static str>,
+    /// Extra patterns appended to `highlights` before it is compiled.
+    ///
+    /// Several grammars are used with the query their own crate ships, which
+    /// cannot be edited here and in places captures nothing for constructs that
+    /// matter -- brackets, or in Objective-C's case comments and strings. This
+    /// is how those are filled in without vendoring a whole query and taking on
+    /// the job of tracking upstream's. Appended, not prepended: overlapping
+    /// captures resolve last-wins, so a supplement can also correct a capture
+    /// upstream got wrong.
+    pub(super) supplement: Option<&'static str>,
 }
 
 impl TreesitterQueryAsset {
@@ -2802,6 +2812,7 @@ impl TreesitterQueryAsset {
         Self {
             highlights: source,
             injections: None,
+            supplement: None,
         }
     }
 
@@ -2812,6 +2823,31 @@ impl TreesitterQueryAsset {
         Self {
             highlights,
             injections: Some(injections),
+            supplement: None,
+        }
+    }
+
+    /// Appends in-tree patterns to a query this repo does not own.
+    pub(super) const fn with_supplement(
+        highlights: &'static str,
+        supplement: &'static str,
+    ) -> Self {
+        Self {
+            highlights,
+            injections: None,
+            supplement: Some(supplement),
+        }
+    }
+
+    pub(super) const fn with_injections_and_supplement(
+        highlights: &'static str,
+        injections: &'static str,
+        supplement: &'static str,
+    ) -> Self {
+        Self {
+            highlights,
+            injections: Some(injections),
+            supplement: Some(supplement),
         }
     }
 }

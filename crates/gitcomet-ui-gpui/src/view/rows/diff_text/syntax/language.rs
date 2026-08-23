@@ -321,7 +321,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Groovy => Some((
             dekobon_tree_sitter_groovy::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY,
+                GROOVY_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Clojure => Some((
             tree_sitter_clojure_orchard::LANGUAGE.into(),
@@ -398,9 +401,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::ObjectiveC => Some((
             tree_sitter_objc::LANGUAGE.into(),
-            TreesitterQueryAsset::with_injections(
+            TreesitterQueryAsset::with_injections_and_supplement(
                 tree_sitter_objc::HIGHLIGHTS_QUERY,
                 tree_sitter_objc::INJECTIONS_QUERY,
+                OBJC_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::CSharp => Some((
@@ -416,13 +420,17 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Java => Some((
             tree_sitter_java::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_java::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                tree_sitter_java::HIGHLIGHTS_QUERY,
+                JAVA_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Php => Some((
             tree_sitter_php::LANGUAGE_PHP.into(),
-            TreesitterQueryAsset::with_injections(
+            TreesitterQueryAsset::with_injections_and_supplement(
                 tree_sitter_php::HIGHLIGHTS_QUERY,
                 tree_sitter_php::INJECTIONS_QUERY,
+                PHP_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::Ruby => Some((
@@ -431,7 +439,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::PowerShell => Some((
             tree_sitter_powershell::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(POWERSHELL_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                POWERSHELL_HIGHLIGHTS_QUERY,
+                POWERSHELL_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Swift => Some((
             tree_sitter_swift::LANGUAGE.into(),
@@ -519,8 +530,16 @@ pub(super) fn tree_sitter_grammar(
 fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec {
     let (ts_language, asset) =
         tree_sitter_grammar(language).expect("tree-sitter grammar should exist");
-    let query = tree_sitter::Query::new(&ts_language, asset.highlights)
-        .expect("highlights.scm should compile");
+    let combined;
+    let highlights = match asset.supplement {
+        None => asset.highlights,
+        Some(supplement) => {
+            combined = format!("{}\n{supplement}", asset.highlights);
+            combined.as_str()
+        }
+    };
+    let query =
+        tree_sitter::Query::new(&ts_language, highlights).expect("highlights.scm should compile");
     let capture_kinds = query
         .capture_names()
         .iter()
@@ -761,7 +780,12 @@ fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         "module.builtin" | "type.builtin" => SyntaxTokenKind::TypeBuiltin,
         "concept" | "type.interface" => SyntaxTokenKind::TypeInterface,
         "module" | "namespace" => SyntaxTokenKind::Namespace,
-        "array" | "selector" | "type" | "type.class" => SyntaxTokenKind::Type,
+        // Note "array" is deliberately absent: PowerShell is the only query that
+        // uses it, on `(array_expression)`, which spans the whole `@(1, 2)` --
+        // parens, commas and the spaces between. Painting that as a type made an
+        // array literal read as one long type name. Left unmapped, the elements
+        // inside keep their own colours.
+        "selector" | "type" | "type.class" => SyntaxTokenKind::Type,
         // Variables - general `@variable` renders as plain text (no color) to avoid
         // "everything is highlighted" noise. Sub-captures get distinct treatment.
         "parameter" | "variable.parameter" => SyntaxTokenKind::VariableParameter,
