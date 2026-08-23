@@ -948,6 +948,7 @@ impl MainPaneView {
                         (DiffTextPairSide::New, row.new_line)
                     }
                     // Headers and hunk markers are not document text.
+                    // Headers and hunk markers are not document text.
                     DiffLineKind::Header | DiffLineKind::Hunk => return None,
                 };
                 let document = self.file_diff_pair_syntax_document(match side {
@@ -1015,10 +1016,6 @@ impl MainPaneView {
 
     /// The matching delimiter pair for a click, projected onto rows.
     fn diff_text_pair_match_for_pos(&self, pos: &DiffTextPos) -> Option<DiffTextPairMatch> {
-        // Temporary diagnostic while the diff surfaces are being verified in a
-        // real build: `GITCOMET_PAIR_DEBUG=1` reports why a click found no pair.
-        // Remove once the diff path is confirmed working in the app.
-        let pair_debug = std::env::var_os("GITCOMET_PAIR_DEBUG").is_some();
         // A row the display truncated is not the tab-expansion of its line, so
         // offsets into it do not convert. Better no answer than a confident one
         // pointing at the wrong character.
@@ -1027,17 +1024,7 @@ impl MainPaneView {
         }
         let (document, line_ix, side) =
             self.diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)?;
-        let hit = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, pos.offset);
-        if pair_debug {
-            eprintln!(
-                "[pair] row={} region={:?} line_ix={line_ix} offset={} side={side:?} hit={:?}",
-                pos.source_visible_ix,
-                pos.region,
-                pos.offset,
-                hit.as_ref().map(|h| h.kind),
-            );
-        }
-        let hit = hit?;
+        let hit = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, pos.offset)?;
 
         let spans: Vec<DiffTextPairSpan> = hit
             .open
@@ -1053,9 +1040,6 @@ impl MainPaneView {
                 })
             })
             .collect();
-        if pair_debug {
-            eprintln!("[pair]   spans={spans:?}");
-        }
         // Both ends off-screen is not a pair worth remembering.
         (!spans.is_empty()).then_some(DiffTextPairMatch {
             kind: hit.kind,

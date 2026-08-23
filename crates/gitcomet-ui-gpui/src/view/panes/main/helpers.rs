@@ -3175,6 +3175,11 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
     pub(in crate::view) file_diff_row_provider: Option<Arc<super::diff_cache::PagedFileDiffRows>>,
     /// Real old-side file text used for split and inline syntax projection.
+    /// Where each side's content lives when it is a file rather than text in
+    /// memory. A source-backed side keeps its text off the heap; the click path
+    /// reads it back from here when it needs a whole-document parse.
+    pub(in crate::view) file_diff_old_source_path: Option<Arc<std::path::PathBuf>>,
+    pub(in crate::view) file_diff_new_source_path: Option<Arc<std::path::PathBuf>>,
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_old_line_to_row: Arc<[Option<usize>]>,

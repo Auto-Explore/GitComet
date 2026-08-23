@@ -1536,10 +1536,11 @@ impl MainPaneView {
     /// entries. Rendering copes because it falls back to per-line tokens; a
     /// delimiter pair cannot, because it needs the whole tree.
     ///
-    /// The old/new texts are on the view either way, so prepare from those
-    /// instead of depending on having won that race. When the render path *did*
-    /// get there first this costs nothing: the prepare call matches the cached
-    /// document by source identity and returns it without reparsing.
+    /// So prepare one here instead of depending on having won that race, from
+    /// the in-memory text when there is one and from the side's file when there
+    /// is not. When the render path *did* get there first this costs nothing:
+    /// the prepare call matches the cached document by source identity and
+    /// returns it without reparsing.
     pub(in crate::view) fn file_diff_pair_syntax_document(
         &self,
         region: DiffTextRegion,
@@ -1548,15 +1549,34 @@ impl MainPaneView {
             return Some(document);
         }
         let language = self.file_diff_cache_language?;
-        let (text, line_starts) = match region {
-            DiffTextRegion::SplitLeft => {
-                (&self.file_diff_old_text, &self.file_diff_old_line_starts)
-            }
-            DiffTextRegion::SplitRight | DiffTextRegion::Inline => {
-                (&self.file_diff_new_text, &self.file_diff_new_line_starts)
-            }
+        let (text, line_starts, source_path) = match region {
+            DiffTextRegion::SplitLeft => (
+                &self.file_diff_old_text,
+                &self.file_diff_old_line_starts,
+                self.file_diff_old_source_path.as_ref(),
+            ),
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => (
+                &self.file_diff_new_text,
+                &self.file_diff_new_line_starts,
+                self.file_diff_new_source_path.as_ref(),
+            ),
         };
-        if text.is_empty() {
+        // A source-backed side keeps its text out of memory on purpose, so a
+        // huge diff can render from per-line slices. That is the ordinary case
+        // for a worktree file, whose new side *is* the file, and it leaves
+        // nothing to parse a document from -- read it back here, where a click
+        // can afford it and the same size ceiling still applies.
+        let text = if text.is_empty() {
+            let path = source_path?;
+            let len = std::fs::metadata(path.as_ref()).ok()?.len();
+            if len > rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES as u64 {
+                return None;
+            }
+            SharedString::from(std::fs::read_to_string(path.as_ref()).ok()?)
+        } else {
+            text.clone()
+        };
+        if text.is_empty() || line_starts.is_empty() {
             return None;
         }
         // A click is not a frame: it can afford a real parse where the render
@@ -1567,7 +1587,7 @@ impl MainPaneView {
         match rows::prepare_diff_syntax_document_with_budget_reuse_text(
             language,
             FULL_DOCUMENT_SYNTAX_MODE,
-            text.clone(),
+            text,
             Arc::clone(line_starts),
             budget,
             None,
@@ -2251,6 +2271,8 @@ impl MainPaneView {
         self.file_diff_cache_language = None;
         self.file_diff_cache_rows.clear();
         self.file_diff_row_provider = None;
+        self.file_diff_old_source_path = None;
+        self.file_diff_new_source_path = None;
         self.file_diff_old_text = SharedString::default();
         self.file_diff_old_line_starts = Arc::default();
         self.file_diff_old_line_to_row = Arc::default();
@@ -2479,6 +2501,8 @@ impl MainPaneView {
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
                     this.file_diff_row_provider = Some(rebuild.row_provider);
+                    this.file_diff_old_source_path = rebuild.old_source_path;
+                    this.file_diff_new_source_path = rebuild.new_source_path;
                     this.file_diff_old_text = rebuild.old_text;
                     this.file_diff_old_line_starts = rebuild.old_line_starts;
                     this.file_diff_old_line_to_row = rebuild.old_line_to_row;

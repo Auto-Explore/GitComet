@@ -1718,6 +1718,8 @@ impl MainPaneView {
             file_diff_row_provider: None,
             file_diff_old_text: SharedString::default(),
             file_diff_old_line_starts: Arc::default(),
+            file_diff_old_source_path: None,
+            file_diff_new_source_path: None,
             file_diff_old_line_to_row: Arc::default(),
             file_diff_old_line_to_inline_row: Arc::default(),
             file_diff_new_text: SharedString::default(),
