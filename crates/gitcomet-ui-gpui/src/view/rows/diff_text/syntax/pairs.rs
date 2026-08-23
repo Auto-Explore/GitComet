@@ -50,10 +50,16 @@ impl SyntaxPair {
 /// in most grammars and only sometimes delimiters, so pairing them lights up
 /// arithmetic. Tag angle brackets are covered by [`TAG_PAIRS`] instead, which
 /// keys on the element node and so cannot make that mistake.
-const BRACKET_PAIRS: [(&str, &str); 6] = [
+const BRACKET_PAIRS: [(&str, &str); 8] = [
     ("(", ")"),
     ("[", "]"),
     ("{", "}"),
+    // PowerShell spells its subexpression and array openers as their own
+    // anonymous tokens, both ending at a plain `)`. Several opens against one
+    // close is why the close side is matched with [`closes_open`] rather than
+    // by looking up a single counterpart.
+    ("$(", ")"),
+    ("@(", ")"),
     // Some grammars wrap their delimiters in named nodes instead of exposing the
     // punctuation as anonymous siblings, which puts the `{` a level too deep for
     // the sibling scan to see. HCL is the in-tree example: a `block`'s children
@@ -176,12 +182,16 @@ fn counterpart_of_open(kind: &str, pair: SyntaxPairKind) -> Option<&'static str>
         .map(|(_, close)| *close)
 }
 
-/// The opening counterpart of a closing delimiter kind.
-fn counterpart_of_close(kind: &str, pair: SyntaxPairKind) -> Option<&'static str> {
+/// Whether `open_kind` is an opening delimiter that `close_kind` closes.
+///
+/// A predicate rather than a lookup because the relation is many-to-one: a
+/// grammar can spell several opens against one close (PowerShell's `(`, `$(`
+/// and `@(` all end at `)`), and taking only the table's first match would
+/// leave every other one of them unpaired.
+fn closes_open(open_kind: &str, close_kind: &str, pair: SyntaxPairKind) -> bool {
     table_for(pair)
         .iter()
-        .find(|(_, close)| *close == kind)
-        .map(|(open, _)| *open)
+        .any(|(open, close)| *open == open_kind && *close == close_kind)
 }
 
 /// Whether `node` is a leaf delimiter a caret can sit directly on, as opposed
@@ -283,12 +293,11 @@ fn partner_of_delimiter(node: tree_sitter::Node<'_>) -> Option<SyntaxPair> {
             None
         }
         PairRole::Close(pair) => {
-            let open = counterpart_of_close(kind, pair)?;
             let mut depth = 1usize;
             for child in children[..index].iter().rev() {
                 if child.kind() == kind {
                     depth += 1;
-                } else if child.kind() == open {
+                } else if closes_open(child.kind(), kind, pair) {
                     depth -= 1;
                     if depth == 0 {
                         return Some(SyntaxPair::new(child.byte_range(), node.byte_range(), pair));
@@ -354,16 +363,20 @@ fn enclosing_pair_among_children(
         match pair_role(&child) {
             Some(PairRole::Open(pair)) => open_stack.push((child, pair)),
             Some(PairRole::Close(pair)) => {
-                let Some(open_kind) = counterpart_of_close(child.kind(), pair) else {
-                    continue;
-                };
                 let Some(position) = open_stack
                     .iter()
-                    .rposition(|(open, _)| open.kind() == open_kind)
+                    .rposition(|(open, _)| closes_open(open.kind(), child.kind(), pair))
                 else {
                     continue;
                 };
-                let (open, _) = open_stack.remove(position);
+                let (open, _) = open_stack[position];
+                // Truncate rather than remove: every opener still above the
+                // match is one this close skipped past, so it can no longer
+                // pair with anything to the right without crossing this
+                // delimiter. Leaving them on the stack is how `( [ ) ]` -- an
+                // ERROR node, or a grammar that flattens a malformed construct
+                // -- produced a `[ ... ]` pair spanning the `)`.
+                open_stack.truncate(position);
                 consider(SyntaxPair::new(open.byte_range(), child.byte_range(), pair));
             }
             _ => {}
@@ -421,6 +434,23 @@ pub(in crate::view) fn raw_offset_for_display_offset(line: &str, display_offset:
     line.len()
 }
 
+/// The raw offset a *click* at `display_offset` landed on, or `None` when the
+/// click fell past the line's last character.
+///
+/// The row hitbox spans the full width of the pane, not the width of the text,
+/// and it clamps a point past the end of the line to the line's last column. A
+/// caret belongs there, but a highlight does not: without this, clicking the
+/// blank area to the right of `let sum = total;` resolves to the byte after the
+/// `;` and the caret-adjacency probe one byte to its left then washes the whole
+/// file's uses of the last name on the line.
+pub(in crate::view) fn clicked_raw_offset_for_display_offset(
+    line: &str,
+    display_offset: usize,
+) -> Option<usize> {
+    (display_offset < crate::view::diff_utils::diff_text_display_len(line))
+        .then(|| raw_offset_for_display_offset(line, display_offset))
+}
+
 /// Convert an offset in a raw line to the display column the canvas painted it
 /// at -- the inverse of [`raw_offset_for_display_offset`].
 pub(in crate::view) fn display_offset_for_raw_offset(line: &str, raw_offset: usize) -> usize {
@@ -438,5 +468,7 @@ pub(in crate::view) fn display_offset_for_raw_offset(line: &str, raw_offset: usi
             ch.len_utf8()
         };
     }
-    display
+    // Past the last character: the line's whole display width, which is what
+    // the canvas measured when it painted the row.
+    crate::view::diff_utils::diff_text_display_len(line)
 }

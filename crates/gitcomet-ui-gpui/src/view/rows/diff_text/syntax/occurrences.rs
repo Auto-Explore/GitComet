@@ -139,17 +139,20 @@ pub(in crate::view) fn syntax_occurrences_in_tree(
         let end = start + name.len();
         search_from = end;
 
-        candidates += 1;
-        if candidates > MAX_OCCURRENCE_CANDIDATES {
-            break;
-        }
-
         // Word boundaries first: they are a byte comparison, where the tree
         // lookup below walks the depth of the document.
         let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
         let after_ok = end >= bytes.len() || !is_word_byte(bytes[end]);
         if !before_ok || !after_ok {
             continue;
+        }
+        // Counted *after* the boundary test, because the budget exists to bound
+        // the descents and only a word-bounded hit pays for one. Counting raw
+        // substring hits instead spends the whole budget on `uuid` and `valid`
+        // and then stops before the real uses of `id`.
+        candidates += 1;
+        if candidates > MAX_OCCURRENCE_CANDIDATES {
+            break;
         }
         // And the grammar has to agree this span is one whole name token -- the
         // same test the clicked token had to pass. Exact range alone is not

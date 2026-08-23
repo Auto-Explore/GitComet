@@ -8,7 +8,7 @@ pub(super) fn merge_commit_destination_label(repo: Option<&RepoState>) -> Shared
     .unwrap_or_else(|| "HEAD".into())
 }
 
-fn merge_commit_repo_is_ready(repo: Option<&RepoState>) -> bool {
+pub(super) fn merge_commit_repo_is_ready(repo: Option<&RepoState>) -> bool {
     repo.is_some_and(|repo| !repo.history_rewrite_busy())
 }
 

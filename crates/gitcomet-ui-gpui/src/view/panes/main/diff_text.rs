@@ -773,8 +773,7 @@ impl MainPaneView {
         self.diff_selection_range = None;
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
-        self.diff_text_pair_match = self.diff_text_pair_match_for_pos(&pos);
-        self.diff_text_occurrences = self.diff_text_occurrences_for_pos(&pos);
+        self.set_diff_text_click_highlights(&pos);
     }
 
     pub(in super::super::super) fn begin_diff_text_scroll_tracking(
@@ -972,7 +971,6 @@ impl MainPaneView {
                         (DiffTextPairSide::New, row.new_line)
                     }
                     // Headers and hunk markers are not document text.
-                    // Headers and hunk markers are not document text.
                     DiffLineKind::Header | DiffLineKind::Hunk => return None,
                 };
                 let document = self.file_diff_pair_syntax_document(match side {
@@ -1050,16 +1048,41 @@ impl MainPaneView {
         self.diff_source_visible_ix_for_mapped_ix(row_ix)
     }
 
-    /// The matching delimiter pair for a click, projected onto rows.
-    fn diff_text_pair_match_for_pos(&mut self, pos: &DiffTextPos) -> Option<DiffTextPairMatch> {
+    /// Both of a click's highlights, off one resolution of the row.
+    ///
+    /// The pair and the occurrences need the same three answers -- is this row's
+    /// text a truncated stand-in, which document does it belong to, and which
+    /// line of it -- and that resolution is the expensive half: it re-fetches
+    /// the row model through the paged providers, and on a cold cache it reads a
+    /// source-backed side's file back off disk and parses it. Asking for the two
+    /// highlights separately paid all of it twice on every mouse-down.
+    fn set_diff_text_click_highlights(&mut self, pos: &DiffTextPos) {
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+
         // A row the display truncated is not the tab-expansion of its line, so
         // offsets into it do not convert. Better no answer than a confident one
         // pointing at the wrong character.
         if self.diff_text_row_is_display_truncated(pos.source_visible_ix, pos.region) {
-            return None;
+            return;
         }
-        let (document, line_ix, side) =
-            self.diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)?;
+        let Some((document, line_ix, side)) =
+            self.diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)
+        else {
+            return;
+        };
+        self.diff_text_pair_match = self.diff_text_pair_match_in(document, line_ix, side, pos);
+        self.diff_text_occurrences = self.diff_text_occurrences_in(document, line_ix, side, pos);
+    }
+
+    /// The matching delimiter pair for a click, projected onto rows.
+    fn diff_text_pair_match_in(
+        &mut self,
+        document: rows::PreparedDiffSyntaxDocument,
+        line_ix: usize,
+        side: DiffTextPairSide,
+        pos: &DiffTextPos,
+    ) -> Option<DiffTextPairMatch> {
         let hit = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, pos.offset)?;
 
         let spans: Vec<DiffTextPairSpan> = hit
@@ -1077,7 +1100,8 @@ impl MainPaneView {
             })
             .collect();
         // Both ends off-screen is not a pair worth remembering.
-        (!spans.is_empty()).then_some(DiffTextPairMatch {
+        (!spans.is_empty()).then(|| DiffTextPairMatch {
+            #[cfg(test)]
             kind: hit.kind,
             spans,
         })
@@ -1085,21 +1109,16 @@ impl MainPaneView {
 
     /// Every place the clicked name appears, projected onto rows.
     ///
-    /// Reuses the pair path's row resolution: both answer "which document and
+    /// Shares the pair path's row resolution: both answer "which document and
     /// line is this row", and both project document lines back onto rows, so a
     /// name's uses land on rows exactly the way a delimiter's partner does.
-    fn diff_text_occurrences_for_pos(
+    fn diff_text_occurrences_in(
         &mut self,
+        document: rows::PreparedDiffSyntaxDocument,
+        line_ix: usize,
+        side: DiffTextPairSide,
         pos: &DiffTextPos,
     ) -> FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> {
-        if self.diff_text_row_is_display_truncated(pos.source_visible_ix, pos.region) {
-            return FxHashMap::default();
-        }
-        let Some((document, line_ix, side)) =
-            self.diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)
-        else {
-            return FxHashMap::default();
-        };
         let ends =
             rows::prepared_diff_syntax_occurrences_at_display_offset(document, line_ix, pos.offset);
         if ends.is_empty() {

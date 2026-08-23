@@ -412,7 +412,11 @@ pub(in crate::view) use live::{
     LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_document_supported,
     live_syntax_reparse,
 };
-pub(in crate::view) use pairs::{SyntaxPair, SyntaxPairKind};
+pub(in crate::view) use pairs::SyntaxPair;
+// Only assertions name a pair kind -- every kind is painted alike; see
+// `DiffTextPairMatch::kind`.
+#[cfg(test)]
+pub(in crate::view) use pairs::SyntaxPairKind;
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
 #[cfg(test)]
@@ -1328,6 +1332,21 @@ mod tests {
         ]
     };
 
+    /// Every token kind a sample comes out coloured with.
+    ///
+    /// The one definition of "what this language emits", so the per-language
+    /// tests below and the baseline sweep cannot disagree about what counts.
+    fn token_kinds_in_sample(language: DiffSyntaxLanguage, text: &str) -> Vec<SyntaxTokenKind> {
+        let document = prepare_test_document(language, text);
+        let mut seen: Vec<SyntaxTokenKind> = Vec::new();
+        for ix in 0..text.lines().count() {
+            if let Some(chunk) = syntax_tokens_for_prepared_document_line(document, ix) {
+                seen.extend(chunk.iter().map(|token| token.kind));
+            }
+        }
+        seen
+    }
+
     /// The kinds a language must be able to colour before it counts as wired.
     ///
     /// Not a style preference: each of these is something a reader looks for. A
@@ -1338,13 +1357,7 @@ mod tests {
         text: &str,
         required: &[SyntaxTokenKind],
     ) {
-        let document = prepare_test_document(language, text);
-        let mut seen: Vec<SyntaxTokenKind> = Vec::new();
-        for ix in 0..text.lines().count() {
-            if let Some(chunk) = syntax_tokens_for_prepared_document_line(document, ix) {
-                seen.extend(chunk.iter().map(|token| token.kind));
-            }
-        }
+        let seen = token_kinds_in_sample(language, text);
         for kind in required {
             assert!(
                 seen.contains(kind),
@@ -1361,13 +1374,7 @@ mod tests {
     fn every_wired_language_meets_its_highlight_baseline() {
         let mut gaps: Vec<String> = Vec::new();
         for (language, sample, required) in LANGUAGE_BASELINES {
-            let document = prepare_test_document(*language, sample);
-            let mut seen: Vec<SyntaxTokenKind> = Vec::new();
-            for ix in 0..sample.lines().count() {
-                if let Some(chunk) = syntax_tokens_for_prepared_document_line(document, ix) {
-                    seen.extend(chunk.iter().map(|token| token.kind));
-                }
-            }
+            let mut seen = token_kinds_in_sample(*language, sample);
             let missing: Vec<_> = required
                 .iter()
                 .filter(|kind| !seen.contains(kind))

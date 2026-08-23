@@ -3184,10 +3184,6 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
     pub(in crate::view) file_diff_row_provider: Option<Arc<super::diff_cache::PagedFileDiffRows>>,
-    /// Real old-side file text used for split and inline syntax projection.
-    /// Where each side's content lives when it is a file rather than text in
-    /// memory. A source-backed side keeps its text off the heap; the click path
-    /// reads it back from here when it needs a whole-document parse.
     /// Text read back from a source-backed side for a click, kept alive.
     ///
     /// Not just a cache: the prepared-document identity is keyed partly on the
@@ -3195,14 +3191,24 @@ pub(crate) struct MainPaneView {
     /// call returns leaves an identity pointing at freed memory, which a later
     /// allocation of the same length can alias. Retaining it also means a second
     /// click resolves by identity instead of re-reading and re-parsing the file.
+    ///
+    /// Cleared whenever the cache rebuilds, so what it holds is always the body
+    /// the current generation's line index was built from.
     pub(in crate::view) file_diff_pair_syntax_text: FxHashMap<DiffTextRegion, SharedString>,
+    /// Where each side's content lives when it is a file rather than text in
+    /// memory. A source-backed side keeps its text off the heap so a huge diff
+    /// can render from per-line slices; the click path reads it back from here
+    /// when it needs a whole-document parse.
     pub(in crate::view) file_diff_old_source_path: Option<Arc<std::path::PathBuf>>,
     pub(in crate::view) file_diff_new_source_path: Option<Arc<std::path::PathBuf>>,
+    /// Real old-side file text used for split and inline syntax projection.
+    /// Empty when the side is source-backed; `file_diff_old_source_path` says so.
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_old_line_to_row: Arc<[Option<usize>]>,
     pub(in crate::view) file_diff_old_line_to_inline_row: Arc<[Option<usize>]>,
     /// Real new-side file text used for split and inline syntax projection.
+    /// Empty when the side is source-backed; `file_diff_new_source_path` says so.
     pub(in crate::view) file_diff_new_text: SharedString,
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,

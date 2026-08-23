@@ -472,11 +472,20 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     // is already part of HEAD's history (including HEAD itself), so it is
     // disabled rather than letting git reject it as "Already up to date". It
     // also contends for the same repository operation slot as history rewrites.
+    //
+    // Resolved through `state.repos` rather than `active_repo()`, and through
+    // the dialog's own two helpers, because this entry opens that dialog: with
+    // several repositories open, a right-click on a commit outside the active
+    // one made the entry read "into HEAD" while the confirmation it opened read
+    // "into main", and left the entry enabled for a repository the dialog was
+    // about to refuse. `commit_is_ancestor_of_head` already looks the repository
+    // up this way.
+    let merge_repo = this.state.repos.iter().find(|repo| repo.id == repo_id);
     let merge_into_current_disabled =
-        history_rewrite_disabled || commit_is_ancestor_of_head(this, repo_id, commit_id);
-    let merge_destination = super::super::merge_commit_confirm::merge_commit_destination_label(
-        this.active_repo().filter(|repo| repo.id == repo_id),
-    );
+        !super::super::merge_commit_confirm::merge_commit_repo_is_ready(merge_repo)
+            || commit_is_ancestor_of_head(this, repo_id, commit_id);
+    let merge_destination =
+        super::super::merge_commit_confirm::merge_commit_destination_label(merge_repo);
     items.push(ContextMenuItem::Entry {
         label: format!("Merge {short} into {merge_destination}").into(),
         icon: Some("icons/swap.svg".into()),

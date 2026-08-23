@@ -165,6 +165,29 @@ fn line_byte_range(text: &str, line_starts: &[usize], line_ix: usize) -> std::op
     start..end
 }
 
+/// Whether `line_starts` is the index of exactly this text.
+///
+/// The one place the indexing convention of [`IndexedFileDiffSource`] is
+/// restated as a test: a start at 0, one after every `\n` including a trailing
+/// one, and nothing else. A click can re-read a source-backed side long after
+/// the diff was indexed, and a stale index is not a cosmetic mismatch -- the
+/// pair projection would report ranges of a document the reader is not looking
+/// at, and a shortened file leaves starts past the end of the text.
+///
+/// O(text) with no allocation, which is nothing beside the parse it guards.
+pub(in crate::view) fn line_starts_describe(text: &str, line_starts: &[usize]) -> bool {
+    let mut expected = line_starts.iter().copied();
+    if expected.next() != Some(0) {
+        return false;
+    }
+    for (ix, byte) in text.bytes().enumerate() {
+        if byte == b'\n' && expected.next() != Some(ix + 1) {
+            return false;
+        }
+    }
+    expected.next().is_none()
+}
+
 const FILE_DIFF_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
 const FILE_DIFF_INDEX_LINE_CAPACITY_MAX: usize = 64 * 1024;
 

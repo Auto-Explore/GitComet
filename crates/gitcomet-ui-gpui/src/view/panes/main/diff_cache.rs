@@ -14,7 +14,7 @@ mod word_highlight;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
-use self::file_diff::file_diff_text_signature;
+use self::file_diff::{file_diff_text_signature, line_starts_describe};
 pub(in crate::view) use self::file_diff::{
     PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
@@ -1574,22 +1574,35 @@ impl MainPaneView {
         let text = if text.is_empty() {
             match self.file_diff_pair_syntax_text.get(&side) {
                 // Kept from an earlier click: the same allocation, so the parse
-                // below resolves by source identity instead of re-parsing.
+                // below resolves by source identity instead of re-parsing. It is
+                // dropped whenever the cache rebuilds, so it can only ever be
+                // the body this generation's `line_starts` were indexed from.
                 Some(retained) => retained.clone(),
                 None => {
                     let path = source_path?;
                     let len = std::fs::metadata(path.as_ref()).ok()?.len();
-                    // Bounded by the occurrence ceiling rather than the prepared
-                    // document's 8 MB one. The click budget below is far above
-                    // the render path's, which switches off the large-file skip
-                    // guard -- so without a limit here a click on a huge file
-                    // reads megabytes, burns the whole budget, times out, caches
+                    // A read that has to happen *now* is bounded by the
+                    // occurrence ceiling rather than the prepared document's
+                    // 8 MB one. The click budget below is far above the render
+                    // path's, which switches off the large-file skip guard -- so
+                    // without a limit here a click on a huge file reads
+                    // megabytes, burns the whole budget, times out, caches
                     // nothing, and does it again on the next click. Declining up
                     // front reaches the same answer without the stall.
                     if len > rows::OCCURRENCE_MAX_TEXT_BYTES as u64 {
                         return None;
                     }
                     let read = SharedString::from(std::fs::read_to_string(path.as_ref()).ok()?);
+                    // The rows' line numbers, and the `line_starts` the parse is
+                    // handed, were indexed from this file when the diff was
+                    // built. A worktree file can have changed since -- the poll
+                    // is 250 ms -- and then the index describes a document this
+                    // text no longer is: at best the pair lands on the wrong
+                    // line, at worst a start sits past the end of the shortened
+                    // text. Decline until the rebuild catches up.
+                    if !line_starts_describe(read.as_ref(), line_starts.as_ref()) {
+                        return None;
+                    }
                     self.file_diff_pair_syntax_text.insert(side, read.clone());
                     read
                 }
@@ -1600,8 +1613,14 @@ impl MainPaneView {
         if text.is_empty() || line_starts.is_empty() {
             return None;
         }
-        // Same ceiling for a side whose text the view already holds.
-        if text.len() > rows::OCCURRENCE_MAX_TEXT_BYTES {
+        // Text the view already holds is bounded by the ceiling the *render*
+        // path uses, not by the occurrence one: nothing is read here, so the
+        // only cost is the parse, and using a lower ceiling would mean the same
+        // file paired or did not depending on whether the render path had won
+        // the race to prepare its document. The occurrence scan, which really is
+        // O(document), keeps its own ceiling inside
+        // `prepared_document_occurrences_at_display_offset`.
+        if text.len() > rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
             return None;
         }
         // A click is not a frame: it can afford a real parse where the render

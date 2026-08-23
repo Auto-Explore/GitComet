@@ -627,6 +627,15 @@ pub(super) struct DiffTextPairSpan {
 /// "there is no pair here", which is false.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) struct DiffTextPairMatch {
+    /// Which construct the pair delimits.
+    ///
+    /// Test-only, and deliberately so: the canvas washes brackets, tags and
+    /// quotes with the same `diff_text_pair_match_color()`, so carrying the kind
+    /// into a release build would be state nothing reads -- state that drifts.
+    /// Assertions still want it, because "clicking the tag name paired the
+    /// element" and "it paired some brackets nearby" are different outcomes with
+    /// the same painted ranges.
+    #[cfg(test)]
     pub(super) kind: crate::view::rows::SyntaxPairKind,
     pub(super) spans: Vec<DiffTextPairSpan>,
 }

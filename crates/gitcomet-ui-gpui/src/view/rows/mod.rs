@@ -440,12 +440,16 @@ pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document;
+// Every pair kind is painted alike, so only assertions name one; see
+// `DiffTextPairMatch::kind`.
+#[cfg(test)]
+pub(in crate::view) use diff_text::SyntaxPairKind;
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSearchMatchEmphasis, DiffSyntaxBudget,
     DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument, LiveSyntaxSnapshot,
     LiveSyntaxSyncOutcome, OCCURRENCE_MAX_TEXT_BYTES, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
     PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine,
-    PreparedDiffSyntaxReparseSeed, SyntaxPair, SyntaxPairKind,
+    PreparedDiffSyntaxReparseSeed, SyntaxPair,
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
     diff_wrap_ranges_for_text, drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,

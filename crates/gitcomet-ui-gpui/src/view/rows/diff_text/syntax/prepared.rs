@@ -1778,9 +1778,37 @@ pub(in crate::view) struct PreparedSyntaxPairSpan {
 /// `<div` and leave the rest bare.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(in crate::view) struct PreparedSyntaxPairHit {
+    /// Which construct the pair delimits. Test-only for the same reason as
+    /// [`crate::view::DiffTextPairMatch::kind`]: every kind is painted alike, so
+    /// this exists to let an assertion say which pair was found, not to steer
+    /// anything.
+    #[cfg(test)]
     pub(in crate::view) kind: SyntaxPairKind,
     pub(in crate::view) open: Vec<PreparedSyntaxPairSpan>,
     pub(in crate::view) close: Vec<PreparedSyntaxPairSpan>,
+}
+
+/// One line's byte range, without its line terminator.
+///
+/// The newline belongs to the line's bytes but never to its display columns, so
+/// it is trimmed before any offset is measured against the line.
+///
+/// Every bound goes through `text.get`, so a `line_starts` that does not
+/// describe `text` answers `None` instead of panicking. That is not
+/// hypothetical: the click path can index a side whose file was re-read after
+/// the diff was built, and a file that shrank in between leaves starts past the
+/// end of the text.
+fn prepared_line_span(text: &str, line_starts: &[usize], ix: usize) -> Option<Range<usize>> {
+    let start = *line_starts.get(ix)?;
+    let end = line_starts
+        .get(ix + 1)
+        .copied()
+        .unwrap_or(text.len())
+        .min(text.len());
+    let line = text.get(start..end)?;
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    Some(start..start + line.len())
 }
 
 /// The matching pair at a click, taking and returning the canvases' own
@@ -1793,33 +1821,14 @@ pub(in crate::view) struct PreparedSyntaxPairHit {
 /// them. The view layer therefore never handles a document byte offset.
 ///
 /// Returns `None` when the document has no retained tree (it was evicted, or the
-/// parse never finished), when `line_ix` is past the end, or when nothing pairs.
+/// parse never finished), when `line_ix` is past the end, when the click landed
+/// past the line's last character, or when nothing pairs.
 ///
 /// Injections are not consulted: unlike the live engine, this one parses an
 /// injected region on a text slice, keeps the tokens and drops the tree, so
 /// there is nothing here to match against. A delimiter inside a `<script>` body
 /// is a byte of an unparsed `raw_text` leaf, so it matches nothing and the walk
 /// falls out to the enclosing element -- a narrower answer, never a wrong one.
-/// One line's byte range, without its line terminator.
-///
-/// The newline belongs to the line's bytes but never to its display columns, so
-/// it is trimmed before any offset is measured against the line.
-fn prepared_line_span(text: &str, line_starts: &[usize], ix: usize) -> Option<Range<usize>> {
-    let start = *line_starts.get(ix)?;
-    let end = line_starts
-        .get(ix + 1)
-        .copied()
-        .unwrap_or(text.len())
-        .min(text.len());
-    let end = text[start..end]
-        .strip_suffix('\n')
-        .map_or(end, |line| start + line.len());
-    let end = text[start..end]
-        .strip_suffix('\r')
-        .map_or(end, |line| start + line.len());
-    (start <= end).then_some(start..end)
-}
-
 pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     document: PreparedSyntaxDocument,
     line_ix: usize,
@@ -1833,7 +1842,8 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
 
     let clicked = line_span(line_ix)?;
     let clicked_line = text.get(clicked.clone())?;
-    let offset = clicked.start + raw_offset_for_display_offset(clicked_line, display_offset);
+    let offset =
+        clicked.start + clicked_raw_offset_for_display_offset(clicked_line, display_offset)?;
 
     let pair = syntax_pair_in_tree(&state.tree, offset)?;
 
@@ -1872,7 +1882,8 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     };
 
     let (open, close) = (project(&pair.open), project(&pair.close));
-    (!open.is_empty() && !close.is_empty()).then_some(PreparedSyntaxPairHit {
+    (!open.is_empty() && !close.is_empty()).then(|| PreparedSyntaxPairHit {
+        #[cfg(test)]
         kind: pair.kind,
         open,
         close,
@@ -1906,7 +1917,13 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
     let Some(clicked_line) = text.get(clicked.clone()) else {
         return Vec::new();
     };
-    let offset = clicked.start + raw_offset_for_display_offset(clicked_line, display_offset);
+    // A click past the line's last character places a caret but names nothing;
+    // see [`clicked_raw_offset_for_display_offset`].
+    let Some(raw_offset) = clicked_raw_offset_for_display_offset(clicked_line, display_offset)
+    else {
+        return Vec::new();
+    };
+    let offset = clicked.start + raw_offset;
 
     let Some(found) = syntax_occurrences_in_tree(&state.tree, text, offset) else {
         return Vec::new();
@@ -3338,6 +3355,12 @@ fn apply_injection_query_tokens_for_document(
         // painted token keeps last-wins where the two overlap and leaves the
         // host's answer standing in the gaps.
         for (parent_line_ix, tokens) in &injected_tokens {
+            // Same window guard as the append loop below: `saturating_sub` on a
+            // line below the window would clamp to index 0 and subtract these
+            // ranges out of the first visible row's host tokens instead.
+            if *parent_line_ix < context.start_line_ix {
+                continue;
+            }
             // The tokens are already grouped by line and their ranges are
             // already line-relative, so going back through the absolute form
             // would re-derive by binary search what is known here.
@@ -3367,10 +3390,12 @@ fn apply_injection_query_tokens_for_document(
     }
 
     // Combined last, and the order matters once a grammar declares both kinds over
-    // the same bytes. Each layer subtracts its own span from `per_line` before
-    // painting, so the last one wins the overlap; running combined first let a
-    // single delete combined tokens and then repaint only the bytes its own
-    // captures cover, leaving the rest bare. No in-tree grammar mixes them yet.
+    // the same bytes. Each layer clears what it is about to paint out of
+    // `per_line` first -- per painted token for a single, over the whole span for
+    // a combined group -- so the last one wins the overlap; running combined
+    // first let a single delete combined tokens and then repaint only the bytes
+    // its own captures cover, leaving the rest bare. No in-tree grammar mixes
+    // them yet.
     if !injections.truncated {
         for group in &injections.combined {
             apply_combined_injection_tokens(group, input, context);
