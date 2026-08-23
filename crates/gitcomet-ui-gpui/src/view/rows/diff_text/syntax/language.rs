@@ -314,9 +314,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Zig => Some((
             tree_sitter_zig::LANGUAGE.into(),
-            TreesitterQueryAsset::with_injections(
+            TreesitterQueryAsset::with_injections_and_supplement(
                 tree_sitter_zig::HIGHLIGHTS_QUERY,
                 tree_sitter_zig::INJECTIONS_QUERY,
+                ZIG_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::Groovy => Some((
@@ -477,7 +478,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Sql => Some((
             tree_sitter_sequel::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_sequel::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                tree_sitter_sequel::HIGHLIGHTS_QUERY,
+                SQL_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Diff => Some((
             tree_sitter_diff::LANGUAGE.into(),
@@ -519,7 +523,7 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Xml => Some((
             tree_sitter_xml::LANGUAGE_XML.into(),
-            TreesitterQueryAsset::highlights(XML_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(XML_HIGHLIGHTS_QUERY, XML_SUPPLEMENT_QUERY),
         )),
         // Languages without a wired tree-sitter grammar, or grammars gated off
         // by the current feature set, fall back to heuristic-only highlighting.

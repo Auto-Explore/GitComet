@@ -45,6 +45,9 @@ const JAVA_SUPPLEMENT_QUERY: &str = include_str!("queries/java_supplement.scm");
 const OBJC_SUPPLEMENT_QUERY: &str = include_str!("queries/objc_supplement.scm");
 const PHP_SUPPLEMENT_QUERY: &str = include_str!("queries/php_supplement.scm");
 const POWERSHELL_SUPPLEMENT_QUERY: &str = include_str!("queries/powershell_supplement.scm");
+const SQL_SUPPLEMENT_QUERY: &str = include_str!("queries/sql_supplement.scm");
+const ZIG_SUPPLEMENT_QUERY: &str = include_str!("queries/zig_supplement.scm");
+const XML_SUPPLEMENT_QUERY: &str = include_str!("queries/xml_supplement.scm");
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
 const JINJA_HIGHLIGHTS_QUERY: &str = include_str!("queries/jinja_highlights.scm");
@@ -859,6 +862,443 @@ mod tests {
         );
     }
 
+    /// Every wired language, a snippet of it, and the kinds it must colour.
+    ///
+    /// The bar is what a reader looks for rather than what a grammar happens to
+    /// offer: comments must not read as code, literals must not read as names,
+    /// and brackets must not be flat. Data formats are held to what they have --
+    /// no functions in JSON -- but a programming language that cannot colour a
+    /// call or a bracket has a gap worth fixing, not a style to accept.
+    ///
+    /// Adding a grammar without adding a row here leaves it unguarded, which is
+    /// how Objective-C shipped with no comment colour at all.
+    const LANGUAGE_BASELINES: &[(DiffSyntaxLanguage, &str, &[SyntaxTokenKind])] = {
+        use SyntaxTokenKind as K;
+        &[
+            (
+                DiffSyntaxLanguage::Rust,
+                "// c\nfn main() {\n    let x = \"s\";\n    let n = 1;\n    f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Python,
+                "# c\ndef main():\n    x = \"s\"\n    n = 1\n    f(x)\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::JavaScript,
+                "// c\nfunction main() {\n  const x = \"s\";\n  const n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::TypeScript,
+                "// c\nfunction main(): void {\n  const x: string = \"s\";\n  const n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Tsx,
+                "// c\nconst a = <div id=\"x\">{f(1)}</div>;\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Tag,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Go,
+                "// c\nfunc main() {\n\tx := \"s\"\n\tn := 1\n\tf(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::C,
+                "// c\nint main(void) {\n  const char *x = \"s\";\n  int n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Cpp,
+                "// c\nclass A {};\nint main() {\n  std::string x = \"s\";\n  return 1;\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::ObjectiveC,
+                "// c\n@implementation Foo\n- (void)bar {\n  NSString *s = @\"hi\";\n  int n = 42;\n}\n@end\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::CSharp,
+                "// c\nclass Foo {\n  void Bar() {\n    var x = \"s\";\n    int n = 1;\n  }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Java,
+                "// c\nclass Foo {\n  int count = 1;\n  void bar() {\n    f(\"s\");\n  }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Kotlin,
+                "// c\nfun main() {\n  val x = \"s\"\n  val n = 1\n  f(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Scala,
+                "// c\nobject Foo {\n  def bar(): Unit = {\n    val x = \"s\"\n    val n = 1\n  }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Groovy,
+                "// c\nclass Foo {\n  int count = 1\n  def bar() { f(\"s\") }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Php,
+                "<?php\n// c\nclass Foo {\n  public $count = 1;\n  function bar() { return f(\"s\"); }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Ruby,
+                "# c\nclass Foo\n  def bar\n    x = \"s\"\n    n = 1\n    f(x)\n  end\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Swift,
+                "// c\nfunc main() {\n  let x = \"s\"\n  let n = 1\n  f(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Dart,
+                "// c\nvoid main() {\n  var x = \"s\";\n  var n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Lua,
+                "-- c\nlocal function main()\n  local x = \"s\"\n  local n = 1\n  f(x)\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Bash,
+                "# c\nmain() {\n  x=\"s\"\n  n=1\n  f \"$x\"\n}\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::PowerShell,
+                "# c\nfunction Get-Thing {\n  $x = \"s\"\n  $n = 1\n  Write-Host $x\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Zig,
+                "// c\npub fn main() void {\n    const x = \"s\";\n    const n = 1;\n    f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Nix,
+                "# c\n{\n  x = \"s\";\n  n = 1;\n}\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Hcl,
+                "# c\nresource \"a\" \"b\" {\n  n = 1\n  s = \"x\"\n  v = f(\"y\")\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Bicep,
+                "// c\nparam name string = 's'\nvar n = 1\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Sql,
+                "-- c\nSELECT id, name FROM t WHERE n = 1 AND s = 'x';\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::R,
+                "# c\nmain <- function() {\n  x <- \"s\"\n  n <- 1\n  f(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Julia,
+                "# c\nfunction main()\n    x = \"s\"\n    n = 1\n    f(x)\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Haskell,
+                "-- c\nmain :: IO ()\nmain = do\n  let x = \"s\"\n  let n = 1\n  f x\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Elixir,
+                "# c\ndefmodule Foo do\n  def bar do\n    x = \"s\"\n    n = 1\n    f(x)\n  end\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Erlang,
+                "% c\n-module(foo).\nbar() ->\n    X = \"s\",\n    N = 1,\n    f(X).\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::OCaml,
+                "(* c *)\nlet main () =\n  let x = \"s\" in\n  let n = 1 in\n  f x\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::FSharp,
+                "// c\nlet main () =\n  let x = \"s\"\n  let n = 1\n  f x\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Clojure,
+                ";; c\n(defn main []\n  (let [x \"s\" n 1]\n    (f x)))\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Solidity,
+                "// c\ncontract Foo {\n  uint n = 1;\n  function bar() public { f(\"s\"); }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Assembly,
+                "; c\n.section .text\nmain:\n    mov $1, %eax\n    ret\n",
+                // Instructions are `@function` and labels `@label` in this
+                // grammar; there is no separate keyword class to ask for.
+                &[K::Comment, K::Number, K::Function, K::Label],
+            ),
+            (
+                DiffSyntaxLanguage::Makefile,
+                "# c\nall: build\n\techo \"s\"\n",
+                // A recipe line is opaque shell text to this grammar, so nothing
+                // inside it is coloured; only the makefile's own syntax is.
+                &[K::Comment, K::Constant, K::PunctuationDelimiter],
+            ),
+            (
+                DiffSyntaxLanguage::Css,
+                "/* c */\n.a { color: red; width: 1px; }\n",
+                &[K::Comment, K::Number, K::Property, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Html,
+                "<!-- c -->\n<div id=\"x\">t</div>\n",
+                &[K::Comment, K::String, K::Tag, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Xml,
+                "<!-- c -->\n<root a=\"x\">t</root>\n",
+                &[K::Comment, K::String, K::Tag, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Vue,
+                "<template>\n  <div id=\"x\">t</div>\n</template>\n",
+                &[K::String, K::Tag, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Svelte,
+                "<script>\n  let n = 1;\n</script>\n<div id=\"x\">t</div>\n",
+                &[K::Tag, K::String, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Json,
+                "{\n  \"a\": \"s\",\n  \"n\": 1,\n  \"b\": true\n}\n",
+                &[
+                    K::String,
+                    K::Number,
+                    K::Property,
+                    K::PunctuationBracket,
+                    K::Boolean,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Yaml,
+                "# c\na: \"s\"\nn: 1\nb: true\n",
+                &[K::Comment, K::String, K::Number, K::Property],
+            ),
+            (
+                DiffSyntaxLanguage::Toml,
+                "# c\n[t]\na = \"s\"\nn = 1\n",
+                &[K::Comment, K::String, K::Number, K::Property],
+            ),
+            (
+                DiffSyntaxLanguage::GoMod,
+                "// c\nmodule example.com/m\n\ngo 1.22\n",
+                &[K::Comment, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Markdown,
+                "# Title\n\nSome *text* and [a link](http://x).\n",
+                &[K::MarkupHeading],
+            ),
+        ]
+    };
+
     /// The kinds a language must be able to colour before it counts as wired.
     ///
     /// Not a style preference: each of these is something a reader looks for. A
@@ -882,6 +1322,34 @@ mod tests {
                 "{language:?} never produced {kind:?}; it emitted {seen:?}"
             );
         }
+    }
+
+    /// Every language in [`LANGUAGE_BASELINES`] colours what it must.
+    ///
+    /// Reports every gap in one run rather than stopping at the first, so a
+    /// grammar batch can be assessed in one go.
+    #[test]
+    fn every_wired_language_meets_its_highlight_baseline() {
+        let mut gaps: Vec<String> = Vec::new();
+        for (language, sample, required) in LANGUAGE_BASELINES {
+            let document = prepare_test_document(*language, sample);
+            let mut seen: Vec<SyntaxTokenKind> = Vec::new();
+            for ix in 0..sample.lines().count() {
+                if let Some(chunk) = syntax_tokens_for_prepared_document_line(document, ix) {
+                    seen.extend(chunk.iter().map(|token| token.kind));
+                }
+            }
+            let missing: Vec<_> = required
+                .iter()
+                .filter(|kind| !seen.contains(kind))
+                .collect();
+            if !missing.is_empty() {
+                seen.sort_by_key(|kind| format!("{kind:?}"));
+                seen.dedup();
+                gaps.push(format!("{language:?} missing {missing:?} (has {seen:?})"));
+            }
+        }
+        assert!(gaps.is_empty(), "highlight gaps:\n  {}", gaps.join("\n  "));
     }
 
     /// Objective-C's own query captures neither comments, strings nor numbers,

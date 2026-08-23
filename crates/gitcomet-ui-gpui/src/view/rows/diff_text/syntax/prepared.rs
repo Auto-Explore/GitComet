@@ -3326,13 +3326,28 @@ fn apply_injection_query_tokens_for_document(
             continue;
         };
 
-        subtract_absolute_range_from_document_tokens(
-            context.line_starts,
-            input,
-            context.start_line_ix,
-            context.per_line,
-            injection.byte_start..injection.byte_end,
-        );
+        // Subtract only what the injection actually paints, not its whole span.
+        //
+        // Blanking the span outright loses any host capture the injection has no
+        // opinion about: a markdown heading is `@text.title` in the block
+        // grammar, and the inline grammar that owns those bytes captures nothing
+        // for plain prose, so the heading came out uncoloured. Cutting per
+        // painted token keeps last-wins where the two overlap and leaves the
+        // host's answer standing in the gaps.
+        for (parent_line_ix, tokens) in &injected_tokens {
+            let Some(line_start) = context.line_starts.get(*parent_line_ix).copied() else {
+                continue;
+            };
+            for token in tokens {
+                subtract_absolute_range_from_document_tokens(
+                    context.line_starts,
+                    input,
+                    context.start_line_ix,
+                    context.per_line,
+                    line_start + token.range.start..line_start + token.range.end,
+                );
+            }
+        }
 
         for (parent_line_ix, tokens) in injected_tokens {
             if tokens.is_empty() || parent_line_ix < context.start_line_ix {
