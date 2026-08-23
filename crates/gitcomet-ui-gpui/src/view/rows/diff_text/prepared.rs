@@ -60,6 +60,15 @@ pub(in crate::view) fn prepared_diff_syntax_pair_at_display_offset(
     syntax::prepared_document_syntax_pair_at_display_offset(document.inner, line_ix, display_offset)
 }
 
+/// Every place the clicked name appears, in the row canvases' coordinates.
+pub(in crate::view) fn prepared_diff_syntax_occurrences_at_display_offset(
+    document: PreparedDiffSyntaxDocument,
+    line_ix: usize,
+    display_offset: usize,
+) -> Vec<syntax::PreparedSyntaxPairSpan> {
+    syntax::prepared_document_occurrences_at_display_offset(document.inner, line_ix, display_offset)
+}
+
 fn map_prepare_result(
     result: syntax::PrepareTreesitterDocumentResult,
 ) -> PrepareDiffSyntaxDocumentResult {

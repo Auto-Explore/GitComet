@@ -3133,6 +3133,11 @@ pub(crate) struct MainPaneView {
     /// this is painted as a quad outside every cached artifact, and `KeyedCanvas`
     /// re-runs prepaint and paint every frame regardless of its revision key.
     pub(in crate::view) diff_text_pair_match: Option<DiffTextPairMatch>,
+    /// Every place the clicked name appears, already projected onto rows.
+    ///
+    /// Separate from `diff_text_pair_match` because a click produces both: the
+    /// name's other uses, and the construct enclosing it.
+    pub(in crate::view) diff_text_occurrences: Vec<DiffTextPairSpan>,
     pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
@@ -3323,6 +3328,8 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_live_syntax_reparse: Option<gpui::Task<()>>,
     /// The delimiters currently washed as the caret's bracket pair.
     pub(in crate::view) file_editor_syntax_pair: Option<rows::SyntaxPair>,
+    /// Everywhere the editor's buffer names the token under the caret.
+    pub(in crate::view) file_editor_occurrences: Vec<Range<usize>>,
     /// Byte ranges of every search match in the editor buffer, one per
     /// occurrence and parallel to `diff_search_matches`, which carries the line
     /// each of them sits on. Keeping the two parallel is what lets the shared

@@ -924,6 +924,130 @@ fn file_preview_click_lights_whole_html_tags_across_lines(cx: &mut gpui::TestApp
     std::fs::remove_dir_all(&workdir).expect("cleanup preview html fixture");
 }
 
+/// Clicking a name lights every other use of it, and the enclosing construct
+/// stays lit too -- one click answers both "what is this" and "where else".
+#[gpui::test]
+fn file_preview_click_lights_every_use_of_the_clicked_name(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(941);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_occurrences",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("occurrences.rs");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines: Arc<Vec<String>> = Arc::new(vec![
+        "fn main() {".to_string(),
+        "    let values = 1;".to_string(),
+        "    // values in a comment".to_string(),
+        "    let sum = values + 1;".to_string(),
+        "}".to_string(),
+    ]);
+    let preview_text = preview_lines.join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create occurrences workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write occurrences fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "occurrences preview prepared syntax",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+        },
+        |pane| {
+            (
+                pane.is_file_preview_active(),
+                pane.worktree_preview_prepared_syntax_document().is_some(),
+            )
+        },
+    );
+
+    // Line 1 is `    let values = 1;`: the name starts at column 8.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        1,
+        DiffTextRegion::Inline,
+        8..14,
+        "occurrence click target",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let spans: Vec<_> = pane
+            .diff_text_occurrences_for_tests()
+            .iter()
+            .map(|span| (span.source_visible_ix, span.range.clone()))
+            .collect();
+        assert_eq!(
+            spans,
+            vec![(1, 8..14), (3, 14..20)],
+            "the declaration and the later use, never the one in the comment"
+        );
+        assert_eq!(
+            pane.diff_text_local_occurrence_ranges(3, DiffTextRegion::Inline)
+                .into_vec(),
+            vec![14..20]
+        );
+        assert!(
+            pane.diff_text_local_occurrence_ranges(2, DiffTextRegion::Inline)
+                .is_empty(),
+            "the comment row must stay unwashed"
+        );
+        // And the enclosing construct is lit by the same click.
+        assert!(
+            pane.diff_text_pair_match_for_tests().is_some(),
+            "clicking inside the function body should also light its braces"
+        );
+    });
+
+    // Both reach the paint pass, not just the state.
+    cx.update(|_window, _app| rows::clear_diff_paint_log_for_tests());
+    draw_and_drain_test_window(cx);
+    let painted = rows::diff_paint_log_for_tests()
+        .into_iter()
+        .find(|record| record.visible_ix == 3 && record.region == DiffTextRegion::Inline)
+        .expect("row 3 should have painted");
+    assert_eq!(painted.occurrence_quads, vec![14..20]);
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup occurrences fixture");
+}
+
 #[gpui::test]
 fn untracked_json_file_preview_keeps_underscored_string_value_highlighted(
     cx: &mut gpui::TestAppContext,

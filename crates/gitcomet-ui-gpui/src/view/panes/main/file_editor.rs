@@ -93,11 +93,36 @@ pub(in crate::view) fn file_editor_text_fingerprint(snapshot: &TextModelSnapshot
 /// varied per call would rebind, notify, and spin forever.
 /// `set_highlight_provider_with_key` early-returns on an unchanged key, and that
 /// early return is what terminates the cycle.
+/// Wash every occurrence of the caret's name that falls inside `byte_range`.
+///
+/// `occurrences` is whole-document and sorted; this clips it to the window the
+/// provider was asked for, which is what the overlay composer requires.
+pub(in crate::view) fn apply_file_editor_occurrence_highlights(
+    highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
+    occurrences: &[Range<usize>],
+    byte_range: Range<usize>,
+    style: gpui::HighlightStyle,
+) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
+    if occurrences.is_empty() {
+        return highlights;
+    }
+    let clipped: Vec<Range<usize>> = occurrences
+        .iter()
+        .filter_map(|span| {
+            let start = span.start.max(byte_range.start);
+            let end = span.end.min(byte_range.end);
+            (start < end).then_some(start..end)
+        })
+        .collect();
+    apply_file_editor_overlay_highlights(highlights, &clipped, style)
+}
+
 pub(in crate::view) fn file_editor_provider_binding_key(
     document_version: u64,
     theme_epoch: u64,
     pair: Option<&rows::SyntaxPair>,
     search_overlay: &[Range<usize>],
+    occurrences: &[Range<usize>],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
 
@@ -122,6 +147,9 @@ pub(in crate::view) fn file_editor_provider_binding_key(
         }
         None => 0u8.hash(&mut hasher),
     }
+    // Moving the caret onto another name changes no text and touches no tree
+    // either, so this is the only thing that tells the input to repaint.
+    occurrences.hash(&mut hasher);
     hasher.finish()
 }
 
@@ -1394,14 +1422,31 @@ impl MainPaneView {
         self.file_editor_syntax_pair = (!has_selection)
             .then(|| snapshot.syntax_pair_at(cursor))
             .flatten();
+        self.file_editor_occurrences = if has_selection {
+            Vec::new()
+        } else {
+            snapshot.occurrences_at(cursor)
+        };
 
         let pair = self.file_editor_syntax_pair.clone();
+        let occurrences = self.file_editor_occurrences.clone();
         let binding_key = file_editor_provider_binding_key(
             version,
             self.file_editor_provider_theme_epoch,
             pair.as_ref(),
             &search_overlay,
+            &occurrences,
         );
+        let occurrence_style = gpui::HighlightStyle {
+            background_color: Some(
+                self.theme
+                    .colors
+                    .editor
+                    .occurrence_highlight_background
+                    .into_color(),
+            ),
+            ..Default::default()
+        };
         let pair_style = gpui::HighlightStyle {
             background_color: Some(
                 self.theme
@@ -1415,11 +1460,16 @@ impl MainPaneView {
         let provider = HighlightProvider::with_pending(
             move |byte_range: Range<usize>| HighlightProviderResult {
                 highlights: apply_file_editor_pair_highlights(
-                    apply_file_editor_search_highlights(
-                        snapshot.highlights_for_byte_range(byte_range.clone()),
-                        &search_overlay,
+                    apply_file_editor_occurrence_highlights(
+                        apply_file_editor_search_highlights(
+                            snapshot.highlights_for_byte_range(byte_range.clone()),
+                            &search_overlay,
+                            byte_range.clone(),
+                            search_style,
+                        ),
+                        &occurrences,
                         byte_range.clone(),
-                        search_style,
+                        occurrence_style,
                     ),
                     pair.as_ref(),
                     byte_range,

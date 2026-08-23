@@ -89,6 +89,7 @@
           "search_match_background": "#f8edcfff",
           "search_match_foreground": "#76510fff",
           "bracket_match_background": "#e7effcff",
+          "occurrence_highlight_background": "#ece4f7ff",
           "indent_guide": "#d3d9e2ff"
         },
         "diff": {
@@ -378,6 +379,10 @@
           },
           "search_match_foreground": "#f2a53aff",
           "bracket_match_background": "#ffffff26",
+          "occurrence_highlight_background": {
+            "hex": "#a78bfaff",
+            "alpha": 0.26
+          },
           "indent_guide": "#ffffff0d"
         },
         "diff": {

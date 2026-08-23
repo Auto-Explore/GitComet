@@ -28,6 +28,13 @@ use super::*;
 use crate::kit::rope::Rope;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// Ceiling for the occurrence scan in the editor.
+///
+/// The editor asks on every caret move, and the scan copies the rope out and
+/// walks the document, so this keeps a large buffer from paying that per
+/// keystroke. Comfortably above ordinary source files.
+const LIVE_OCCURRENCE_MAX_TEXT_BYTES: usize = 256 * 1024;
+
 /// Served in place of the real bytes for masked spans. See [`masked_read`].
 static BLANKS: [u8; 64] = [b' '; 64];
 
@@ -998,6 +1005,28 @@ impl LiveSyntaxSnapshot {
             pass_start = pass_end;
         }
         out
+    }
+
+    /// Everywhere the document names the token at `offset`.
+    ///
+    /// Bounded, unlike [`Self::syntax_pair_at`]: that is O(tree depth), this is
+    /// O(document), and the editor recomputes highlights on every caret move.
+    /// Past the ceiling the answer is empty rather than slow -- a missing
+    /// highlight beats a stuttering keystroke.
+    ///
+    /// Injected regions are not searched: the root tree has their bodies as one
+    /// unparsed leaf, so a name inside one matches nothing there.
+    pub(in crate::view) fn occurrences_at(&self, offset: usize) -> Vec<Range<usize>> {
+        let inner = self.0.as_ref();
+        let len = inner.rope.len();
+        if len > LIVE_OCCURRENCE_MAX_TEXT_BYTES {
+            return Vec::new();
+        }
+        let text = inner.rope.text_for_range(0..len);
+        let offset = offset.min(text.len());
+        syntax_occurrences_in_tree(&inner.tree, &text, offset)
+            .map(|found| found.ranges)
+            .unwrap_or_default()
     }
 
     /// The matching open/close pair the caret at `offset` belongs to: the

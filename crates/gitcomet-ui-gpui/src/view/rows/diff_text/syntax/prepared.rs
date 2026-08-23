@@ -1800,6 +1800,26 @@ pub(in crate::view) struct PreparedSyntaxPairHit {
 /// there is nothing here to match against. A delimiter inside a `<script>` body
 /// is a byte of an unparsed `raw_text` leaf, so it matches nothing and the walk
 /// falls out to the enclosing element -- a narrower answer, never a wrong one.
+/// One line's byte range, without its line terminator.
+///
+/// The newline belongs to the line's bytes but never to its display columns, so
+/// it is trimmed before any offset is measured against the line.
+fn prepared_line_span(text: &str, line_starts: &[usize], ix: usize) -> Option<Range<usize>> {
+    let start = *line_starts.get(ix)?;
+    let end = line_starts
+        .get(ix + 1)
+        .copied()
+        .unwrap_or(text.len())
+        .min(text.len());
+    let end = text[start..end]
+        .strip_suffix('\n')
+        .map_or(end, |line| start + line.len());
+    let end = text[start..end]
+        .strip_suffix('\r')
+        .map_or(end, |line| start + line.len());
+    (start <= end).then_some(start..end)
+}
+
 pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     document: PreparedSyntaxDocument,
     line_ix: usize,
@@ -1809,23 +1829,7 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     let text = state.text.as_ref();
     let line_starts = state.line_starts.as_ref();
 
-    let line_span = |ix: usize| -> Option<Range<usize>> {
-        let start = *line_starts.get(ix)?;
-        let end = line_starts
-            .get(ix + 1)
-            .copied()
-            .unwrap_or(text.len())
-            .min(text.len());
-        // The newline belongs to the line's bytes but never to its display
-        // columns, so trim it before any offset is measured against it.
-        let end = text[start..end]
-            .strip_suffix('\n')
-            .map_or(end, |line| start + line.len());
-        let end = text[start..end]
-            .strip_suffix('\r')
-            .map_or(end, |line| start + line.len());
-        (start <= end).then_some(start..end)
-    };
+    let line_span = |ix: usize| prepared_line_span(text, line_starts, ix);
 
     let clicked = line_span(line_ix)?;
     let clicked_line = text.get(clicked.clone())?;
@@ -1873,6 +1877,56 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
         open,
         close,
     })
+}
+
+/// Every place the document names the token at a click, in the canvases' own
+/// coordinates.
+///
+/// Shares the display/raw conversion and the line projection with
+/// [`prepared_document_syntax_pair_at_display_offset`], for the same reason:
+/// this is the only place holding both the tree's byte offsets and the text the
+/// rows were painted from.
+pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
+    document: PreparedSyntaxDocument,
+    line_ix: usize,
+    display_offset: usize,
+) -> Vec<PreparedSyntaxPairSpan> {
+    let Some(state) = prepared_document_tree_state(document) else {
+        return Vec::new();
+    };
+    let text = state.text.as_ref();
+    let line_starts = state.line_starts.as_ref();
+
+    let Some(clicked) = prepared_line_span(text, line_starts, line_ix) else {
+        return Vec::new();
+    };
+    let Some(clicked_line) = text.get(clicked.clone()) else {
+        return Vec::new();
+    };
+    let offset = clicked.start + raw_offset_for_display_offset(clicked_line, display_offset);
+
+    let Some(found) = syntax_occurrences_in_tree(&state.tree, text, offset) else {
+        return Vec::new();
+    };
+    found
+        .ranges
+        .iter()
+        .filter_map(|range| {
+            // A name never spans a line, so one span per occurrence is exact.
+            let ix = line_starts
+                .partition_point(|start| *start <= range.start)
+                .checked_sub(1)?;
+            let span = prepared_line_span(text, line_starts, ix)?;
+            let line = text.get(span.clone())?;
+            let start = range.start.clamp(span.start, span.end) - span.start;
+            let end = range.end.clamp(span.start, span.end) - span.start;
+            (start < end).then(|| PreparedSyntaxPairSpan {
+                line_ix: ix,
+                display_range: display_offset_for_raw_offset(line, start)
+                    ..display_offset_for_raw_offset(line, end),
+            })
+        })
+        .collect()
 }
 
 pub(in super::super) fn prepared_document_reparse_seed(

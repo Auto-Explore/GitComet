@@ -1190,6 +1190,8 @@ pub(in crate::view) struct DiffPaintRecord {
     /// `NoopTextSystem`, so a painted x proves nothing about which character
     /// it covered.
     pub(in crate::view) pair_quads: Vec<Range<usize>>,
+    /// Local offset ranges the occurrence quads were painted for.
+    pub(in crate::view) occurrence_quads: Vec<Range<usize>>,
 }
 
 #[cfg(test)]
@@ -1205,6 +1207,7 @@ fn record_diff_paint_for_tests(
     highlights: &[(Range<usize>, HighlightStyle)],
     row_bg: Option<gpui::Rgba>,
     pair_quads: &[Range<usize>],
+    occurrence_quads: &[Range<usize>],
 ) {
     DIFF_PAINT_LOG.with(|log| {
         log.borrow_mut().push(DiffPaintRecord {
@@ -1217,6 +1220,7 @@ fn record_diff_paint_for_tests(
                 .collect(),
             row_bg,
             pair_quads: pair_quads.to_vec(),
+            occurrence_quads: occurrence_quads.to_vec(),
         });
     });
 }
@@ -3714,6 +3718,9 @@ fn paint_selectable_diff_text(
     let pair_ranges = view
         .read(cx)
         .diff_text_local_pair_ranges(visible_ix, region);
+    let occurrence_ranges = view
+        .read(cx)
+        .diff_text_local_occurrence_ranges(visible_ix, region);
 
     #[cfg(test)]
     record_diff_paint_for_tests(
@@ -3723,6 +3730,7 @@ fn paint_selectable_diff_text(
         paint_highlights,
         row_bg,
         &pair_ranges,
+        &occurrence_ranges,
     );
     #[cfg(not(test))]
     let _ = row_bg;
@@ -3771,9 +3779,18 @@ fn paint_selectable_diff_text(
         }
     };
 
-    // The pair goes down first so a selection dragged over it still reads as the
-    // selection. They are mutually exclusive today -- a drag clears the pair --
-    // but the ordering costs nothing and survives that changing.
+    // Occurrences go down first, then the pair, then the selection. One click
+    // produces both a pair and a set of occurrences, and the clicked name is in
+    // both: painting the pair second means the delimiters stay legible where
+    // the two overlap.
+    if !occurrence_ranges.is_empty() {
+        let color = view.read(cx).diff_text_occurrence_color();
+        for range in &occurrence_ranges {
+            let (x0, x1) = x_range_for_local(range);
+            paint_row_quad(x0, x1, color, window);
+        }
+    }
+
     if !pair_ranges.is_empty() {
         let color = view.read(cx).diff_text_pair_match_color();
         for range in &pair_ranges {

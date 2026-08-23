@@ -57,8 +57,9 @@ impl MainPaneView {
         self.diff_text_head = None;
         self.diff_text_autoscroll_target = None;
         // Reached on every file switch, view-mode change and diff rebuild, all of
-        // which move the row indices the pair spans were projected onto.
+        // which move the row indices these spans were projected onto.
         self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
     }
 
     pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
@@ -729,6 +730,7 @@ impl MainPaneView {
         // text entirely is a press away from the pair. Both must dismiss it, and
         // both skip `begin_diff_text_selection`'s set below.
         self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
         match click_count {
             3.. => {
                 self.select_diff_text_line_at_mouse(visible_ix, region, position);
@@ -765,6 +767,7 @@ impl MainPaneView {
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
         self.diff_text_pair_match = self.diff_text_pair_match_for_pos(&pos);
+        self.diff_text_occurrences = self.diff_text_occurrences_for_pos(&pos);
     }
 
     pub(in super::super::super) fn begin_diff_text_scroll_tracking(
@@ -831,6 +834,7 @@ impl MainPaneView {
                 // A selection is the user working on a span, not sitting in one;
                 // a pair lit at each end of it reads as part of the selection.
                 self.diff_text_pair_match = None;
+                self.diff_text_occurrences.clear();
                 self.sync_diff_focus_to_text_selection();
                 self.diff_suppress_clicks_remaining = 1;
             }
@@ -1045,6 +1049,66 @@ impl MainPaneView {
             kind: hit.kind,
             spans,
         })
+    }
+
+    /// Every place the clicked name appears, projected onto rows.
+    ///
+    /// Reuses the pair path's row resolution: both answer "which document and
+    /// line is this row", and both project document lines back onto rows, so a
+    /// name's uses land on rows exactly the way a delimiter's partner does.
+    fn diff_text_occurrences_for_pos(&self, pos: &DiffTextPos) -> Vec<DiffTextPairSpan> {
+        if self.diff_text_row_is_display_truncated(pos.source_visible_ix, pos.region) {
+            return Vec::new();
+        }
+        let Some((document, line_ix, side)) =
+            self.diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)
+        else {
+            return Vec::new();
+        };
+        rows::prepared_diff_syntax_occurrences_at_display_offset(document, line_ix, pos.offset)
+            .into_iter()
+            .filter_map(|end| {
+                let (source_visible_ix, region) =
+                    self.diff_text_pair_row_for_document_line(side, end.line_ix)?;
+                Some(DiffTextPairSpan {
+                    source_visible_ix,
+                    region,
+                    range: end.display_range,
+                })
+            })
+            .collect()
+    }
+
+    pub(in super::super::super) fn diff_text_occurrence_color(&self) -> gpui::Rgba {
+        self.theme.colors.editor.occurrence_highlight_background
+    }
+
+    /// The occurrences falling on one row, in that row's local offsets.
+    pub(in super::super::super) fn diff_text_local_occurrence_ranges(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        if self.diff_text_occurrences.is_empty() {
+            return smallvec::SmallVec::new();
+        }
+        let (source_visible_ix, visual_range) =
+            self.diff_text_visual_source_range_for_region(visible_ix, region);
+        let mut out: smallvec::SmallVec<[Range<usize>; 4]> = self
+            .diff_text_occurrences
+            .iter()
+            .filter(|span| span.source_visible_ix == source_visible_ix && span.region == region)
+            .filter_map(|span| {
+                diff_text_local_range_from_source_ranges(span.range.clone(), visual_range.clone())
+            })
+            .collect();
+        out.sort_by_key(|range| range.start);
+        out
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_occurrences_for_tests(&self) -> &[DiffTextPairSpan] {
+        &self.diff_text_occurrences
     }
 
     /// The parts of the pair that fall on one row, in that row's local offsets.

@@ -313,23 +313,24 @@ fn provider_binding_key_changes_only_when_something_changed() {
         kind: rows::SyntaxPairKind::Bracket,
     };
     let no_matches: &[std::ops::Range<usize>] = &[];
+    let no_occurrences: &[std::ops::Range<usize>] = &[];
     // Two ranges, not one: clippy reads a single-range array literal as a typo.
     let one_match: &[std::ops::Range<usize>] = &[20..25, 40..45];
     let other_match: &[std::ops::Range<usize>] = &[30..35, 40..45];
-    let base = file_editor_provider_binding_key(7, 1, Some(&pair), no_matches);
+    let base = file_editor_provider_binding_key(7, 1, Some(&pair), no_matches, no_occurrences);
 
     assert_eq!(
         base,
-        file_editor_provider_binding_key(7, 1, Some(&pair), no_matches),
+        file_editor_provider_binding_key(7, 1, Some(&pair), no_matches, no_occurrences),
         "an unchanged binding must not rebind — that is what stops the observe cycle"
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(8, 1, Some(&pair), no_matches)
+        file_editor_provider_binding_key(8, 1, Some(&pair), no_matches, no_occurrences)
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 2, Some(&pair), no_matches)
+        file_editor_provider_binding_key(7, 2, Some(&pair), no_matches, no_occurrences)
     );
     assert_ne!(
         base,
@@ -341,7 +342,8 @@ fn provider_binding_key_changes_only_when_something_changed() {
                 close: 12..13,
                 kind: rows::SyntaxPairKind::Bracket,
             }),
-            no_matches
+            no_matches,
+            no_occurrences
         ),
         "moving the caret to another pair must rebind"
     );
@@ -355,24 +357,31 @@ fn provider_binding_key_changes_only_when_something_changed() {
                 close: 9..10,
                 kind: rows::SyntaxPairKind::Quote,
             }),
-            no_matches
+            no_matches,
+            no_occurrences
         ),
         "same span, different kind: the key must still separate them"
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 1, None, no_matches)
+        file_editor_provider_binding_key(7, 1, None, no_matches, no_occurrences)
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 1, Some(&pair), one_match),
+        file_editor_provider_binding_key(7, 1, Some(&pair), one_match, no_occurrences),
         "a search match moves no text and touches no tree, so this key is the \
          only thing that can tell the input its highlights changed"
     );
     assert_ne!(
-        file_editor_provider_binding_key(7, 1, Some(&pair), one_match),
-        file_editor_provider_binding_key(7, 1, Some(&pair), other_match),
+        file_editor_provider_binding_key(7, 1, Some(&pair), one_match, no_occurrences),
+        file_editor_provider_binding_key(7, 1, Some(&pair), other_match, no_occurrences),
         "stepping to the next match changes which hits are washed"
+    );
+    assert_ne!(
+        base,
+        file_editor_provider_binding_key(7, 1, Some(&pair), no_matches, &[20..25, 40..45]),
+        "moving the caret onto a name moves no text and touches no tree, so this \
+         key is the only thing that can tell the input its highlights changed"
     );
 }
 

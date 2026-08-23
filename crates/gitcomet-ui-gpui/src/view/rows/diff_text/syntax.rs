@@ -381,11 +381,13 @@ pub(super) enum PrepareTreesitterDocumentResult {
 mod heuristic;
 mod language;
 mod live;
+mod occurrences;
 mod pairs;
 mod prepared;
 
 use heuristic::*;
 use language::*;
+use occurrences::*;
 use pairs::*;
 use prepared::*;
 
@@ -400,6 +402,7 @@ pub(in crate::view) use live::{
     LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_document_supported,
     live_syntax_reparse,
 };
+pub(in crate::view) use occurrences::SyntaxOccurrences;
 pub(in crate::view) use pairs::{SyntaxPair, SyntaxPairKind};
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
@@ -415,7 +418,8 @@ pub(super) use prepared::{
     request_syntax_tokens_for_prepared_document_line_range_into,
 };
 pub(in crate::view) use prepared::{
-    PreparedSyntaxPairHit, PreparedSyntaxPairSpan, prepared_document_syntax_pair_at_display_offset,
+    PreparedSyntaxPairHit, PreparedSyntaxPairSpan, prepared_document_occurrences_at_display_offset,
+    prepared_document_syntax_pair_at_display_offset,
 };
 #[cfg(feature = "benchmarks")]
 pub(super) use prepared::{
@@ -736,6 +740,118 @@ mod tests {
         );
         assert_eq!(hit.close.len(), 1);
         assert_eq!(hit.close[0].line_ix, 4);
+    }
+
+    fn occurrences_in(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        offset: usize,
+    ) -> Option<SyntaxOccurrences> {
+        let input = treesitter_document_input_from_text(text);
+        let spec = tree_sitter_highlight_spec(language)?;
+        let tree = with_ts_parser_parse_result(&spec.ts_language, |parser| {
+            parse_treesitter_tree(parser, input.text.as_bytes(), None, None)
+        })?;
+        syntax_occurrences_in_tree(&tree, text, offset)
+    }
+
+    /// The clicked name lights everywhere the grammar also tokenised it.
+    #[test]
+    fn occurrences_find_every_use_of_the_clicked_name() {
+        let text = "fn main() {\n    let values = vec![1];\n    for v in values {}\n}\n";
+        let click = text.find("values").expect("declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+
+        assert_eq!(found.token, click..click + "values".len());
+        assert_eq!(
+            found
+                .ranges
+                .iter()
+                .map(|range| &text[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["values", "values"],
+        );
+        assert_eq!(found.ranges[1].start, text.rfind("values").expect("use"));
+    }
+
+    /// A name inside a comment or a string is content, not a use of the symbol.
+    #[test]
+    fn occurrences_skip_comments_and_string_bodies() {
+        let text = concat!(
+            "fn main() {\n",
+            "    let total = 1;\n",
+            "    // total is not a use\n",
+            "    let label = \"total\";\n",
+            "    let sum = total + 1;\n",
+            "}\n",
+        );
+        let click = text.find("total").expect("declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+
+        assert_eq!(found.ranges.len(), 2, "declaration and the later use only");
+        for range in &found.ranges {
+            assert_eq!(&text[range.clone()], "total");
+            assert!(
+                !text[..range.start].ends_with("// ") && !text[..range.start].ends_with('"'),
+                "matched inside a comment or string: {range:?}"
+            );
+        }
+        assert_eq!(found.ranges[1].start, text.rfind("total").expect("use"));
+    }
+
+    /// A longer word that merely contains the name is not a use of it.
+    #[test]
+    fn occurrences_respect_word_boundaries() {
+        let text = "fn main() {\n    let sum = 1;\n    let summary = 2;\n    let x = sum;\n}\n";
+        let click = text.find("sum").expect("declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+
+        assert_eq!(found.ranges.len(), 2, "`summary` must not match `sum`");
+        assert!(
+            found
+                .ranges
+                .iter()
+                .all(|range| &text[range.clone()] == "sum"),
+        );
+    }
+
+    /// Clicking punctuation, whitespace or a literal is not clicking a name.
+    #[test]
+    fn occurrences_are_none_off_a_name() {
+        let text = "fn main() {\n    let n = 1234;\n}\n";
+        for probe in ["{", " 1234", ";"] {
+            let at = text.find(probe).expect("probe");
+            assert_eq!(
+                occurrences_in(DiffSyntaxLanguage::Rust, text, at + 1).map(|found| found.token),
+                None,
+                "clicking {probe:?} should not name anything",
+            );
+        }
+    }
+
+    /// Fields and calls are names too, which is the point of asking the tree
+    /// rather than scanning for words.
+    #[test]
+    fn occurrences_cover_calls_and_fields() {
+        let text = concat!(
+            "fn main() {\n",
+            "    let item = Item { width: 1 };\n",
+            "    let w = item.width;\n",
+            "    resize(item.width);\n",
+            "}\n",
+        );
+        let click = text.find("width").expect("field declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+        assert_eq!(
+            found.ranges.len(),
+            3,
+            "the shorthand field and both reads, got {:?}",
+            found
+                .ranges
+                .iter()
+                .map(|r| &text[r.clone()])
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
