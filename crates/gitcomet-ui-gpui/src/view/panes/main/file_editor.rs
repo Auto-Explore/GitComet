@@ -501,6 +501,8 @@ impl MainPaneView {
         // downgraded the file to heuristic highlighting.
         if !same_file {
             self.file_editor_syntax_pair = None;
+            self.file_editor_occurrences.clear();
+            self.file_editor_occurrences_version = None;
             self.file_editor_live_syntax = None;
             self.file_editor_live_syntax_source = None;
             self.file_editor_live_syntax_building = None;
@@ -1382,6 +1384,8 @@ impl MainPaneView {
             // window so the cost stays proportional to the viewport. Bracket
             // matching needs a tree, so it stays off here.
             self.file_editor_syntax_pair = None;
+            self.file_editor_occurrences.clear();
+            self.file_editor_occurrences_version = None;
             let theme = self.theme;
             let language = self.file_editor_language;
             let rope = snapshot.rope();
@@ -1422,11 +1426,21 @@ impl MainPaneView {
         self.file_editor_syntax_pair = (!has_selection)
             .then(|| snapshot.syntax_pair_at(cursor))
             .flatten();
-        self.file_editor_occurrences = if has_selection {
-            Vec::new()
-        } else {
-            snapshot.occurrences_at(cursor)
-        };
+        // A caret moving inside the name it is already on changes nothing, and
+        // the scan is O(document) -- so hold the answer until the caret leaves
+        // the set or the text changes under it.
+        let occurrences_still_apply = self.file_editor_occurrences_version == Some(version)
+            && self
+                .file_editor_occurrences
+                .iter()
+                .any(|range| range.start <= cursor && cursor <= range.end);
+        if has_selection {
+            self.file_editor_occurrences = Vec::new();
+            self.file_editor_occurrences_version = None;
+        } else if !occurrences_still_apply {
+            self.file_editor_occurrences = snapshot.occurrences_at(cursor);
+            self.file_editor_occurrences_version = Some(version);
+        }
 
         let pair = self.file_editor_syntax_pair.clone();
         let occurrences = self.file_editor_occurrences.clone();

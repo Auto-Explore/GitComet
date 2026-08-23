@@ -28,13 +28,6 @@ use super::*;
 use crate::kit::rope::Rope;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// Ceiling for the occurrence scan in the editor.
-///
-/// The editor asks on every caret move, and the scan copies the rope out and
-/// walks the document, so this keeps a large buffer from paying that per
-/// keystroke. Comfortably above ordinary source files.
-const LIVE_OCCURRENCE_MAX_TEXT_BYTES: usize = 256 * 1024;
-
 /// Served in place of the real bytes for masked spans. See [`masked_read`].
 static BLANKS: [u8; 64] = [b' '; 64];
 
@@ -1019,11 +1012,21 @@ impl LiveSyntaxSnapshot {
     pub(in crate::view) fn occurrences_at(&self, offset: usize) -> Vec<Range<usize>> {
         let inner = self.0.as_ref();
         let len = inner.rope.len();
-        if len > LIVE_OCCURRENCE_MAX_TEXT_BYTES {
+        if len > OCCURRENCE_MAX_TEXT_BYTES {
+            return Vec::new();
+        }
+        let offset = offset.min(len);
+        // Ask the tree first. Deciding "not a name" costs a descent; deciding it
+        // after flattening the rope costs the whole document, and most caret
+        // moves land on punctuation, whitespace or a literal.
+        if name_token_at(&inner.tree, offset, |range| {
+            Some(inner.rope.text_for_range(range))
+        })
+        .is_none()
+        {
             return Vec::new();
         }
         let text = inner.rope.text_for_range(0..len);
-        let offset = offset.min(text.len());
         syntax_occurrences_in_tree(&inner.tree, &text, offset)
             .map(|found| found.ranges)
             .unwrap_or_default()
@@ -1902,11 +1905,11 @@ mod tests {
     }
 
     /// `(open, close)` in `language`, as `&str` slices.
-    fn pair_text_in<'a>(
+    fn pair_text_in(
         language: DiffSyntaxLanguage,
-        text: &'a str,
+        text: &str,
         offset: usize,
-    ) -> Option<(&'a str, &'a str)> {
+    ) -> Option<(&str, &str)> {
         let document = document_in(language, text, Vec::new());
         syntax_pair_text(&document, text, offset)
     }

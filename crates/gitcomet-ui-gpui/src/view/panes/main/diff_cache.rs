@@ -1542,7 +1542,7 @@ impl MainPaneView {
     /// the prepare call matches the cached document by source identity and
     /// returns it without reparsing.
     pub(in crate::view) fn file_diff_pair_syntax_document(
-        &self,
+        &mut self,
         region: DiffTextRegion,
     ) -> Option<rows::PreparedDiffSyntaxDocument> {
         if let Some(document) = self.file_diff_split_prepared_syntax_document(region) {
@@ -1551,32 +1551,57 @@ impl MainPaneView {
         let language = self.file_diff_cache_language?;
         let (text, line_starts, source_path) = match region {
             DiffTextRegion::SplitLeft => (
-                &self.file_diff_old_text,
-                &self.file_diff_old_line_starts,
-                self.file_diff_old_source_path.as_ref(),
+                self.file_diff_old_text.clone(),
+                Arc::clone(&self.file_diff_old_line_starts),
+                self.file_diff_old_source_path.clone(),
             ),
             DiffTextRegion::SplitRight | DiffTextRegion::Inline => (
-                &self.file_diff_new_text,
-                &self.file_diff_new_line_starts,
-                self.file_diff_new_source_path.as_ref(),
+                self.file_diff_new_text.clone(),
+                Arc::clone(&self.file_diff_new_line_starts),
+                self.file_diff_new_source_path.clone(),
             ),
         };
+        let source_path = source_path.as_ref();
         // A source-backed side keeps its text out of memory on purpose, so a
         // huge diff can render from per-line slices. That is the ordinary case
         // for a worktree file, whose new side *is* the file, and it leaves
         // nothing to parse a document from -- read it back here, where a click
         // can afford it and the same size ceiling still applies.
+        let side = match region {
+            DiffTextRegion::SplitLeft => DiffTextRegion::SplitLeft,
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => DiffTextRegion::SplitRight,
+        };
         let text = if text.is_empty() {
-            let path = source_path?;
-            let len = std::fs::metadata(path.as_ref()).ok()?.len();
-            if len > rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES as u64 {
-                return None;
+            match self.file_diff_pair_syntax_text.get(&side) {
+                // Kept from an earlier click: the same allocation, so the parse
+                // below resolves by source identity instead of re-parsing.
+                Some(retained) => retained.clone(),
+                None => {
+                    let path = source_path?;
+                    let len = std::fs::metadata(path.as_ref()).ok()?.len();
+                    // Bounded by the occurrence ceiling rather than the prepared
+                    // document's 8 MB one. The click budget below is far above
+                    // the render path's, which switches off the large-file skip
+                    // guard -- so without a limit here a click on a huge file
+                    // reads megabytes, burns the whole budget, times out, caches
+                    // nothing, and does it again on the next click. Declining up
+                    // front reaches the same answer without the stall.
+                    if len > rows::OCCURRENCE_MAX_TEXT_BYTES as u64 {
+                        return None;
+                    }
+                    let read = SharedString::from(std::fs::read_to_string(path.as_ref()).ok()?);
+                    self.file_diff_pair_syntax_text.insert(side, read.clone());
+                    read
+                }
             }
-            SharedString::from(std::fs::read_to_string(path.as_ref()).ok()?)
         } else {
             text.clone()
         };
         if text.is_empty() || line_starts.is_empty() {
+            return None;
+        }
+        // Same ceiling for a side whose text the view already holds.
+        if text.len() > rows::OCCURRENCE_MAX_TEXT_BYTES {
             return None;
         }
         // A click is not a frame: it can afford a real parse where the render
@@ -1588,7 +1613,7 @@ impl MainPaneView {
             language,
             FULL_DOCUMENT_SYNTAX_MODE,
             text,
-            Arc::clone(line_starts),
+            line_starts,
             budget,
             None,
             None,
@@ -2271,6 +2296,7 @@ impl MainPaneView {
         self.file_diff_cache_language = None;
         self.file_diff_cache_rows.clear();
         self.file_diff_row_provider = None;
+        self.file_diff_pair_syntax_text.clear();
         self.file_diff_old_source_path = None;
         self.file_diff_new_source_path = None;
         self.file_diff_old_text = SharedString::default();

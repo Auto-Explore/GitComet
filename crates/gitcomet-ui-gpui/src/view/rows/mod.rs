@@ -443,7 +443,7 @@ pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSearchMatchEmphasis, DiffSyntaxBudget,
     DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument, LiveSyntaxSnapshot,
-    LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
+    LiveSyntaxSyncOutcome, OCCURRENCE_MAX_TEXT_BYTES, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
     PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine,
     PreparedDiffSyntaxReparseSeed, SyntaxPair, SyntaxPairKind,
     diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,

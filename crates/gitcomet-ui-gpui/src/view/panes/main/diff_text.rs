@@ -856,8 +856,21 @@ impl MainPaneView {
         visible_ix: usize,
         region: DiffTextRegion,
     ) -> Option<Range<usize>> {
-        let (source_visible_ix, visual_range) =
-            self.diff_text_visual_source_range_for_region(visible_ix, region);
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_selection_range_in(region, resolved)
+    }
+
+    /// As above, for a caller that already resolved the row's visual range.
+    ///
+    /// The paint path asks three of these per row -- selection, pair,
+    /// occurrences -- and resolving the range is not free: its non-wrapped arm
+    /// re-fetches the row model and can re-measure the row's display text.
+    pub(in super::super::super) fn diff_text_local_selection_range_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> Option<Range<usize>> {
+        let (source_visible_ix, visual_range) = resolved;
         let selected =
             self.diff_text_source_selection_range(source_visible_ix, region, visual_range.end)?;
         diff_text_local_range_from_source_ranges(selected, visual_range)
@@ -913,7 +926,7 @@ impl MainPaneView {
     /// also why a pair can never span the two halves of a split view: the two
     /// sides are different documents and the matcher only ever walks one tree.
     fn diff_text_pair_document_for_row(
-        &self,
+        &mut self,
         source_visible_ix: usize,
         region: DiffTextRegion,
     ) -> Option<(rows::PreparedDiffSyntaxDocument, usize, DiffTextPairSide)> {
@@ -983,6 +996,15 @@ impl MainPaneView {
         side: DiffTextPairSide,
         line_ix: usize,
     ) -> Option<(usize, DiffTextRegion)> {
+        self.diff_text_pair_row_for_document_line_with(side, line_ix, None)
+    }
+
+    fn diff_text_pair_row_for_document_line_with(
+        &self,
+        side: DiffTextPairSide,
+        line_ix: usize,
+        collapsed_rows: Option<&FxHashMap<usize, usize>>,
+    ) -> Option<(usize, DiffTextRegion)> {
         if side == DiffTextPairSide::Preview {
             return Some((line_ix, DiffTextRegion::Inline));
         }
@@ -994,7 +1016,10 @@ impl MainPaneView {
             (_, false) => self.file_diff_new_line_to_row.as_ref(),
         };
         let row_ix = (*map.get(line_ix)?)?;
-        let source_visible_ix = self.diff_text_pair_source_visible_ix_for_row(row_ix)?;
+        let source_visible_ix = match collapsed_rows {
+            Some(index) => index.get(&row_ix).copied()?,
+            None => self.diff_text_pair_source_visible_ix_for_row(row_ix)?,
+        };
         let region = match (inline, side) {
             (true, _) => DiffTextRegion::Inline,
             (false, DiffTextPairSide::Old) => DiffTextRegion::SplitLeft,
@@ -1019,7 +1044,7 @@ impl MainPaneView {
     }
 
     /// The matching delimiter pair for a click, projected onto rows.
-    fn diff_text_pair_match_for_pos(&self, pos: &DiffTextPos) -> Option<DiffTextPairMatch> {
+    fn diff_text_pair_match_for_pos(&mut self, pos: &DiffTextPos) -> Option<DiffTextPairMatch> {
         // A row the display truncated is not the tab-expansion of its line, so
         // offsets into it do not convert. Better no answer than a confident one
         // pointing at the wrong character.
@@ -1056,75 +1081,137 @@ impl MainPaneView {
     /// Reuses the pair path's row resolution: both answer "which document and
     /// line is this row", and both project document lines back onto rows, so a
     /// name's uses land on rows exactly the way a delimiter's partner does.
-    fn diff_text_occurrences_for_pos(&self, pos: &DiffTextPos) -> Vec<DiffTextPairSpan> {
+    fn diff_text_occurrences_for_pos(
+        &mut self,
+        pos: &DiffTextPos,
+    ) -> FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> {
         if self.diff_text_row_is_display_truncated(pos.source_visible_ix, pos.region) {
-            return Vec::new();
+            return FxHashMap::default();
         }
         let Some((document, line_ix, side)) =
             self.diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)
         else {
-            return Vec::new();
+            return FxHashMap::default();
         };
-        rows::prepared_diff_syntax_occurrences_at_display_offset(document, line_ix, pos.offset)
-            .into_iter()
-            .filter_map(|end| {
-                let (source_visible_ix, region) =
-                    self.diff_text_pair_row_for_document_line(side, end.line_ix)?;
-                Some(DiffTextPairSpan {
-                    source_visible_ix,
-                    region,
-                    range: end.display_range,
-                })
-            })
-            .collect()
+        let ends =
+            rows::prepared_diff_syntax_occurrences_at_display_offset(document, line_ix, pos.offset);
+        if ends.is_empty() {
+            return FxHashMap::default();
+        }
+        // The collapsed projection keeps no reverse index, and the per-occurrence
+        // lookup would otherwise scan every projected row for every match. Build
+        // it once here instead -- O(rows + matches) rather than rows times
+        // matches.
+        let collapsed_rows = self.diff_text_collapsed_row_index();
+        let mut buckets: FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> =
+            FxHashMap::default();
+        for end in ends {
+            let Some((source_visible_ix, region)) = self.diff_text_pair_row_for_document_line_with(
+                side,
+                end.line_ix,
+                collapsed_rows.as_ref(),
+            ) else {
+                continue;
+            };
+            buckets
+                .entry((source_visible_ix, region))
+                .or_default()
+                .push(end.display_range);
+        }
+        for ranges in buckets.values_mut() {
+            ranges.sort_by_key(|range| range.start);
+        }
+        buckets
+    }
+
+    /// `row_ix -> source_visible_ix` for the collapsed projection, or `None`
+    /// when that projection is not active and the mapping is not a scan.
+    fn diff_text_collapsed_row_index(&self) -> Option<FxHashMap<usize, usize>> {
+        self.is_collapsed_diff_projection_active().then(|| {
+            self.collapsed_diff_visible_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(visible_ix, row)| Some((row.row_ix()?, visible_ix)))
+                .collect()
+        })
     }
 
     pub(in super::super::super) fn diff_text_occurrence_color(&self) -> gpui::Rgba {
         self.theme.colors.editor.occurrence_highlight_background
     }
 
-    /// The occurrences falling on one row, in that row's local offsets.
+    /// The occurrences falling on one row, resolving the row itself. See the
+    /// note on the pair equivalent.
+    #[cfg(test)]
     pub(in super::super::super) fn diff_text_local_occurrence_ranges(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
     ) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_occurrence_ranges_in(region, resolved)
+    }
+
+    pub(in super::super::super) fn diff_text_local_occurrence_ranges_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> smallvec::SmallVec<[Range<usize>; 4]> {
         if self.diff_text_occurrences.is_empty() {
             return smallvec::SmallVec::new();
         }
-        let (source_visible_ix, visual_range) =
-            self.diff_text_visual_source_range_for_region(visible_ix, region);
-        let mut out: smallvec::SmallVec<[Range<usize>; 4]> = self
+        let (source_visible_ix, visual_range) = resolved;
+        let Some(ranges) = self.diff_text_occurrences.get(&(source_visible_ix, region)) else {
+            return smallvec::SmallVec::new();
+        };
+        // Already sorted when the buckets were built.
+        ranges
+            .iter()
+            .filter_map(|range| {
+                diff_text_local_range_from_source_ranges(range.clone(), visual_range.clone())
+            })
+            .collect()
+    }
+
+    /// Every occurrence span, flattened and ordered, for assertions.
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_occurrences_for_tests(&self) -> Vec<(usize, Range<usize>)> {
+        let mut out: Vec<(usize, Range<usize>)> = self
             .diff_text_occurrences
             .iter()
-            .filter(|span| span.source_visible_ix == source_visible_ix && span.region == region)
-            .filter_map(|span| {
-                diff_text_local_range_from_source_ranges(span.range.clone(), visual_range.clone())
+            .flat_map(|((source_visible_ix, _), ranges)| {
+                ranges
+                    .iter()
+                    .map(move |range| (*source_visible_ix, range.clone()))
             })
             .collect();
-        out.sort_by_key(|range| range.start);
+        out.sort_by_key(|(row, range)| (*row, range.start));
         out
     }
 
-    #[cfg(test)]
-    pub(in crate::view) fn diff_text_occurrences_for_tests(&self) -> &[DiffTextPairSpan] {
-        &self.diff_text_occurrences
-    }
-
-    /// The parts of the pair that fall on one row, in that row's local offsets.
+    /// The parts of the pair that fall on one row, resolving the row itself.
     ///
-    /// Mirrors [`Self::diff_text_local_selection_range`] so both quads are
-    /// clipped to the same wrap slice in the same coordinate space.
+    /// The paint path uses the `_in` form, which shares one resolution across
+    /// all three row queries; this is the standalone form the tests read.
+    #[cfg(test)]
     pub(in super::super::super) fn diff_text_local_pair_ranges(
         &self,
         visible_ix: usize,
         region: DiffTextRegion,
     ) -> smallvec::SmallVec<[Range<usize>; 2]> {
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_pair_ranges_in(region, resolved)
+    }
+
+    pub(in super::super::super) fn diff_text_local_pair_ranges_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> smallvec::SmallVec<[Range<usize>; 2]> {
         let Some(pair) = self.diff_text_pair_match.as_ref() else {
             return smallvec::SmallVec::new();
         };
-        let (source_visible_ix, visual_range) =
-            self.diff_text_visual_source_range_for_region(visible_ix, region);
+        let (source_visible_ix, visual_range) = resolved;
         pair.ranges_on_row(source_visible_ix, region)
             .into_iter()
             .filter_map(|range| {

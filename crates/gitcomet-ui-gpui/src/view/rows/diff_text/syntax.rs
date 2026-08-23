@@ -396,6 +396,7 @@ mod prepared;
 
 use heuristic::*;
 use language::*;
+pub(in crate::view) use occurrences::OCCURRENCE_MAX_TEXT_BYTES;
 use occurrences::*;
 use pairs::*;
 use prepared::*;
@@ -821,6 +822,34 @@ mod tests {
                 .iter()
                 .all(|range| &text[range.clone()] == "sum"),
         );
+    }
+
+    /// A name whose first character is multi-byte must still light up.
+    ///
+    /// The scan used to step one byte past each hit, which lands inside the
+    /// leading character of such a name; the slice then failed and the `?` threw
+    /// away every match found so far, including the clicked one, so the whole
+    /// highlight silently vanished.
+    #[test]
+    fn occurrences_handle_non_ascii_names() {
+        let text = "x = 1\ncafé = 2\ny = café\n";
+        let click = text.find("café").expect("name");
+        let found = occurrences_in(DiffSyntaxLanguage::Python, text, click).expect("a name");
+        assert_eq!(
+            found
+                .ranges
+                .iter()
+                .map(|range| &text[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["café", "café"],
+        );
+        assert_eq!(found.ranges[1].start, text.rfind("café").expect("use"));
+
+        // And a name that is entirely multi-byte.
+        let cjk = "日本語 = 1\nz = 日本語\n";
+        let at = cjk.find("日本語").expect("name");
+        let found = occurrences_in(DiffSyntaxLanguage::Python, cjk, at).expect("a name");
+        assert_eq!(found.ranges.len(), 2, "got {:?}", found.ranges);
     }
 
     /// Clicking punctuation, whitespace or a literal is not clicking a name.

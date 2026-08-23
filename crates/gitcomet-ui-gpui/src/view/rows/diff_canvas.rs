@@ -3621,9 +3621,13 @@ fn paint_selectable_diff_text(
     let (source_visible_ix, visual_text_range) = view
         .read(cx)
         .diff_text_visual_source_range_for_region(visible_ix, region);
+    // Resolved once and shared by all three row queries below: the selection,
+    // the delimiter pair and the name's other uses each need it, and its
+    // non-wrapped arm re-fetches the row model to measure the row.
+    let resolved_row = (source_visible_ix, visual_text_range.clone());
     let selection = view
         .read(cx)
-        .diff_text_local_selection_range(visible_ix, region);
+        .diff_text_local_selection_range_in(region, resolved_row.clone());
 
     let mut streamed_styled = None;
     let mut streamed_slice_range = None;
@@ -3717,10 +3721,10 @@ fn paint_selectable_diff_text(
 
     let pair_ranges = view
         .read(cx)
-        .diff_text_local_pair_ranges(visible_ix, region);
+        .diff_text_local_pair_ranges_in(region, resolved_row.clone());
     let occurrence_ranges = view
         .read(cx)
-        .diff_text_local_occurrence_ranges(visible_ix, region);
+        .diff_text_local_occurrence_ranges_in(region, resolved_row);
 
     #[cfg(test)]
     record_diff_paint_for_tests(

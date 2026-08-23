@@ -3133,11 +3133,16 @@ pub(crate) struct MainPaneView {
     /// this is painted as a quad outside every cached artifact, and `KeyedCanvas`
     /// re-runs prepaint and paint every frame regardless of its revision key.
     pub(in crate::view) diff_text_pair_match: Option<DiffTextPairMatch>,
-    /// Every place the clicked name appears, already projected onto rows.
+    /// Every place the clicked name appears, already projected onto rows and
+    /// bucketed by the row that paints it.
     ///
     /// Separate from `diff_text_pair_match` because a click produces both: the
-    /// name's other uses, and the construct enclosing it.
-    pub(in crate::view) diff_text_occurrences: Vec<DiffTextPairSpan>,
+    /// name's other uses, and the construct enclosing it. Bucketed because the
+    /// paint path asks per row per region per frame, and scanning a flat list of
+    /// up to `MAX_OCCURRENCES` for each of them is work proportional to rows
+    /// times matches, repeated at frame rate for as long as the highlight is up.
+    pub(in crate::view) diff_text_occurrences:
+        FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>>,
     pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
@@ -3183,6 +3188,14 @@ pub(crate) struct MainPaneView {
     /// Where each side's content lives when it is a file rather than text in
     /// memory. A source-backed side keeps its text off the heap; the click path
     /// reads it back from here when it needs a whole-document parse.
+    /// Text read back from a source-backed side for a click, kept alive.
+    ///
+    /// Not just a cache: the prepared-document identity is keyed partly on the
+    /// text's *address*, so handing it a `SharedString` that is dropped when the
+    /// call returns leaves an identity pointing at freed memory, which a later
+    /// allocation of the same length can alias. Retaining it also means a second
+    /// click resolves by identity instead of re-reading and re-parsing the file.
+    pub(in crate::view) file_diff_pair_syntax_text: FxHashMap<DiffTextRegion, SharedString>,
     pub(in crate::view) file_diff_old_source_path: Option<Arc<std::path::PathBuf>>,
     pub(in crate::view) file_diff_new_source_path: Option<Arc<std::path::PathBuf>>,
     pub(in crate::view) file_diff_old_text: SharedString,
@@ -3330,6 +3343,9 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_syntax_pair: Option<rows::SyntaxPair>,
     /// Everywhere the editor's buffer names the token under the caret.
     pub(in crate::view) file_editor_occurrences: Vec<Range<usize>>,
+    /// The document version `file_editor_occurrences` was computed against, so
+    /// a caret moving *within* the same name does not rescan the document.
+    pub(in crate::view) file_editor_occurrences_version: Option<u64>,
     /// Byte ranges of every search match in the editor buffer, one per
     /// occurrence and parallel to `diff_search_matches`, which carries the line
     /// each of them sits on. Keeping the two parallel is what lets the shared

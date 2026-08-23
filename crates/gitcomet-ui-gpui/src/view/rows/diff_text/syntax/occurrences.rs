@@ -9,6 +9,14 @@
 
 use std::ops::Range;
 
+/// Ceiling for the occurrence scan.
+///
+/// The scan is O(document), and the editor asks on every caret move, so a large
+/// buffer must not pay for it per keystroke. The diff side is bounded by the
+/// same number rather than by the prepared document's own 8 MB ceiling: a click
+/// is cheaper than a keystroke but not free, and it runs on the UI thread too.
+pub(in crate::view) const OCCURRENCE_MAX_TEXT_BYTES: usize = 256 * 1024;
+
 /// The most matches worth reporting for one click.
 ///
 /// A very common identifier in a large file can occur thousands of times, and
@@ -16,6 +24,15 @@ use std::ops::Range;
 /// starts meaning "this file is full of colour". The cap also bounds the work
 /// the paint path does per row.
 const MAX_OCCURRENCES: usize = 512;
+
+/// The most candidates worth examining for one click.
+///
+/// [`MAX_OCCURRENCES`] alone bounds only what is *accepted*. A name that occurs
+/// forty thousand times inside string literals passes the cheap byte test every
+/// time, pays a root-to-leaf tree descent, and is then rejected -- so the cheap
+/// cap never trips and the scan runs the whole document for no results. This
+/// bounds the descents themselves.
+const MAX_OCCURRENCE_CANDIDATES: usize = 4_096;
 
 /// The token a click landed on, and everywhere else the document names it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -52,14 +69,48 @@ fn is_name(text: &str) -> bool {
 /// kind check then drops the leaf nodes that are content rather than names --
 /// comment bodies and string contents, which are single tokens too.
 fn is_name_token(node: &tree_sitter::Node<'_>, text: &str) -> bool {
+    is_name_token_kind(node) && text.get(node.byte_range()).is_some_and(is_name)
+}
+
+/// The half of [`is_name_token`] that needs no text, so a caller can ask it
+/// before deciding whether the text is worth materializing.
+fn is_name_token_kind(node: &tree_sitter::Node<'_>) -> bool {
     if !node.is_named() || node.child_count() != 0 {
         return false;
     }
     let kind = node.kind();
-    if kind.contains("comment") || kind.contains("string") || kind.contains("char") {
-        return false;
-    }
-    text.get(node.byte_range()).is_some_and(is_name)
+    !(kind.contains("comment") || kind.contains("string") || kind.contains("char"))
+}
+
+/// The name token at `offset`, read through `token_text` so a caller whose text
+/// is expensive to materialize pays only for that one token's bytes.
+///
+/// Split out because the editor asks on every caret move, and most of those land
+/// on punctuation, whitespace or a literal. Answering "not a name" here costs a
+/// tree descent; answering it after flattening the document costs the document.
+pub(in crate::view) fn name_token_at(
+    tree: &tree_sitter::Tree,
+    offset: usize,
+    token_text: impl Fn(Range<usize>) -> Option<String>,
+) -> Option<Range<usize>> {
+    let root = tree.root_node();
+    let limit = root.end_byte();
+    // A caret sits between two characters, so it touches the token on either
+    // side; the one to the right wins, matching where a caret is drawn.
+    [Some(offset), offset.checked_sub(1)]
+        .into_iter()
+        .flatten()
+        .filter(|probe| *probe < limit)
+        .find_map(|probe| {
+            let node = root.named_descendant_for_byte_range(probe, probe)?;
+            if !is_name_token_kind(&node) {
+                return None;
+            }
+            let range = node.byte_range();
+            token_text(range.clone())
+                .filter(|text| is_name(text))
+                .map(|_| range)
+        })
 }
 
 /// The occurrences of the name at `offset`, or `None` if the click did not land
@@ -70,27 +121,28 @@ pub(in crate::view) fn syntax_occurrences_in_tree(
     offset: usize,
 ) -> Option<SyntaxOccurrences> {
     let root = tree.root_node();
-    let limit = root.end_byte().min(text.len());
-
-    // A caret sits between two characters, so it touches the token on either
-    // side; the one to the right wins, matching where a caret is drawn.
-    let token = [Some(offset), offset.checked_sub(1)]
-        .into_iter()
-        .flatten()
-        .filter(|probe| *probe < limit)
-        .find_map(|probe| {
-            let node = root.named_descendant_for_byte_range(probe, probe)?;
-            is_name_token(&node, text).then(|| node.byte_range())
-        })?;
+    let token = name_token_at(tree, offset, |range| {
+        text.get(range).map(std::borrow::ToOwned::to_owned)
+    })?;
 
     let name = text.get(token.clone())?;
     let bytes = text.as_bytes();
     let mut ranges = Vec::new();
+    let mut candidates = 0usize;
     let mut search_from = 0usize;
-    while let Some(found) = text.get(search_from..)?.find(name) {
+    // `name.len()`, not one byte: a word-bounded name cannot overlap itself, and
+    // stepping a single byte lands *inside* the leading character of a name like
+    // `café`, where the slice below fails and the `?` throws away every match
+    // found so far -- including the clicked one.
+    while let Some(found) = text.get(search_from..).and_then(|rest| rest.find(name)) {
         let start = search_from + found;
         let end = start + name.len();
-        search_from = start + 1;
+        search_from = end;
+
+        candidates += 1;
+        if candidates > MAX_OCCURRENCE_CANDIDATES {
+            break;
+        }
 
         // Word boundaries first: they are a byte comparison, where the tree
         // lookup below walks the depth of the document.

@@ -1691,7 +1691,7 @@ impl MainPaneView {
             diff_text_hitboxes: FxHashMap::default(),
             diff_search_horizontal_reveal: None,
             diff_text_pair_match: None,
-            diff_text_occurrences: Vec::new(),
+            diff_text_occurrences: FxHashMap::default(),
             conflict_text_hitboxes: FxHashMap::default(),
             diff_text_layout_cache_epoch: 0,
             diff_text_layout_cache: FxHashMap::default(),
@@ -1719,6 +1719,7 @@ impl MainPaneView {
             file_diff_row_provider: None,
             file_diff_old_text: SharedString::default(),
             file_diff_old_line_starts: Arc::default(),
+            file_diff_pair_syntax_text: FxHashMap::default(),
             file_diff_old_source_path: None,
             file_diff_new_source_path: None,
             file_diff_old_line_to_row: Arc::default(),
@@ -1808,6 +1809,7 @@ impl MainPaneView {
             file_editor_live_syntax_reparse: None,
             file_editor_syntax_pair: None,
             file_editor_occurrences: Vec::new(),
+            file_editor_occurrences_version: None,
             file_editor_search_matches: Vec::new(),
             file_editor_search_source: None,
             file_editor_search_rev: 0,
@@ -4439,6 +4441,13 @@ impl MainPaneView {
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
+        // Revealing a hunk renumbers every row below it. The click highlights are
+        // stored against the row indices they were projected onto, so leaving
+        // them would paint the pair and the name's uses over unrelated rows --
+        // and, since the spans are per-row display columns, over unrelated
+        // characters.
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
     }
 
     // Apply the mode inside the pane first, then sync the root preference

@@ -1895,6 +1895,9 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
         return Vec::new();
     };
     let text = state.text.as_ref();
+    if text.len() > OCCURRENCE_MAX_TEXT_BYTES {
+        return Vec::new();
+    }
     let line_starts = state.line_starts.as_ref();
 
     let Some(clicked) = prepared_line_span(text, line_starts, line_ix) else {
@@ -3335,17 +3338,17 @@ fn apply_injection_query_tokens_for_document(
         // painted token keeps last-wins where the two overlap and leaves the
         // host's answer standing in the gaps.
         for (parent_line_ix, tokens) in &injected_tokens {
-            let Some(line_start) = context.line_starts.get(*parent_line_ix).copied() else {
+            // The tokens are already grouped by line and their ranges are
+            // already line-relative, so going back through the absolute form
+            // would re-derive by binary search what is known here.
+            let Some(line_tokens) = context
+                .per_line
+                .get_mut(parent_line_ix.saturating_sub(context.start_line_ix))
+            else {
                 continue;
             };
             for token in tokens {
-                subtract_absolute_range_from_document_tokens(
-                    context.line_starts,
-                    input,
-                    context.start_line_ix,
-                    context.per_line,
-                    line_start + token.range.start..line_start + token.range.end,
-                );
+                subtract_relative_range_from_line_tokens(line_tokens, token.range.clone());
             }
         }
 

@@ -1009,13 +1009,8 @@ fn file_preview_click_lights_every_use_of_the_clicked_name(cx: &mut gpui::TestAp
 
     cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
-        let spans: Vec<_> = pane
-            .diff_text_occurrences_for_tests()
-            .iter()
-            .map(|span| (span.source_visible_ix, span.range.clone()))
-            .collect();
         assert_eq!(
-            spans,
+            pane.diff_text_occurrences_for_tests(),
             vec![(1, 8..14), (3, 14..20)],
             "the declaration and the later use, never the one in the comment"
         );
