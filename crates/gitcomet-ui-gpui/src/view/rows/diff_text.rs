@@ -75,7 +75,7 @@ pub(in crate::view) use prepared::{
 pub(in crate::view) use syntax::{
     DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument,
     LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
-    PreparedSyntaxPairSpan, SyntaxPair, SyntaxPairKind, diff_syntax_language_for_code_fence_info,
+    SyntaxPair, SyntaxPairKind, diff_syntax_language_for_code_fence_info,
     diff_syntax_language_for_path,
 };
 pub(in crate::view) use syntax::{live_syntax_document_supported, live_syntax_reparse};
