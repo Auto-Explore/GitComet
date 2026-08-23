@@ -4487,6 +4487,114 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
     });
 }
 
+/// Collapsed mode renders the same file-diff rows as Full, so a click in it must
+/// pair too. Gating on `is_file_diff_view_active()` (which demands
+/// `DiffContentMode::Full`) silently excluded this whole mode.
+#[gpui::test]
+fn collapsed_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(933);
+    let path = PathBuf::from("config.json");
+    let mut old_lines: Vec<String> = (0..30).map(|i| format!("  \"pad{i}\": {i},")).collect();
+    let mut new_lines = old_lines.clone();
+    old_lines.insert(0, "{".to_string());
+    new_lines.insert(0, "{".to_string());
+    old_lines.push("  \"items\": [1, 2],".to_string());
+    new_lines.push("  \"items\": [1, 2],".to_string());
+    old_lines.push("  \"name\": \"old\"".to_string());
+    new_lines.push("  \"name\": \"new\"".to_string());
+    old_lines.push("}".to_string());
+    new_lines.push("}".to_string());
+    let old_text = format!("{}\n", old_lines.join("\n"));
+    let new_text = format!("{}\n", new_lines.join("\n"));
+    let unified = format!(
+        "@@ -31,3 +31,3 @@\n   \"items\": [1, 2],\n-  \"name\": \"old\"\n+  \"name\": \"new\"\n }}\n"
+    );
+
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "collapsed_pair_json",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed pair fixture builds its file diff first",
+        |pane| {
+            pane.is_file_diff_view_active() && pane.file_diff_cache_target == Some(target.clone())
+        },
+        |pane| format!("file_diff_active={}", pane.is_file_diff_view_active()),
+    );
+
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "collapsed projection active with prepared syntax",
+        |pane| {
+            pane.is_collapsed_diff_projection_active()
+                && !pane.is_file_diff_view_active()
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "collapsed={} file_diff_active={} doc={}",
+                pane.is_collapsed_diff_projection_active(),
+                pane.is_file_diff_view_active(),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some(),
+            )
+        },
+    );
+
+    // Find the visible row showing the `"items"` context line and click its `[`.
+    let (row_ix, col) = cx
+        .update(|_window, app| {
+            let pane = view.read(app).main_pane.read(app);
+            (0..pane.diff_visible_len()).find_map(|ix| {
+                let text = pane.diff_text_line_for_region(ix, DiffTextRegion::SplitRight);
+                text.find('[').map(|col| (ix, col))
+            })
+        })
+        .expect("a visible row should show the `items` line");
+
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        row_ix,
+        DiffTextRegion::SplitRight,
+        col..col + 1,
+        "collapsed diff pair bracket hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("collapsed mode must pair too -- it renders the same file-diff rows");
+        assert_eq!(pair.kind, rows::SyntaxPairKind::Bracket);
+        assert_eq!(
+            pane.diff_text_local_pair_ranges(row_ix, DiffTextRegion::SplitRight)
+                .into_vec(),
+            vec![col..col + 1, col + 5..col + 6]
+        );
+    });
+}
+
 #[gpui::test]
 fn collapsed_diff_hunk_header_click_does_not_create_row_selection(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
