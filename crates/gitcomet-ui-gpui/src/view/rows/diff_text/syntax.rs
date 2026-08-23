@@ -402,7 +402,6 @@ pub(in crate::view) use live::{
     LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_document_supported,
     live_syntax_reparse,
 };
-pub(in crate::view) use occurrences::SyntaxOccurrences;
 pub(in crate::view) use pairs::{SyntaxPair, SyntaxPairKind};
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
