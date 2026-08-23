@@ -56,6 +56,9 @@ impl MainPaneView {
         self.diff_text_anchor = None;
         self.diff_text_head = None;
         self.diff_text_autoscroll_target = None;
+        // Reached on every file switch, view-mode change and diff rebuild, all of
+        // which move the row indices the pair spans were projected onto.
+        self.diff_text_pair_match = None;
     }
 
     pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
@@ -721,6 +724,11 @@ impl MainPaneView {
         // A drag that actually moved is suppressed by
         // `diff_suppress_clicks_remaining` instead, which a plain click leaves
         // alone.
+        // Cleared for every press, not just the ones that resolve to a position:
+        // a double- or triple-click selects a span, and a press that misses the
+        // text entirely is a press away from the pair. Both must dismiss it, and
+        // both skip `begin_diff_text_selection`'s set below.
+        self.diff_text_pair_match = None;
         match click_count {
             3.. => {
                 self.select_diff_text_line_at_mouse(visible_ix, region, position);
@@ -756,6 +764,7 @@ impl MainPaneView {
         self.diff_selection_range = None;
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
+        self.diff_text_pair_match = self.diff_text_pair_match_for_pos(&pos);
     }
 
     pub(in super::super::super) fn begin_diff_text_scroll_tracking(
@@ -819,6 +828,9 @@ impl MainPaneView {
                 .diff_text_normalized_selection()
                 .is_some_and(|(a, b)| a != b)
             {
+                // A selection is the user working on a span, not sitting in one;
+                // a pair lit at each end of it reads as part of the selection.
+                self.diff_text_pair_match = None;
                 self.sync_diff_focus_to_text_selection();
                 self.diff_suppress_clicks_remaining = 1;
             }
@@ -845,6 +857,86 @@ impl MainPaneView {
         let selected =
             self.diff_text_source_selection_range(source_visible_ix, region, visual_range.end)?;
         diff_text_local_range_from_source_ranges(selected, visual_range)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_pair_match_for_tests(&self) -> Option<&DiffTextPairMatch> {
+        self.diff_text_pair_match.as_ref()
+    }
+
+    pub(in super::super::super) fn diff_text_pair_match_color(&self) -> gpui::Rgba {
+        self.theme.colors.editor.bracket_match_background
+    }
+
+    /// The matching delimiter pair for a click, projected onto rows.
+    ///
+    /// Only the file preview is wired so far: its rows map one-to-one onto
+    /// document lines in both directions, so no row model is involved. The diff
+    /// views need `file_diff_{old,new}_line_to_row` and the collapsed-hunk
+    /// projection to get an answer back onto a row, which is a separate step.
+    fn diff_text_pair_match_for_pos(&self, pos: &DiffTextPos) -> Option<DiffTextPairMatch> {
+        // Same order the row-text dispatch uses: the markdown rendered preview
+        // wins over the file preview and supplies its own rows, so a raw-file
+        // line index means nothing there even though `is_file_preview_active`
+        // is still true underneath it.
+        if self.is_markdown_preview_active() {
+            return None;
+        }
+        if !self.is_file_preview_active() || pos.region != DiffTextRegion::Inline {
+            return None;
+        }
+        // A row the display truncated is not the tab-expansion of its line, so
+        // offsets into it do not convert. Better no answer than a confident one
+        // pointing at the wrong character.
+        if self
+            .worktree_preview_line_raw_text(pos.source_visible_ix)
+            .is_some_and(|raw| {
+                crate::view::file_diff_display::should_truncate_file_diff_display(&raw)
+            })
+        {
+            return None;
+        }
+        let document = self.worktree_preview_prepared_syntax_document()?;
+        let hit = rows::prepared_diff_syntax_pair_at_display_offset(
+            document,
+            pos.source_visible_ix,
+            pos.offset,
+        )?;
+        Some(DiffTextPairMatch {
+            kind: hit.kind,
+            spans: hit
+                .open
+                .into_iter()
+                .chain(hit.close)
+                .map(|end| DiffTextPairSpan {
+                    source_visible_ix: end.line_ix,
+                    region: DiffTextRegion::Inline,
+                    range: end.display_range,
+                })
+                .collect(),
+        })
+    }
+
+    /// The parts of the pair that fall on one row, in that row's local offsets.
+    ///
+    /// Mirrors [`Self::diff_text_local_selection_range`] so both quads are
+    /// clipped to the same wrap slice in the same coordinate space.
+    pub(in super::super::super) fn diff_text_local_pair_ranges(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> smallvec::SmallVec<[Range<usize>; 2]> {
+        let Some(pair) = self.diff_text_pair_match.as_ref() else {
+            return smallvec::SmallVec::new();
+        };
+        let (source_visible_ix, visual_range) =
+            self.diff_text_visual_source_range_for_region(visible_ix, region);
+        pair.ranges_on_row(source_visible_ix, region)
+            .into_iter()
+            .filter_map(|range| {
+                diff_text_local_range_from_source_ranges(range, visual_range.clone())
+            })
+            .collect()
     }
 
     /// The part of one row a selection covers, or `None` when the selection

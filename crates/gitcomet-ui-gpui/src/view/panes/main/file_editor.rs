@@ -6,7 +6,7 @@
 //! positionally correct for the very next frame, a budgeted foreground reparse,
 //! and an off-thread one when that budget runs out. What it does *not* carry is
 //! the conflict machinery: no placeholder mask, no protected rows, no overlay
-//! for unresolved blocks. The one overlay it does add is the bracket pair the
+//! for unresolved blocks. The one overlay it does add is the delimiter pair the
 //! caret sits in.
 //!
 //! Buffers are keyed by path and survive switching files, so an unsaved edit is
@@ -96,7 +96,7 @@ pub(in crate::view) fn file_editor_text_fingerprint(snapshot: &TextModelSnapshot
 pub(in crate::view) fn file_editor_provider_binding_key(
     document_version: u64,
     theme_epoch: u64,
-    bracket_match: Option<&(Range<usize>, Range<usize>)>,
+    pair: Option<&rows::SyntaxPair>,
     search_overlay: &[Range<usize>],
 ) -> u64 {
     use std::hash::{Hash, Hasher};
@@ -108,13 +108,17 @@ pub(in crate::view) fn file_editor_provider_binding_key(
     // without this the provider stays bound to the pre-query closure and nothing
     // is ever painted.
     search_overlay.hash(&mut hasher);
-    // Moving the caret between brackets moves no text and touches no tree, so
+    // Moving the caret between delimiters moves no text and touches no tree, so
     // this is the only thing that tells the input its highlights changed.
-    match bracket_match {
-        Some((open, close)) => {
+    match pair {
+        Some(pair) => {
             1u8.hash(&mut hasher);
-            open.hash(&mut hasher);
-            close.hash(&mut hasher);
+            pair.open.hash(&mut hasher);
+            pair.close.hash(&mut hasher);
+            // Two kinds can share a span -- an empty string `""` is both a quote
+            // pair and, to a grammar that brackets it, nothing else -- so the
+            // kind rides along rather than being assumed redundant.
+            (pair.kind as u8).hash(&mut hasher);
         }
         None => 0u8.hash(&mut hasher),
     }
@@ -141,22 +145,23 @@ pub(in crate::view) fn file_editor_heuristic_provider_binding_key(
     hasher.finish()
 }
 
-/// Paint the matching bracket pair on top of the syntax runs.
+/// Paint the matching pair on top of the syntax runs.
 ///
-/// The pair is two single-character ranges, so this splits at most two runs.
+/// The two spans are usually one character each, but a tag pair covers whole
+/// tags and so can span many runs; the overlay composer handles either.
 /// Mirrors the overlay composition the resolved output uses for its unresolved
 /// rows: highlights arrive sorted and disjoint and leave that way.
-pub(in crate::view) fn apply_file_editor_bracket_highlights(
+pub(in crate::view) fn apply_file_editor_pair_highlights(
     highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
-    bracket_match: Option<&(Range<usize>, Range<usize>)>,
+    pair: Option<&rows::SyntaxPair>,
     byte_range: Range<usize>,
     style: gpui::HighlightStyle,
 ) -> Vec<(Range<usize>, gpui::HighlightStyle)> {
-    let Some((open, close)) = bracket_match else {
+    let Some(pair) = pair else {
         return highlights;
     };
     let mut overlays: Vec<Range<usize>> = Vec::with_capacity(2);
-    for span in [open, close] {
+    for span in [&pair.open, &pair.close] {
         let clipped = span.start.max(byte_range.start)..span.end.min(byte_range.end);
         if clipped.start < clipped.end {
             overlays.push(clipped);
@@ -170,8 +175,8 @@ pub(in crate::view) fn apply_file_editor_bracket_highlights(
 /// each run and replacing only its background.
 ///
 /// `overlays` must be sorted, disjoint and already clipped to the window the
-/// caller is answering for. Both the bracket pair and the search matches go
-/// through here, search first, so the bracket affordance stays readable inside a
+/// caller is answering for. Both the delimiter pair and the search matches go
+/// through here, search first, so the pair affordance stays readable inside a
 /// washed match.
 pub(in crate::view) fn apply_file_editor_overlay_highlights(
     mut highlights: Vec<(Range<usize>, gpui::HighlightStyle)>,
@@ -202,7 +207,7 @@ pub(in crate::view) fn apply_file_editor_overlay_highlights(
             let end = overlay.end.min(range.end);
             let mut merged = run_style;
             merged.background_color = style.background_color;
-            // Only when the overlay asks for one: the bracket wash leaves the
+            // Only when the overlay asks for one: the pair wash leaves the
             // grammar's colour alone, while the search wash pins one on light
             // themes, where its background would drown a syntax colour.
             if style.color.is_some() {
@@ -467,7 +472,7 @@ impl MainPaneView {
         // move in between rebound through the no-tree branch and visibly
         // downgraded the file to heuristic highlighting.
         if !same_file {
-            self.file_editor_bracket_match = None;
+            self.file_editor_syntax_pair = None;
             self.file_editor_live_syntax = None;
             self.file_editor_live_syntax_source = None;
             self.file_editor_live_syntax_building = None;
@@ -1316,7 +1321,7 @@ impl MainPaneView {
     }
 
     /// Hand the input a provider over the document's current tree, with the
-    /// caret's bracket pair painted on top.
+    /// caret's delimiter pair painted on top.
     pub(in crate::view) fn rebind_file_editor_highlight_provider(
         &mut self,
         cx: &mut gpui::Context<Self>,
@@ -1348,7 +1353,7 @@ impl MainPaneView {
             // resolved output takes: line-local heuristic tokens, answered per
             // window so the cost stays proportional to the viewport. Bracket
             // matching needs a tree, so it stays off here.
-            self.file_editor_bracket_match = None;
+            self.file_editor_syntax_pair = None;
             let theme = self.theme;
             let language = self.file_editor_language;
             let rope = snapshot.rope();
@@ -1386,18 +1391,18 @@ impl MainPaneView {
         };
         // A selection is the user working on a span, not sitting in one; a pair
         // lit at each end of it reads as part of the selection.
-        self.file_editor_bracket_match = (!has_selection)
-            .then(|| snapshot.bracket_pair_at(cursor))
+        self.file_editor_syntax_pair = (!has_selection)
+            .then(|| snapshot.syntax_pair_at(cursor))
             .flatten();
 
-        let bracket_match = self.file_editor_bracket_match.clone();
+        let pair = self.file_editor_syntax_pair.clone();
         let binding_key = file_editor_provider_binding_key(
             version,
             self.file_editor_provider_theme_epoch,
-            bracket_match.as_ref(),
+            pair.as_ref(),
             &search_overlay,
         );
-        let bracket_style = gpui::HighlightStyle {
+        let pair_style = gpui::HighlightStyle {
             background_color: Some(
                 self.theme
                     .colors
@@ -1409,16 +1414,16 @@ impl MainPaneView {
         };
         let provider = HighlightProvider::with_pending(
             move |byte_range: Range<usize>| HighlightProviderResult {
-                highlights: apply_file_editor_bracket_highlights(
+                highlights: apply_file_editor_pair_highlights(
                     apply_file_editor_search_highlights(
                         snapshot.highlights_for_byte_range(byte_range.clone()),
                         &search_overlay,
                         byte_range.clone(),
                         search_style,
                     ),
-                    bracket_match.as_ref(),
+                    pair.as_ref(),
                     byte_range,
-                    bracket_style,
+                    pair_style,
                 ),
                 pending: false,
             },

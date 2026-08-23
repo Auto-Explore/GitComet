@@ -48,6 +48,18 @@ pub(in crate::view) fn prepared_diff_syntax_line_for_inline_diff_row(
     }
 }
 
+/// The matching delimiter pair at a click on a prepared document row.
+///
+/// Takes and returns the row canvases' own coordinates: a document line index
+/// and a tab-expanded display offset within that line.
+pub(in crate::view) fn prepared_diff_syntax_pair_at_display_offset(
+    document: PreparedDiffSyntaxDocument,
+    line_ix: usize,
+    display_offset: usize,
+) -> Option<syntax::PreparedSyntaxPairHit> {
+    syntax::prepared_document_syntax_pair_at_display_offset(document.inner, line_ix, display_offset)
+}
+
 fn map_prepare_result(
     result: syntax::PrepareTreesitterDocumentResult,
 ) -> PrepareDiffSyntaxDocumentResult {

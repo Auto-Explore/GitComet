@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::panes::main::{
-    apply_file_editor_bracket_highlights, file_editor_blame_line_for_editor_line,
+    apply_file_editor_pair_highlights, file_editor_blame_line_for_editor_line,
     file_editor_provider_binding_key,
 };
 use palette::IntoColor;
@@ -251,7 +251,7 @@ async fn file_editor_refuses_a_non_utf8_file(cx: &mut gpui::TestAppContext) {
 }
 
 #[test]
-fn bracket_overlay_paints_both_delimiters_over_the_syntax_runs() {
+fn pair_overlay_paints_both_delimiters_over_the_syntax_runs() {
     let text = "fn f() {}";
     let keyword = gpui::HighlightStyle {
         color: Some(gpui::rgb(0x112233).into_color()),
@@ -264,9 +264,13 @@ fn bracket_overlay_paints_both_delimiters_over_the_syntax_runs() {
     let open = text.find('{').expect("open brace");
     let close = text.find('}').expect("close brace");
 
-    let highlights = apply_file_editor_bracket_highlights(
+    let highlights = apply_file_editor_pair_highlights(
         vec![(0..2, keyword), (open..close + 1, keyword)],
-        Some(&(open..open + 1, close..close + 1)),
+        Some(&rows::SyntaxPair {
+            open: open..open + 1,
+            close: close..close + 1,
+            kind: rows::SyntaxPairKind::Bracket,
+        }),
         0..text.len(),
         bracket,
     );
@@ -292,18 +296,22 @@ fn bracket_overlay_paints_both_delimiters_over_the_syntax_runs() {
 }
 
 #[test]
-fn bracket_overlay_is_a_no_op_without_a_pair() {
+fn pair_overlay_is_a_no_op_without_a_pair() {
     let style = gpui::HighlightStyle::default();
     let runs = vec![(0..4, style), (6..9, style)];
     assert_eq!(
-        apply_file_editor_bracket_highlights(runs.clone(), None, 0..9, style),
+        apply_file_editor_pair_highlights(runs.clone(), None, 0..9, style),
         runs
     );
 }
 
 #[test]
 fn provider_binding_key_changes_only_when_something_changed() {
-    let pair = (3..4, 9..10);
+    let pair = rows::SyntaxPair {
+        open: 3..4,
+        close: 9..10,
+        kind: rows::SyntaxPairKind::Bracket,
+    };
     let no_matches: &[std::ops::Range<usize>] = &[];
     // Two ranges, not one: clippy reads a single-range array literal as a typo.
     let one_match: &[std::ops::Range<usize>] = &[20..25, 40..45];
@@ -325,8 +333,31 @@ fn provider_binding_key_changes_only_when_something_changed() {
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 1, Some(&(3..4, 12..13)), no_matches),
+        file_editor_provider_binding_key(
+            7,
+            1,
+            Some(&rows::SyntaxPair {
+                open: 3..4,
+                close: 12..13,
+                kind: rows::SyntaxPairKind::Bracket,
+            }),
+            no_matches
+        ),
         "moving the caret to another pair must rebind"
+    );
+    assert_ne!(
+        base,
+        file_editor_provider_binding_key(
+            7,
+            1,
+            Some(&rows::SyntaxPair {
+                open: 3..4,
+                close: 9..10,
+                kind: rows::SyntaxPairKind::Quote,
+            }),
+            no_matches
+        ),
+        "same span, different kind: the key must still separate them"
     );
     assert_ne!(
         base,

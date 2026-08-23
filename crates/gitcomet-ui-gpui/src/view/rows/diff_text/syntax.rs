@@ -381,10 +381,12 @@ pub(super) enum PrepareTreesitterDocumentResult {
 mod heuristic;
 mod language;
 mod live;
+mod pairs;
 mod prepared;
 
 use heuristic::*;
 use language::*;
+use pairs::*;
 use prepared::*;
 
 pub(super) use heuristic::syntax_tokens_for_line_heuristic_into;
@@ -398,6 +400,7 @@ pub(in crate::view) use live::{
     LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_document_supported,
     live_syntax_reparse,
 };
+pub(in crate::view) use pairs::{SyntaxPair, SyntaxPairKind};
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
 #[cfg(test)]
@@ -410,6 +413,9 @@ pub(super) use prepared::{
     prepare_treesitter_document_with_budget_reuse_text, prepared_document_reparse_seed,
     request_syntax_tokens_for_prepared_document_line,
     request_syntax_tokens_for_prepared_document_line_range_into,
+};
+pub(in crate::view) use prepared::{
+    PreparedSyntaxPairHit, PreparedSyntaxPairSpan, prepared_document_syntax_pair_at_display_offset,
 };
 #[cfg(feature = "benchmarks")]
 pub(super) use prepared::{
@@ -607,6 +613,145 @@ mod tests {
             PrepareTreesitterDocumentResult::Ready(doc) => doc,
             other => panic!("test document should parse successfully, got {other:?}"),
         }
+    }
+
+    /// The display<->raw conversion in isolation. This is the one piece of the
+    /// feature that silently produces a plausible-but-wrong answer when it is
+    /// wrong, so it is pinned on its own rather than only through a document.
+    #[test]
+    fn display_and_raw_offsets_round_trip_across_tabs() {
+        // Two tabs then `x`: display columns 0..8 are the tabs, `x` is at 8.
+        let line = "\t\tx = 1";
+        assert_eq!(display_offset_for_raw_offset(line, 0), 0);
+        assert_eq!(
+            display_offset_for_raw_offset(line, 1),
+            4,
+            "one tab is 4 wide"
+        );
+        assert_eq!(display_offset_for_raw_offset(line, 2), 8);
+        assert_eq!(
+            display_offset_for_raw_offset(line, line.find('x').expect("x")),
+            8
+        );
+
+        assert_eq!(raw_offset_for_display_offset(line, 0), 0);
+        assert_eq!(raw_offset_for_display_offset(line, 4), 1);
+        assert_eq!(raw_offset_for_display_offset(line, 8), 2);
+        // A click landing inside an expanded tab resolves to that tab.
+        assert_eq!(raw_offset_for_display_offset(line, 2), 0);
+        assert_eq!(raw_offset_for_display_offset(line, 6), 1);
+
+        // Round trip on every real byte boundary.
+        for (raw, _) in line.char_indices() {
+            assert_eq!(
+                raw_offset_for_display_offset(line, display_offset_for_raw_offset(line, raw)),
+                raw,
+                "raw offset {raw} did not survive the round trip"
+            );
+        }
+
+        // A tab-free line is the identity, including past the end.
+        let plain = "let x = 1;";
+        for raw in 0..=plain.len() {
+            assert_eq!(display_offset_for_raw_offset(plain, raw), raw);
+            assert_eq!(raw_offset_for_display_offset(plain, raw), raw);
+        }
+        assert_eq!(raw_offset_for_display_offset(plain, 999), plain.len());
+    }
+
+    #[test]
+    fn prepared_syntax_pair_reports_display_columns_on_tab_indented_lines() {
+        // Every body line is tab-indented, so a raw-offset answer would be three
+        // columns per indent level to the left of where the row was painted.
+        let text = "fn main() {\n\tif a {\n\t\tb();\n\t}\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+
+        // Line 1 is "\tif a {": display columns 0..4 are the tab, so the `{` is
+        // painted at column 9 and its raw offset within the line is 6.
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 1, 9)
+            .expect("the `if` block braces pair");
+        assert_eq!(hit.kind, SyntaxPairKind::Bracket);
+        assert_eq!(hit.open.len(), 1);
+        assert_eq!(hit.open[0].line_ix, 1);
+        assert_eq!(
+            hit.open[0].display_range,
+            9..10,
+            "the open brace is reported where the canvas painted it, not at raw offset 6"
+        );
+        assert_eq!(hit.close.len(), 1);
+        assert_eq!(hit.close[0].line_ix, 3);
+        assert_eq!(
+            hit.close[0].display_range,
+            4..5,
+            "the closing brace sits after one expanded tab"
+        );
+    }
+
+    #[test]
+    fn prepared_syntax_pair_projects_each_end_onto_its_own_line() {
+        let text = "<div class=\"card\">\n  <span>hi</span>\n</div>\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, text);
+
+        // Caret on the inner element's text: an inner pair, both ends on line 1.
+        let inner = prepared_document_syntax_pair_at_display_offset(document, 1, 9)
+            .expect("the span element pairs");
+        assert_eq!(inner.kind, SyntaxPairKind::Tag);
+        assert_eq!(inner.open[0].line_ix, 1);
+        assert_eq!(inner.close[0].line_ix, 1);
+        // `  <span>hi</span>`: two spaces, then the tags at columns 2 and 10.
+        assert_eq!(inner.open[0].display_range, 2..8);
+        assert_eq!(inner.close[0].display_range, 10..17);
+
+        // Caret on the outer element name: ends on lines 0 and 2, whole tags.
+        let outer = prepared_document_syntax_pair_at_display_offset(document, 0, 2)
+            .expect("the div element pairs");
+        assert_eq!(outer.kind, SyntaxPairKind::Tag);
+        assert_eq!(outer.open[0].line_ix, 0);
+        assert_eq!(
+            outer.open[0].display_range,
+            0..18,
+            "the whole start tag, attributes included"
+        );
+        assert_eq!(outer.close[0].line_ix, 2);
+        assert_eq!(outer.close[0].display_range, 0..6);
+    }
+
+    /// A start tag split across lines is one delimiter but several rows, so it
+    /// reports one span per row rather than washing only its first line.
+    #[test]
+    fn prepared_syntax_pair_spans_every_line_a_tag_covers() {
+        let text = "<div\n  class=\"card\"\n  id=\"x\">\ntext\n</div>\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, text);
+
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 3, 1)
+            .expect("the caret in the element content pairs its tags");
+        assert_eq!(hit.kind, SyntaxPairKind::Tag);
+        assert_eq!(
+            hit.open
+                .iter()
+                .map(|span| (span.line_ix, span.display_range.clone()))
+                .collect::<Vec<_>>(),
+            vec![(0, 0..4), (1, 0..14), (2, 0..9)],
+            "every line of the start tag is washed, not just the first"
+        );
+        assert_eq!(hit.close.len(), 1);
+        assert_eq!(hit.close[0].line_ix, 4);
+    }
+
+    #[test]
+    fn prepared_syntax_pair_is_none_outside_the_document() {
+        let text = "fn main() {}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        assert_eq!(
+            prepared_document_syntax_pair_at_display_offset(document, 99, 0),
+            None,
+            "a line past the end has no answer"
+        );
+        assert_eq!(
+            prepared_document_syntax_pair_at_display_offset(document, 0, 0),
+            None,
+            "the caret before `fn` is inside nothing"
+        );
     }
 
     fn prepare_test_document_from_shared_text(

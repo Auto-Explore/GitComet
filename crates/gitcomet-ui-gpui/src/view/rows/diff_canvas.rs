@@ -3709,8 +3709,11 @@ fn paint_selectable_diff_text(
     #[cfg(not(test))]
     let _ = row_bg;
 
-    if let Some(r) = selection {
-        let (x0, x1) = if let Some(cell_width) = hitbox_cell_width {
+    // Shared by the selection and matching-pair quads: three coordinate regimes
+    // (streamed monospace, tab-expanded via the offset map, and plain shaped
+    // text) that both must agree on, so neither gets its own copy.
+    let x_range_for_local = |r: &Range<usize>| -> (Pixels, Pixels) {
+        if let Some(cell_width) = hitbox_cell_width {
             let (start, end) = if streamed_slice_is_wrap {
                 (r.start.min(total_text_len), r.end.min(total_text_len))
             } else {
@@ -3736,10 +3739,10 @@ fn paint_selectable_diff_text(
                 layout.x_for_index(r.start.min(total_text_len)),
                 layout.x_for_index(r.end.min(total_text_len)),
             )
-        };
-
+        }
+    };
+    let paint_row_quad = |x0: Pixels, x1: Pixels, color: gpui::Rgba, window: &mut Window| {
         if x1 > x0 {
-            let color = view.read(cx).diff_text_selection_color();
             window.paint_quad(fill(
                 Bounds::from_corners(
                     point(bounds.left() + x0, bounds.top()),
@@ -3748,6 +3751,26 @@ fn paint_selectable_diff_text(
                 color,
             ));
         }
+    };
+
+    // The pair goes down first so a selection dragged over it still reads as the
+    // selection. They are mutually exclusive today -- a drag clears the pair --
+    // but the ordering costs nothing and survives that changing.
+    let pair_ranges = view
+        .read(cx)
+        .diff_text_local_pair_ranges(visible_ix, region);
+    if !pair_ranges.is_empty() {
+        let color = view.read(cx).diff_text_pair_match_color();
+        for range in &pair_ranges {
+            let (x0, x1) = x_range_for_local(range);
+            paint_row_quad(x0, x1, color, window);
+        }
+    }
+
+    if let Some(r) = selection {
+        let (x0, x1) = x_range_for_local(&r);
+        let color = view.read(cx).diff_text_selection_color();
+        paint_row_quad(x0, x1, color, window);
     }
 
     let hitbox = DiffTextHitbox {

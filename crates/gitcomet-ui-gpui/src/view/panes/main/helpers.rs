@@ -3127,6 +3127,12 @@ pub(crate) struct MainPaneView {
     pub(super) diff_text_autoscroll_target: Option<DiffTextAutoscrollTarget>,
     pub(super) diff_text_last_mouse_pos: Point<Pixels>,
     pub(in crate::view) diff_suppress_clicks_remaining: u8,
+    /// The delimiter pair the last click selected, already projected onto rows.
+    ///
+    /// Not folded into any cache key: unlike the file editor's highlight runs,
+    /// this is painted as a quad outside every cached artifact, and `KeyedCanvas`
+    /// re-runs prepaint and paint every frame regardless of its revision key.
+    pub(in crate::view) diff_text_pair_match: Option<DiffTextPairMatch>,
     pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
@@ -3311,7 +3317,7 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_live_syntax_build: Option<gpui::Task<()>>,
     pub(in crate::view) file_editor_live_syntax_reparse: Option<gpui::Task<()>>,
     /// The delimiters currently washed as the caret's bracket pair.
-    pub(in crate::view) file_editor_bracket_match: Option<(Range<usize>, Range<usize>)>,
+    pub(in crate::view) file_editor_syntax_pair: Option<rows::SyntaxPair>,
     /// Byte ranges of every search match in the editor buffer, one per
     /// occurrence and parallel to `diff_search_matches`, which carries the line
     /// each of them sits on. Keeping the two parallel is what lets the shared

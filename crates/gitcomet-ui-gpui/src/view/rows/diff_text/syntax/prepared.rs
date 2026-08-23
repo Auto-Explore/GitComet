@@ -1762,6 +1762,119 @@ fn prepared_document_tree_state(
     TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
 }
 
+/// One end of a matched pair, in the coordinate space the row canvases speak:
+/// a document line index plus a *display* byte range within that line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct PreparedSyntaxPairSpan {
+    pub(in crate::view) line_ix: usize,
+    pub(in crate::view) display_range: Range<usize>,
+}
+
+/// A matched pair on a prepared document, already projected into line space.
+///
+/// Each end is a *list* of spans, one per line it covers: a start tag written
+/// across several lines (`<div\n  class="card">`, ordinary in HTML and JSX) is
+/// one delimiter but several rows, and reporting only its first line would wash
+/// `<div` and leave the rest bare.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct PreparedSyntaxPairHit {
+    pub(in crate::view) kind: SyntaxPairKind,
+    pub(in crate::view) open: Vec<PreparedSyntaxPairSpan>,
+    pub(in crate::view) close: Vec<PreparedSyntaxPairSpan>,
+}
+
+/// The matching pair at a click, taking and returning the canvases' own
+/// coordinates.
+///
+/// The whole display/raw tab conversion lives here rather than at the call site
+/// because this is the only place that holds both halves of it: the tree indexes
+/// raw bytes, the canvases count tab-expanded columns, and
+/// [`PreparedSyntaxTreeState`] carries the `text` and `line_starts` that relate
+/// them. The view layer therefore never handles a document byte offset.
+///
+/// Returns `None` when the document has no retained tree (it was evicted, or the
+/// parse never finished), when `line_ix` is past the end, or when nothing pairs.
+///
+/// Injections are not consulted: unlike the live engine, this one parses an
+/// injected region on a text slice, keeps the tokens and drops the tree, so
+/// there is nothing here to match against. A delimiter inside a `<script>` body
+/// is a byte of an unparsed `raw_text` leaf, so it matches nothing and the walk
+/// falls out to the enclosing element -- a narrower answer, never a wrong one.
+pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
+    document: PreparedSyntaxDocument,
+    line_ix: usize,
+    display_offset: usize,
+) -> Option<PreparedSyntaxPairHit> {
+    let state = prepared_document_tree_state(document)?;
+    let text = state.text.as_ref();
+    let line_starts = state.line_starts.as_ref();
+
+    let line_span = |ix: usize| -> Option<Range<usize>> {
+        let start = *line_starts.get(ix)?;
+        let end = line_starts
+            .get(ix + 1)
+            .copied()
+            .unwrap_or(text.len())
+            .min(text.len());
+        // The newline belongs to the line's bytes but never to its display
+        // columns, so trim it before any offset is measured against it.
+        let end = text[start..end]
+            .strip_suffix('\n')
+            .map_or(end, |line| start + line.len());
+        let end = text[start..end]
+            .strip_suffix('\r')
+            .map_or(end, |line| start + line.len());
+        (start <= end).then_some(start..end)
+    };
+
+    let clicked = line_span(line_ix)?;
+    let clicked_line = text.get(clicked.clone())?;
+    let offset = clicked.start + raw_offset_for_display_offset(clicked_line, display_offset);
+
+    let pair = syntax_pair_in_tree(&state.tree, offset)?;
+
+    let project = |range: &Range<usize>| -> Vec<PreparedSyntaxPairSpan> {
+        // `partition_point` gives the count of starts at or before `range.start`,
+        // so subtracting one lands on the line containing it.
+        let Some(first) = line_starts
+            .partition_point(|start| *start <= range.start)
+            .checked_sub(1)
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for ix in first..line_starts.len() {
+            let Some(span) = line_span(ix) else { break };
+            if span.start >= range.end && ix > first {
+                break;
+            }
+            let Some(line) = text.get(span.clone()) else {
+                break;
+            };
+            let start = range.start.clamp(span.start, span.end) - span.start;
+            let end = range.end.clamp(span.start, span.end) - span.start;
+            if start < end {
+                out.push(PreparedSyntaxPairSpan {
+                    line_ix: ix,
+                    display_range: display_offset_for_raw_offset(line, start)
+                        ..display_offset_for_raw_offset(line, end),
+                });
+            }
+            if span.end >= range.end {
+                break;
+            }
+        }
+        out
+    };
+
+    let (open, close) = (project(&pair.open), project(&pair.close));
+    (!open.is_empty() && !close.is_empty()).then_some(PreparedSyntaxPairHit {
+        kind: pair.kind,
+        open,
+        close,
+    })
+}
+
 pub(in super::super) fn prepared_document_reparse_seed(
     document: PreparedSyntaxDocument,
 ) -> Option<PreparedSyntaxReparseSeed> {

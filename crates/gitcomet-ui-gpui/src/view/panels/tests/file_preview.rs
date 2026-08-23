@@ -679,6 +679,251 @@ fn deleted_file_preview_text_file_materializes_and_uses_prepared_syntax_highligh
     std::fs::remove_dir_all(&workdir).expect("cleanup deleted preview prepared syntax fixture");
 }
 
+/// Clicking a delimiter in the read-only file preview lights it and its partner.
+///
+/// Asserts the projected line/offset spans rather than painted pixels:
+/// `#[gpui::test]` runs a `NoopTextSystem` where every glyph measures the same,
+/// so an x coordinate proves nothing about which character was hit.
+#[gpui::test]
+fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(918);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_pair_json",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_pair.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines: Arc<Vec<String>> = Arc::new(vec![
+        "{".to_string(),
+        r#"  "items": [1, 2],"#.to_string(),
+        r#"  "name": "x""#.to_string(),
+        "}".to_string(),
+    ]);
+    let preview_text = preview_lines.join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview pair workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write preview pair fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    // The pair comes off the retained tree, so the parse has to have landed --
+    // under a tight foreground budget it defers to the background build and the
+    // click would otherwise resolve to no pair, intermittently.
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "JSON preview prepared syntax",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+        },
+        |pane| {
+            (
+                pane.is_file_preview_active(),
+                pane.worktree_preview_prepared_syntax_document().is_some(),
+            )
+        },
+    );
+
+    // Line 1 is `  "items": [1, 2],`: the brackets sit at columns 11 and 16.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        1,
+        DiffTextRegion::Inline,
+        11..12,
+        "preview pair bracket hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("clicking `[` should light its pair");
+        assert_eq!(pair.kind, rows::SyntaxPairKind::Bracket);
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| (span.source_visible_ix, span.range.clone()))
+                .collect::<Vec<_>>(),
+            vec![(1, 11..12), (1, 16..17)]
+        );
+
+        // And the row query hands the paint path exactly those two ranges.
+        let ranges = pane.diff_text_local_pair_ranges(1, DiffTextRegion::Inline);
+        assert_eq!(ranges.as_slice(), &[11..12, 16..17]);
+        assert!(
+            pane.diff_text_local_pair_ranges(0, DiffTextRegion::Inline)
+                .is_empty(),
+            "a row holding neither end paints nothing"
+        );
+    });
+
+    // A double-click selects a word, and a selection is the user working on a
+    // span rather than sitting in one -- the pair must not stay lit under it.
+    simulate_counted_click(cx, click, 2);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_text_has_selection(),
+            "double click should select the token"
+        );
+        assert!(
+            pane.diff_text_pair_match_for_tests().is_none(),
+            "a double click selects a span, so the pair highlight must be dismissed"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview pair fixture");
+}
+
+/// The same path, across lines and with whole tags rather than single chars.
+#[gpui::test]
+fn file_preview_click_lights_whole_html_tags_across_lines(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(919);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_pair_html",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_pair.html");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines: Arc<Vec<String>> = Arc::new(vec![
+        r#"<div class="card">"#.to_string(),
+        "  <span>hi</span>".to_string(),
+        "</div>".to_string(),
+    ]);
+    let preview_text = preview_lines.join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview html workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write preview html fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "HTML preview prepared syntax",
+        |pane| {
+            pane.is_file_preview_active()
+                && pane.worktree_preview_prepared_syntax_document().is_some()
+        },
+        |pane| {
+            (
+                pane.is_file_preview_active(),
+                pane.worktree_preview_prepared_syntax_document().is_some(),
+            )
+        },
+    );
+
+    // Click the element name in the outer start tag on line 0.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::Inline,
+        1..4,
+        "preview pair tag hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("clicking inside `<div ...>` should light the element");
+        assert_eq!(pair.kind, rows::SyntaxPairKind::Tag);
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| (span.source_visible_ix, span.range.clone()))
+                .collect::<Vec<_>>(),
+            vec![(0, 0..18), (2, 0..6)],
+            "the whole start tag, attributes included"
+        );
+
+        // Each end paints on its own row and nowhere else.
+        assert_eq!(
+            pane.diff_text_local_pair_ranges(0, DiffTextRegion::Inline)
+                .into_vec(),
+            vec![0..18]
+        );
+        assert_eq!(
+            pane.diff_text_local_pair_ranges(2, DiffTextRegion::Inline)
+                .into_vec(),
+            vec![0..6]
+        );
+        assert!(
+            pane.diff_text_local_pair_ranges(1, DiffTextRegion::Inline)
+                .is_empty()
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup preview html fixture");
+}
+
 #[gpui::test]
 fn untracked_json_file_preview_keeps_underscored_string_value_highlighted(
     cx: &mut gpui::TestAppContext,
