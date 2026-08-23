@@ -1526,6 +1526,58 @@ impl MainPaneView {
         self.prepared_syntax_document(&key)
     }
 
+    /// One side's document for a click-time lookup, preparing it if the render
+    /// path has not left one behind.
+    ///
+    /// The rendered document is keyed by the diff revision and is genuinely
+    /// often absent: an unstaged file's revision moves under it as the worktree
+    /// is polled, the first paint can blow its 1 ms foreground budget and defer
+    /// to a background build, and this view-level map holds only a handful of
+    /// entries. Rendering copes because it falls back to per-line tokens; a
+    /// delimiter pair cannot, because it needs the whole tree.
+    ///
+    /// The old/new texts are on the view either way, so prepare from those
+    /// instead of depending on having won that race. When the render path *did*
+    /// get there first this costs nothing: the prepare call matches the cached
+    /// document by source identity and returns it without reparsing.
+    pub(in crate::view) fn file_diff_pair_syntax_document(
+        &self,
+        region: DiffTextRegion,
+    ) -> Option<rows::PreparedDiffSyntaxDocument> {
+        if let Some(document) = self.file_diff_split_prepared_syntax_document(region) {
+            return Some(document);
+        }
+        let language = self.file_diff_cache_language?;
+        let (text, line_starts) = match region {
+            DiffTextRegion::SplitLeft => {
+                (&self.file_diff_old_text, &self.file_diff_old_line_starts)
+            }
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => {
+                (&self.file_diff_new_text, &self.file_diff_new_line_starts)
+            }
+        };
+        if text.is_empty() {
+            return None;
+        }
+        // A click is not a frame: it can afford a real parse where the render
+        // path deliberately cannot.
+        let budget = rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::from_millis(50),
+        };
+        match rows::prepare_diff_syntax_document_with_budget_reuse_text(
+            language,
+            FULL_DOCUMENT_SYNTAX_MODE,
+            text.clone(),
+            Arc::clone(line_starts),
+            budget,
+            None,
+            None,
+        ) {
+            rows::PrepareDiffSyntaxDocumentResult::Ready(document) => Some(document),
+            _ => None,
+        }
+    }
+
     pub(in crate::view) fn file_diff_split_style_cache_epoch(&self, region: DiffTextRegion) -> u64 {
         self.file_diff_style_cache_epochs.split_epoch(region)
     }
