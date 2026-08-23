@@ -4394,6 +4394,29 @@ fn split_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppC
         vec![11..12, 16..17],
         "the pair quad must be painted on the row, not merely computed"
     );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.diff_text_occurrences
+                    .entry((1, DiffTextRegion::SplitRight))
+                    .or_default()
+                    .push(3..8);
+            });
+        });
+    });
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_text_pair_match_for_tests().is_none(),
+            "changing the row projection must discard pair spans keyed by the old rows"
+        );
+        assert!(
+            pane.diff_text_occurrences_for_tests().is_empty(),
+            "changing the row projection must discard occurrence spans keyed by the old rows"
+        );
+    });
 }
 
 /// The inline diff routes every row through the side its text came from, so a
@@ -4483,6 +4506,71 @@ fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestApp
             pane.diff_text_local_pair_ranges(1, DiffTextRegion::Inline)
                 .into_vec(),
             vec![11..12, 16..17]
+        );
+    });
+
+    let previous_signature = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        pane.file_diff_cache_content_signature
+            .expect("the first file-diff generation should be installed")
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.diff_text_occurrences
+                    .entry((1, DiffTextRegion::Inline))
+                    .or_default()
+                    .push(3..8);
+            });
+        });
+    });
+
+    push_regular_diff_content_mode_state_with_rev(
+        cx,
+        &view,
+        repo_id,
+        "inline_pair_json",
+        PathBuf::from("config.json"),
+        2,
+        concat!(
+            "@@ -1,4 +1,4 @@\n",
+            " {\n",
+            "   \"items\": (1, 2),\n",
+            "-  \"name\": \"old\"\n",
+            "+  \"name\": \"newer\"\n",
+            " }\n",
+        )
+        .to_string(),
+        "{\n  \"items\": (1, 2),\n  \"name\": \"old\"\n}\n".to_string(),
+        "{\n  \"items\": (1, 2),\n  \"name\": \"newer\"\n}\n".to_string(),
+    );
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "same-target file-diff highlight generation refresh",
+        |pane| {
+            pane.file_diff_cache_rev == 2
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_cache_content_signature != Some(previous_signature)
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?} signature={:?}",
+                pane.file_diff_cache_rev,
+                pane.file_diff_cache_inflight,
+                pane.file_diff_cache_content_signature,
+            )
+        },
+    );
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_text_pair_match_for_tests().is_none(),
+            "an accepted source generation must discard its predecessor's pair spans"
+        );
+        assert!(
+            pane.diff_text_occurrences_for_tests().is_empty(),
+            "an accepted source generation must discard its predecessor's occurrences"
         );
     });
 }
@@ -18130,6 +18218,14 @@ fn toggle_diff_view_command_clears_styled_segment_caches(cx: &mut gpui::TestAppC
                     },
                 );
             }
+            pane.diff_text_pair_match = Some(DiffTextPairMatch {
+                kind: rows::SyntaxPairKind::Bracket,
+                spans: Vec::new(),
+            });
+            pane.diff_text_occurrences
+                .entry((0, DiffTextRegion::Inline))
+                .or_default()
+                .push(0..3);
             pane.diff_text_segments_cache.iter().flatten().count()
         })
     });
@@ -18151,6 +18247,8 @@ fn toggle_diff_view_command_clears_styled_segment_caches(cx: &mut gpui::TestAppC
             0,
             "switching modes outside the toolbar must still clear the aliasing cache"
         );
+        assert!(pane.diff_text_pair_match_for_tests().is_none());
+        assert!(pane.diff_text_occurrences_for_tests().is_empty());
     });
 }
 

@@ -470,10 +470,15 @@ pub(super) fn model(this: &PopoverHost, repo_id: RepoId, commit_id: &CommitId) -
     // "Merge into current" merges the right-clicked commit into the checked-out
     // branch through the shared MergeRef pipeline. It is a no-op when the commit
     // is already part of HEAD's history (including HEAD itself), so it is
-    // disabled rather than letting git reject it as "Already up to date".
-    let merge_into_current_disabled = commit_is_ancestor_of_head(this, repo_id, commit_id);
+    // disabled rather than letting git reject it as "Already up to date". It
+    // also contends for the same repository operation slot as history rewrites.
+    let merge_into_current_disabled =
+        history_rewrite_disabled || commit_is_ancestor_of_head(this, repo_id, commit_id);
+    let merge_destination = super::super::merge_commit_confirm::merge_commit_destination_label(
+        this.active_repo().filter(|repo| repo.id == repo_id),
+    );
     items.push(ContextMenuItem::Entry {
-        label: format!("Merge {short} into {current_branch}").into(),
+        label: format!("Merge {short} into {merge_destination}").into(),
         icon: Some("icons/swap.svg".into()),
         shortcut: Some("M".into()),
         disabled: merge_into_current_disabled,

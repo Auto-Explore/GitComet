@@ -3865,6 +3865,7 @@ impl MainPaneView {
         // the same `split_left`/`split_right` epochs, so the two key spaces
         // alias. Clear on every mode change, not just the toolbar/hotkey ones.
         self.clear_diff_text_style_caches();
+        self.clear_diff_text_projected_highlights();
         if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();
         }
@@ -4431,6 +4432,7 @@ impl MainPaneView {
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
+        self.clear_diff_text_projected_highlights();
         if clear_reveals {
             self.diff_visible_cache_projection_rev = u64::MAX;
         }
@@ -4446,8 +4448,7 @@ impl MainPaneView {
         // them would paint the pair and the name's uses over unrelated rows --
         // and, since the spans are per-row display columns, over unrelated
         // characters.
-        self.diff_text_pair_match = None;
-        self.diff_text_occurrences.clear();
+        self.clear_diff_text_projected_highlights();
     }
 
     // Apply the mode inside the pane first, then sync the root preference

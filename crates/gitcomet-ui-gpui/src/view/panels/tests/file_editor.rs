@@ -296,6 +296,72 @@ fn pair_overlay_paints_both_delimiters_over_the_syntax_runs() {
 }
 
 #[test]
+fn whole_tag_pair_overlay_preserves_disjoint_syntax_runs() {
+    let punctuation = gpui::HighlightStyle {
+        color: Some(gpui::rgb(0x112233).into_color()),
+        ..Default::default()
+    };
+    let tag_name = gpui::HighlightStyle {
+        color: Some(gpui::rgb(0x445566).into_color()),
+        ..Default::default()
+    };
+    let attribute = gpui::HighlightStyle {
+        color: Some(gpui::rgb(0x778899).into_color()),
+        ..Default::default()
+    };
+    let pair_style = gpui::HighlightStyle {
+        background_color: Some(gpui::rgba(0xffffff26).into_color()),
+        ..Default::default()
+    };
+    let runs = vec![
+        (0..1, punctuation),
+        (1..4, tag_name),
+        (5..10, attribute),
+        (10..11, punctuation),
+        (11..12, punctuation),
+        (12..15, tag_name),
+        (15..16, punctuation),
+    ];
+
+    let highlights = apply_file_editor_pair_highlights(
+        runs,
+        Some(&rows::SyntaxPair {
+            open: 0..11,
+            close: 11..16,
+            kind: rows::SyntaxPairKind::Tag,
+        }),
+        0..16,
+        pair_style,
+    );
+
+    assert_eq!(
+        highlights
+            .iter()
+            .map(|(range, style)| (range.clone(), style.color, style.background_color,))
+            .collect::<Vec<_>>(),
+        vec![
+            (0..1, punctuation.color, pair_style.background_color),
+            (1..4, tag_name.color, pair_style.background_color),
+            // The grammar left the whitespace unstyled; the overlay fills only
+            // that gap instead of adding a run across the whole start tag.
+            (4..5, pair_style.color, pair_style.background_color),
+            (5..10, attribute.color, pair_style.background_color),
+            (10..11, punctuation.color, pair_style.background_color),
+            (11..12, punctuation.color, pair_style.background_color),
+            (12..15, tag_name.color, pair_style.background_color),
+            (15..16, punctuation.color, pair_style.background_color),
+        ]
+    );
+
+    for adjacent in highlights.windows(2) {
+        assert_eq!(
+            adjacent[0].0.end, adjacent[1].0.start,
+            "whole-tag overlay runs must form a sorted, disjoint tiling"
+        );
+    }
+}
+
+#[test]
 fn pair_overlay_is_a_no_op_without_a_pair() {
     let style = gpui::HighlightStyle::default();
     let runs = vec![(0..4, style), (6..9, style)];

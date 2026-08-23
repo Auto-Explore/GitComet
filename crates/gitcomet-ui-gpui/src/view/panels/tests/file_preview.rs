@@ -806,6 +806,56 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
         );
     });
 
+    simulate_counted_click(cx, click, 1);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                assert!(
+                    pane.diff_text_pair_match_for_tests().is_some(),
+                    "the single click should restore the pair before the refresh"
+                );
+                pane.diff_text_occurrences
+                    .entry((1, DiffTextRegion::Inline))
+                    .or_default()
+                    .push(3..8);
+            });
+        });
+    });
+
+    let refreshed_lines: Arc<Vec<String>> = Arc::new(vec![
+        "{".to_string(),
+        r#"  "items": (1, 2),"#.to_string(),
+        r#"  "name": "updated""#.to_string(),
+        "}".to_string(),
+    ]);
+    let refreshed_len = refreshed_lines.join("\n").len();
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let refreshed_lines = Arc::clone(&refreshed_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    refreshed_lines,
+                    refreshed_len,
+                    cx,
+                );
+            });
+        });
+    });
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_text_pair_match_for_tests().is_none(),
+            "a preview source refresh must discard pair spans from the old rows"
+        );
+        assert!(
+            pane.diff_text_occurrences_for_tests().is_empty(),
+            "a preview source refresh must discard occurrences from the old rows"
+        );
+    });
+
     std::fs::remove_dir_all(&workdir).expect("cleanup preview pair fixture");
 }
 

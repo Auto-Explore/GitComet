@@ -254,15 +254,41 @@ pub(in crate::view) fn apply_file_editor_overlay_highlights(
 
     // An overlay landing in a stretch the grammar produced no run for (plain
     // punctuation in some grammars, or anything at all in a plain-text buffer)
-    // still has to be painted, so add whatever the sweep above did not cover.
+    // still has to be painted. Coverage can be the union of several syntax
+    // runs -- whole tags ordinarily cross punctuation, name and attribute
+    // runs -- so add only the gaps instead of appending the whole overlay on
+    // top of those already-composed pieces.
+    let mut gaps: Vec<(Range<usize>, gpui::HighlightStyle)> = Vec::new();
+    let mut out_ix = 0usize;
     for overlay in overlays {
-        let covered = out
-            .iter()
-            .any(|(range, _)| range.start <= overlay.start && range.end >= overlay.end);
-        if !covered {
-            out.push((overlay.clone(), style));
+        let mut cursor = overlay.start;
+        while out_ix < out.len() && out[out_ix].0.end <= cursor {
+            out_ix += 1;
+        }
+        let mut probe = out_ix;
+        while let Some((range, _)) = out.get(probe) {
+            if range.end <= cursor {
+                probe += 1;
+                continue;
+            }
+            if range.start >= overlay.end {
+                break;
+            }
+            if range.start > cursor {
+                gaps.push((cursor..range.start.min(overlay.end), style));
+            }
+            cursor = cursor.max(range.end.min(overlay.end));
+            if cursor >= overlay.end {
+                break;
+            }
+            probe += 1;
+        }
+        out_ix = probe;
+        if cursor < overlay.end {
+            gaps.push((cursor..overlay.end, style));
         }
     }
+    out.extend(gaps);
     out.sort_by_key(|(range, _)| range.start);
     out
 }

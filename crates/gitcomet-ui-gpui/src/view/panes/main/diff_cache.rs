@@ -1864,6 +1864,7 @@ impl MainPaneView {
             self.worktree_preview_content_rev = self.worktree_preview_content_rev.wrapping_add(1);
             self.worktree_preview_style_cache_epoch =
                 self.worktree_preview_style_cache_epoch.wrapping_add(1);
+            self.clear_diff_text_projected_highlights();
             self.worktree_markdown_preview_path = None;
             self.worktree_markdown_preview_source_rev = 0;
             self.worktree_markdown_preview = Loadable::NotLoaded;
@@ -2524,6 +2525,10 @@ impl MainPaneView {
                         }
                     };
                     this.file_diff_cache_error = None;
+                    // A click may have retained a source-backed side's body.
+                    // It belongs to the generation being replaced even when
+                    // the source path itself is unchanged.
+                    this.file_diff_pair_syntax_text.clear();
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
                     this.file_diff_row_provider = Some(rebuild.row_provider);
@@ -2540,6 +2545,7 @@ impl MainPaneView {
                     this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
+                    this.clear_diff_text_projected_highlights();
                     // The rows just changed under their own indices. On the
                     // clearing path `reset_file_diff_cache_data` already did
                     // this; the kept-rows path deliberately skips it, so without

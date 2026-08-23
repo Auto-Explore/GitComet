@@ -2,6 +2,139 @@ use super::*;
 use palette::IntoColor;
 
 #[gpui::test]
+fn source_backed_pair_text_tracks_accepted_file_diff_generation(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(881);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_source_backed_pair_generation",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create source-backed generation fixture");
+    let path = std::path::PathBuf::from("src/pair_generation.rs");
+    let old_source_path = source_dir.join("old.rs");
+    let new_source_path = source_dir.join("new.rs");
+    let base_text = "fn base() { let value = 0; }\n";
+    let first_text = "fn first() { let value = 1; }\n";
+    let second_text = "fn second() { let value = 2; }\n";
+
+    let push_generation = |cx: &mut gpui::VisualTestContext,
+                           revision: u64,
+                           old_text: &str,
+                           new_text: &str,
+                           old_identity: &str,
+                           new_identity: &str| {
+        std::fs::write(&old_source_path, old_text).expect("write old source generation");
+        std::fs::write(&new_source_path, new_text).expect("write new source generation");
+        let unified = format!(
+            "@@ -1 +1 @@\n-{}\n+{}\n",
+            old_text.trim_end(),
+            new_text.trim_end(),
+        );
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut repo = opening_repo_state(repo_id, &workdir);
+                set_test_file_status(
+                    &mut repo,
+                    path.clone(),
+                    gitcomet_core::domain::FileStatusKind::Modified,
+                    gitcomet_core::domain::DiffArea::Unstaged,
+                );
+                let target = repo
+                    .diff_state
+                    .diff_target
+                    .clone()
+                    .expect("test file status should select a diff target");
+                repo.diff_state.diff_rev = revision;
+                repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                    gitcomet_core::domain::Diff::from_unified(target, &unified),
+                ));
+                repo.diff_state.diff_file_rev = revision;
+                repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                    gitcomet_core::domain::FileDiffText::new_sources(
+                        path.clone(),
+                        Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                            old_source_path.clone(),
+                            old_identity,
+                        )),
+                        Some(gitcomet_core::domain::FileDiffTextSource::with_identity(
+                            new_source_path.clone(),
+                            new_identity,
+                        )),
+                    ),
+                )));
+                push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+            });
+        });
+    };
+
+    push_generation(cx, 1, base_text, first_text, "old-1", "new-1");
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "first source-backed file-diff generation",
+        |pane| pane.file_diff_cache_rev == 1 && pane.file_diff_cache_inflight.is_none(),
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
+                    .expect("the first source generation should parse on click");
+                assert_eq!(
+                    pane.file_diff_pair_syntax_text
+                        .get(&DiffTextRegion::SplitRight)
+                        .map(AsRef::as_ref),
+                    Some(first_text),
+                );
+            });
+        });
+    });
+
+    push_generation(cx, 2, first_text, second_text, "old-2", "new-2");
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "second source-backed file-diff generation",
+        |pane| pane.file_diff_cache_rev == 2 && pane.file_diff_cache_inflight.is_none(),
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                pane.file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
+                    .expect("the replacement source generation should parse on click");
+                assert_eq!(
+                    pane.file_diff_pair_syntax_text
+                        .get(&DiffTextRegion::SplitRight)
+                        .map(AsRef::as_ref),
+                    Some(second_text),
+                    "retained syntax text must belong to the installed generation",
+                );
+            });
+        });
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup source-backed generation fixture");
+}
+
+#[gpui::test]
 fn large_file_diff_keeps_prepared_syntax_documents_above_old_line_gate(
     cx: &mut gpui::TestAppContext,
 ) {

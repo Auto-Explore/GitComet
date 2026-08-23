@@ -56,6 +56,13 @@ impl MainPaneView {
         self.diff_text_anchor = None;
         self.diff_text_head = None;
         self.diff_text_autoscroll_target = None;
+        self.clear_diff_text_projected_highlights();
+    }
+
+    /// Drop click affordances projected into the current visible-row space.
+    /// Pair and occurrence spans carry row indices and display offsets, so
+    /// neither can survive a projection reset or a replacement source.
+    pub(in crate::view) fn clear_diff_text_projected_highlights(&mut self) {
         // Reached on every file switch, view-mode change and diff rebuild, all of
         // which move the row indices these spans were projected onto.
         self.diff_text_pair_match = None;
