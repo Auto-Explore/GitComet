@@ -4380,6 +4380,111 @@ fn split_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppC
             "the left side renders the old document and must not be washed"
         );
     });
+
+    // And it actually reaches the paint pass -- the state being right is not the
+    // same as a quad being drawn on the row.
+    cx.update(|_window, _app| rows::clear_diff_paint_log_for_tests());
+    draw_and_drain_test_window(cx);
+    let painted = rows::diff_paint_log_for_tests()
+        .into_iter()
+        .find(|record| record.visible_ix == 1 && record.region == DiffTextRegion::SplitRight)
+        .expect("row 1 of the right column should have painted");
+    assert_eq!(
+        painted.pair_quads,
+        vec![11..12, 16..17],
+        "the pair quad must be painted on the row, not merely computed"
+    );
+}
+
+/// The inline diff routes every row through the side its text came from, so a
+/// context row pairs against the new document and a removed row against the old.
+#[gpui::test]
+fn inline_file_diff_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(932);
+    let path = PathBuf::from("config.json");
+    let old_text = "{\n  \"items\": [1, 2],\n  \"name\": \"old\"\n}\n".to_string();
+    let new_text = "{\n  \"items\": [1, 2],\n  \"name\": \"new\"\n}\n".to_string();
+    let unified = concat!(
+        "@@ -1,4 +1,4 @@\n",
+        " {\n",
+        "   \"items\": [1, 2],\n",
+        "-  \"name\": \"old\"\n",
+        "+  \"name\": \"new\"\n",
+        " }\n",
+    )
+    .to_string();
+
+    let target = push_regular_diff_content_mode_state(
+        cx,
+        &view,
+        repo_id,
+        "inline_pair_json",
+        path,
+        unified,
+        old_text,
+        new_text,
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "inline file diff with prepared syntax on the new side",
+        |pane| {
+            pane.is_file_diff_view_active()
+                && pane.file_diff_cache_target == Some(target.clone())
+                && pane.diff_view == DiffViewMode::Inline
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "file_diff_active={} view={:?} doc={}",
+                pane.is_file_diff_view_active(),
+                pane.diff_view,
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some(),
+            )
+        },
+    );
+
+    // Inline row 1 is the context line `  "items": [1, 2],`.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        1,
+        DiffTextRegion::Inline,
+        11..12,
+        "inline diff pair bracket hitbox",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("clicking `[` in the inline diff should light its pair");
+        assert_eq!(pair.kind, rows::SyntaxPairKind::Bracket);
+        assert_eq!(
+            pane.diff_text_local_pair_ranges(1, DiffTextRegion::Inline)
+                .into_vec(),
+            vec![11..12, 16..17]
+        );
+    });
 }
 
 #[gpui::test]

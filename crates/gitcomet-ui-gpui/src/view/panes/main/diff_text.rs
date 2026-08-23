@@ -925,9 +925,11 @@ impl MainPaneView {
             return Some((document, source_visible_ix, DiffTextPairSide::Preview));
         }
 
-        if !self.is_file_diff_view_active() {
-            return None;
-        }
+        // Deliberately not gated on `is_file_diff_view_active()`: that is a
+        // *mode* flag (it requires `DiffContentMode::Full`), and file-diff rows
+        // also render under the collapsed projection. Asking the row model and
+        // the document cache directly covers every mode and fails closed when
+        // either is absent, which is what a patch/commit diff does.
         let row_ix = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix)?;
         // `line_to_row` maps are indexed by 0-based line; the row models carry
         // 1-based diff line numbers.

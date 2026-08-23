@@ -1185,6 +1185,11 @@ pub(in crate::view) struct DiffPaintRecord {
     pub(in crate::view) text: SharedString,
     pub(in crate::view) highlights: Vec<(Range<usize>, Option<gpui::Hsla>, Option<gpui::Hsla>)>,
     pub(in crate::view) row_bg: Option<gpui::Rgba>,
+    /// Local offset ranges the matching-pair quad was painted for. Recorded as
+    /// ranges rather than x coordinates: `#[gpui::test]` shapes on a
+    /// `NoopTextSystem`, so a painted x proves nothing about which character
+    /// it covered.
+    pub(in crate::view) pair_quads: Vec<Range<usize>>,
 }
 
 #[cfg(test)]
@@ -1199,6 +1204,7 @@ fn record_diff_paint_for_tests(
     text: &SharedString,
     highlights: &[(Range<usize>, HighlightStyle)],
     row_bg: Option<gpui::Rgba>,
+    pair_quads: &[Range<usize>],
 ) {
     DIFF_PAINT_LOG.with(|log| {
         log.borrow_mut().push(DiffPaintRecord {
@@ -1210,6 +1216,7 @@ fn record_diff_paint_for_tests(
                 .map(|(range, style)| (range.clone(), style.color, style.background_color))
                 .collect(),
             row_bg,
+            pair_quads: pair_quads.to_vec(),
         });
     });
 }
@@ -3704,8 +3711,19 @@ fn paint_selectable_diff_text(
         .map(|styled| styled.highlights.as_ref())
         .unwrap_or_else(|| highlights.as_ref());
 
+    let pair_ranges = view
+        .read(cx)
+        .diff_text_local_pair_ranges(visible_ix, region);
+
     #[cfg(test)]
-    record_diff_paint_for_tests(visible_ix, region, paint_text, paint_highlights, row_bg);
+    record_diff_paint_for_tests(
+        visible_ix,
+        region,
+        paint_text,
+        paint_highlights,
+        row_bg,
+        &pair_ranges,
+    );
     #[cfg(not(test))]
     let _ = row_bg;
 
@@ -3756,9 +3774,6 @@ fn paint_selectable_diff_text(
     // The pair goes down first so a selection dragged over it still reads as the
     // selection. They are mutually exclusive today -- a drag clears the pair --
     // but the ordering costs nothing and survives that changing.
-    let pair_ranges = view
-        .read(cx)
-        .diff_text_local_pair_ranges(visible_ix, region);
     if !pair_ranges.is_empty() {
         let color = view.read(cx).diff_text_pair_match_color();
         for range in &pair_ranges {
