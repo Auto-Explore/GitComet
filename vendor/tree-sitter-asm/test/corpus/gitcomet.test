@@ -1,0 +1,141 @@
+================================================================================
+arm64 condition suffix on a mnemonic
+================================================================================
+    b.eq .Lloop
+    b.ne .Lloop
+    ret
+--------------------------------------------------------------------------------
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (meta_ident)))
+  (instruction
+    (mnemonic)
+    (ident
+      (meta_ident)))
+  (instruction
+    (mnemonic)))
+
+================================================================================
+clang-emitted mixed-case labels and directives
+================================================================================
+.LBB0_1:
+    .p2align 4
+main:
+--------------------------------------------------------------------------------
+
+(program
+  (label
+    (meta_ident))
+  (meta
+    (meta_ident)
+    (int))
+  (label
+    (ident)))
+
+================================================================================
+a hash comment after a mnemonic is a comment, not an ARM immediate
+================================================================================
+    nop                 # an explicit nop, because the slot must be filled
+    mflo    $t2         # and must be moved out explicitly
+    mult    $t0, $t1    # two operands always worked; one did not
+--------------------------------------------------------------------------------
+
+(program
+  (instruction
+    (mnemonic))
+  (line_comment)
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (address))))
+  (line_comment)
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (address)))
+    (ident
+      (reg
+        (address))))
+  (line_comment))
+
+================================================================================
+and a real ARM immediate still lexes as one
+================================================================================
+    mov     r0, #1
+    ldr     x1, [x0, #8]
+--------------------------------------------------------------------------------
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (int))
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (ptr
+      (reg
+        (word))
+      (int))))
+
+================================================================================
+a Z80 shadow register is not an opening quote
+================================================================================
+        EX   AF, AF'
+        EXX
+CHAR    EQU 'A'
+--------------------------------------------------------------------------------
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (ident
+      (reg
+        (shadow_reg))))
+  (instruction
+    (mnemonic))
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (string)))
+
+================================================================================
+a directive takes a mixed comma-separated operand list
+================================================================================
+        .size   main, .-main
+        .section .rodata
+        .align  3
+--------------------------------------------------------------------------------
+
+(program
+  (meta
+    (meta_ident)
+    (ident
+      (reg
+        (word)))
+    (tc_infix
+      (ident)
+      (ident
+        (reg
+          (word)))))
+  (meta
+    (meta_ident)
+    (ident
+      (meta_ident)))
+  (meta
+    (meta_ident)
+    (int)))

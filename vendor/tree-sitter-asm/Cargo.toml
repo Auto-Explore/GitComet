@@ -1,0 +1,59 @@
+# Vendored from https://github.com/RubixDev/tree-sitter-asm
+# at rev 839741fef4dab5128952334624905c82b40c7133 (MIT, see LICENSE).
+#
+# Vendored rather than taken from crates.io -- where it is `tree-sitter-asm =
+# "0.24.0"`, the same source -- because `grammar.js` needed changing and upstream
+# has not. Two edits, both marked `GitComet:` in `grammar.js`:
+#
+#   * `instruction`'s `kind` is a new `mnemonic` token that spans dots, so an
+#     arm64 `b.eq` is one node. Upstream's `word` is /[a-zA-Z0-9_]+/, so `b.eq`
+#     lexed as `_ident`, found no `:` after it and became an ERROR -- a whole
+#     conditional branch uncoloured, and nothing there answered a click.
+#   * `meta_ident` admits uppercase and digits, so clang's `.LBB0_1` and
+#     `.p2align` are directives rather than error recovery.
+#
+# `src/` is regenerated (`tree-sitter generate`, CLI 0.26.13, ABI 15) and
+# `test/corpus/` re-recorded, so `tree-sitter test` in this directory is the
+# regression gate for both edits -- `test/corpus/gitcomet.test` covers them
+# directly. Send these upstream once they have had some mileage.
+#
+# Compatibility with the workspace tree-sitter (see `tree-sitter` in the root
+# Cargo.toml) is a hard requirement, enforced by
+# `vendored_asm_grammar_is_abi_compatible_with_workspace_tree_sitter` and
+# `vendored_asm_grammar_parses_dotted_mnemonics_and_directives` in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/syntax.rs. Depending on
+# `tree-sitter-language` rather than `tree-sitter` is what keeps that true.
+#
+# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue:
+# GitComet keeps its own asm query in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/asm_highlights.scm,
+# and upstream's `HIGHLIGHTS_QUERY` const is removed from lib.rs because it
+# `include_str!`s a file that is not here.
+[package]
+name = "tree-sitter-asm"
+description = "assembly grammar for the tree-sitter parsing library"
+authors = ["RubixDev"]
+version = "0.24.0"
+repository = "https://github.com/RubixDev/tree-sitter-asm"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+# The build script body, shared by every vendored grammar.
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+# Upstream's dev-dependency, kept so `bindings/rust/lib.rs`'s own test module and
+# doc example still build under
+# `cargo test --manifest-path vendor/tree-sitter-asm/Cargo.toml`. The version
+# tracks `tree-sitter` in the root Cargo.toml.
+[dev-dependencies]
+tree-sitter = "0.26.12"

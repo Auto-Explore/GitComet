@@ -207,64 +207,68 @@ fn for_each_sample(
 ) -> usize {
     let mut checked = 0usize;
     for path in sample_files(root) {
-        let Some(language) = diff_syntax_language_for_path(&path) else {
+        let Some(sample) = parse_sample(path, failures) else {
             continue;
         };
-        let Ok(bytes) = std::fs::read(&path) else {
-            continue;
-        };
-        if bytes.len() > MAX_SAMPLE_BYTES {
-            continue;
-        }
-        // The corpus includes deliberately invalid encodings; a highlighter
-        // never sees those, because the diff indexer rejects them first.
-        let Ok(text) = String::from_utf8(bytes) else {
-            continue;
-        };
-        if text.is_empty() {
-            continue;
-        }
-
-        let input = treesitter_document_input_from_text(&text);
-        let line_starts = Arc::clone(&input.line_starts);
-        let document = match prepare_treesitter_document_with_budget_reuse_text(
-            language,
-            DiffSyntaxMode::Auto,
-            input.text,
-            Arc::clone(&line_starts),
-            DiffSyntaxBudget {
-                foreground_parse: PARSE_BUDGET,
-            },
-            None,
-            None,
-        ) {
-            PrepareTreesitterDocumentResult::Ready(document) => document,
-            // `Unsupported` is the honest answer for a language wired for
-            // heuristic highlighting only, so it is not a failure. A timeout on
-            // a file this small is.
-            PrepareTreesitterDocumentResult::Unsupported => continue,
-            PrepareTreesitterDocumentResult::TimedOut => {
-                failures.push(format!(
-                    "{} ({language:?}) did not parse within {PARSE_BUDGET:?}",
-                    path.display()
-                ));
-                continue;
-            }
-        };
-
         checked += 1;
-        check(
-            &Sample {
-                path,
-                language,
-                text,
-                line_starts,
-                document,
-            },
-            failures,
-        );
+        check(&sample, failures);
     }
     checked
+}
+
+/// Parse one file the way the diff panes would, or `None` if it is not a sample
+/// GitComet claims to support.
+///
+/// Split out of [`for_each_sample`] so the single-file dump below shares exactly
+/// this path -- a dump that parsed differently from the sweep would answer
+/// questions about itself rather than about the highlighter.
+fn parse_sample(path: PathBuf, failures: &mut Vec<String>) -> Option<Sample> {
+    let language = diff_syntax_language_for_path(&path)?;
+    let bytes = std::fs::read(&path).ok()?;
+    if bytes.len() > MAX_SAMPLE_BYTES {
+        return None;
+    }
+    // The corpus includes deliberately invalid encodings; a highlighter never
+    // sees those, because the diff indexer rejects them first.
+    let text = String::from_utf8(bytes).ok()?;
+    if text.is_empty() {
+        return None;
+    }
+
+    let input = treesitter_document_input_from_text(&text);
+    let line_starts = Arc::clone(&input.line_starts);
+    let document = match prepare_treesitter_document_with_budget_reuse_text(
+        language,
+        DiffSyntaxMode::Auto,
+        input.text,
+        Arc::clone(&line_starts),
+        DiffSyntaxBudget {
+            foreground_parse: PARSE_BUDGET,
+        },
+        None,
+        None,
+    ) {
+        PrepareTreesitterDocumentResult::Ready(document) => document,
+        // `Unsupported` is the honest answer for a language wired for heuristic
+        // highlighting only, so it is not a failure. A timeout on a file this
+        // small is.
+        PrepareTreesitterDocumentResult::Unsupported => return None,
+        PrepareTreesitterDocumentResult::TimedOut => {
+            failures.push(format!(
+                "{} ({language:?}) did not parse within {PARSE_BUDGET:?}",
+                path.display()
+            ));
+            return None;
+        }
+    };
+
+    Some(Sample {
+        path,
+        language,
+        text,
+        line_starts,
+        document,
+    })
 }
 
 /// Skip with a printed reason, or hand back the corpus.
@@ -569,4 +573,107 @@ fn syntax_corpus_files_colour_the_construct_they_are_named_for() {
         failures.len(),
         failures.join("\n  ")
     );
+}
+
+/// Print every token of one sample, line by line.
+///
+/// The corpus sweeps above assert invariants, and invariants are silent about the
+/// one report that keeps arriving: "the highlighting breaks around line N". That
+/// question needs the actual tokens, and reading the grammar's query cannot answer
+/// it -- an upstream query that captures nothing for a construct looks identical
+/// in source to one that captures it correctly.
+///
+/// Off unless `$GITCOMET_SYNTAX_DUMP` names a file, either absolute or relative to
+/// the corpus root:
+///
+/// ```sh
+/// GITCOMET_SYNTAX_DUMP=config/makefile/Makefile \
+///   cargo test -p gitcomet-ui-gpui --lib syntax_corpus_dump -- --nocapture
+/// ```
+///
+/// `..` marks a line the grammar coloured nothing on, which is what a break looks
+/// like from here.
+#[test]
+fn syntax_corpus_dump() {
+    let Some(requested) = std::env::var_os("GITCOMET_SYNTAX_DUMP") else {
+        println!("skipping syntax corpus dump: set $GITCOMET_SYNTAX_DUMP to a sample path");
+        return;
+    };
+    let requested = PathBuf::from(requested);
+    let path = if requested.is_absolute() {
+        requested
+    } else {
+        corpus_or_skip!().join(requested)
+    };
+    assert!(path.is_file(), "no such sample: {}", path.display());
+
+    let language = diff_syntax_language_for_path(&path)
+        .unwrap_or_else(|| panic!("no wired language for {}", path.display()));
+
+    let mut failures: Vec<String> = Vec::new();
+    // `None` here is a language wired for heuristic highlighting only, which is a
+    // thing worth dumping rather than an error: `Conf` and the other grammarless
+    // ones are exactly where "it colours nothing" is the report.
+    let sample = parse_sample(path.clone(), &mut failures);
+    assert!(
+        failures.is_empty(),
+        "{} did not parse: {}",
+        path.display(),
+        failures.join("; ")
+    );
+    let text = match sample.as_ref() {
+        Some(sample) => sample.text.clone(),
+        None => std::fs::read_to_string(&path)
+            .unwrap_or_else(|err| panic!("cannot read {}: {err}", path.display())),
+    };
+
+    println!(
+        "{} ({language:?}{})",
+        path.display(),
+        if sample.is_some() {
+            ""
+        } else {
+            ", heuristic only"
+        }
+    );
+    let mut uncoloured = 0usize;
+    let line_count = match sample.as_ref() {
+        Some(sample) => sample.line_count(),
+        None => text.lines().count(),
+    };
+    for line_ix in 0..line_count {
+        let heuristic_line;
+        let (line, tokens) = match sample.as_ref() {
+            Some(sample) => (
+                sample.line(line_ix),
+                syntax_tokens_for_prepared_document_line(sample.document, line_ix)
+                    .map(|tokens| tokens.to_vec())
+                    .unwrap_or_default(),
+            ),
+            None => {
+                heuristic_line = text.lines().nth(line_ix).unwrap_or_default();
+                (
+                    heuristic_line,
+                    syntax_tokens_for_line(heuristic_line, language, DiffSyntaxMode::Auto).to_vec(),
+                )
+            }
+        };
+        let rendered = if tokens.is_empty() {
+            if !line.trim().is_empty() {
+                uncoloured += 1;
+            }
+            "..".to_string()
+        } else {
+            tokens
+                .iter()
+                .map(|token| {
+                    let text = line.get(token.range.clone()).unwrap_or("<out of range>");
+                    format!("{:?}={text:?}", token.kind)
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        println!("{:>5}  {line:<72}  {rendered}", line_ix + 1);
+    }
+    println!("\n{uncoloured} non-empty lines coloured nothing");
 }

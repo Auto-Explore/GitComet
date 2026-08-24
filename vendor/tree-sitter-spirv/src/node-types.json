@@ -1,0 +1,134 @@
+[
+  {
+    "type": "instruction",
+    "named": true,
+    "fields": {
+      "opcode": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "opcode",
+            "named": true
+          }
+        ]
+      },
+      "result": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "id",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "enumerant",
+          "named": true
+        },
+        {
+          "type": "float",
+          "named": true
+        },
+        {
+          "type": "id",
+          "named": true
+        },
+        {
+          "type": "integer",
+          "named": true
+        },
+        {
+          "type": "mask",
+          "named": true
+        },
+        {
+          "type": "raw_literal",
+          "named": true
+        },
+        {
+          "type": "string",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "mask",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "enumerant",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "module",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "instruction",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "=",
+    "named": false
+  },
+  {
+    "type": "comment",
+    "named": true,
+    "extra": true
+  },
+  {
+    "type": "enumerant",
+    "named": true
+  },
+  {
+    "type": "float",
+    "named": true
+  },
+  {
+    "type": "id",
+    "named": true
+  },
+  {
+    "type": "integer",
+    "named": true
+  },
+  {
+    "type": "opcode",
+    "named": true
+  },
+  {
+    "type": "raw_literal",
+    "named": true
+  },
+  {
+    "type": "string",
+    "named": true
+  },
+  {
+    "type": "|",
+    "named": false
+  }
+]

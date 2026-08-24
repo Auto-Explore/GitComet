@@ -1,0 +1,93 @@
+==========
+Basic label
+==========
+main:
+---
+(program
+    (label (ident)))
+
+==========
+Local label
+==========
+.label:
+---
+(program
+    (label (meta_ident)))
+
+==========
+Directive -- Single string arg
+==========
+.asciz "Hello, world!"
+---
+(program
+      (meta
+        (meta_ident)
+        (string)))
+
+==========
+Directive -- Multiple string args
+==========
+.asciz "Hello", ", ", "world!"
+---
+(program
+      (meta
+        (meta_ident)
+        (string)
+        (string)
+        (string)))
+
+==========
+Directive -- Single integer arg
+==========
+.line 42
+---
+(program
+      (meta
+        (meta_ident)
+        (int)))
+
+==========
+Directive -- Multiple integer args
+==========
+.fill 0, 1, 2
+---
+(program
+      (meta
+        (meta_ident)
+        (int)
+        (int)
+        (int)))
+
+==========
+Directive -- Single floating point arg
+==========
+.float 3.14
+---
+(program
+      (meta
+        (meta_ident)
+        (float)))
+
+==========
+Directive -- Multiple floating point args
+==========
+.float 3.14, 2.72
+---
+(program
+      (meta
+        (meta_ident)
+        (float)
+        (float)))
+
+==========
+Label and Directive -- Single integer arg
+==========
+length: .word 8
+---
+(program
+      (label
+        (ident)
+        (meta
+          (meta_ident)
+          (int))))
+

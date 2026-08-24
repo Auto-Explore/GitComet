@@ -1,0 +1,265 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/grammar.schema.json",
+  "name": "spirv",
+  "rules": {
+    "module": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SYMBOL",
+              "name": "instruction"
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "PATTERN",
+                "value": "\\n"
+              },
+              {
+                "type": "CHOICE",
+                "members": [
+                  {
+                    "type": "SYMBOL",
+                    "name": "instruction"
+                  },
+                  {
+                    "type": "BLANK"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "instruction": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "CHOICE",
+          "members": [
+            {
+              "type": "SEQ",
+              "members": [
+                {
+                  "type": "FIELD",
+                  "name": "result",
+                  "content": {
+                    "type": "SYMBOL",
+                    "name": "id"
+                  }
+                },
+                {
+                  "type": "STRING",
+                  "value": "="
+                }
+              ]
+            },
+            {
+              "type": "BLANK"
+            }
+          ]
+        },
+        {
+          "type": "FIELD",
+          "name": "opcode",
+          "content": {
+            "type": "SYMBOL",
+            "name": "opcode"
+          }
+        },
+        {
+          "type": "REPEAT",
+          "content": {
+            "type": "SYMBOL",
+            "name": "_operand"
+          }
+        }
+      ]
+    },
+    "opcode": {
+      "type": "PATTERN",
+      "value": "Op[A-Z][0-9A-Za-z_]*"
+    },
+    "_operand": {
+      "type": "CHOICE",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "id"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "string"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "float"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "integer"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "raw_literal"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "mask"
+        },
+        {
+          "type": "SYMBOL",
+          "name": "enumerant"
+        }
+      ]
+    },
+    "id": {
+      "type": "PATTERN",
+      "value": "%[0-9A-Za-z_]+"
+    },
+    "string": {
+      "type": "TOKEN",
+      "content": {
+        "type": "SEQ",
+        "members": [
+          {
+            "type": "STRING",
+            "value": "\""
+          },
+          {
+            "type": "REPEAT",
+            "content": {
+              "type": "CHOICE",
+              "members": [
+                {
+                  "type": "PATTERN",
+                  "value": "[^\"\\\\]"
+                },
+                {
+                  "type": "PATTERN",
+                  "value": "\\\\."
+                }
+              ]
+            }
+          },
+          {
+            "type": "STRING",
+            "value": "\""
+          }
+        ]
+      }
+    },
+    "float": {
+      "type": "TOKEN",
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "PATTERN",
+            "value": "-?[0-9]+\\.[0-9]+([eE][+-]?[0-9]+)?"
+          },
+          {
+            "type": "PATTERN",
+            "value": "-?0[xX][0-9a-fA-F]+(\\.[0-9a-fA-F]*)?[pP][+-]?[0-9]+"
+          }
+        ]
+      }
+    },
+    "integer": {
+      "type": "TOKEN",
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "PATTERN",
+            "value": "-?0[xX][0-9a-fA-F]+"
+          },
+          {
+            "type": "PATTERN",
+            "value": "-?[0-9]+"
+          }
+        ]
+      }
+    },
+    "raw_literal": {
+      "type": "TOKEN",
+      "content": {
+        "type": "CHOICE",
+        "members": [
+          {
+            "type": "PATTERN",
+            "value": "!0[xX][0-9a-fA-F]+"
+          },
+          {
+            "type": "PATTERN",
+            "value": "![0-9]+"
+          }
+        ]
+      }
+    },
+    "mask": {
+      "type": "SEQ",
+      "members": [
+        {
+          "type": "SYMBOL",
+          "name": "enumerant"
+        },
+        {
+          "type": "REPEAT1",
+          "content": {
+            "type": "SEQ",
+            "members": [
+              {
+                "type": "IMMEDIATE_TOKEN",
+                "content": {
+                  "type": "STRING",
+                  "value": "|"
+                }
+              },
+              {
+                "type": "SYMBOL",
+                "name": "enumerant"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "enumerant": {
+      "type": "PATTERN",
+      "value": "[A-Za-z_][0-9A-Za-z_]*"
+    },
+    "comment": {
+      "type": "PATTERN",
+      "value": ";[^\\n]*"
+    }
+  },
+  "extras": [
+    {
+      "type": "PATTERN",
+      "value": "[ \\t\\r]"
+    },
+    {
+      "type": "SYMBOL",
+      "name": "comment"
+    }
+  ],
+  "conflicts": [],
+  "precedences": [],
+  "externals": [],
+  "inline": [],
+  "supertypes": [],
+  "reserved": {}
+}

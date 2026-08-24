@@ -1,0 +1,20 @@
+{
+  "grammars": [
+    {
+      "name": "gitignore",
+      "camelcase": "Gitignore",
+      "scope": "source.gitignore",
+      "path": ".",
+      "file-types": ["gitignore"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "gitignore grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/shunsambongi/tree-sitter-gitignore"
+    }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

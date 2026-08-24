@@ -37,16 +37,30 @@ const C_INJECTIONS_QUERY: &str = include_str!("queries/c_injections.scm");
 const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.scm");
 const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
+const ASM_HIGHLIGHTS_QUERY: &str = include_str!("queries/asm_highlights.scm");
+const CMAKE_SUPPLEMENT_QUERY: &str = include_str!("queries/cmake_supplement.scm");
+const CADDYFILE_HIGHLIGHTS_QUERY: &str = include_str!("queries/caddyfile_highlights.scm");
+const CIL_HIGHLIGHTS_QUERY: &str = include_str!("queries/cil_highlights.scm");
+const CRONTAB_HIGHLIGHTS_QUERY: &str = include_str!("queries/crontab_highlights.scm");
+const CRONTAB_INJECTIONS_QUERY: &str = include_str!("queries/crontab_injections.scm");
+const GITIGNORE_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitignore_highlights.scm");
+const JUST_HIGHLIGHTS_QUERY: &str = include_str!("queries/just_highlights.scm");
+const JUST_INJECTIONS_QUERY: &str = include_str!("queries/just_injections.scm");
+const SPIRV_HIGHLIGHTS_QUERY: &str = include_str!("queries/spirv_highlights.scm");
+const WAT_HIGHLIGHTS_QUERY: &str = include_str!("queries/wat_highlights.scm");
 const GOMOD_HIGHLIGHTS_QUERY: &str = include_str!("queries/gomod_highlights.scm");
 const GOWORK_HIGHLIGHTS_QUERY: &str = include_str!("queries/gowork_highlights.scm");
 const GROOVY_SUPPLEMENT_QUERY: &str = include_str!("queries/groovy_supplement.scm");
 const HCL_HIGHLIGHTS_QUERY: &str = include_str!("queries/hcl_highlights.scm");
+const HCL_INJECTIONS_QUERY: &str = include_str!("queries/hcl_injections.scm");
 const JAVA_SUPPLEMENT_QUERY: &str = include_str!("queries/java_supplement.scm");
+const MAKEFILE_INJECTIONS_QUERY: &str = include_str!("queries/makefile_injections.scm");
+const MAKEFILE_SUPPLEMENT_QUERY: &str = include_str!("queries/makefile_supplement.scm");
 const OBJC_SUPPLEMENT_QUERY: &str = include_str!("queries/objc_supplement.scm");
 const PHP_SUPPLEMENT_QUERY: &str = include_str!("queries/php_supplement.scm");
 const POWERSHELL_SUPPLEMENT_QUERY: &str = include_str!("queries/powershell_supplement.scm");
 const SQL_SUPPLEMENT_QUERY: &str = include_str!("queries/sql_supplement.scm");
-const ZIG_SUPPLEMENT_QUERY: &str = include_str!("queries/zig_supplement.scm");
+const ZIG_HIGHLIGHTS_QUERY: &str = include_str!("queries/zig_highlights.scm");
 const XML_SUPPLEMENT_QUERY: &str = include_str!("queries/xml_supplement.scm");
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
@@ -233,6 +247,41 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     Bicep,
     Lua,
     Makefile,
+    /// `CMakeLists.txt` and `.cmake`.
+    Cmake,
+    /// `Dockerfile`, `Containerfile`. The crate is `tree-sitter-containerfile`,
+    /// named for the OCI-neutral spelling; the grammar is the Docker one and
+    /// parses both.
+    Dockerfile,
+    /// INI, and the config formats that are INI without saying so: systemd units,
+    /// `.editorconfig`, `.desktop` entries, and git's own config files.
+    ///
+    /// The grammar is a strict reading of INI, so it produces a few ERROR nodes on
+    /// each of those dialects' idioms -- a `\`-continued `ExecStart=`, an
+    /// `.editorconfig` glob section like `[[a-c]*.txt]`. Error recovery keeps
+    /// those local, and the alternative is [`DiffSyntaxLanguage::Conf`]'s
+    /// heuristic, which knows less about all of them.
+    Ini,
+    /// `.conf`, with no grammar on purpose.
+    ///
+    /// One extension serves Apache, nginx, systemd and a hundred unrelated tools,
+    /// and no grammar is right for more than one of them: `tree-sitter-nginx`
+    /// exists but ships no highlights query, and nothing covers Apache at all.
+    /// The heuristic reads what they do share -- `#`/`;` comments, quoted strings,
+    /// numbers, and a directive name at the head of a line -- and is never
+    /// actively wrong about any of them.
+    Conf,
+    /// `justfile`. The grammar is vendored because the published crate pins
+    /// `tree-sitter = ~0.25.5` and `links` makes that unresolvable here.
+    Just,
+    /// `Caddyfile`.
+    Caddyfile,
+    /// `.gitignore`, and the `.dockerignore`/`.npmignore` family that share its
+    /// syntax exactly.
+    Gitignore,
+    /// `crontab`. The grammar is written in-tree, not vendored: the only one on
+    /// GitHub carries no licence at all.
+    Crontab,
     Nix,
     Kotlin,
     Zig,
@@ -255,6 +304,16 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     /// dialect-agnostic, so it labels mnemonics and operands without knowing the
     /// target architecture.
     Assembly,
+    /// LLVM IR (`.ll`). Textual, not bitcode -- `.bc` is binary and never reaches
+    /// a highlighter.
+    Llvm,
+    /// WebAssembly text format (`.wat`, `.wast`). The binary `.wasm` is not text
+    /// and never reaches a highlighter.
+    Wat,
+    /// SPIR-V assembly (`.spvasm`). Like `.wat`, the assembled `.spv` is binary.
+    Spirv,
+    /// CIL / MSIL (`.il`). The grammar is written in-tree: there is none anywhere.
+    Cil,
     Rust,
     Python,
     JavaScript,
@@ -1479,10 +1538,95 @@ mod tests {
             ),
             (
                 DiffSyntaxLanguage::Makefile,
-                "# c\nall: build\n\techo \"s\"\n",
-                // A recipe line is opaque shell text to this grammar, so nothing
-                // inside it is coloured; only the makefile's own syntax is.
-                &[K::Comment, K::Constant, K::PunctuationDelimiter],
+                "# c\nOUT := a\nall: build\n\techo \"s\"\n",
+                // `Function` is asserted twice over: the target name `all`, which
+                // upstream's query captures only for the ~25 conventional target
+                // names (see queries/makefile_supplement.scm), and `echo` inside
+                // the recipe, which reaches bash through
+                // queries/makefile_injections.scm. A recipe line used to be opaque
+                // shell text that nothing coloured at all.
+                &[
+                    K::Comment,
+                    K::Constant,
+                    K::Function,
+                    K::PunctuationDelimiter,
+                    K::String,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Cmake,
+                "# c\nset(NAME \"demo\")\nif(NAME)\n  add_library(y STATIC a.c)\nendif()\n",
+                &[K::Comment, K::String, K::Function, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Dockerfile,
+                "# c\nFROM alpine:3.20 AS build\nENV A=1\nCMD [\"app\", \"--serve\"]\n",
+                // Exec form, not `RUN echo "s"`: the grammar hands a shell-form
+                // command over as one opaque `shell_command`, so the quotes in it
+                // are not the grammar's strings. The JSON-ish exec form is.
+                &[K::Comment, K::String, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Ini,
+                "; c\n[section]\nkey = value\nnumber = 42\n",
+                &[K::Comment, K::Property],
+            ),
+            (
+                DiffSyntaxLanguage::Llvm,
+                "; c\ndefine i32 @main() {\n  ret i32 0\n}\n",
+                // `Constant`, not `Number`: upstream's query captures integer
+                // literals as `@constant`, which in LLVM IR is what they are --
+                // `i32 0` is a constant operand, not a numeric literal in an
+                // expression. Left as upstream has it rather than supplemented.
+                &[K::Comment, K::Constant, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Just,
+                "# c\nname := \"demo\"\n\nbuild:\n    echo \"hi\"\n",
+                // `Function` comes from bash inside the recipe, via
+                // queries/just_injections.scm -- a justfile is mostly recipes,
+                // and without the injection they are plain text.
+                &[K::Comment, K::String, K::Function],
+            ),
+            (
+                DiffSyntaxLanguage::Caddyfile,
+                "# c\nexample.com {\n\troot * /srv\n\tfile_server\n}\n",
+                &[K::Comment, K::Keyword, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Gitignore,
+                "# c\n*.log\n!keep.log\nbuild/\n",
+                // The literal path text is deliberately uncoloured; what is
+                // captured is what makes a line more than a path. See
+                // queries/gitignore_highlights.scm. `KeywordControl` is the
+                // leading `!`, which inverts the rule and is deliberately not the
+                // punctuation grey `@operator` resolves to.
+                &[K::Comment, K::StringRegex, K::KeywordControl],
+            ),
+            (
+                DiffSyntaxLanguage::Crontab,
+                "# c\nMAILTO=ops@example.com\n*/5 9-17 * * MON echo hi\n",
+                &[K::Comment, K::Property, K::Number, K::PunctuationSpecial],
+            ),
+            (
+                DiffSyntaxLanguage::Wat,
+                ";; c\n(module\n  (func $add (param $a i32) (result i32)\n    local.get $a))\n",
+                &[
+                    K::Comment,
+                    K::Keyword,
+                    K::TypeBuiltin,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Spirv,
+                "; c\n%1 = OpTypeVoid\n%2 = OpConstant %int 42\n",
+                &[K::Comment, K::Type, K::Operator],
+            ),
+            (
+                DiffSyntaxLanguage::Cil,
+                "// c\n.method public static void Main() cil managed\n{\n  IL_0000:  ldstr \"hi\"\n}\n",
+                &[K::Comment, K::Preproc, K::Label, K::String, K::Keyword],
             ),
             (
                 DiffSyntaxLanguage::Css,
@@ -1781,6 +1925,304 @@ mod tests {
         assert_eq!(
             spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
             vec![1, 2]
+        );
+    }
+
+    /// The Z80 shadow-register apostrophe does not open a string, on either path.
+    ///
+    /// `AF'`, `BC'`, `DE'`, `HL'` end in an apostrophe in a language that also
+    /// spells character literals with one, so `EX AF, AF'` used to open a string
+    /// that ran to the next quote fifty lines later. The grammar half is
+    /// `shadow_reg` in vendor/tree-sitter-asm; this covers the heuristic, which is
+    /// what the app renders whenever the parse budget blows -- so a fix to only
+    /// one of the two is invisible in whichever regime you happen to test.
+    #[test]
+    fn assembly_shadow_register_apostrophe_does_not_open_a_string() {
+        let heuristic = |line: &str| {
+            syntax_tokens_for_line(
+                line,
+                DiffSyntaxLanguage::Assembly,
+                DiffSyntaxMode::HeuristicOnly,
+            )
+            .to_vec()
+        };
+
+        let shadow = heuristic("        EX   AF, AF'");
+        assert!(
+            shadow.iter().all(|t| t.kind != SyntaxTokenKind::String),
+            "a shadow register is not a string: {shadow:?}"
+        );
+
+        // ...but a real character literal still is, and the two differ only by
+        // what precedes the quote.
+        let literal = heuristic("CHAR    EQU 'A'");
+        assert!(
+            literal.iter().any(|t| t.kind == SyntaxTokenKind::String),
+            "`'A'` in value position is still a char literal: {literal:?}"
+        );
+
+        // And the tree-sitter path agrees, which is the point of testing both.
+        let text = concat!(
+            "        EX   AF, AF'\n",
+            "        LD   A, 'X'\n",
+            "        HALT\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Assembly, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+        assert!(
+            !kinds(0).contains(&SyntaxTokenKind::String),
+            "grammar: `AF'` is a register, got {:?}",
+            kinds(0)
+        );
+        assert!(
+            kinds(1).contains(&SyntaxTokenKind::String),
+            "grammar: `'X'` is a char literal, got {:?}",
+            kinds(1)
+        );
+        assert_eq!(
+            kinds(2),
+            vec![SyntaxTokenKind::Function],
+            "the line after must not have been swallowed by a string"
+        );
+    }
+
+    /// A GAS local label reference is a label, not a register.
+    ///
+    /// `1f`/`2b` are the jump targets in hand-written x86 assembly, and the
+    /// grammar files them as `reg` like every other bare operand -- so `je 2f`
+    /// painted its target the same colour as `%r13`. The register assertions are
+    /// the other half: matching by shape rather than by branch mnemonic is what
+    /// keeps ARM's `bic` and x86's `bswap` from having their operands relabelled.
+    #[test]
+    fn assembly_local_label_references_are_labels_not_registers() {
+        let text = concat!(
+            "1:      cmpq    $0, %r13\n",
+            "        je      2f\n",
+            "        jmp     1b\n",
+            "        bswap   %eax\n",
+            "2:\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Assembly, text);
+        let kind_of = |line_ix: usize, needle: &str| -> Option<SyntaxTokenKind> {
+            let line = text.lines().nth(line_ix)?;
+            let at = line.find(needle)?;
+            syntax_tokens_for_prepared_document_line(document, line_ix)?
+                .iter()
+                .find(|token| token.range.start == at)
+                .map(|token| token.kind)
+        };
+
+        assert_eq!(kind_of(1, "2f"), Some(SyntaxTokenKind::Label));
+        assert_eq!(kind_of(2, "1b"), Some(SyntaxTokenKind::Label));
+        // The definitions they point at.
+        assert_eq!(kind_of(0, "1:"), Some(SyntaxTokenKind::Label));
+        assert_eq!(kind_of(4, "2:"), Some(SyntaxTokenKind::Label));
+        // And nothing else moved: registers are still registers, including on a
+        // mnemonic that starts with `b` but is not a branch.
+        assert_eq!(
+            kind_of(0, "%r13"),
+            Some(SyntaxTokenKind::VariableBuiltin),
+            "a `%` register is not a label"
+        );
+        assert_eq!(
+            kind_of(3, "%eax"),
+            Some(SyntaxTokenKind::VariableBuiltin),
+            "`bswap` is not a branch, and its operand is a register"
+        );
+    }
+
+    /// Clicking an assembler directive or a dotted mnemonic finds the others.
+    ///
+    /// Both were dead before: `is_name` in syntax/occurrences.rs required a
+    /// name's first character to be a letter or `_` and every character after it
+    /// to be alphanumeric, so `.section` and `.p2align` never got past it, and
+    /// `b.eq` was not one node to click in the first place (see
+    /// vendor/tree-sitter-asm). An assembly file is mostly these two things, so
+    /// between them the feature did nothing at all on `.s`.
+    #[test]
+    fn assembly_directives_and_dotted_mnemonics_answer_a_click() {
+        let text = concat!(
+            ".section .text\n",
+            "    .p2align 4\n",
+            "main:\n",
+            "    b.eq main\n",
+            "    b.ne main\n",
+            "    b.eq main\n",
+            ".section .data\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Assembly, text);
+
+        // A leading `.` is the whole point: the directive is the name.
+        let spans = prepared_document_occurrences_at_display_offset(document, 0, 3);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 6],
+            "clicking `.section` should find both of them"
+        );
+
+        // And the dot is interior here, in a token the vendored grammar keeps
+        // whole. `b.ne` on line 4 must not match.
+        let spans = prepared_document_occurrences_at_display_offset(document, 3, 6);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![3, 5],
+            "clicking `b.eq` should find the other `b.eq` and not `b.ne`"
+        );
+    }
+
+    /// A Terraform heredoc body highlights as what is inside it.
+    ///
+    /// HCL has no syntax for declaring a heredoc's language, so `user_data` and
+    /// `policy` -- the two densest things in a real Terraform file -- rendered as
+    /// one flat `@string` for however many lines they ran. The language comes from
+    /// the attribute name; see queries/hcl_injections.scm for why not from the
+    /// content.
+    #[test]
+    fn hcl_heredoc_bodies_are_injected_by_attribute_name() {
+        let text = concat!(
+            "resource \"aws_instance\" \"web\" {\n",
+            "  user_data = <<-EOT\n",
+            "    set -euo pipefail\n",
+            "    echo \"hi ${count.index}\"\n",
+            "  EOT\n",
+            "\n",
+            "  policy = <<EOT\n",
+            "{\"Version\": \"2012-10-17\"}\n",
+            "EOT\n",
+            "\n",
+            "  description = <<EOT\n",
+            "just prose, no language to guess\n",
+            "EOT\n",
+            "}\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+
+        // Shell, because the attribute is `user_data`.
+        assert!(
+            kinds(3).contains(&SyntaxTokenKind::Function),
+            "`echo` should be a command, got {:?}",
+            kinds(3)
+        );
+        // ...and the HCL interpolation inside it keeps the HCL colours, because it
+        // is not part of the injected range.
+        assert!(
+            kinds(3).contains(&SyntaxTokenKind::Property),
+            "`${{count.index}}` should still read as Terraform, got {:?}",
+            kinds(3)
+        );
+
+        // JSON, because the attribute is `policy`.
+        assert!(
+            kinds(7).contains(&SyntaxTokenKind::Property),
+            "`\"Version\"` should be a JSON key, got {:?}",
+            kinds(7)
+        );
+
+        // And an attribute the convention says nothing about is left alone rather
+        // than guessed at.
+        assert_eq!(
+            kinds(11),
+            vec![SyntaxTokenKind::String],
+            "an unrecognised attribute's heredoc stays a string"
+        );
+    }
+
+    /// Clicking an `ARG`/`ENV` name in a Dockerfile finds its other uses.
+    ///
+    /// Same root cause as the YAML case below: `tree-sitter-containerfile` calls
+    /// the bare word on both sides of an `ARG`/`ENV` pair `unquoted_string`, and
+    /// `is_name_token_kind` rejects any kind containing "string". Tracing an
+    /// `ARG` through the stages that re-declare it is most of what reading a
+    /// Dockerfile is, and none of it answered a click.
+    #[test]
+    fn dockerfile_arg_names_answer_a_click() {
+        let text = concat!(
+            "ARG BASE_TAG=bookworm\n",
+            "FROM debian:${BASE_TAG} AS builder\n",
+            "ARG BASE_TAG\n",
+            "ENV OTHER=1\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Dockerfile, text);
+
+        let spans = prepared_document_occurrences_at_display_offset(document, 0, 6);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "the declaration, the `${{...}}` use, and the re-declaration after FROM"
+        );
+
+        // The expansion form resolves to the same set from the other end.
+        let line = text.lines().nth(1).expect("line");
+        let column = line.find("BASE_TAG").expect("needle");
+        let spans = prepared_document_occurrences_at_display_offset(document, 1, column + 2);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    /// The `!` that re-includes a path is the accent colour, not punctuation grey.
+    ///
+    /// It is the one character in a `.gitignore` that reverses a line's meaning,
+    /// and `@operator` resolves to `foreground.secondary` -- the same muted grey
+    /// as the comments around it.
+    #[test]
+    fn gitignore_negation_is_prominent() {
+        let text = "*.log\n!important.log\nbuild/\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Gitignore, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 1)
+            .map(|tokens| tokens.to_vec())
+            .unwrap_or_default();
+        assert_eq!(
+            tokens.first().map(|token| token.kind),
+            Some(SyntaxTokenKind::KeywordControl),
+            "the leading `!` should read as an inversion, got {tokens:?}"
+        );
+    }
+
+    /// Clicking a YAML mapping key finds the key's other uses.
+    ///
+    /// `is_name_token_kind` rejects any node kind containing "string", which is
+    /// right for string *contents* and wrong for exactly one grammar:
+    /// tree-sitter-yaml calls the unquoted plain scalar `string_scalar`, so every
+    /// key in every playbook read as string content. An Ansible file is nothing
+    /// but keys, which is where this was reported.
+    #[test]
+    fn yaml_plain_mapping_keys_answer_a_click() {
+        let text = concat!(
+            "- hosts: web\n",
+            "  become: true\n",
+            "  tasks:\n",
+            "    - name: install\n",
+            "      ansible.builtin.copy:\n",
+            "        src: a\n",
+            "- hosts: db\n",
+            "  become: false\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Yaml, text);
+
+        let spans = prepared_document_occurrences_at_display_offset(document, 0, 4);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 6],
+            "clicking the `hosts` key should find both plays"
+        );
+
+        // A dotted module name is one plain scalar, so it is one name.
+        let spans = prepared_document_occurrences_at_display_offset(document, 4, 10);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![4],
+            "clicking `ansible.builtin.copy` should resolve to the whole key"
         );
     }
 
@@ -5713,6 +6155,93 @@ mod tests {
     // any routine `cargo update` that bumps an unrelated grammar into a red CI
     // while Vue still parses perfectly.
 
+    /// Every grammar in `vendor/` loads with the workspace's tree-sitter.
+    ///
+    /// The vendored crates depend on `tree-sitter-language`, not on
+    /// `tree-sitter`, so nothing in cargo's resolution notices when a grammar's
+    /// generated ABI drifts out of range -- it fails at `set_language`, at run
+    /// time, on whichever file the user happened to open.
+    #[test]
+    fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
+        let vendored: &[(&str, tree_sitter::Language)] = &[
+            ("asm", tree_sitter_asm::LANGUAGE.into()),
+            ("caddyfile", tree_sitter_caddyfile::LANGUAGE.into()),
+            ("cil", tree_sitter_cil::LANGUAGE.into()),
+            ("crontab", tree_sitter_crontab::LANGUAGE.into()),
+            ("gitignore", tree_sitter_gitignore::LANGUAGE.into()),
+            ("just", tree_sitter_just::LANGUAGE.into()),
+            ("spirv", tree_sitter_spirv::LANGUAGE.into()),
+            ("vue", tree_sitter_vue::LANGUAGE.into()),
+            ("wat", tree_sitter_wat::LANGUAGE.into()),
+        ];
+        for (name, language) in vendored {
+            let abi = language.abi_version();
+            assert!(
+                (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                    .contains(&abi),
+                "vendored {name} grammar ABI {abi} is outside the range this tree-sitter \
+                 supports ({}..={}); regenerate vendor/tree-sitter-{name} with a newer \
+                 tree-sitter-cli",
+                tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+                tree_sitter::LANGUAGE_VERSION,
+            );
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(language)
+                .unwrap_or_else(|err| panic!("vendored {name} grammar should load: {err}"));
+        }
+    }
+
+    #[test]
+    fn vendored_asm_grammar_is_abi_compatible_with_workspace_tree_sitter() {
+        let asm: tree_sitter::Language = tree_sitter_asm::LANGUAGE.into();
+        let abi = asm.abi_version();
+        assert!(
+            (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                .contains(&abi),
+            "vendored asm grammar ABI {abi} is outside the range this tree-sitter supports \
+             ({}..={}); regenerate vendor/tree-sitter-asm with a newer tree-sitter-cli",
+            tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+            tree_sitter::LANGUAGE_VERSION,
+        );
+    }
+
+    /// The two reasons vendor/tree-sitter-asm exists rather than the crates.io
+    /// crate, asserted from this side of the boundary.
+    ///
+    /// `tree-sitter test` in that directory covers the same ground against the
+    /// grammar's own corpus; this covers it against the grammar GitComet
+    /// actually links, so a `cargo update` or a botched regeneration that
+    /// reverted either edit fails here rather than silently in a diff view.
+    #[test]
+    fn vendored_asm_grammar_parses_dotted_mnemonics_and_directives() {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_asm::LANGUAGE.into())
+            .expect("the vendored asm grammar should load");
+        let source = concat!(
+            ".section .text\n",
+            ".LBB0_1:\n",
+            "    .p2align 4\n",
+            "    b.eq .LBB0_1\n",
+            "main:\n",
+            "    ret\n",
+        );
+        let tree = parser.parse(source, None).expect("asm should parse");
+        assert!(
+            !tree.root_node().has_error(),
+            "upstream's `word` cannot span the dot in `b.eq`, and its `meta_ident` \
+             is lowercase-only, so both of those lines error without the vendored \
+             grammar's edits: {}",
+            tree.root_node().to_sexp(),
+        );
+        assert!(
+            tree.root_node().to_sexp().contains("mnemonic"),
+            "the `mnemonic` token is what makes `b.eq` one node: {}",
+            tree.root_node().to_sexp(),
+        );
+    }
+
     #[test]
     fn vendored_vue_grammar_parses_with_workspace_tree_sitter() {
         let source = concat!(
@@ -6432,10 +6961,7 @@ mod tests {
             tree_sitter_kotlin_sg::LANGUAGE.into(),
             tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY,
         );
-        assert_capture_names_are_supported(
-            tree_sitter_zig::LANGUAGE.into(),
-            tree_sitter_zig::HIGHLIGHTS_QUERY,
-        );
+        assert_capture_names_are_supported(tree_sitter_zig::LANGUAGE.into(), ZIG_HIGHLIGHTS_QUERY);
         assert_capture_names_are_supported(
             dekobon_tree_sitter_groovy::LANGUAGE.into(),
             dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY,
@@ -6468,10 +6994,7 @@ mod tests {
             tree_sitter_solidity::LANGUAGE.into(),
             SOLIDITY_HIGHLIGHTS_QUERY,
         );
-        assert_capture_names_are_supported(
-            tree_sitter_asm::LANGUAGE.into(),
-            tree_sitter_asm::HIGHLIGHTS_QUERY,
-        );
+        assert_capture_names_are_supported(tree_sitter_asm::LANGUAGE.into(), ASM_HIGHLIGHTS_QUERY);
         assert_capture_names_are_supported(
             tree_sitter_svelte_ng::LANGUAGE.into(),
             SVELTE_HIGHLIGHTS_QUERY,
@@ -8252,6 +8775,18 @@ mod tests {
             DiffSyntaxLanguage::GitCommit,
             DiffSyntaxLanguage::Bash,
             DiffSyntaxLanguage::Xml,
+            DiffSyntaxLanguage::Cmake,
+            DiffSyntaxLanguage::Dockerfile,
+            DiffSyntaxLanguage::Ini,
+            DiffSyntaxLanguage::Llvm,
+            DiffSyntaxLanguage::Conf,
+            DiffSyntaxLanguage::Just,
+            DiffSyntaxLanguage::Caddyfile,
+            DiffSyntaxLanguage::Gitignore,
+            DiffSyntaxLanguage::Wat,
+            DiffSyntaxLanguage::Spirv,
+            DiffSyntaxLanguage::Crontab,
+            DiffSyntaxLanguage::Cil,
         ])
     }
 
@@ -8266,6 +8801,178 @@ mod tests {
                  grammar={has_grammar}, spec={has_spec}"
             );
         }
+    }
+
+    /// Every path the config and assembly batch claims, and the collisions it
+    /// had to avoid.
+    ///
+    /// Path resolution is the only thing between a wired grammar and a file that
+    /// still renders as plain text, and most of these resolve on the *file-name*
+    /// pass rather than the extension one -- `Dockerfile` and `CMakeLists.txt`
+    /// have no useful extension, and `Path::extension()` returns `None` for a
+    /// leading-dot name like `.editorconfig` -- so nothing else exercises them.
+    #[test]
+    fn config_language_paths_resolve() {
+        let cases: &[(&str, DiffSyntaxLanguage)] = &[
+            ("CMakeLists.txt", DiffSyntaxLanguage::Cmake),
+            ("cmake/FindFoo.cmake", DiffSyntaxLanguage::Cmake),
+            ("Dockerfile", DiffSyntaxLanguage::Dockerfile),
+            ("Containerfile", DiffSyntaxLanguage::Dockerfile),
+            ("docker/build.dockerfile", DiffSyntaxLanguage::Dockerfile),
+            (".editorconfig", DiffSyntaxLanguage::Ini),
+            ("gitconfig", DiffSyntaxLanguage::Ini),
+            (".gitconfig", DiffSyntaxLanguage::Ini),
+            ("etc/systemd/system/app.service", DiffSyntaxLanguage::Ini),
+            ("app.timer", DiffSyntaxLanguage::Ini),
+            ("app.socket", DiffSyntaxLanguage::Ini),
+            ("multi-user.target", DiffSyntaxLanguage::Ini),
+            ("share/applications/app.desktop", DiffSyntaxLanguage::Ini),
+            ("setup.cfg", DiffSyntaxLanguage::Ini),
+            ("etc/httpd/httpd.conf", DiffSyntaxLanguage::Conf),
+            ("etc/nginx/nginx.conf", DiffSyntaxLanguage::Conf),
+            ("my.cnf", DiffSyntaxLanguage::Conf),
+            ("build/hello.ll", DiffSyntaxLanguage::Llvm),
+            ("justfile", DiffSyntaxLanguage::Just),
+            (".justfile", DiffSyntaxLanguage::Just),
+            ("tasks.just", DiffSyntaxLanguage::Just),
+            ("Caddyfile", DiffSyntaxLanguage::Caddyfile),
+            (".gitignore", DiffSyntaxLanguage::Gitignore),
+            (".dockerignore", DiffSyntaxLanguage::Gitignore),
+            (".npmignore", DiffSyntaxLanguage::Gitignore),
+            ("crontab", DiffSyntaxLanguage::Crontab),
+            ("build/module.wat", DiffSyntaxLanguage::Wat),
+            ("build/module.wast", DiffSyntaxLanguage::Wat),
+            ("shaders/frag.spvasm", DiffSyntaxLanguage::Spirv),
+            ("bin/hello.il", DiffSyntaxLanguage::Cil),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(*expected),
+                "{path} should resolve to {expected:?}"
+            );
+        }
+
+        // Collisions this batch had to step around. `.targets` and `.props` are
+        // MSBuild XML and predate `.target`; `.md` is not a systemd `.mount`.
+        let unchanged: &[(&str, DiffSyntaxLanguage)] = &[
+            ("Directory.Build.targets", DiffSyntaxLanguage::Xml),
+            ("Directory.Build.props", DiffSyntaxLanguage::Xml),
+            ("Makefile", DiffSyntaxLanguage::Makefile),
+            ("main.s", DiffSyntaxLanguage::Assembly),
+        ];
+        for (path, expected) in unchanged {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(*expected),
+                "{path} should still resolve to {expected:?}"
+            );
+        }
+    }
+
+    /// The three `#lua-match?` patterns in tree-sitter-zig's own query, which the
+    /// engine never evaluates, so each applied to everything it was meant to
+    /// filter.
+    ///
+    /// Every assertion here failed before queries/zig_highlights.scm was vendored
+    /// in place of `tree_sitter_zig::HIGHLIGHTS_QUERY`. The identifier pair is why
+    /// a supplement was not enough: both rules captured *all* identifiers, and
+    /// `@constant` came second, so every name in every Zig file was a constant.
+    #[test]
+    fn zig_identifier_and_comment_predicates_are_actually_evaluated() {
+        let text = concat!(
+            "// an ordinary note\n",
+            "/// a doc comment\n",
+            "const lowercase_name = 1;\n",
+            "const MAX_RETRIES = 3;\n",
+            "const StructName = struct {};\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Zig, text);
+        let kinds = |line_ix: usize, needle: &str| -> Vec<SyntaxTokenKind> {
+            let line = text.lines().nth(line_ix).expect("line");
+            let at = line.find(needle).expect("needle");
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| {
+                    tokens
+                        .iter()
+                        .filter(|token| token.range.start <= at && at < token.range.end)
+                        .map(|token| token.kind)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        assert_eq!(
+            kinds(2, "lowercase_name"),
+            vec![SyntaxTokenKind::Variable],
+            "a lower-case binding is a variable, not a constant"
+        );
+        assert_eq!(
+            kinds(3, "MAX_RETRIES"),
+            vec![SyntaxTokenKind::Constant],
+            "SCREAMING_CASE is what the constant rule is actually for"
+        );
+        assert_eq!(
+            kinds(4, "StructName"),
+            vec![SyntaxTokenKind::Type],
+            "CamelCase is what the type rule is actually for"
+        );
+        assert_eq!(
+            kinds(0, "an ordinary"),
+            vec![SyntaxTokenKind::Comment],
+            "a `//` comment is not documentation"
+        );
+        assert_eq!(
+            kinds(1, "a doc"),
+            vec![SyntaxTokenKind::CommentDoc],
+            "a `///` comment is, which upstream's `^//!` missed even when evaluated"
+        );
+    }
+
+    /// `.conf` has no grammar, so this is the whole of what it can say.
+    ///
+    /// Each assertion here is a bug that was in the first cut: `;` read as a
+    /// comment and greyed the tail of every nginx statement, and `stream` in the
+    /// keyword list matched inside `application/octet-stream`.
+    #[test]
+    fn conf_heuristic_reads_directives_without_breaking_nginx() {
+        let tokens = |line: &str| {
+            syntax_tokens_for_line(line, DiffSyntaxLanguage::Conf, DiffSyntaxMode::Auto).to_vec()
+        };
+
+        let statement = tokens("    worker_connections  1024;");
+        assert!(
+            statement
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Property && t.range == (4..22)),
+            "the first word of a line names the setting: {statement:?}"
+        );
+        assert!(
+            statement.iter().all(|t| t.kind != SyntaxTokenKind::Comment),
+            "a `;` ending an nginx statement is not a comment: {statement:?}"
+        );
+
+        let leading = tokens("; an INI-dialect comment");
+        assert!(
+            leading
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Comment && t.range.start == 0),
+            "a `;` that opens the line is: {leading:?}"
+        );
+
+        let mime = tokens("    default_type  application/octet-stream;");
+        assert!(
+            mime.iter().all(|t| t.kind != SyntaxTokenKind::Keyword),
+            "`stream` inside a MIME type is not a keyword: {mime:?}"
+        );
+
+        let section = tokens("</VirtualHost>");
+        assert!(
+            section
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Tag && t.range == (0..14)),
+            "an Apache closing tag is the whole line, and nothing else colours it: {section:?}"
+        );
     }
 
     // ---- Batch: Groovy, Clojure, Elixir, Erlang, Haskell, Julia, OCaml, ------
@@ -10339,9 +11046,9 @@ mod tests {
     ///
     /// Combined injections change how a grammar's whole document is assembled, so
     /// a grammar bump that quietly introduces the directive must not slip through
-    /// review. F#'s `xml_doc` rule is the only one in the tree today; it arrived
-    /// with the upstream `tree_sitter_fsharp::INJECTIONS_QUERY` rather than being
-    /// written here.
+    /// review. F#'s `xml_doc` rule arrived with the upstream
+    /// `tree_sitter_fsharp::INJECTIONS_QUERY` rather than being written here; the
+    /// rest are ours, and each one is a deliberate decision recorded beside it.
     #[test]
     fn combined_injection_declarations_are_exactly_the_known_set() {
         let mut declared = Vec::new();
@@ -10365,6 +11072,13 @@ mod tests {
             vec![
                 // queries/jinja_injections.scm -- the HTML around the template tags.
                 (DiffSyntaxLanguage::Jinja, 0),
+                // queries/hcl_injections.scm -- shell in `user_data`, JSON in
+                // `policy`. Combined for the same reason as Nix: a `${...}`
+                // interpolation splits one heredoc into several `template_literal`
+                // nodes, and those are one script. The third pattern there, for
+                // bodies nested inside a `%{ if }`, is deliberately *not* combined.
+                (DiffSyntaxLanguage::Hcl, 0),
+                (DiffSyntaxLanguage::Hcl, 1),
                 // queries/nix_injections.scm -- bash in script/hook attributes.
                 (DiffSyntaxLanguage::Nix, 0),
                 (DiffSyntaxLanguage::Nix, 1),

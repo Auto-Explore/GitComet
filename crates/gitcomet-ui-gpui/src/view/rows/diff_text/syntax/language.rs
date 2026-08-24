@@ -22,6 +22,31 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "lua" => DiffSyntaxLanguage::Lua,
         "nix" => DiffSyntaxLanguage::Nix,
         "mk" | "make" | "makefile" | "gnumakefile" => DiffSyntaxLanguage::Makefile,
+        "cmake" | "cmakelists.txt" => DiffSyntaxLanguage::Cmake,
+        "dockerfile" | "containerfile" => DiffSyntaxLanguage::Dockerfile,
+        // systemd unit types, `.desktop` entries, and the dotted and undotted
+        // spellings of git's own config -- all INI, none of them named `.ini`.
+        "ini" | "cfg" | "editorconfig" | ".editorconfig" | "gitconfig" | ".gitconfig"
+        | "gitmodules" | ".gitmodules" | "desktop" | "service" | "timer" | "socket" | "target"
+        | "mount" | "automount" | "path" | "slice" | "swap" | "netdev" | "network" | "nspawn" => {
+            DiffSyntaxLanguage::Ini
+        }
+        // Deliberately last of the config family, and deliberately grammarless --
+        // see `DiffSyntaxLanguage::Conf`.
+        "conf" | "cnf" => DiffSyntaxLanguage::Conf,
+        "ll" | "llvm" => DiffSyntaxLanguage::Llvm,
+        "just" | "justfile" | ".justfile" => DiffSyntaxLanguage::Just,
+        "caddyfile" | ".caddyfile" => DiffSyntaxLanguage::Caddyfile,
+        // Every one of these is git's own ignore syntax, byte for byte -- the
+        // tools copied the format rather than inventing one.
+        "gitignore" | ".gitignore" | "dockerignore" | ".dockerignore" | ".npmignore"
+        | ".eslintignore" | ".prettierignore" | ".helmignore" | ".gcloudignore"
+        | ".vscodeignore" => DiffSyntaxLanguage::Gitignore,
+        "wat" | "wast" => DiffSyntaxLanguage::Wat,
+        "spvasm" => DiffSyntaxLanguage::Spirv,
+        "crontab" | "cron" | "cronfile" => DiffSyntaxLanguage::Crontab,
+        // Not `.ils` or `.cil`: neither is a thing. `ilasm` reads `.il`.
+        "il" => DiffSyntaxLanguage::Cil,
         "kt" | "kts" | "kotlin" => DiffSyntaxLanguage::Kotlin,
         "zig" => DiffSyntaxLanguage::Zig,
         // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
@@ -260,7 +285,7 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Hcl => Some((
             tree_sitter_hcl::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(HCL_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_injections(HCL_HIGHLIGHTS_QUERY, HCL_INJECTIONS_QUERY),
         )),
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
@@ -304,9 +329,64 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_lua::INJECTIONS_QUERY,
             ),
         )),
+        DiffSyntaxLanguage::Cil => Some((
+            tree_sitter_cil::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CIL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Crontab => Some((
+            tree_sitter_crontab::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(
+                CRONTAB_HIGHLIGHTS_QUERY,
+                CRONTAB_INJECTIONS_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Caddyfile => Some((
+            tree_sitter_caddyfile::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CADDYFILE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Gitignore => Some((
+            tree_sitter_gitignore::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(GITIGNORE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Just => Some((
+            tree_sitter_just::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(JUST_HIGHLIGHTS_QUERY, JUST_INJECTIONS_QUERY),
+        )),
+        DiffSyntaxLanguage::Spirv => Some((
+            tree_sitter_spirv::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(SPIRV_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Wat => Some((
+            tree_sitter_wat::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(WAT_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Cmake => Some((
+            tree_sitter_cmake::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections_and_supplement(
+                tree_sitter_cmake::HIGHLIGHTS_QUERY,
+                tree_sitter_cmake::INJECTIONS_QUERY,
+                CMAKE_SUPPLEMENT_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Dockerfile => Some((
+            tree_sitter_containerfile::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_containerfile::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Ini => Some((
+            tree_sitter_ini::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_ini::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Llvm => Some((
+            tree_sitter_llvm::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_llvm::HIGHLIGHTS_QUERY),
+        )),
         DiffSyntaxLanguage::Makefile => Some((
             tree_sitter_make::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_make::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_injections_and_supplement(
+                tree_sitter_make::HIGHLIGHTS_QUERY,
+                MAKEFILE_INJECTIONS_QUERY,
+                MAKEFILE_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Kotlin => Some((
             tree_sitter_kotlin_sg::LANGUAGE.into(),
@@ -314,10 +394,9 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Zig => Some((
             tree_sitter_zig::LANGUAGE.into(),
-            TreesitterQueryAsset::with_injections_and_supplement(
-                tree_sitter_zig::HIGHLIGHTS_QUERY,
+            TreesitterQueryAsset::with_injections(
+                ZIG_HIGHLIGHTS_QUERY,
                 tree_sitter_zig::INJECTIONS_QUERY,
-                ZIG_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::Groovy => Some((
@@ -370,7 +449,7 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Assembly => Some((
             tree_sitter_asm::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_asm::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::highlights(ASM_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Rust => Some((
             tree_sitter_rust::LANGUAGE.into(),
@@ -688,6 +767,17 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Bicep => highlight_spec_entry!(Bicep),
         DiffSyntaxLanguage::Lua => highlight_spec_entry!(Lua),
         DiffSyntaxLanguage::Nix => highlight_spec_entry!(Nix),
+        DiffSyntaxLanguage::Cil => highlight_spec_entry!(Cil),
+        DiffSyntaxLanguage::Crontab => highlight_spec_entry!(Crontab),
+        DiffSyntaxLanguage::Caddyfile => highlight_spec_entry!(Caddyfile),
+        DiffSyntaxLanguage::Gitignore => highlight_spec_entry!(Gitignore),
+        DiffSyntaxLanguage::Just => highlight_spec_entry!(Just),
+        DiffSyntaxLanguage::Spirv => highlight_spec_entry!(Spirv),
+        DiffSyntaxLanguage::Wat => highlight_spec_entry!(Wat),
+        DiffSyntaxLanguage::Cmake => highlight_spec_entry!(Cmake),
+        DiffSyntaxLanguage::Dockerfile => highlight_spec_entry!(Dockerfile),
+        DiffSyntaxLanguage::Ini => highlight_spec_entry!(Ini),
+        DiffSyntaxLanguage::Llvm => highlight_spec_entry!(Llvm),
         DiffSyntaxLanguage::Makefile => highlight_spec_entry!(Makefile),
         DiffSyntaxLanguage::Kotlin => highlight_spec_entry!(Kotlin),
         DiffSyntaxLanguage::Zig => highlight_spec_entry!(Zig),

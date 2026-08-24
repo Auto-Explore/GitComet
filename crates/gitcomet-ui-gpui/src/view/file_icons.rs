@@ -18,6 +18,25 @@ const FILE_STEMS_BY_ICON_KEY: &[(&str, &[&str])] = &[
 /// File suffixes (extensions, multi-part suffixes, and a few full names) mapped
 /// to an icon key.
 const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
+    // Not in Zed's icon theme, glyph and mapping both: every assembly dialect
+    // GitComet highlights fell back to the blank page glyph, which in a directory
+    // of `.s` files reads as "none of these are source". `assembly.svg` is a chip
+    // outline drawn to this set's conventions -- 16x16, 1.2 stroke, round caps --
+    // rather than the generic code braces, which said only "some language".
+    //
+    // `S` is listed beside `s` because this lookup is case-sensitive and
+    // preprocessed assembly is conventionally capitalised -- `head.S`, `crt0.S`
+    // -- which is most of the `.s` files in a kernel or libc tree. The other
+    // dialects have no capitalised convention worth carrying.
+    //
+    // `il`, `ll`, `spvasm`, `wat` and `wast` are the assembly-adjacent
+    // intermediate forms -- CIL, LLVM IR, SPIR-V, WebAssembly text. They share
+    // the chip because they are the same kind of thing to a reader scanning a
+    // directory: an instruction stream rather than a program.
+    (
+        "assembly",
+        &["S", "asm", "il", "ll", "nasm", "s", "spvasm", "wast", "wat"],
+    ),
     ("astro", &["astro"]),
     (
         "audio",
@@ -265,6 +284,7 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
 /// Icon keys mapped to their SVG asset path. Keys with no dedicated glyph point
 /// at `file.svg`, exactly as in Zed's default theme.
 const FILE_ICONS: &[(&str, &str)] = &[
+    ("assembly", "icons/file_icons/assembly.svg"),
     ("astro", "icons/file_icons/astro.svg"),
     ("audio", "icons/file_icons/audio.svg"),
     ("ballerina", "icons/file_icons/ballerina.svg"),
@@ -563,6 +583,32 @@ mod tests {
         assert_eq!(icon("rows.csv"), "icons/file_icons/database.svg");
         // C# has no dedicated glyph in Zed's default theme.
         assert_eq!(icon("Program.cs"), "icons/file_icons/file.svg");
+    }
+
+    /// Every assembly dialect GitComet highlights has an icon.
+    ///
+    /// They all share the generic code glyph -- the point of the test is that
+    /// none of them falls through to `file.svg`, which is what a reader sees as
+    /// "unknown type".
+    #[test]
+    fn resolves_assembly_dialects() {
+        for name in [
+            "boot/head.S",
+            "src/main.s",
+            "hello.asm",
+            "hello.nasm",
+            "bin/hello.il",
+            "build/hello.ll",
+            "shaders/frag.spvasm",
+            "build/module.wat",
+            "build/module.wast",
+        ] {
+            assert_eq!(
+                icon(name),
+                "icons/file_icons/assembly.svg",
+                "{name} should not fall back to the blank page glyph"
+            );
+        }
     }
 
     #[test]

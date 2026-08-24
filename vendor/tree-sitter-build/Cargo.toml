@@ -1,0 +1,19 @@
+# Build-support for the vendored grammars. GitComet's own code, not vendored --
+# it lives here so `vendor/` stays self-contained.
+#
+# Every grammar `tree-sitter generate` emits is compiled the same way, and the
+# build script upstream ships with each one is byte-identical apart from the name
+# handed to `cc::Build::compile`. Nine copies of ninety lines is nine places to
+# fix the next time a compiler warning, a target, or a header path changes -- so
+# the body lives here once and each grammar's `bindings/rust/build.rs` is a
+# one-line call.
+[package]
+name = "tree-sitter-build"
+description = "Shared build script body for GitComet's vendored tree-sitter grammars"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[dependencies]
+cc = "1"

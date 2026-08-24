@@ -51,15 +51,32 @@ fn is_word_byte(byte: u8) -> bool {
 ///
 /// Leading digits are excluded on purpose: a grammar tokenises `1` as its own
 /// node, and lighting every `1` in a file is noise, not information.
+///
+/// `.` and `-` are allowed because this only ever sees a *whole leaf token's*
+/// text, never a slice of a larger construct -- so a dot here is one the grammar
+/// itself put inside a single token, not the field access in `foo.bar` (which is
+/// three nodes, and whose leaves have no dot). Assembly is what forces it: GAS
+/// directives are `.section`, `.align`, `.p2align`, and arm64 condition suffixes
+/// make `b.eq`, so every one of them was rejected before reaching the tree. The
+/// same widening is what lets an Ansible key like `ansible.builtin.copy` or
+/// `on-failure` resolve. A leading `.` is allowed, a leading `-` is not: `-5` is
+/// a number literal in most grammars, where `.text` is a name in all of them.
 fn is_name(text: &str) -> bool {
     let mut chars = text.chars();
     let Some(first) = chars.next() else {
         return false;
     };
-    if !(first.is_alphabetic() || first == '_') {
+    if !(first.is_alphabetic() || first == '_' || first == '.') {
         return false;
     }
-    text.chars().all(|ch| ch.is_alphanumeric() || ch == '_')
+    if !text
+        .chars()
+        .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '.' | '-'))
+    {
+        return false;
+    }
+    // At least one letter, so `...` and `.-.` are not names.
+    text.chars().any(char::is_alphabetic)
 }
 
 /// Whether `node` is a single grammar token that names something.
@@ -72,6 +89,29 @@ fn is_name_token(node: &tree_sitter::Node<'_>, text: &str) -> bool {
     is_name_token_kind(node) && text.get(node.byte_range()).is_some_and(is_name)
 }
 
+/// Leaf kinds whose name contains `string` but which are not string content.
+///
+/// The substring test in [`is_name_token_kind`] is a heuristic over how ~60
+/// grammars name their nodes, and it is right nearly everywhere. Where it
+/// misfires is a grammar that says "string" to mean "a bare word with no quotes
+/// round it" -- which is exactly the thing a name is:
+///
+/// * `string_scalar` (`tree-sitter-yaml`) is the *unquoted* plain scalar, so
+///   every mapping key in a playbook -- `hosts:`, `become_user:`,
+///   `ansible.builtin.copy:` -- read as string content.
+/// * `unquoted_string` (`tree-sitter-containerfile`) is the name and the value of
+///   every `ARG` and `ENV` pair, so no `ARG BASE_TAG` in any Dockerfile resolved.
+///
+/// Both kinds are unique to their own grammar, so listing them here is
+/// unambiguous. The genuinely quoted kinds beside them (`double_quote_scalar`,
+/// `single_quote_scalar`) stay excluded, because those really are strings.
+///
+/// This list has grown twice now. If it reaches a third or fourth entry, the
+/// substring test has stopped paying for itself and the kind should come from
+/// the highlight capture instead -- a `@property` or `@variable` capture already
+/// says "name" without guessing from a node's spelling.
+const NAME_TOKEN_KINDS_DESPITE_SUBSTRING: &[&str] = &["string_scalar", "unquoted_string"];
+
 /// The half of [`is_name_token`] that needs no text, so a caller can ask it
 /// before deciding whether the text is worth materializing.
 fn is_name_token_kind(node: &tree_sitter::Node<'_>) -> bool {
@@ -79,6 +119,9 @@ fn is_name_token_kind(node: &tree_sitter::Node<'_>) -> bool {
         return false;
     }
     let kind = node.kind();
+    if NAME_TOKEN_KINDS_DESPITE_SUBSTRING.contains(&kind) {
+        return true;
+    }
     !(kind.contains("comment") || kind.contains("string") || kind.contains("char"))
 }
 
@@ -141,8 +184,21 @@ pub(in crate::view) fn syntax_occurrences_in_tree(
 
         // Word boundaries first: they are a byte comparison, where the tree
         // lookup below walks the depth of the document.
-        let before_ok = start == 0 || !is_word_byte(bytes[start - 1]);
-        let after_ok = end >= bytes.len() || !is_word_byte(bytes[end]);
+        //
+        // Only where the name's *own* edge is a word byte, though. A boundary
+        // test asks "is this hit the whole word, or the tail of a longer one",
+        // and that question is meaningless when the name begins with punctuation:
+        // `.eq` in `b.eq` is preceded by `b`, so the plain test rejected the only
+        // occurrence there is. The exact-leaf check below is what actually
+        // guarantees correctness; this is a prefilter, and a prefilter that
+        // cannot apply must let the candidate through rather than drop it.
+        let name_bytes = name.as_bytes();
+        let before_ok = !name_bytes.first().copied().is_some_and(is_word_byte)
+            || start == 0
+            || !is_word_byte(bytes[start - 1]);
+        let after_ok = !name_bytes.last().copied().is_some_and(is_word_byte)
+            || end >= bytes.len()
+            || !is_word_byte(bytes[end]);
         if !before_ok || !after_ok {
             continue;
         }

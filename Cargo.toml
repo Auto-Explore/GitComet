@@ -9,7 +9,19 @@ members = [
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
 ]
-exclude = ["crates/win32-window-utils", "vendor/tree-sitter-vue"]
+exclude = [
+  "crates/win32-window-utils",
+  "vendor/tree-sitter-asm",
+  "vendor/tree-sitter-build",
+  "vendor/tree-sitter-caddyfile",
+  "vendor/tree-sitter-cil",
+  "vendor/tree-sitter-crontab",
+  "vendor/tree-sitter-gitignore",
+  "vendor/tree-sitter-just",
+  "vendor/tree-sitter-spirv",
+  "vendor/tree-sitter-vue",
+  "vendor/tree-sitter-wat",
+]
 
 default-members = [
   "crates/gitcomet",
@@ -77,7 +89,10 @@ sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
 tree-sitter = "0.26.12"
-tree-sitter-asm = "0.24.0"
+# Vendored, not from crates.io: the grammar needed a `mnemonic` token so an
+# arm64 `b.eq` is one node instead of an ERROR, and upstream has not changed.
+# See vendor/tree-sitter-asm/Cargo.toml for the full list of edits.
+tree-sitter-asm = { path = "vendor/tree-sitter-asm" }
 tree-sitter-bash = "0.25.1"
 tree-sitter-bicep = "1.1.0"
 tree-sitter-c = "0.24.2"
@@ -87,7 +102,16 @@ tree-sitter-c-sharp = "0.23.5"
 # not resolve it alongside 0.26 at any version. `tree-sitter-just` is blocked the
 # same way (`~0.25.5`), so it is not in the tree either.
 tree-sitter-clojure-orchard = "0.2.8"
+# Vendored: upstream is archived and unpublished. See its Cargo.toml.
+tree-sitter-caddyfile = { path = "vendor/tree-sitter-caddyfile" }
+# Written here rather than vendored: no CIL or crontab grammar exists upstream.
+tree-sitter-cil = { path = "vendor/tree-sitter-cil" }
+tree-sitter-cmake = "0.7.4"
+# Dockerfile / Containerfile. The crate is named for the OCI-neutral spelling but
+# the grammar is the Docker one.
+tree-sitter-containerfile = "0.9.2"
 tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "5cb9b693cfd7bfacab1d9ff4acac1a4150700609" }
+tree-sitter-crontab = { path = "vendor/tree-sitter-crontab" }
 tree-sitter-css = "0.25.0"
 tree-sitter-dart = "0.2.0"
 tree-sitter-diff = "0.1.0"
@@ -99,15 +123,25 @@ tree-sitter-go = "0.25.0"
 tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a" }
 tree-sitter-gowork = { git = "https://github.com/zed-industries/tree-sitter-go-work", rev = "acb0617bf7f4fda02c6217676cc64acb89536dc7" }
 tree-sitter-haskell = "0.23.1"
+# Vendored: no crates.io release, no Rust bindings upstream.
+tree-sitter-gitignore = { path = "vendor/tree-sitter-gitignore" }
 tree-sitter-hcl = "1.1.0"
 tree-sitter-html = "0.23.2"
+# INI, and the several config formats that are INI without saying so:
+# `.editorconfig`, systemd units, and git's own config files.
+tree-sitter-ini = "1.4.0"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-jinja-dialects = "0.1.1"
 tree-sitter-jsdoc = "0.25.0"
 tree-sitter-json = "0.24.8"
+# Vendored, not from crates.io: the published crate depends on
+# `tree-sitter = ~0.25.5` and `links` makes that unresolvable alongside 0.26 --
+# the same blocker as `tree-sitter-clojure`, above.
+tree-sitter-just = { path = "vendor/tree-sitter-just" }
 tree-sitter-julia = "0.23.1"
 tree-sitter-kotlin-sg = "0.4.1"
+tree-sitter-llvm = "1.1.0"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
@@ -124,11 +158,15 @@ tree-sitter-rust = "0.24.2"
 tree-sitter-scala = "0.26.2"
 tree-sitter-sequel = "0.3.11"
 tree-sitter-solidity = "1.2.13"
+# Vendored: no crates.io release, no Rust bindings upstream.
+tree-sitter-spirv = { path = "vendor/tree-sitter-spirv" }
 tree-sitter-svelte-ng = "1.0.2"
 tree-sitter-swift = "0.7.3"
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
 tree-sitter-vue = { path = "vendor/tree-sitter-vue" }
+# Vendored: nothing on crates.io provides a WebAssembly text grammar.
+tree-sitter-wat = { path = "vendor/tree-sitter-wat" }
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"

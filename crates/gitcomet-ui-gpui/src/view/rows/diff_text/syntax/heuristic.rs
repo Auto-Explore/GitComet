@@ -226,6 +226,41 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             visual_basic_line_comment: false,
             haskell_dashes_line_comment: false,
         },
+        DiffSyntaxLanguage::Ini => HeuristicCommentConfig {
+            line_comment: Some(";"),
+            hash_comment: true,
+            block_comment: None,
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
+        // `.conf` takes `#` only, even though the INI dialects among them also
+        // take `;`. In nginx -- which is most of what people call a `.conf` --
+        // `;` ends every statement, so treating it as a comment greys the tail of
+        // every line in the file. The line-leading `;` those INI dialects
+        // actually write is picked up in the main loop instead.
+        DiffSyntaxLanguage::Conf => HeuristicCommentConfig {
+            line_comment: None,
+            hash_comment: true,
+            block_comment: None,
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
+        // Wasm text takes `;;` for a line comment and `(; ... ;)` for a block one;
+        // only the first is expressible here.
+        DiffSyntaxLanguage::Wat => HeuristicCommentConfig {
+            line_comment: Some(";;"),
+            hash_comment: false,
+            block_comment: None,
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
+        DiffSyntaxLanguage::Llvm | DiffSyntaxLanguage::Spirv => HeuristicCommentConfig {
+            line_comment: Some(";"),
+            hash_comment: false,
+            block_comment: None,
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
         DiffSyntaxLanguage::Clojure => HeuristicCommentConfig {
             line_comment: Some(";"),
             hash_comment: false,
@@ -242,6 +277,15 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
         // HeuristicCommentConfig carries one `line_comment`, the right choice is
         // dialect-dependent, and nothing here knows the target. `/* */` covers GAS
         // block comments and the tree-sitter path handles the rest.
+        // CIL takes C's comment syntax, being an assembly language written by a
+        // C-family toolchain rather than by hand.
+        DiffSyntaxLanguage::Cil => HeuristicCommentConfig {
+            line_comment: Some("//"),
+            hash_comment: false,
+            block_comment: Some(HEURISTIC_C_BLOCK_COMMENT),
+            visual_basic_line_comment: false,
+            haskell_dashes_line_comment: false,
+        },
         DiffSyntaxLanguage::Assembly => HeuristicCommentConfig {
             line_comment: Some(";"),
             hash_comment: false,
@@ -256,7 +300,13 @@ pub(super) fn heuristic_comment_config(language: DiffSyntaxLanguage) -> Heuristi
             visual_basic_line_comment: false,
             haskell_dashes_line_comment: false,
         },
-        DiffSyntaxLanguage::Python
+        DiffSyntaxLanguage::Cmake
+        | DiffSyntaxLanguage::Dockerfile
+        | DiffSyntaxLanguage::Just
+        | DiffSyntaxLanguage::Caddyfile
+        | DiffSyntaxLanguage::Gitignore
+        | DiffSyntaxLanguage::Crontab
+        | DiffSyntaxLanguage::Python
         | DiffSyntaxLanguage::Toml
         | DiffSyntaxLanguage::Yaml
         | DiffSyntaxLanguage::Bash
@@ -1078,7 +1128,19 @@ pub(super) fn heuristic_single_quote_role(language: DiffSyntaxLanguage) -> Heuri
         // Julia's postfix `'` is the adjoint operator: `A'` transposes, `'c'` is a
         // character. The two are told apart by what precedes the quote, which is
         // what ValuePositionOnly already tests for.
-        DiffSyntaxLanguage::Julia => HeuristicSingleQuote::ValuePositionOnly,
+        //
+        // The Z80's shadow registers are the same shape: `AF'`, `BC'`, `DE'` and
+        // `HL'` end in an apostrophe, in a language that also spells character
+        // literals with one. `EX AF, AF'` opened a string that ran to the end of
+        // the file -- and the heuristic is what the app falls back to whenever the
+        // parse budget blows, so fixing the grammar alone (see
+        // vendor/tree-sitter-asm's `shadow_reg`) left this half broken.
+        //
+        // The cost is a char literal written with no separator before it --
+        // `DB'A'` -- which no assembler style writes.
+        DiffSyntaxLanguage::Julia | DiffSyntaxLanguage::Assembly => {
+            HeuristicSingleQuote::ValuePositionOnly
+        }
         DiffSyntaxLanguage::Html
         | DiffSyntaxLanguage::Xml
         | DiffSyntaxLanguage::Vue
@@ -1320,6 +1382,10 @@ pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
     let allow_backtick_strings = heuristic_allows_backtick_strings(language);
     let single_quote = heuristic_single_quote_role(language);
     let highlight_css_selectors = matches!(language, DiffSyntaxLanguage::Css);
+    // A `.conf` has no grammar behind it, so the one structural fact the
+    // heuristic can still state is which word names the setting: in Apache,
+    // nginx, and generic key-value config alike it is the first word on the line.
+    let highlight_leading_directive = matches!(language, DiffSyntaxLanguage::Conf);
 
     let is_ident_start = |byte: u8| byte == b'_' || byte.is_ascii_alphabetic();
     // `'` continues an identifier only where it is not a quote -- Nix's `foldl'`.
@@ -1382,6 +1448,56 @@ pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
             }
         }
 
+        if highlight_leading_directive {
+            // A `;` that opens a line is an INI-dialect comment; one anywhere else
+            // is nginx ending a statement. See `heuristic_comment_config`.
+            if byte == b';' && bytes[..i].iter().all(u8::is_ascii_whitespace) {
+                tokens.push(SyntaxToken {
+                    range: i..len,
+                    kind: SyntaxTokenKind::Comment,
+                });
+                break;
+            }
+            // Apache nests blocks in XML-ish section tags -- `<VirtualHost *:80>`,
+            // `</Directory>`, `<IfModule !mod_authz_core.c>`. A closing tag is a
+            // whole line with nothing else on it, so without this every one of
+            // them rendered as plain text.
+            if byte == b'<' && bytes[..i].iter().all(u8::is_ascii_whitespace) {
+                let mut j = i.saturating_add(1);
+                if bytes.get(j) == Some(&b'/') {
+                    j = j.saturating_add(1);
+                }
+                let name_start = j;
+                while j < len && is_ident_continue(bytes[j]) {
+                    j += 1;
+                }
+                if j > name_start {
+                    // Take the `>` too when the tag ends the line, so a closing
+                    // tag is coloured whole rather than all but its last byte.
+                    if bytes.get(j) == Some(&b'>') {
+                        j = j.saturating_add(1);
+                    }
+                    tokens.push(SyntaxToken {
+                        range: i..j,
+                        kind: SyntaxTokenKind::Tag,
+                    });
+                    i = j;
+                    continue;
+                }
+            }
+            // nginx and Apache both nest blocks in braces, and nothing else here
+            // would colour them: there is no tree, so `syntax/pairs.rs` cannot
+            // match them either, but a visible delimiter still reads as structure.
+            if matches!(byte, b'{' | b'}') {
+                tokens.push(SyntaxToken {
+                    range: i..i.saturating_add(1),
+                    kind: SyntaxTokenKind::PunctuationBracket,
+                });
+                i = i.saturating_add(1);
+                continue;
+            }
+        }
+
         if is_comment_lead(byte)
             && let Some(comment_range) = heuristic_comment_range(text, i, comment_config)
         {
@@ -1439,6 +1555,12 @@ pub(in super::super) fn syntax_tokens_for_line_heuristic_into(
                 tokens.push(SyntaxToken {
                     range: i..j,
                     kind: SyntaxTokenKind::Keyword,
+                });
+            } else if highlight_leading_directive && bytes[..i].iter().all(u8::is_ascii_whitespace)
+            {
+                tokens.push(SyntaxToken {
+                    range: i..j,
+                    kind: SyntaxTokenKind::Property,
                 });
             }
             i = j;
@@ -1572,6 +1694,162 @@ fn is_keyword(language: DiffSyntaxLanguage, ident: &str) -> bool {
                 | "while"
         ),
         DiffSyntaxLanguage::Makefile => matches!(ident, "if" | "else" | "endif"),
+        // A `.gitignore` has no keywords: every line is a path.
+        DiffSyntaxLanguage::Gitignore => false,
+        // Five fields and a command; `@reboot` and friends are the only words.
+        DiffSyntaxLanguage::Crontab => matches!(
+            ident,
+            "reboot"
+                | "yearly"
+                | "annually"
+                | "monthly"
+                | "weekly"
+                | "daily"
+                | "midnight"
+                | "hourly"
+        ),
+        DiffSyntaxLanguage::Cil => matches!(
+            ident,
+            "assembly"
+                | "class"
+                | "extends"
+                | "extern"
+                | "hidebysig"
+                | "instance"
+                | "managed"
+                | "private"
+                | "public"
+                | "static"
+                | "valuetype"
+                | "virtual"
+                | "void"
+        ),
+        // Opcodes are all `Op`-prefixed and the grammar matches them by family,
+        // so a fixed list here would be both huge and quickly out of date.
+        DiffSyntaxLanguage::Spirv => false,
+        DiffSyntaxLanguage::Just => matches!(
+            ident,
+            "alias" | "else" | "export" | "if" | "import" | "mod" | "set" | "shell"
+        ),
+        DiffSyntaxLanguage::Caddyfile => {
+            matches!(ident, "true" | "false" | "on" | "off")
+        }
+        DiffSyntaxLanguage::Wat => matches!(
+            ident,
+            "block"
+                | "br"
+                | "br_if"
+                | "call"
+                | "data"
+                | "elem"
+                | "else"
+                | "end"
+                | "export"
+                | "func"
+                | "global"
+                | "if"
+                | "import"
+                | "local"
+                | "loop"
+                | "memory"
+                | "module"
+                | "mut"
+                | "param"
+                | "result"
+                | "return"
+                | "table"
+                | "then"
+                | "type"
+        ),
+        DiffSyntaxLanguage::Cmake => matches!(
+            ident,
+            "if" | "else"
+                | "elseif"
+                | "endif"
+                | "foreach"
+                | "endforeach"
+                | "while"
+                | "endwhile"
+                | "function"
+                | "endfunction"
+                | "macro"
+                | "endmacro"
+                | "return"
+                | "break"
+                | "continue"
+                | "AND"
+                | "NOT"
+                | "OR"
+                | "ON"
+                | "OFF"
+                | "TRUE"
+                | "FALSE"
+        ),
+        // The instruction set, which in a Dockerfile is the whole language.
+        // Case-insensitive in Docker, but every convention and every generator
+        // writes them upper-case, and lower-casing the check would colour the
+        // word `from` in a `RUN` line.
+        DiffSyntaxLanguage::Dockerfile => matches!(
+            ident,
+            "ADD"
+                | "ARG"
+                | "AS"
+                | "CMD"
+                | "COPY"
+                | "ENTRYPOINT"
+                | "ENV"
+                | "EXPOSE"
+                | "FROM"
+                | "HEALTHCHECK"
+                | "LABEL"
+                | "MAINTAINER"
+                | "ONBUILD"
+                | "RUN"
+                | "SHELL"
+                | "STOPSIGNAL"
+                | "USER"
+                | "VOLUME"
+                | "WORKDIR"
+        ),
+        // Only the words that are values rather than setting names: a key in an
+        // INI file can be called anything, so anything else here would colour
+        // half the file at random.
+        DiffSyntaxLanguage::Ini => {
+            matches!(ident, "true" | "false" | "yes" | "no" | "on" | "off")
+        }
+        // Values only, like Ini, and deliberately not nginx's block words. This
+        // scanner sees bare identifiers with no context: `stream` matched inside
+        // `application/octet-stream` and `http` matches inside every URL in the
+        // file. `events`, `http` and `server` open a line, so the leading-directive
+        // rule colours them anyway.
+        DiffSyntaxLanguage::Conf => {
+            matches!(ident, "true" | "false" | "yes" | "no" | "on" | "off")
+        }
+        DiffSyntaxLanguage::Llvm => matches!(
+            ident,
+            "alloca"
+                | "br"
+                | "call"
+                | "constant"
+                | "declare"
+                | "define"
+                | "getelementptr"
+                | "global"
+                | "icmp"
+                | "label"
+                | "load"
+                | "null"
+                | "phi"
+                | "ret"
+                | "select"
+                | "store"
+                | "switch"
+                | "true"
+                | "false"
+                | "type"
+                | "unreachable"
+                | "void"
+        ),
         DiffSyntaxLanguage::Kotlin => matches!(
             ident,
             "as" | "break"
