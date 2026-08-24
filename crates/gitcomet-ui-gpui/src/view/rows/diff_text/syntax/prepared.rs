@@ -1845,7 +1845,8 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     let offset =
         clicked.start + clicked_raw_offset_for_display_offset(clicked_line, display_offset)?;
 
-    let pair = syntax_pair_in_tree(&state.tree, offset)?;
+    let pair = injected_syntax_pair_at(text, offset)
+        .or_else(|| syntax_pair_in_tree(&state.tree, offset))?;
 
     let project = |range: &Range<usize>| -> Vec<PreparedSyntaxPairSpan> {
         // `partition_point` gives the count of starts at or before `range.start`,
@@ -2800,13 +2801,29 @@ pub(super) struct TreesitterInjectionMatch {
     pub(super) content_hash: u64,
 }
 
-pub(super) struct CachedInjectionTokens {
+pub(super) struct CachedInjection {
     /// Full tokenized lines in injection-local coordinates (all lines of the injection).
     pub(super) all_line_tokens: Vec<Vec<SyntaxToken>>,
     /// Line starts for the injection text, used for coordinate remapping.
     pub(super) injection_line_starts: Vec<usize>,
     /// First line in the parent document that this injection starts on.
     pub(super) injection_start_line_ix: usize,
+    /// The injected grammar's own tree, kept so a click can be answered by the
+    /// grammar that actually owns those bytes.
+    ///
+    /// Tokens alone were enough while this cache only ever painted. Bracket
+    /// matching reads the tree, and `prepared_document_syntax_pair_at_display_offset`
+    /// had only the *host* tree -- so in an injected region there was no
+    /// structure to pair against at all: clicking the `<` of `<html>` in a PHP
+    /// file did nothing, because to PHP that whole span is one `text` node.
+    /// Parsed here rather than on the click so a click never pays for a parse.
+    ///
+    /// Its offsets are injection-local: the injected text is parsed standalone,
+    /// not with `included_ranges`, so document offsets need shifting by
+    /// `byte_start` in both directions. The live engine differs here -- see
+    /// `LiveSyntaxSnapshot::syntax_pair_at`, whose layers are already in document
+    /// coordinates.
+    pub(super) tree: tree_sitter::Tree,
     /// Monotonic access counter for LRU eviction.
     pub(super) last_access: u64,
 }
@@ -3717,12 +3734,9 @@ pub(super) fn collect_treesitter_injection_matches_for_line_window(
                             language,
                             byte_start: byte_range.start,
                             byte_end: byte_range.end,
-                            content_hash: {
-                                use std::hash::{Hash, Hasher};
-                                let mut h = FxHasher::default();
-                                input[byte_range.start..byte_range.end].hash(&mut h);
-                                h.finish()
-                            },
+                            content_hash: injection_content_hash(
+                                &input[byte_range.start..byte_range.end],
+                            ),
                         };
                         if seen.insert(injection) {
                             injections.push(injection);
@@ -3989,14 +4003,85 @@ fn ensure_injection_cached(
         }
         cache.insert(
             injection,
-            CachedInjectionTokens {
+            CachedInjection {
                 all_line_tokens,
                 injection_line_starts: injection_input.line_starts.as_ref().to_vec(),
                 injection_start_line_ix,
+                tree,
                 last_access: access,
             },
         );
         true
+    })
+}
+
+/// The hash an injection's bytes are keyed by.
+///
+/// One function so the two callers cannot drift: the cache is keyed on this at
+/// insertion, and [`injected_syntax_pair_at`] re-derives it to prove an entry
+/// belongs to the document it is about to answer for. Hashing a `&[u8]` and
+/// hashing the `&str` over the same bytes give different values, which is a
+/// silent miss rather than a wrong answer -- the pair lookup just falls through
+/// to the host grammar, exactly the bug it was added to fix.
+fn injection_content_hash(content: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = FxHasher::default();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The pair at `offset` as the *injected* grammar sees it.
+///
+/// Tried before the host tree by [`prepared_document_syntax_pair_at_display_offset`],
+/// for the same reason `LiveSyntaxSnapshot::syntax_pair_at` tries its layers
+/// first: a bracket inside an injected region belongs to the grammar that region
+/// is written in. To PHP, the whole of a file's inline HTML is one `text` node,
+/// so without this a click on a tag there found no delimiter and fell through to
+/// whatever PHP block enclosed it -- which is why clicking a bracket appeared to
+/// do nothing while clicking a column away appeared to work.
+///
+/// `content_hash` is re-checked against the document rather than trusted: the
+/// cache is a thread-local shared by every document, and two of them can easily
+/// have an injection at the same byte range.
+///
+/// Combined injections are deliberately not consulted. Their ranges are stitched
+/// from several disjoint spans, so a single `byte_start` shift cannot map their
+/// offsets back, and the host grammar remains the right answer in the gaps
+/// between them.
+fn injected_syntax_pair_at(text: &str, offset: usize) -> Option<SyntaxPair> {
+    TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        // The innermost injection wins, the same rule the tree walk uses: an
+        // injection nested inside another is the more specific answer.
+        let mut best: Option<(&TreesitterInjectionMatch, &CachedInjection)> = None;
+        for (key, entry) in cache.iter() {
+            if offset < key.byte_start || offset >= key.byte_end {
+                continue;
+            }
+            let Some(content) = text.as_bytes().get(key.byte_start..key.byte_end) else {
+                continue;
+            };
+            if injection_content_hash(content) != key.content_hash {
+                continue;
+            }
+            let width = key.byte_end.saturating_sub(key.byte_start);
+            if best.is_none_or(|(best_key, _)| {
+                width < best_key.byte_end.saturating_sub(best_key.byte_start)
+            }) {
+                best = Some((key, entry));
+            }
+        }
+        let (key, entry) = best?;
+        let local = offset.checked_sub(key.byte_start)?;
+        let pair = syntax_pair_in_tree(&entry.tree, local)?;
+        let shift = |range: Range<usize>| {
+            range.start.saturating_add(key.byte_start)..range.end.saturating_add(key.byte_start)
+        };
+        Some(SyntaxPair {
+            open: shift(pair.open),
+            close: shift(pair.close),
+            kind: pair.kind,
+        })
     })
 }
 

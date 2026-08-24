@@ -37,6 +37,32 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
         "assembly",
         &["S", "asm", "il", "ll", "nasm", "s", "spvasm", "wast", "wat"],
     ),
+    // Not in Zed's icon theme. Every language below has syntax highlighting here
+    // but fell back to the blank page glyph, which reads as "unknown type" in a
+    // directory listing.
+    //
+    // `clojure.svg` is the s-expression: parens with the form between them, which
+    // is what a Lisp looks like and what distinguishes it from `code.svg`'s
+    // braces. `.edn` is Clojure's data notation and shares it.
+    ("clojure", &["clj", "cljc", "cljd", "cljs", "edn"]),
+    // `solidity.svg` is the Ethereum octahedron, which is the mark every Solidity
+    // toolchain uses.
+    ("solidity", &["sol"]),
+    // The generic code glyph rather than one each: Groovy, Perl and Pascal have no
+    // mark simple enough to read at 16px -- Perl's camel and Groovy's logo both
+    // turn to mush -- and a shared glyph still separates "a language" from
+    // "unknown", which is what the blank page failed to do.
+    (
+        "code",
+        &[
+            "gradle", "groovy", "gsh", "gvy", "gy", "pas", "dpr", "pl", "pm", "proto", "gleam",
+            "v", "vsh", "ron", "ebnf", "dhall",
+        ],
+    ),
+    // Jsonnet is JSON with functions, and `json` is already the generic code
+    // glyph in this theme; `.properties` is configuration, like `.ini`.
+    ("json", &["jsonnet", "libsonnet"]),
+    ("settings", &["properties"]),
     ("astro", &["astro"]),
     (
         "audio",
@@ -112,7 +138,7 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
         ],
     ),
     ("font", &["otf", "ttf", "woff", "woff2"]),
-    ("fsharp", &["fs"]),
+    ("fsharp", &["fs", "fsi", "fsx"]),
     ("fsproj", &["fsproj"]),
     ("gitlab", &["gitlab-ci.yml", "gitlab-ci.yaml"]),
     ("gleam", &["gleam"]),
@@ -286,20 +312,21 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
 const FILE_ICONS: &[(&str, &str)] = &[
     ("assembly", "icons/file_icons/assembly.svg"),
     ("astro", "icons/file_icons/astro.svg"),
+    ("clojure", "icons/file_icons/clojure.svg"),
     ("audio", "icons/file_icons/audio.svg"),
     ("ballerina", "icons/file_icons/ballerina.svg"),
-    ("bicep", "icons/file_icons/file.svg"),
+    ("bicep", "icons/file_icons/code.svg"),
     ("bun", "icons/file_icons/bun.svg"),
     ("c", "icons/file_icons/c.svg"),
     ("cairo", "icons/file_icons/cairo.svg"),
     ("code", "icons/file_icons/code.svg"),
     ("coffeescript", "icons/file_icons/coffeescript.svg"),
     ("cpp", "icons/file_icons/cpp.svg"),
-    ("crystal", "icons/file_icons/file.svg"),
-    ("csharp", "icons/file_icons/file.svg"),
-    ("csproj", "icons/file_icons/file.svg"),
+    ("crystal", "icons/file_icons/code.svg"),
+    ("csharp", "icons/file_icons/csharp.svg"),
+    ("csproj", "icons/file_icons/project.svg"),
     ("css", "icons/file_icons/css.svg"),
-    ("cue", "icons/file_icons/file.svg"),
+    ("cue", "icons/file_icons/code.svg"),
     ("dart", "icons/file_icons/dart.svg"),
     ("default", "icons/file_icons/file.svg"),
     ("diff", "icons/file_icons/diff.svg"),
@@ -312,7 +339,7 @@ const FILE_ICONS: &[(&str, &str)] = &[
     ("eslint", "icons/file_icons/eslint.svg"),
     ("font", "icons/file_icons/font.svg"),
     ("fsharp", "icons/file_icons/fsharp.svg"),
-    ("fsproj", "icons/file_icons/file.svg"),
+    ("fsproj", "icons/file_icons/project.svg"),
     ("gitlab", "icons/file_icons/gitlab.svg"),
     ("gleam", "icons/file_icons/gleam.svg"),
     ("go", "icons/file_icons/go.svg"),
@@ -356,7 +383,7 @@ const FILE_ICONS: &[(&str, &str)] = &[
     ("sass", "icons/file_icons/sass.svg"),
     ("scala", "icons/file_icons/scala.svg"),
     ("settings", "icons/file_icons/settings.svg"),
-    ("solidity", "icons/file_icons/file.svg"),
+    ("solidity", "icons/file_icons/solidity.svg"),
     ("storage", "icons/file_icons/database.svg"),
     ("stylelint", "icons/file_icons/javascript.svg"),
     ("surrealql", "icons/file_icons/surrealql.svg"),
@@ -369,11 +396,11 @@ const FILE_ICONS: &[(&str, &str)] = &[
     ("toml", "icons/file_icons/toml.svg"),
     ("typescript", "icons/file_icons/typescript.svg"),
     ("v", "icons/file_icons/v.svg"),
-    ("vbproj", "icons/file_icons/file.svg"),
+    ("vbproj", "icons/file_icons/project.svg"),
     ("vcs", "icons/file_icons/git.svg"),
     ("video", "icons/file_icons/video.svg"),
-    ("vs_sln", "icons/file_icons/file.svg"),
-    ("vs_suo", "icons/file_icons/file.svg"),
+    ("vs_sln", "icons/file_icons/project.svg"),
+    ("vs_suo", "icons/file_icons/project.svg"),
     ("vue", "icons/file_icons/vue.svg"),
     ("vyper", "icons/file_icons/vyper.svg"),
     ("wgsl", "icons/file_icons/wgsl.svg"),
@@ -581,8 +608,72 @@ mod tests {
         assert_eq!(icon("data.xml"), "icons/file_icons/html.svg");
         // csv/sql share the storage (database) glyph.
         assert_eq!(icon("rows.csv"), "icons/file_icons/database.svg");
-        // C# has no dedicated glyph in Zed's default theme.
-        assert_eq!(icon("Program.cs"), "icons/file_icons/file.svg");
+        // C# has no dedicated glyph in Zed's default theme; GitComet draws one.
+        // See `the_c_family_badges_are_distinguishable`.
+        assert_eq!(icon("Program.cs"), "icons/file_icons/csharp.svg");
+    }
+
+    /// C, C++ and C# are three different glyphs.
+    ///
+    /// They share the badge silhouette on purpose -- they are one family and a
+    /// reader should see that -- so the *interior* has to carry the difference.
+    /// Zed's `cpp.svg` differed from `c.svg` only by a `+` notched into the right
+    /// edge of the hexagon, which is invisible at the 16px a file tree draws, and
+    /// a repository mixing `.c` and `.cpp` is exactly where telling them apart
+    /// matters most.
+    #[test]
+    fn the_c_family_badges_are_distinguishable() {
+        let c = icon("main.c");
+        let cpp = icon("main.cpp");
+        let cs = icon("Program.cs");
+        assert_ne!(c, cpp);
+        assert_ne!(c, cs);
+        assert_ne!(cpp, cs);
+        // ...and the headers follow their language.
+        assert_eq!(icon("util.h"), c);
+        assert_eq!(icon("util.hpp"), cpp);
+    }
+
+    /// Every language with syntax highlighting has an icon that is not the blank
+    /// page.
+    ///
+    /// A file falling back to `file.svg` reads as "unknown type", so a language
+    /// GitComet knows well enough to colour should never land there. Some of
+    /// these had a table entry all along whose *key* pointed at `file.svg`, which
+    /// looks mapped and is not -- `csharp` and `solidity` were both that.
+    #[test]
+    fn highlighted_languages_do_not_fall_back_to_the_blank_page() {
+        for name in [
+            "src/core.clj",
+            "src/core.cljs",
+            "deps.edn",
+            "contracts/Token.sol",
+            "src/Program.cs",
+            "build.gradle",
+            "src/Demo.groovy",
+            "lib/Util.pm",
+            "script.pl",
+            "unit.pas",
+            "main.bicep",
+            "app.cr",
+            "schema.cue",
+            "App.csproj",
+            "App.fsproj",
+            "Solution.sln",
+        ] {
+            assert_ne!(
+                icon(name),
+                "icons/file_icons/file.svg",
+                "{name} should not use the blank page glyph"
+            );
+        }
+
+        // The two drawn for this batch, and the two reused from glyphs that were
+        // already in the set but unreferenced.
+        assert_eq!(icon("src/core.clj"), "icons/file_icons/clojure.svg");
+        assert_eq!(icon("Token.sol"), "icons/file_icons/solidity.svg");
+        assert_eq!(icon("Program.cs"), "icons/file_icons/csharp.svg");
+        assert_eq!(icon("App.csproj"), "icons/file_icons/project.svg");
     }
 
     /// Every assembly dialect GitComet highlights has an icon.

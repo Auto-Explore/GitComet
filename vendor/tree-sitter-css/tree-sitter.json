@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "css", "camelcase": "CSS", "scope": "source.css", "path": ".", "file-types": ["css"] }
+  ],
+  "metadata": {
+    "version": "0.25.0",
+    "license": "MIT",
+    "description": "CSS grammar for tree-sitter",
+    "links": { "repository": "https://github.com/tree-sitter/tree-sitter-css" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

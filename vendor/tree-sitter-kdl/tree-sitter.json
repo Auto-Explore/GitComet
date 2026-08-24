@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "kdl", "camelcase": "Kdl", "scope": "source.kdl", "path": ".", "file-types": ["kdl"] }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Kdl grammar for tree-sitter",
+    "links": { "repository": "https://github.com/amaanq/tree-sitter-kdl" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

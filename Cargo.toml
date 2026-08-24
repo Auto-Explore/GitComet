@@ -15,8 +15,18 @@ exclude = [
   "vendor/tree-sitter-build",
   "vendor/tree-sitter-caddyfile",
   "vendor/tree-sitter-cil",
+  "vendor/tree-sitter-coffee",
   "vendor/tree-sitter-crontab",
+  "vendor/tree-sitter-css",
+  "vendor/tree-sitter-dhall",
+  "vendor/tree-sitter-csv",
+  "vendor/tree-sitter-cue",
+  "vendor/tree-sitter-ebnf",
+  "vendor/tree-sitter-kdl",
+  "vendor/tree-sitter-ron",
+  "vendor/tree-sitter-ruby",
   "vendor/tree-sitter-gitignore",
+  "vendor/tree-sitter-html",
   "vendor/tree-sitter-just",
   "vendor/tree-sitter-spirv",
   "vendor/tree-sitter-vue",
@@ -110,15 +120,27 @@ tree-sitter-cmake = "0.7.4"
 # Dockerfile / Containerfile. The crate is named for the OCI-neutral spelling but
 # the grammar is the Docker one.
 tree-sitter-containerfile = "0.9.2"
+# Vendored: no crates.io release for either. See their Cargo.toml headers.
+tree-sitter-coffee = { path = "vendor/tree-sitter-coffee" }
 tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "5cb9b693cfd7bfacab1d9ff4acac1a4150700609" }
 tree-sitter-crontab = { path = "vendor/tree-sitter-crontab" }
-tree-sitter-css = "0.25.0"
+# The five below are vendored: each pins `tree-sitter ~0.20`, which `links`
+# makes unresolvable alongside 0.26. See their Cargo.toml headers.
+tree-sitter-csv = { path = "vendor/tree-sitter-csv" }
+tree-sitter-cue = { path = "vendor/tree-sitter-cue" }
+# Vendored to give custom properties a rule: `--json: {...}` parsed as a nested
+# rule set and the ERROR took the rest of the block. See
+# vendor/tree-sitter-css/Cargo.toml.
+tree-sitter-css = { path = "vendor/tree-sitter-css" }
 tree-sitter-dart = "0.2.0"
+tree-sitter-dhall = { path = "vendor/tree-sitter-dhall" }
 tree-sitter-diff = "0.1.0"
+tree-sitter-ebnf = { path = "vendor/tree-sitter-ebnf" }
 tree-sitter-elixir = "0.3.5"
 tree-sitter-erlang = "0.20.0"
 tree-sitter-fsharp = "0.3.11"
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
+tree-sitter-gleam = "1.0.0"
 tree-sitter-go = "0.25.0"
 tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a" }
 tree-sitter-gowork = { git = "https://github.com/zed-industries/tree-sitter-go-work", rev = "acb0617bf7f4fda02c6217676cc64acb89536dc7" }
@@ -126,7 +148,10 @@ tree-sitter-haskell = "0.23.1"
 # Vendored: no crates.io release, no Rust bindings upstream.
 tree-sitter-gitignore = { path = "vendor/tree-sitter-gitignore" }
 tree-sitter-hcl = "1.1.0"
-tree-sitter-html = "0.23.2"
+# Vendored for a scanner fix: upstream closed a `<script>` on the characters
+# `</script` alone, where the spec requires whitespace, `/` or `>` after the
+# tag name. See vendor/tree-sitter-html/Cargo.toml.
+tree-sitter-html = { path = "vendor/tree-sitter-html" }
 # INI, and the several config formats that are INI without saying so:
 # `.editorconfig`, systemd units, and git's own config files.
 tree-sitter-ini = "1.4.0"
@@ -134,11 +159,13 @@ tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-jinja-dialects = "0.1.1"
 tree-sitter-jsdoc = "0.25.0"
+tree-sitter-jsonnet = "0.0.1"
 tree-sitter-json = "0.24.8"
 # Vendored, not from crates.io: the published crate depends on
 # `tree-sitter = ~0.25.5` and `links` makes that unresolvable alongside 0.26 --
 # the same blocker as `tree-sitter-clojure`, above.
 tree-sitter-just = { path = "vendor/tree-sitter-just" }
+tree-sitter-kdl = { path = "vendor/tree-sitter-kdl" }
 tree-sitter-julia = "0.23.1"
 tree-sitter-kotlin-sg = "0.4.1"
 tree-sitter-llvm = "1.1.0"
@@ -148,12 +175,24 @@ tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-ma
 tree-sitter-nix = "0.3.0"
 tree-sitter-objc = "3.0.2"
 tree-sitter-ocaml = "0.25.0"
+# Ships a parser but no highlights query; GitComet authors one. Its
+# `tree-sitter ^0.26.3` dep resolves to the workspace 0.26.12, so unlike the
+# `~0.20` crates it needs no vendoring.
+tree-sitter-perl = "1.1.2"
 tree-sitter-php = "0.24.2"
 tree-sitter-powershell = "0.26.4"
+# Pascal and Protobuf ship no highlights query; GitComet authors both.
+tree-sitter-pascal = "0.10.2"
+tree-sitter-properties = "0.3.0"
+tree-sitter-proto = "0.4.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.3.0"
 tree-sitter-regex = "0.25.0"
-tree-sitter-ruby = "0.23.1"
+tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
+# Vendored for a grammar fix: a `=begin` block comment ended at any `=end`,
+# including mid-line, where Ruby requires column 0. See
+# vendor/tree-sitter-ruby/Cargo.toml.
+tree-sitter-ruby = { path = "vendor/tree-sitter-ruby" }
 tree-sitter-rust = "0.24.2"
 tree-sitter-scala = "0.26.2"
 tree-sitter-sequel = "0.3.11"
@@ -164,6 +203,7 @@ tree-sitter-svelte-ng = "1.0.2"
 tree-sitter-swift = "0.7.3"
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = "0.23.2"
+tree-sitter-v = "0.0.4"
 tree-sitter-vue = { path = "vendor/tree-sitter-vue" }
 # Vendored: nothing on crates.io provides a WebAssembly text grammar.
 tree-sitter-wat = { path = "vendor/tree-sitter-wat" }

@@ -677,3 +677,89 @@ fn syntax_corpus_dump() {
     }
     println!("\n{uncoloured} non-empty lines coloured nothing");
 }
+
+/// For one line, what every column resolves to when clicked.
+///
+/// The token dump above answers "what colour is this"; this answers "what does
+/// clicking here select", which is the other half of what a reader interacts
+/// with and is invisible in a screenshot. A caret sits *between* characters, so
+/// an off-by-one in the click path looks like "the bracket highlights only when
+/// I click just before it" -- a shape that is obvious in this table and almost
+/// impossible to reason about from the source.
+///
+/// `$GITCOMET_SYNTAX_PAIRS=<path>:<1-based line>`, path absolute or relative to
+/// the corpus root:
+///
+/// ```sh
+/// GITCOMET_SYNTAX_PAIRS=languages/php/templating.php:12 \
+///   cargo test -p gitcomet-ui-gpui --lib syntax_pair_probe -- --nocapture
+/// ```
+#[test]
+fn syntax_pair_probe() {
+    let Some(requested) = std::env::var_os("GITCOMET_SYNTAX_PAIRS") else {
+        println!("skipping pair probe: set $GITCOMET_SYNTAX_PAIRS to <path>:<line>");
+        return;
+    };
+    let requested = requested.to_string_lossy().into_owned();
+    let (path, line_no) = requested
+        .rsplit_once(':')
+        .unwrap_or_else(|| panic!("expected <path>:<line>, got {requested:?}"));
+    let line_ix: usize = line_no
+        .parse::<usize>()
+        .unwrap_or_else(|err| panic!("bad line number {line_no:?}: {err}"))
+        .saturating_sub(1);
+
+    let path = PathBuf::from(path);
+    let path = if path.is_absolute() {
+        path
+    } else {
+        corpus_or_skip!().join(path)
+    };
+    let mut failures: Vec<String> = Vec::new();
+    let sample = parse_sample(path.clone(), &mut failures)
+        .unwrap_or_else(|| panic!("{} has no prepared document", path.display()));
+
+    // Build the line's tokens first. A row has to be *drawn* before it can be
+    // clicked, and drawing is what populates the injection cache that
+    // `injected_syntax_pair_at` reads -- so probing without this would report
+    // the host grammar's answer for a region an injected grammar owns.
+    let _ = syntax_tokens_for_prepared_document_line(sample.document, line_ix);
+
+    let line = sample.line(line_ix);
+    println!(
+        "{} ({:?}) line {}",
+        path.display(),
+        sample.language,
+        line_ix + 1
+    );
+    println!("  {line}");
+    let width = crate::view::diff_utils::diff_text_display_len(line);
+    for column in 0..=width {
+        let at = line
+            .chars()
+            .nth(column)
+            .map_or_else(|| "<eol>".to_string(), |ch| format!("{ch:?}"));
+        let rendered =
+            match prepared_document_syntax_pair_at_display_offset(sample.document, line_ix, column)
+            {
+                Some(hit) => {
+                    let span = |s: &PreparedSyntaxPairSpan| {
+                        format!(
+                            "{}:{}..{}",
+                            s.line_ix + 1,
+                            s.display_range.start,
+                            s.display_range.end
+                        )
+                    };
+                    format!(
+                        "{:?} open={} close={}",
+                        hit.kind,
+                        hit.open.iter().map(span).collect::<Vec<_>>().join(","),
+                        hit.close.iter().map(span).collect::<Vec<_>>().join(","),
+                    )
+                }
+                None => "-".to_string(),
+            };
+        println!("  col {column:>3} {at:<8} {rendered}");
+    }
+}

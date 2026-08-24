@@ -1,0 +1,50 @@
+# Vendored from the `tree-sitter-css 0.25.0` crates.io release
+# (https://github.com/tree-sitter/tree-sitter-css, MIT -- see LICENSE), to give
+# CSS custom properties a rule. Edits are marked `GitComet:` in `grammar.js` and
+# `src/scanner.c`.
+#
+# A custom property takes any balanced token sequence, valid CSS or not, and
+# upstream had no rule for that. What made it more than a missing feature is how
+# it failed: `--json: {"key": 1};` parsed as a nested **rule set**, because CSS
+# nesting means `name: {` is a good selector with a pseudo-class colon. The
+# parser never reached `declaration`, the brace opened a block, and the ERROR took
+# the rest of the rule with it -- every later declaration lost its colours.
+#
+# Two changes, and the first is what makes the second reachable:
+#
+#   * `custom_property_name` is its own token. A selector can never be
+#     `--`-prefixed, so this removes the ambiguity in the lexer rather than
+#     trying to resolve it afterwards. It is admitted as a value too, since
+#     `var(--brand)` is the other place such a name appears.
+#   * `custom_property_value` is an external token that consumes the value whole,
+#     tracking nesting and skipping strings. It *declines* unless the value
+#     contains a brace, so every declaration ordinary CSS can already express
+#     keeps exactly the tree it had -- which is what keeps this from being a
+#     risky change to the most widely used grammar in the tree.
+#
+# `src/` is regenerated (tree-sitter-cli 0.26.13, ABI 15) and the `tree_sitter/`
+# headers come from vendor/tree-sitter-headers -- see the README there.
+#
+# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
+[package]
+name = "tree-sitter-css"
+description = "CSS grammar for the tree-sitter parsing library"
+version = "0.25.0"
+repository = "https://github.com/tree-sitter/tree-sitter-css"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.26.12"

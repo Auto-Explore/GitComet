@@ -1,0 +1,41 @@
+# Vendored from the `tree-sitter-ruby 0.23.1` crates.io release
+# (https://github.com/tree-sitter/tree-sitter-ruby, MIT -- see LICENSE), for one
+# fix in `grammar.js`, marked `GitComet:` there.
+#
+# A `=begin` block comment ended at any `=end`, including one in the middle of a
+# line, and its terminator was allowed leading whitespace. Ruby requires both
+# markers at column 0. The corpus sample that documents that rule broke on the
+# sentence describing it and parsed the next fifty lines as code.
+#
+# `src/parser.c` is 15 MB of generated tables, which is what this grammar costs;
+# git stores it at roughly 0.5 MB compressed. It is regenerated with
+# tree-sitter-cli 0.26.13 (ABI 15) and the `tree_sitter/` headers come from
+# vendor/tree-sitter-headers -- see the README there.
+#
+# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
+# GitComet keeps its own Ruby query in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/ruby_highlights.scm,
+# which drops upstream's unevaluated `#is-not? local` rule -- a separate fix, in
+# a separate place, for a separate bug.
+[package]
+name = "tree-sitter-ruby"
+description = "Ruby grammar for the tree-sitter parsing library"
+version = "0.23.1"
+repository = "https://github.com/tree-sitter/tree-sitter-ruby"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.26.12"

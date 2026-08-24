@@ -66,11 +66,26 @@ fn is_name(text: &str) -> bool {
     let Some(first) = chars.next() else {
         return false;
     };
-    if !(first.is_alphabetic() || first == '_' || first == '.') {
+    // A leading variable sigil counts, but only in front of a real name: `$name`
+    // and `@list` are what Perl calls a variable, and its grammar puts the sigil
+    // *inside* the token, so without this no Perl variable was ever clickable.
+    // Requiring a letter or `_` after it keeps `$`, `%` and a bare `@` out.
+    //
+    // Note this can only ever connect uses that share a sigil. Perl writes the
+    // same hash `%hash`, `$hash{k}` and `@hash{...}` depending on what is being
+    // taken from it, and those are different text; matching them would need to
+    // know the language, which this does not.
+    let sigil = matches!(first, '$' | '@' | '%')
+        && chars
+            .clone()
+            .next()
+            .is_some_and(|next| next.is_alphabetic() || next == '_');
+    if !(first.is_alphabetic() || first == '_' || first == '.' || sigil) {
         return false;
     }
     if !text
         .chars()
+        .skip(usize::from(sigil))
         .all(|ch| ch.is_alphanumeric() || matches!(ch, '_' | '.' | '-'))
     {
         return false;
@@ -110,15 +125,34 @@ fn is_name_token(node: &tree_sitter::Node<'_>, text: &str) -> bool {
 /// substring test has stopped paying for itself and the kind should come from
 /// the highlight capture instead -- a `@property` or `@variable` capture already
 /// says "name" without guessing from a node's spelling.
+/// ...and leaf kinds the grammar models as a node with an anonymous child.
+///
+/// [`is_name_token_kind`] uses `child_count() == 0` to mean "this is a token
+/// rather than a construct", which is right for the ~60 grammars whose names are
+/// bare tokens. Perl's are not: `scalar_variable` is `seq('$', name)`, so the
+/// sigil is an anonymous child and the node fails that test even though it is
+/// exactly one name. No Perl variable was clickable because of it.
+///
+/// Checked for `named_child_count() == 0` instead, so a real construct -- which
+/// always has named children -- still cannot slip through.
+const NAME_TOKEN_KINDS_WITH_ANONYMOUS_PARTS: &[&str] =
+    &["array_variable", "hash_variable", "scalar_variable"];
+
 const NAME_TOKEN_KINDS_DESPITE_SUBSTRING: &[&str] = &["string_scalar", "unquoted_string"];
 
 /// The half of [`is_name_token`] that needs no text, so a caller can ask it
 /// before deciding whether the text is worth materializing.
 fn is_name_token_kind(node: &tree_sitter::Node<'_>) -> bool {
-    if !node.is_named() || node.child_count() != 0 {
+    if !node.is_named() {
         return false;
     }
     let kind = node.kind();
+    if NAME_TOKEN_KINDS_WITH_ANONYMOUS_PARTS.contains(&kind) {
+        return node.named_child_count() == 0;
+    }
+    if node.child_count() != 0 {
+        return false;
+    }
     if NAME_TOKEN_KINDS_DESPITE_SUBSTRING.contains(&kind) {
         return true;
     }

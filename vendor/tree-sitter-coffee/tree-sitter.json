@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "coffee", "camelcase": "Coffee", "scope": "source.coffee", "path": ".", "file-types": ["coffee"] }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "CoffeeScript grammar for tree-sitter",
+    "links": { "repository": "https://github.com/svkozak/tree-sitter-coffeescript" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

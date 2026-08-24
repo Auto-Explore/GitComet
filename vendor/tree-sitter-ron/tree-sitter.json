@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "ron", "camelcase": "Ron", "scope": "source.ron", "path": ".", "file-types": ["ron"] }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Ron grammar for tree-sitter",
+    "links": { "repository": "https://github.com/amaanq/tree-sitter-ron" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}
