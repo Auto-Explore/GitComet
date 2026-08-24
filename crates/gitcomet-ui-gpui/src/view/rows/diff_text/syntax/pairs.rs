@@ -204,6 +204,29 @@ fn is_delimiter_token(node: &tree_sitter::Node<'_>) -> bool {
     !node.is_named() && pair_role(node).is_some()
 }
 
+/// The delimiter node a click on `node` actually means.
+///
+/// Some grammars wrap a delimiter in a named node of its own -- HCL's
+/// `tuple_start` is a `[` and nothing else -- and it is the *wrapper* that
+/// [`BRACKET_PAIRS`] names, because that is the level its partner lives at. A
+/// click lands on the anonymous token one level below, where the sibling scan
+/// finds no partner and gives up. Rising through wrappers that span exactly the
+/// same bytes puts the search back where the table expects it.
+///
+/// The equal-span test is what keeps this from over-reaching: a `(` whose
+/// parent is an `arguments` node spanning the whole call stops immediately, so
+/// no click is ever promoted to a pair wider than the delimiter it landed on.
+fn delimiter_node_for_click(node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_> {
+    let mut node = node;
+    while let Some(parent) = node.parent() {
+        if parent.byte_range() != node.byte_range() || pair_role(&parent).is_none() {
+            break;
+        }
+        node = parent;
+    }
+    node
+}
+
 /// The pair `offset` belongs to: the delimiter it sits on (or immediately
 /// after), otherwise the innermost pair enclosing it.
 ///
@@ -223,7 +246,7 @@ pub(in crate::view) fn syntax_pair_in_tree(
         }
         if let Some(node) = root.descendant_for_byte_range(probe, probe + 1)
             && is_delimiter_token(&node)
-            && let Some(pair) = partner_of_delimiter(node)
+            && let Some(pair) = partner_of_delimiter(delimiter_node_for_click(node))
         {
             return Some(pair);
         }

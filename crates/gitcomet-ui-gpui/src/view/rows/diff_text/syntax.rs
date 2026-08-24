@@ -387,6 +387,8 @@ pub(super) enum PrepareTreesitterDocumentResult {
     Unsupported,
 }
 
+#[cfg(test)]
+mod corpus;
 mod heuristic;
 mod language;
 mod live;
@@ -674,6 +676,118 @@ mod tests {
             assert_eq!(raw_offset_for_display_offset(plain, raw), raw);
         }
         assert_eq!(raw_offset_for_display_offset(plain, 999), plain.len());
+
+        // The click variant declines the offsets the plain conversion clamps:
+        // the row hitbox is as wide as the pane, so "past the last character"
+        // and "on the last character" arrive as the same clamped column
+        // otherwise.
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(plain, plain.len() - 1),
+            Some(plain.len() - 1),
+            "the last character is still clickable"
+        );
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(plain, plain.len()),
+            None
+        );
+        assert_eq!(clicked_raw_offset_for_display_offset(plain, 999), None);
+        // `\t\tx = 1` is 13 display columns wide, not 7 bytes.
+        assert_eq!(clicked_raw_offset_for_display_offset(line, 8), Some(2));
+        assert_eq!(clicked_raw_offset_for_display_offset(line, 12), Some(6));
+        assert_eq!(clicked_raw_offset_for_display_offset(line, 13), None);
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(line, line.len()),
+            Some(1),
+            "a raw length is not a display column: 7 still lands inside the second tab"
+        );
+    }
+
+    /// A `line_starts` that no longer describes its text answers `None` rather
+    /// than panicking.
+    ///
+    /// The click path reads a source-backed diff side back from disk and pairs
+    /// it with the line index taken when the diff was built. A worktree file
+    /// that shrank in between leaves starts past the end of the text, and the
+    /// lookup used to slice with them before checking. `line_starts_describe`
+    /// keeps that pairing from reaching here at all; this is the second wall.
+    #[test]
+    fn prepared_syntax_click_survives_a_line_index_from_a_longer_text() {
+        let indexed = "fn a() {}\nfn b() {}\nfn c() {}\n";
+        let shrunk = "fn a() {}\n";
+        let stale_starts = treesitter_document_input_from_text(indexed).line_starts;
+        // No start after the final newline: unlike the diff indexer's, this
+        // index has one entry per line of text.
+        assert_eq!(stale_starts.as_ref(), &[0, 10, 20]);
+
+        let document = match prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            SharedString::from(shrunk.to_owned()),
+            Arc::clone(&stale_starts),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(200),
+            },
+            None,
+            None,
+        ) {
+            PrepareTreesitterDocumentResult::Ready(doc) => doc,
+            other => panic!("test document should parse successfully, got {other:?}"),
+        };
+
+        // Every line the index claims, at columns inside and past the text.
+        for line_ix in 0..=stale_starts.len() {
+            for display_offset in [0usize, 3, 9, 999] {
+                let _ = prepared_document_syntax_pair_at_display_offset(
+                    document,
+                    line_ix,
+                    display_offset,
+                );
+                let _ = prepared_document_occurrences_at_display_offset(
+                    document,
+                    line_ix,
+                    display_offset,
+                );
+            }
+        }
+
+        // The lines the shrunken text no longer has answer nothing at all.
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 2, 0).is_none());
+        assert!(prepared_document_occurrences_at_display_offset(document, 2, 0).is_empty());
+    }
+
+    /// A click in the blank area right of a short line names nothing.
+    ///
+    /// The row hitbox spans the full width of the pane and clamps a point past
+    /// the text to the line's last column, so without a separate "was this
+    /// inside the line" answer, clicking empty space washed every use of the
+    /// last name on the line and lit the enclosing braces with it.
+    #[test]
+    fn prepared_syntax_click_past_the_end_of_a_line_highlights_nothing() {
+        let text = "fn main() {\n    let total = 1;\n    let sum = total;\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+
+        let line = text.lines().nth(2).expect("the third line");
+        assert_eq!(line, "    let sum = total;");
+        let on_name = line.find("total").expect("the name");
+        assert!(
+            !prepared_document_occurrences_at_display_offset(document, 2, on_name).is_empty(),
+            "clicking the name itself still lights its uses"
+        );
+
+        for past in [line.len(), line.len() + 1, line.len() + 200] {
+            assert!(
+                prepared_document_occurrences_at_display_offset(document, 2, past).is_empty(),
+                "column {past} is past the line's last character"
+            );
+            assert!(
+                prepared_document_syntax_pair_at_display_offset(document, 2, past).is_none(),
+                "column {past} is past the line's last character"
+            );
+        }
+
+        // The closing brace on its own line: on it still pairs, past it does not.
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 0).is_some());
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 1).is_none());
     }
 
     #[test]
@@ -753,6 +867,73 @@ mod tests {
         );
         assert_eq!(hit.close.len(), 1);
         assert_eq!(hit.close[0].line_ix, 4);
+    }
+
+    /// PowerShell spells `$(` and `@(` as opening tokens of their own, both
+    /// closing at a plain `)`.
+    ///
+    /// The pair tables are keyed by node kind, and the close side used to be
+    /// resolved by taking the table's *first* row whose close matched -- always
+    /// `(` -- so a caret anywhere inside a subexpression or an array literal
+    /// matched nothing while every other wired language paired its parens.
+    #[test]
+    fn powershell_subexpression_and_array_parens_pair() {
+        let text = "$x = @(1, 2)\n$y = $(Get-Thing)\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::PowerShell, text);
+
+        // `$x = @(1, 2)`: the opener is the two-byte `@(` at columns 5..7.
+        let array = prepared_document_syntax_pair_at_display_offset(document, 0, 7)
+            .expect("a caret inside `@(1, 2)` pairs the array literal's parens");
+        assert_eq!(array.kind, SyntaxPairKind::Bracket);
+        assert_eq!(array.open.len(), 1);
+        assert_eq!(array.open[0].display_range, 5..7, "the whole `@(` opener");
+        assert_eq!(array.close.len(), 1);
+        assert_eq!(array.close[0].display_range, 11..12);
+
+        // `$y = $(Get-Thing)`: same shape with the subexpression opener.
+        let sub = prepared_document_syntax_pair_at_display_offset(document, 1, 8)
+            .expect("a caret inside `$(Get-Thing)` pairs the subexpression's parens");
+        assert_eq!(sub.kind, SyntaxPairKind::Bracket);
+        assert_eq!(sub.open[0].display_range, 5..7, "the whole `$(` opener");
+        assert_eq!(sub.close[0].display_range, 16..17);
+
+        // And a plain paren in the same language still pairs with itself.
+        let plain = prepare_test_document(DiffSyntaxLanguage::PowerShell, "$z = (1 + 2)\n");
+        let hit = prepared_document_syntax_pair_at_display_offset(plain, 0, 6)
+            .expect("a plain grouping paren still pairs");
+        assert_eq!(hit.open[0].display_range, 5..6);
+        assert_eq!(hit.close[0].display_range, 11..12);
+    }
+
+    /// A delimiter its grammar wraps in a named node of its own must pair from
+    /// both ends.
+    ///
+    /// HCL's `[` and `]` are a `tuple_start` and a `tuple_end`, and only those
+    /// wrappers are siblings; the bare tokens are one level deeper. Clicking the
+    /// `[` reached the pair through the enclosing walk, but clicking the `]`
+    /// searched from the token, found no sibling `tuple_start`, and fell through
+    /// to whatever delimiter sat one column to its left -- in
+    /// `[for p in ports : tostring(p)]`, the `)` of the call.
+    #[test]
+    fn wrapped_delimiters_pair_from_the_closing_end_too() {
+        let text = "locals {\n  upper = [for p in var.ports : tostring(p)]\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+        let line = text.lines().nth(1).expect("the tuple line");
+        let open_col = line.find('[').expect("the opening bracket");
+        let close_col = line.find(']').expect("the closing bracket");
+
+        let from_open = prepared_document_syntax_pair_at_display_offset(document, 1, open_col)
+            .expect("clicking `[` pairs the tuple");
+        assert_eq!(from_open.open[0].display_range, open_col..open_col + 1);
+        assert_eq!(from_open.close[0].display_range, close_col..close_col + 1);
+
+        let from_close = prepared_document_syntax_pair_at_display_offset(document, 1, close_col)
+            .expect("clicking `]` must pair the same tuple, not the call's `)`");
+        assert_eq!(
+            (from_close.open, from_close.close),
+            (from_open.open, from_open.close),
+            "a pair must name the same two ends whichever end is clicked"
+        );
     }
 
     fn occurrences_in(
@@ -854,6 +1035,36 @@ mod tests {
         let at = cjk.find("日本語").expect("name");
         let found = occurrences_in(DiffSyntaxLanguage::Python, cjk, at).expect("a name");
         assert_eq!(found.ranges.len(), 2, "got {:?}", found.ranges);
+    }
+
+    /// The candidate budget bounds tree descents, so hits the cheap
+    /// word-boundary test throws away must not spend it.
+    ///
+    /// `uuid` contains `id`. Counting every raw substring hit exhausted the
+    /// 4096-candidate budget on thousands of `uuid`s without a single descent,
+    /// and the real uses of `id` further down the file were never reached --
+    /// while `MAX_OCCURRENCES`, the cap the budget protects, was nowhere near.
+    #[test]
+    fn occurrence_candidates_are_counted_after_the_word_boundary_test() {
+        use std::fmt::Write as _;
+
+        let mut text = String::from("fn main() {\n");
+        for ix in 0..4_200 {
+            writeln!(text, "    let uuid{ix} = {ix};").expect("write");
+        }
+        text.push_str("    let id = 1;\n    let n = id;\n}\n");
+
+        let click = text.find("let id = 1").expect("the declaration") + "let ".len();
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, &text, click).expect("a name");
+        assert_eq!(
+            found
+                .ranges
+                .iter()
+                .map(|range| &text[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["id", "id"],
+            "both real uses, found past 4200 word-internal `id`s inside `uuid`",
+        );
     }
 
     /// Clicking punctuation, whitespace or a literal is not clicking a name.

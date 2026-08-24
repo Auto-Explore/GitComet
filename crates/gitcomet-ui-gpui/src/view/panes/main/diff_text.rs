@@ -1100,7 +1100,7 @@ impl MainPaneView {
             })
             .collect();
         // Both ends off-screen is not a pair worth remembering.
-        (!spans.is_empty()).then(|| DiffTextPairMatch {
+        (!spans.is_empty()).then_some(DiffTextPairMatch {
             #[cfg(test)]
             kind: hit.kind,
             spans,

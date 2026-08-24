@@ -1882,7 +1882,7 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     };
 
     let (open, close) = (project(&pair.open), project(&pair.close));
-    (!open.is_empty() && !close.is_empty()).then(|| PreparedSyntaxPairHit {
+    (!open.is_empty() && !close.is_empty()).then_some(PreparedSyntaxPairHit {
         #[cfg(test)]
         kind: pair.kind,
         open,

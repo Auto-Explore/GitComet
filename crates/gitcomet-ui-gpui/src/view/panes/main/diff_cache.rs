@@ -14,10 +14,10 @@ mod word_highlight;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
-use self::file_diff::{file_diff_text_signature, line_starts_describe};
 pub(in crate::view) use self::file_diff::{
     PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
+use self::file_diff::{file_diff_text_signature, line_starts_describe};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 

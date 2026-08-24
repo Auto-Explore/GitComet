@@ -2271,6 +2271,41 @@ mod tests {
         );
     }
 
+    /// The staleness guard the click path leans on, against the indexer that
+    /// produced the index it is checking.
+    ///
+    /// Pinned against `IndexedFileDiffSource` itself rather than against a
+    /// hand-written expectation: if the two ever disagree about the convention
+    /// -- a start after a trailing newline, no start for an empty file -- every
+    /// source-backed side would silently stop pairing instead of failing here.
+    #[test]
+    fn line_starts_describe_accepts_its_own_index_and_rejects_a_changed_file() {
+        for text in [
+            "alpha\nbeta\n",
+            "alpha\nbeta",
+            "\n",
+            "one line no newline",
+            "trailing\n\n\n",
+        ] {
+            let indexed = IndexedFileDiffSource::from_shared(Some(&Arc::from(text)));
+            assert!(
+                line_starts_describe(text, indexed.line_starts.as_ref()),
+                "the indexer's own answer for {text:?} must be accepted",
+            );
+        }
+
+        let indexed = IndexedFileDiffSource::from_shared(Some(&Arc::from("alpha\nbeta\ngamma\n")));
+        let starts = indexed.line_starts.as_ref();
+        // The file shrank: the index's later starts sit past the end of the
+        // text, which is exactly the pairing that used to panic downstream.
+        assert!(!line_starts_describe("alpha\n", starts));
+        // The file grew, or a line moved: same length class, different lines.
+        assert!(!line_starts_describe("alpha\nbeta\ngamma\ndelta\n", starts));
+        assert!(!line_starts_describe("alphaX\nbeta\ngamma\n", starts));
+        // An empty read against a real index is not a match either.
+        assert!(!line_starts_describe("", starts));
+    }
+
     #[test]
     fn build_file_diff_cache_rebuild_preserves_real_document_sources() {
         let file = gitcomet_core::domain::FileDiffText::new(
