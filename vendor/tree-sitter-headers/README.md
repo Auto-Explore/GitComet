@@ -3,8 +3,8 @@
 Every grammar `tree-sitter generate` emits includes `tree_sitter/parser.h`, and
 every external scanner also includes `tree_sitter/alloc.h` and
 `tree_sitter/array.h`. The CLI writes a private copy of all three into each
-grammar's `src/tree_sitter/`, so nine vendored grammars carried nine copies of the
-same ~40 KB. They are kept here once instead.
+grammar's `src/tree_sitter/`, so every vendored grammar carried its own copy of
+the same ~40 KB. They are kept here once instead.
 
 The copy here is the one tree-sitter-cli 0.26.13 emits, which is what generated
 every `src/parser.c` under `vendor/` except `tree-sitter-vue`'s — that grammar's
@@ -25,8 +25,8 @@ used to carry was an older implementation with a different macro contract
 (`array_push` as an expression rather than a `do {} while (0)`, and no
 `_array__cast`). Its `scanner.c` compiles against the current header anyway —
 the call sites are unchanged — which is why there is one header set here and not
-two. Only `tree-sitter-vue` and `tree-sitter-just` have a `scanner.c` at all; the
-other seven include `parser.h` and nothing else.
+two. Most vendored grammars now ship an external scanner and so need all three
+headers; the ones that do not include `parser.h` and nothing else.
 
 ## Using the tree-sitter CLI in a grammar directory
 

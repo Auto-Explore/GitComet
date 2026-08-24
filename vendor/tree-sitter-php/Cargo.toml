@@ -1,0 +1,69 @@
+# Vendored from the tree-sitter-php git rev
+# 3f2465c217d0a966d41e584b42d75522f2a3149e
+# (https://github.com/tree-sitter/tree-sitter-php, MIT -- see LICENSE), to
+# regenerate `src/parser.c` with a larger small-state threshold.
+#
+# `tree-sitter generate` decides per parse state whether to emit a dense row in
+# `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
+# `ts_small_parse_table` (scanned), using
+# `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
+# grammar with <= 128 symbols; every large grammar has far more, so thousands of
+# states get a dense row costing several times the compact form. Regenerating
+# with `TS_SMALL_STATE_THRESHOLD=128` saves 0.30 MiB here.
+#
+# It is a representation change only -- the automaton, and so every parse tree, is
+# byte-identical. `vendor/README.md` has the procedure and the proof.
+#
+# A git rev rather than the `tree-sitter-php 0.24.2` crates.io release, because
+# the release cannot be built against the current `tree_sitter/array.h`. The
+# pre-0.25 array API let `_array__reserve`/`_array__grow` mutate an `Array *` in
+# place; they now take and return `contents`, and `array_delete` writes the
+# result back. The heredoc scanner popped and deleted in one expression --
+#
+#     array_delete(&array_pop(&scanner->heredocs).word);
+#
+# -- which is UB under the new contract and segfaults on any `<<<TEXT`, with no
+# compiler diagnostic. Upstream fixed it in 8b7d062 ("fix(scanner): correct UB in
+# `scan`'s heredoc delete logic") and moved to the new header in 1f30145; neither
+# is in any release yet, and v0.24.2 is the newest tag. This rev is the last one
+# to touch the grammar or the scanner -- the two commits after it are CI
+# dependency bumps -- and it also brings PHP 8.4 property hooks and asymmetric
+# visibility in constructor promotion.
+#
+# So the `tree_sitter/` headers here come from vendor/tree-sitter-headers like
+# every other grammar's -- see the README there. Ours is newer than upstream's
+# checked-in copy by one `_array__cast` macro, which is a no-op outside C++.
+#
+# Generated with tree-sitter-cli 0.26.13 at ABI 15, the ABI upstream ships.
+#
+# `queries/` *is* vendored here, unlike most of vendor/: GitComet reads this
+# grammar's upstream query consts rather than authoring its own, so dropping the
+# directory would compile them out (`vendor/tree-sitter-build` sets the
+# `with_*_query` cfgs from the files that are present) and the language would go
+# uncoloured.
+[package]
+name = "tree-sitter-php"
+description = "PHP grammar for tree-sitter"
+version = "0.24.2"
+repository = "https://github.com/tree-sitter/tree-sitter-php"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+# Upstream's dev-dependency, kept so `bindings/rust/lib.rs`'s own test module still
+# builds. This crate is workspace-`exclude`d, so it only runs under
+# `cargo test --manifest-path vendor/tree-sitter-php/Cargo.toml`. The version
+# tracks `tree-sitter` in the root Cargo.toml.
+[dev-dependencies]
+tree-sitter = "0.26.12"

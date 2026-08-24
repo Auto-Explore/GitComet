@@ -6632,34 +6632,158 @@ mod tests {
     /// time, on whichever file the user happened to open.
     #[test]
     fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
-        let vendored: &[(&str, tree_sitter::Language)] = &[
-            ("asm", tree_sitter_asm::LANGUAGE.into()),
-            ("caddyfile", tree_sitter_caddyfile::LANGUAGE.into()),
-            ("cil", tree_sitter_cil::LANGUAGE.into()),
-            ("coffee", tree_sitter_coffee::LANGUAGE.into()),
-            ("crontab", tree_sitter_crontab::LANGUAGE.into()),
-            ("css", tree_sitter_css::LANGUAGE.into()),
-            ("dhall", tree_sitter_dhall::LANGUAGE.into()),
-            ("csv", tree_sitter_csv::LANGUAGE.into()),
-            ("cue", tree_sitter_cue::LANGUAGE.into()),
-            ("ebnf", tree_sitter_ebnf::LANGUAGE.into()),
-            ("gitignore", tree_sitter_gitignore::LANGUAGE.into()),
-            ("just", tree_sitter_just::LANGUAGE.into()),
-            ("kdl", tree_sitter_kdl::LANGUAGE.into()),
-            ("ron", tree_sitter_ron::LANGUAGE.into()),
-            ("ruby", tree_sitter_ruby::LANGUAGE.into()),
-            ("spirv", tree_sitter_spirv::LANGUAGE.into()),
-            ("html", tree_sitter_html::LANGUAGE.into()),
-            ("vue", tree_sitter_vue::LANGUAGE.into()),
-            ("wat", tree_sitter_wat::LANGUAGE.into()),
+        // (label, vendor directory, language) -- the directory is what the
+        // failure message tells the reader to regenerate, and two crates hold
+        // more than one grammar.
+        let vendored: &[(&str, &str, tree_sitter::Language)] = &[
+            ("asm", "tree-sitter-asm", tree_sitter_asm::LANGUAGE.into()),
+            (
+                "c-sharp",
+                "tree-sitter-c-sharp",
+                tree_sitter_c_sharp::LANGUAGE.into(),
+            ),
+            (
+                "caddyfile",
+                "tree-sitter-caddyfile",
+                tree_sitter_caddyfile::LANGUAGE.into(),
+            ),
+            ("cil", "tree-sitter-cil", tree_sitter_cil::LANGUAGE.into()),
+            (
+                "coffee",
+                "tree-sitter-coffee",
+                tree_sitter_coffee::LANGUAGE.into(),
+            ),
+            ("cpp", "tree-sitter-cpp", tree_sitter_cpp::LANGUAGE.into()),
+            (
+                "crontab",
+                "tree-sitter-crontab",
+                tree_sitter_crontab::LANGUAGE.into(),
+            ),
+            ("css", "tree-sitter-css", tree_sitter_css::LANGUAGE.into()),
+            ("csv", "tree-sitter-csv", tree_sitter_csv::LANGUAGE.into()),
+            ("cue", "tree-sitter-cue", tree_sitter_cue::LANGUAGE.into()),
+            (
+                "dhall",
+                "tree-sitter-dhall",
+                tree_sitter_dhall::LANGUAGE.into(),
+            ),
+            (
+                "ebnf",
+                "tree-sitter-ebnf",
+                tree_sitter_ebnf::LANGUAGE.into(),
+            ),
+            (
+                "fsharp",
+                "tree-sitter-fsharp",
+                tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
+            ),
+            (
+                "gitignore",
+                "tree-sitter-gitignore",
+                tree_sitter_gitignore::LANGUAGE.into(),
+            ),
+            (
+                "haskell",
+                "tree-sitter-haskell",
+                tree_sitter_haskell::LANGUAGE.into(),
+            ),
+            (
+                "html",
+                "tree-sitter-html",
+                tree_sitter_html::LANGUAGE.into(),
+            ),
+            (
+                "julia",
+                "tree-sitter-julia",
+                tree_sitter_julia::LANGUAGE.into(),
+            ),
+            (
+                "just",
+                "tree-sitter-just",
+                tree_sitter_just::LANGUAGE.into(),
+            ),
+            ("kdl", "tree-sitter-kdl", tree_sitter_kdl::LANGUAGE.into()),
+            (
+                "kotlin-sg",
+                "tree-sitter-kotlin-sg",
+                tree_sitter_kotlin_sg::LANGUAGE.into(),
+            ),
+            (
+                "objc",
+                "tree-sitter-objc",
+                tree_sitter_objc::LANGUAGE.into(),
+            ),
+            (
+                "ocaml",
+                "tree-sitter-ocaml",
+                tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            ),
+            (
+                "ocaml (interface)",
+                "tree-sitter-ocaml",
+                tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into(),
+            ),
+            (
+                "php",
+                "tree-sitter-php",
+                tree_sitter_php::LANGUAGE_PHP.into(),
+            ),
+            (
+                "powershell",
+                "tree-sitter-powershell",
+                tree_sitter_powershell::LANGUAGE.into(),
+            ),
+            ("ron", "tree-sitter-ron", tree_sitter_ron::LANGUAGE.into()),
+            (
+                "ruby",
+                "tree-sitter-ruby",
+                tree_sitter_ruby::LANGUAGE.into(),
+            ),
+            (
+                "rust",
+                "tree-sitter-rust",
+                tree_sitter_rust::LANGUAGE.into(),
+            ),
+            (
+                "scala",
+                "tree-sitter-scala",
+                tree_sitter_scala::LANGUAGE.into(),
+            ),
+            (
+                "sequel",
+                "tree-sitter-sequel",
+                tree_sitter_sequel::LANGUAGE.into(),
+            ),
+            (
+                "spirv",
+                "tree-sitter-spirv",
+                tree_sitter_spirv::LANGUAGE.into(),
+            ),
+            (
+                "swift",
+                "tree-sitter-swift",
+                tree_sitter_swift::LANGUAGE.into(),
+            ),
+            (
+                "typescript",
+                "tree-sitter-typescript",
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            ),
+            (
+                "typescript (tsx)",
+                "tree-sitter-typescript",
+                tree_sitter_typescript::LANGUAGE_TSX.into(),
+            ),
+            ("vue", "tree-sitter-vue", tree_sitter_vue::LANGUAGE.into()),
+            ("wat", "tree-sitter-wat", tree_sitter_wat::LANGUAGE.into()),
         ];
-        for (name, language) in vendored {
+        for (name, dir, language) in vendored {
             let abi = language.abi_version();
             assert!(
                 (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
                     .contains(&abi),
                 "vendored {name} grammar ABI {abi} is outside the range this tree-sitter \
-                 supports ({}..={}); regenerate vendor/tree-sitter-{name} with a newer \
+                 supports ({}..={}); regenerate vendor/{dir} with a newer \
                  tree-sitter-cli",
                 tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
                 tree_sitter::LANGUAGE_VERSION,
@@ -6668,6 +6792,84 @@ mod tests {
             parser
                 .set_language(language)
                 .unwrap_or_else(|err| panic!("vendored {name} grammar should load: {err}"));
+        }
+    }
+
+    /// The grammars vendored for the small-state retune stay retuned.
+    ///
+    /// `LARGE_STATE_COUNT` is how many parse states got a dense `ts_parse_table`
+    /// row -- `SYMBOL_COUNT` * 2 bytes each -- instead of a compact
+    /// `ts_small_parse_table` entry. It is the one number in a generated parser
+    /// that says whether the retune survived, and regenerating with a stock
+    /// tree-sitter-cli silently multiplies it: F# goes from 2,542 back to 9,268,
+    /// and the release binary grows by about 21 MB with no other symptom. Nothing
+    /// else in the build would notice, because the parse trees are identical
+    /// either way -- that is the whole point of the transformation.
+    ///
+    /// vendor/README.md has the patched-CLI recipe. If a bound here is exceeded
+    /// because the grammar itself was updated, re-measure and move the number;
+    /// if it is exceeded because the CLI was not patched, regenerate.
+    #[test]
+    fn vendored_grammars_keep_the_small_state_retune() {
+        // (grammar directory under vendor/, LARGE_STATE_COUNT as regenerated at
+        // TS_SMALL_STATE_THRESHOLD=128)
+        const RETUNED: &[(&str, usize)] = &[
+            ("tree-sitter-c-sharp", 1981),
+            ("tree-sitter-coffee", 42),
+            ("tree-sitter-cpp", 845),
+            ("tree-sitter-fsharp/fsharp", 2542),
+            ("tree-sitter-fsharp/fsharp_signature", 2),
+            ("tree-sitter-haskell", 117),
+            ("tree-sitter-julia", 4076),
+            ("tree-sitter-kotlin-sg", 1431),
+            ("tree-sitter-objc", 2356),
+            ("tree-sitter-ocaml/grammars/interface", 44),
+            ("tree-sitter-ocaml/grammars/ocaml", 59),
+            ("tree-sitter-ocaml/grammars/type", 46),
+            ("tree-sitter-php/php", 204),
+            ("tree-sitter-php/php_only", 185),
+            ("tree-sitter-powershell", 83),
+            ("tree-sitter-ruby", 741),
+            ("tree-sitter-rust", 67),
+            ("tree-sitter-scala", 504),
+            ("tree-sitter-sequel", 2),
+            ("tree-sitter-swift", 802),
+            ("tree-sitter-typescript/tsx", 176),
+            ("tree-sitter-typescript/typescript", 166),
+        ];
+
+        let vendor = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("vendor");
+        for (grammar, expected_large_states) in RETUNED {
+            let parser = vendor.join(grammar).join("src").join("parser.c");
+            // The #defines are in the first few lines; these files run to tens of
+            // megabytes, so read a prefix rather than the whole thing.
+            let mut head = String::new();
+            {
+                use std::io::Read as _;
+                let file = std::fs::File::open(&parser)
+                    .unwrap_or_else(|err| panic!("{} should exist: {err}", parser.display()));
+                std::io::BufReader::new(file)
+                    .take(4096)
+                    .read_to_string(&mut head)
+                    .unwrap_or_else(|err| panic!("{} should be readable: {err}", parser.display()));
+            }
+
+            let large_states = head
+                .lines()
+                .find_map(|line| line.strip_prefix("#define LARGE_STATE_COUNT "))
+                .and_then(|count| count.trim().parse::<usize>().ok())
+                .unwrap_or_else(|| panic!("{} should define LARGE_STATE_COUNT", parser.display()));
+
+            assert!(
+                large_states <= *expected_large_states,
+                "vendor/{grammar} has LARGE_STATE_COUNT {large_states}, above the {expected_large_states} \
+                 it was vendored with -- it looks regenerated with a stock tree-sitter-cli. \
+                 See vendor/README.md; the fix is to regenerate with \
+                 TS_SMALL_STATE_THRESHOLD=128 against a patched tree-sitter-generate."
+            );
         }
     }
 

@@ -36,22 +36,42 @@ fn shared_tree_sitter_headers(manifest: &Path) -> PathBuf {
         .join("tree-sitter-headers")
 }
 
-/// Compile the calling crate's `src/parser.c`, and its `src/scanner.c` if it has
-/// one, into a static library named after the crate.
+/// Compile every grammar the calling crate holds into one static library named
+/// after the crate.
+///
+/// Most grammars are a single `src/parser.c` (plus `src/scanner.c`). A few crates
+/// package several grammars side by side -- `typescript`/`tsx`, `php`/`php_only`,
+/// ocaml's `ocaml`/`interface`/`type` -- and those are compiled into the same
+/// archive. That is not a size cost: archive members are pulled in only when
+/// something references them, so a parser GitComet never names is left out of the
+/// binary by the linker. `tree_sitter_ocaml_type` is the worked example -- it is
+/// compiled here and absent from the release binary.
 ///
 /// # Panics
 ///
-/// If cargo's environment is missing, or if targeting `wasm32-unknown-unknown`
-/// without `tree-sitter-language`'s wasm sysroot variables.
+/// If cargo's environment is missing, if the crate holds no grammar at all, or if
+/// targeting `wasm32-unknown-unknown` without `tree-sitter-language`'s wasm
+/// sysroot variables.
 pub fn compile() {
     let manifest = manifest_dir();
-    let src_dir = manifest.join("src");
     let library_name = std::env::var("CARGO_PKG_NAME").expect("cargo sets CARGO_PKG_NAME");
 
+    let grammar_dirs = grammar_dirs(&manifest);
+    assert!(
+        !grammar_dirs.is_empty(),
+        "{} holds no src/parser.c; run `tree-sitter generate` in {}",
+        library_name,
+        manifest.display()
+    );
+
     let mut c_config = cc::Build::new();
-    // `src` first, so a grammar that keeps a `src/tree_sitter/` of its own
-    // overrides the shared headers rather than colliding with them.
-    c_config.std("c11").include(&src_dir);
+    // The grammars' own directories first, so a grammar that keeps a
+    // `src/tree_sitter/` of its own overrides the shared headers rather than
+    // colliding with them.
+    c_config.std("c11");
+    for dir in &grammar_dirs {
+        c_config.include(dir);
+    }
 
     let shared_headers = shared_tree_sitter_headers(&manifest);
     c_config.include(&shared_headers);
@@ -100,21 +120,23 @@ pub fn compile() {
         ]);
     }
 
-    let parser_path = src_dir.join("parser.c");
-    assert!(
-        parser_path.exists(),
-        "{} has no src/parser.c; run `tree-sitter generate` in {}",
-        library_name,
-        manifest.display()
-    );
-    c_config.file(&parser_path);
-    println!("cargo:rerun-if-changed={}", parser_path.display());
+    for dir in &grammar_dirs {
+        // The directory itself, not just the two files below: a grammar may also
+        // carry a `src/tree_sitter/` that pins a header against the shared one
+        // (tree-sitter-php does), and that has to re-trigger the build too.
+        println!("cargo:rerun-if-changed={}", dir.display());
 
-    // Only `just` and `vue` have one; the rest are pure generated parsers.
-    let scanner_path = src_dir.join("scanner.c");
-    if scanner_path.exists() {
-        c_config.file(&scanner_path);
-        println!("cargo:rerun-if-changed={}", scanner_path.display());
+        let parser_path = dir.join("parser.c");
+        c_config.file(&parser_path);
+        println!("cargo:rerun-if-changed={}", parser_path.display());
+
+        // Not every grammar has an external scanner; the rest are pure generated
+        // parsers.
+        let scanner_path = dir.join("scanner.c");
+        if scanner_path.exists() {
+            c_config.file(&scanner_path);
+            println!("cargo:rerun-if-changed={}", scanner_path.display());
+        }
     }
 
     c_config.compile(&library_name);
@@ -122,22 +144,61 @@ pub fn compile() {
     emit_query_cfgs(&manifest);
 }
 
+/// Every `src/` directory in the crate that holds a generated parser.
+///
+/// `src/` for a single-grammar crate. Otherwise the layouts upstream actually
+/// uses for a crate that packages several: `<grammar>/src/` (typescript, php,
+/// fsharp) and `grammars/<grammar>/src/` (ocaml). Sorted, so the archive's member
+/// order does not depend on the filesystem.
+fn grammar_dirs(manifest: &Path) -> Vec<PathBuf> {
+    let src_dir = manifest.join("src");
+    if src_dir.join("parser.c").exists() {
+        return vec![src_dir];
+    }
+
+    let mut dirs: Vec<PathBuf> = [manifest.to_path_buf(), manifest.join("grammars")]
+        .iter()
+        .filter_map(|parent| std::fs::read_dir(parent).ok())
+        .flatten()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("src"))
+        .filter(|src| src.join("parser.c").exists())
+        .collect();
+    dirs.sort();
+    dirs
+}
+
 /// Declare and set the `with_*_query` cfgs upstream bindings guard their optional
 /// query consts with.
 ///
-/// GitComet deliberately does not vendor any grammar's `queries/` -- it keeps its
-/// own in `crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/` -- so these
-/// are always *off*. They are still declared, because `tree-sitter-vue`'s
-/// `bindings/rust/lib.rs` is upstream verbatim and references all four; without
-/// the `rustc-check-cfg` lines that file would warn about unexpected cfgs.
+/// Most vendored grammars have no `queries/`: GitComet keeps its own in
+/// `crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/`, so the consts
+/// compile out. Nine grammars whose upstream queries GitComet reads directly --
+/// fsharp, haskell, kotlin-sg, objc, php, powershell, scala, sequel, swift -- do
+/// vendor theirs, and for those the cfgs are set. Either way they are all
+/// *declared*, because the vendored `bindings/rust/lib.rs` files reference them
+/// and without the `rustc-check-cfg` lines those files would warn about
+/// unexpected cfgs. `folds` and `indents` are here for tree-sitter-objc, the only
+/// grammar that ships them.
 fn emit_query_cfgs(manifest: &Path) {
-    for name in ["highlights", "injections", "locals", "tags"] {
+    let queries = manifest.join("queries");
+    // Without this, editing a query file does not re-run the build script, so the
+    // cfgs keep their previous values and the crate's query consts silently stay
+    // compiled out. Cargo tracks this path by mtime, which it cannot do while the
+    // directory does not exist -- so *creating* a `queries/` in a grammar that had
+    // none still needs a `cargo clean -p tree-sitter-<name>` to take effect.
+    println!("cargo:rerun-if-changed={}", queries.display());
+
+    for name in [
+        "highlights",
+        "injections",
+        "locals",
+        "tags",
+        "folds",
+        "indents",
+    ] {
         println!("cargo:rustc-check-cfg=cfg(with_{name}_query)");
-        if manifest
-            .join("queries")
-            .join(format!("{name}.scm"))
-            .exists()
-        {
+        if queries.join(format!("{name}.scm")).exists() {
             println!("cargo:rustc-cfg=with_{name}_query");
         }
     }
