@@ -171,6 +171,10 @@ pub(in crate::view) struct ExternalTerminalLaunchSpec {
 }
 
 impl ExternalTerminalLaunchSpec {
+    /// Spawn the terminal. Blocking, and on Windows `wt.exe` resolves through an
+    /// App Execution Alias, whose COM activation pumps the message queue — run
+    /// this on a background thread, never inside a GPUI event handler. See
+    /// [`crate::view::platform_open::spawn_launch`].
     pub(in crate::view) fn launch(&self) -> io::Result<()> {
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.args);
@@ -214,14 +218,6 @@ pub(in crate::view) fn parse_terminal_args_multiline(raw: &str) -> Vec<String> {
 pub(in crate::view) fn resolve_embedded_shell_program() -> Result<PathBuf, String> {
     resolve_automatic_embedded_shell_program()
         .ok_or_else(|| "No shell program was found for the embedded terminal.".to_string())
-}
-
-pub(in crate::view) fn launch_external_terminal_from_preferences(
-    preferences: &TerminalPreferences,
-    context: &ExternalTerminalLaunchContext,
-) -> Result<(), String> {
-    let spec = resolve_external_terminal_launch_spec(preferences, context)?;
-    spec.launch().map_err(|err| err.to_string())
 }
 
 pub(in crate::view) fn resolve_external_terminal_launch_spec(

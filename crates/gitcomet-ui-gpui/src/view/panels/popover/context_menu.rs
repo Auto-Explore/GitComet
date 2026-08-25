@@ -249,12 +249,36 @@ impl PopoverHost {
         Ok(normalize_platform_path(workdir.join(path)))
     }
 
-    fn open_path_default(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
-        super::super::super::platform_open::open_path(path)
+    fn open_path_default(&mut self, path: std::path::PathBuf, cx: &mut gpui::Context<Self>) {
+        crate::view::platform_open::spawn_launch(
+            cx,
+            move || crate::view::platform_open::open_path_blocking(&path),
+            |this, result, cx| {
+                if let Err(err) = result {
+                    this.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open: {err}"),
+                        cx,
+                    );
+                }
+            },
+        );
     }
 
-    fn open_file_location(&mut self, path: &std::path::Path) -> Result<(), std::io::Error> {
-        super::super::super::platform_open::open_file_location(path)
+    fn open_file_location(&mut self, path: std::path::PathBuf, cx: &mut gpui::Context<Self>) {
+        crate::view::platform_open::spawn_launch(
+            cx,
+            move || crate::view::platform_open::open_file_location_blocking(&path),
+            |this, result, cx| {
+                if let Err(err) = result {
+                    this.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open location: {err}"),
+                        cx,
+                    );
+                }
+            },
+        );
     }
 
     fn reveal_path_in_file_manager(
@@ -278,12 +302,8 @@ impl PopoverHost {
                 format!("Path not found: {}", target.display()),
                 cx,
             );
-        } else if let Err(err) = self.open_file_location(&target) {
-            self.push_toast(
-                components::ToastKind::Error,
-                format!("Failed to open location: {err}"),
-                cx,
-            );
+        } else {
+            self.open_file_location(target, cx);
         }
     }
 
@@ -755,12 +775,8 @@ impl PopoverHost {
                         format!("Path not found: {}", full_path.display()),
                         cx,
                     );
-                } else if let Err(err) = self.open_path_default(&full_path) {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open: {err}"),
-                        cx,
-                    );
+                } else {
+                    self.open_path_default(full_path, cx);
                 }
             }
             ContextMenuAction::OpenFileLocation { repo_id, path } => {
@@ -792,21 +808,11 @@ impl PopoverHost {
                     None => path,
                 };
 
-                if !full_path.exists() {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Path not found: {}", full_path.display()),
-                        cx,
-                    );
-                } else if let Err(err) =
-                    crate::external_editor::launch_configured_editor(&full_path)
-                {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open in code editor: {err}"),
-                        cx,
-                    );
-                }
+                // The root view owns this sequence (existence check, resolve,
+                // background launch, toast); routing through it keeps one copy.
+                let _ = self.root_view.update(cx, |root, cx| {
+                    root.open_path_in_external_code_editor(full_path, cx);
+                });
             }
             ContextMenuAction::OpenRepo { path } => {
                 self.store.dispatch(Msg::OpenRepo(path));
@@ -1466,13 +1472,19 @@ impl PopoverHost {
                 );
             }
             ContextMenuAction::OpenWebUrl { url } => {
-                if let Err(err) = crate::view::platform_open::open_url(&url) {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open link: {err}"),
-                        cx,
-                    );
-                }
+                crate::view::platform_open::spawn_launch(
+                    cx,
+                    move || crate::view::platform_open::open_url_blocking(&url),
+                    |this, result, cx| {
+                        if let Err(err) = result {
+                            this.push_toast(
+                                components::ToastKind::Error,
+                                format!("Failed to open link: {err}"),
+                                cx,
+                            );
+                        }
+                    },
+                );
             }
             ContextMenuAction::CopyDiffSelection { text } => {
                 window.activate_window();
