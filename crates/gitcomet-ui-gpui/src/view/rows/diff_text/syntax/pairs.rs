@@ -309,7 +309,12 @@ fn partner_of_delimiter(
             let close = counterpart_of_open(kind, pair)?;
             let mut depth = 1usize;
             for child in &children[index + 1..] {
-                if child.kind() == kind {
+                // Any sibling opener this `close` can end, not only one spelled
+                // the same way -- the same many-to-one relation the `Close` arm
+                // reads with [`closes_open`]. Counting `kind` alone let a `$(`
+                // walk straight past a `)` that a plain `(` had already claimed
+                // and pair with it, so the two ends of one delimiter disagreed.
+                if closes_open(child.kind(), close, pair) {
                     depth += 1;
                 } else if child.kind() == close {
                     depth -= 1;
@@ -337,6 +342,39 @@ fn partner_of_delimiter(
     }
 }
 
+/// Above this many direct children, it is worth asking the grammar whether a
+/// delimiter could be among them before walking them all.
+///
+/// Below it the walk is cheaper than the question. The number only has to be
+/// large enough that ordinary constructs -- an argument list, a small object
+/// literal -- skip the check, and small enough to catch the wide nodes: a source
+/// file's top-level item list, a generated array, a long block.
+const PAIR_SCAN_GRAMMAR_CHECK_MIN_CHILDREN: usize = 64;
+
+/// Whether `language` spells any pair delimiter as a *named* node.
+///
+/// Most grammars do not: `(`, `)`, `{`, `"` and the rest are anonymous tokens.
+/// The exceptions are the tag grammars and the few that wrap their punctuation
+/// -- HCL's `block_start`, Python's `string_start`. Derived from the tables
+/// themselves so a new row cannot drift out of sync; looking an anonymous
+/// spelling up as a named kind simply finds nothing.
+fn language_has_named_delimiters(language: &tree_sitter::Language) -> bool {
+    [
+        SyntaxPairKind::Bracket,
+        SyntaxPairKind::Tag,
+        SyntaxPairKind::Quote,
+    ]
+    .into_iter()
+    .flat_map(table_for)
+    .flat_map(|(open, close)| [*open, *close])
+    .any(|kind| language.id_for_node_kind(kind, true) != 0)
+}
+
+#[cfg(test)]
+pub(super) fn language_has_named_delimiters_for_tests(language: &tree_sitter::Language) -> bool {
+    language_has_named_delimiters(language)
+}
+
 /// The tightest delimiter pair among `node`'s direct children that contains
 /// `offset` strictly between them.
 fn enclosing_pair_among_children(
@@ -344,6 +382,23 @@ fn enclosing_pair_among_children(
     offset: usize,
     source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
 ) -> Option<SyntaxPair> {
+    // A node whose children are all named can only hold a delimiter if this
+    // grammar has a named one, and both counts are O(1) where the walk is not.
+    //
+    // This is what keeps the caret-move path off the wide nodes. The outward
+    // walk reaches a source file's top-level item list for any caret that is not
+    // inside a bracketed construct -- a blank line, a doc comment, a declaration
+    // name -- and every item there is a named node, so the old code stepped
+    // tree-sitter's cursor over tens of thousands of children to conclude what
+    // these two counts conclude immediately.
+    let child_count = node.child_count();
+    if child_count >= PAIR_SCAN_GRAMMAR_CHECK_MIN_CHILDREN
+        && child_count == node.named_child_count()
+        && !language_has_named_delimiters(&node.language())
+    {
+        return None;
+    }
+
     let mut best: Option<SyntaxPair> = None;
     let mut consider = |candidate: SyntaxPair| {
         if candidate.open.end > offset || candidate.close.start < offset {
@@ -371,6 +426,25 @@ fn enclosing_pair_among_children(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
+        // Nothing past `offset` can start an accepted pair: `consider` requires
+        // `open.end <= offset`, so an opener found here could only ever be
+        // rejected. It is still worth reading while some *earlier* opener is
+        // waiting for its close -- that pair would be accepted -- so the scan
+        // stops only once nothing is outstanding.
+        //
+        // Worth a guard because this loop is the caret-move path's whole cost:
+        // stepping tree-sitter's child cursor over a node's children is ~60% of
+        // `syntax_pair_in_tree`, and a source file's top-level item list runs to
+        // tens of thousands of them.
+        if child.start_byte() > offset
+            && open_stack.is_empty()
+            && !quote_open
+                .iter()
+                .zip(quote_settled.iter())
+                .any(|(open, settled)| open.is_some() && !settled)
+        {
+            break;
+        }
         if !child.is_named()
             && let Some(slot) = QUOTE_CHARS.iter().position(|quote| *quote == child.kind())
         {

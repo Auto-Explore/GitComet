@@ -3100,3 +3100,497 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
         );
     });
 }
+
+/// A click-syntax worker must leave its side unmarked however it ends.
+///
+/// The marker exists to stop two workers racing for one side, so it has to be
+/// released whenever the task is over -- including the superseded case. It used
+/// to be removed *after* the generation guard, and a keep-rows rebuild bumps
+/// `file_diff_syntax_generation` at its start without clearing the set. A click
+/// racing that rebuild therefore left the side marked, and
+/// `request_file_diff_click_syntax_document` drops every later click on a marked
+/// side, so clicking a bracket did nothing until the rebuild finished.
+#[gpui::test]
+fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(884);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_superseded_click_worker",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create superseded-worker fixture");
+    let path = std::path::PathBuf::from("src/superseded.rs");
+    let old_source_path = source_dir.join("old.rs");
+    let new_source_path = source_dir.join("new.rs");
+
+    // Past `DIFF_CLICK_FOREGROUND_COMPLETION_MAX_TEXT_BYTES`, so the click is
+    // answered by the background worker rather than synchronously -- which is
+    // the only path that takes the marker.
+    let filler: String = (0..48_000)
+        .map(|ix| format!("fn filler{ix}() {{ let v = {ix}; }}\n"))
+        .collect();
+    let old_text = format!("fn f() {{ g([zzz]); }}\n{filler}");
+    let new_text = format!("fn f() {{ g([aaa]); }}\n{filler}");
+    assert!(
+        new_text.len() > 1024 * 1024,
+        "the fixture must exceed the foreground completion ceiling, got {}",
+        new_text.len()
+    );
+    std::fs::write(&old_source_path, &old_text).expect("write old source");
+    std::fs::write(&new_source_path, &new_text).expect("write new source");
+    let unified = "@@ -1 +1 @@\n-fn f() { g([zzz]); }\n+fn f() { g([aaa]); }\n".to_string();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed superseded-worker diff",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_source_path.as_deref() == Some(&new_source_path)
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                cx.notify();
+            });
+        });
+    });
+    // Row 0 on the right is `fn f() { g([aaa]); }`: the `[` sits at column 11.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::SplitRight,
+        11..12,
+        "superseded-worker bracket hitbox",
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                // A cold side: no prepared document and no retained body, so the
+                // click has to go through the worker.
+                pane.prepared_syntax_documents.clear();
+                pane.file_diff_pair_syntax_text.clear();
+                pane.begin_diff_text_selection(0, DiffTextRegion::SplitRight, click, cx);
+                assert!(
+                    pane.file_diff_click_syntax_inflight
+                        .contains(&DiffTextRegion::SplitRight),
+                    "a cold click on a source-backed side should take the marker"
+                );
+
+                // Exactly what starting a keep-rows rebuild does: a new sequence
+                // number becomes the syntax generation, and nothing clears the
+                // in-flight set.
+                pane.file_diff_syntax_generation = pane.file_diff_syntax_generation.wrapping_add(1);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            !pane
+                .file_diff_click_syntax_inflight
+                .contains(&DiffTextRegion::SplitRight),
+            "a superseded worker must release its side, or every later click on \
+             it is dropped; inflight={:?}",
+            pane.file_diff_click_syntax_inflight,
+        );
+    });
+
+    // And the side is genuinely usable again: the next click reaches the worker
+    // and resolves the pair.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.begin_diff_text_selection(0, DiffTextRegion::SplitRight, click, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("the click after the rebuild window should still light its pair");
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| span.range.clone())
+                .collect::<Vec<_>>(),
+            vec![11..12, 15..16],
+            "`[` and `]` of `g([aaa])`"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// A click must never be answered from a file the rows are no longer showing.
+///
+/// A source-backed side is re-read at click time and the read is retained for
+/// later clicks, while the rows are per-line slices resolved on every render.
+/// The only staleness guard was `line_starts_describe`, which validates where
+/// the newlines are and nothing about the bytes between them -- so an edit that
+/// keeps every line length passed it, and the retained body then answered later
+/// clicks from text that was two edits old. The highlight landed on characters
+/// that were not delimiters at all.
+#[gpui::test]
+fn same_shape_worktree_edit_is_not_answered_from_the_indexed_body(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(885);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_same_shape_worktree_edit",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create same-shape fixture");
+    let path = std::path::PathBuf::from("src/same_shape.rs");
+    let old_source_path = source_dir.join("old.rs");
+    let new_source_path = source_dir.join("new.rs");
+
+    // All three are the same length with newlines in the same places, so every
+    // one of them satisfies `line_starts_describe` against the indexed starts.
+    let indexed_text = "fn f() { g([aaa], (b)); }\n";
+    let edited_once = "fn f() { g([a], (bbb)); }\n";
+    let edited_twice = "fn f() { g([aaaaa], b); }\n";
+    assert_eq!(indexed_text.len(), edited_once.len());
+    assert_eq!(indexed_text.len(), edited_twice.len());
+
+    let old_text = "fn f() { g([zzz], (b)); }\n";
+    std::fs::write(&old_source_path, old_text).expect("write old source");
+    std::fs::write(&new_source_path, indexed_text).expect("write new source");
+    let unified = format!(
+        "@@ -1 +1 @@\n-{}\n+{}\n",
+        old_text.trim_end(),
+        indexed_text.trim_end()
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed same-shape diff",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_source_path.as_deref() == Some(&new_source_path)
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                cx.notify();
+            });
+        });
+    });
+    // `fn f() { g([aaa], (b)); }`: the `[` is at column 11 and its `]` at 15.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::SplitRight,
+        11..12,
+        "same-shape bracket hitbox",
+    );
+
+    let pair_ranges = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .main_pane
+                .read(app)
+                .diff_text_pair_match_for_tests()
+                .map(|pair| {
+                    pair.spans
+                        .iter()
+                        .map(|span| span.range.clone())
+                        .collect::<Vec<_>>()
+                })
+        })
+    };
+
+    simulate_counted_click(cx, click, 1);
+    cx.run_until_parked();
+    assert_eq!(
+        pair_ranges(cx),
+        Some(vec![11..12, 15..16]),
+        "against the file as indexed, the click pairs the brackets it landed on"
+    );
+
+    // The worktree file changes under the open diff, keeping every line length.
+    std::fs::write(&new_source_path, edited_once).expect("first same-shape edit");
+    simulate_counted_click(cx, click, 1);
+    cx.run_until_parked();
+    assert_eq!(
+        pair_ranges(cx),
+        None,
+        "the file is no longer the one this generation indexed, so the click \
+         declines rather than answering from bytes the rows do not describe"
+    );
+
+    // And a second edit cannot be answered from the body the first click read.
+    std::fs::write(&new_source_path, edited_twice).expect("second same-shape edit");
+    simulate_counted_click(cx, click, 1);
+    cx.run_until_parked();
+    assert_eq!(
+        pair_ranges(cx),
+        None,
+        "a retained body must not outlive the file it was read from"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// A click whose parse blows its budget defers to the worker instead of
+/// finishing on the UI thread.
+///
+/// The budget is the whole of what a mouse press may spend in front of the user.
+/// Timing out used to fall through to the same parse with no budget at all: a
+/// 900 KiB C++ file spent its 50 ms, threw that away, and then held the UI
+/// thread for a further 210 ms before the press returned. The click still has to
+/// be answered, so this pins both halves -- nothing resolves synchronously, and
+/// the pair is there once the worker lands.
+#[gpui::test]
+fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(886);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_click_defers_instead_of_blocking",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create deferral fixture");
+    let path = std::path::PathBuf::from("src/deferral.cpp");
+    let old_source_path = source_dir.join("old.cpp");
+    let new_source_path = source_dir.join("new.cpp");
+
+    // Templates, so the parse is slow enough to blow a 50 ms budget, and under
+    // 1 MiB so the click reads it synchronously and only the *parse* defers.
+    let mut filler = String::new();
+    let mut ix = 0usize;
+    while filler.len() < 900 * 1024 {
+        filler.push_str(&format!(
+            "template <typename T> struct Holder{ix} {{ T value; int id = {ix}; }};\n"
+        ));
+        ix += 1;
+    }
+    let old_text = format!("int f() {{ return g([0]); }}\n{filler}");
+    let new_text = format!("int f() {{ return g([1]); }}\n{filler}");
+    assert!(
+        new_text.len() < 1024 * 1024,
+        "the fixture must stay under the synchronous read ceiling, got {}",
+        new_text.len()
+    );
+    std::fs::write(&old_source_path, &old_text).expect("write old source");
+    std::fs::write(&new_source_path, &new_text).expect("write new source");
+    let unified =
+        "@@ -1 +1 @@\n-int f() { return g([0]); }\n+int f() { return g([1]); }\n".to_string();
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed deferral diff",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_source_path.as_deref() == Some(&new_source_path)
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Split;
+                cx.notify();
+            });
+        });
+    });
+    // `int f() { return g([1]); }` -- the `[` sits at column 19.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        0,
+        DiffTextRegion::SplitRight,
+        19..20,
+        "deferral bracket hitbox",
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                // Cold: no prepared document and no retained body.
+                pane.prepared_syntax_documents.clear();
+                pane.file_diff_pair_syntax_text.clear();
+                pane.file_diff_click_syntax_inflight.clear();
+                pane.begin_diff_text_selection(0, DiffTextRegion::SplitRight, click, cx);
+                assert!(
+                    pane.diff_text_pair_match_for_tests().is_none(),
+                    "a parse this slow must not be finished on the UI thread"
+                );
+                assert!(
+                    pane.diff_text_pending_syntax_click.is_some()
+                        && pane
+                            .file_diff_click_syntax_inflight
+                            .contains(&DiffTextRegion::SplitRight),
+                    "it must be recorded as pending with a worker in flight"
+                );
+            });
+        });
+    });
+
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("the worker landing must replay the click");
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| span.range.clone())
+                .collect::<Vec<_>>(),
+            vec![19..20, 21..22],
+            "`[` and `]` of `g([1])`"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}

@@ -2903,3 +2903,90 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// The occurrence set must depend on where the caret *is*, not on how it got
+/// there.
+///
+/// Two name tokens can abut, and the guard that decided whether the cached set
+/// still applied was an inclusive range test -- so the offset where one name
+/// ends and the next begins satisfied both. Walking right out of `$foo` into
+/// `$bar` kept `$foo` lit for one keypress, while arriving at the same offset
+/// from the right lit `$bar`. Perl is the in-tree case: `scalar_variable` is a
+/// sigil plus a name with no separator between two of them.
+#[gpui::test]
+async fn file_editor_occurrences_do_not_depend_on_the_direction_of_approach(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(966);
+    let workdir = unique_workdir("file_editor_abutting_names");
+    let file_rel = std::path::PathBuf::from("abutting.pl");
+    // `$foo` is 6..10 and `$bar` is 10..14, so offset 10 is the boundary. Each
+    // name occurs again below, so the two sets are told apart by more than the
+    // clicked token alone.
+    let contents = "print $foo$bar;\nprint $foo;\nprint $bar;\n";
+    std::fs::write(workdir.join(&file_rel), contents).expect("write abutting-name fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
+            this.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        });
+    });
+    cx.run_until_parked();
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        assert!(
+            main_pane.read(app).file_editor_live_syntax.is_some(),
+            "the Perl fixture should have a live syntax tree"
+        );
+    });
+
+    let set_cursor = |cx: &mut gpui::VisualTestContext, offset: usize| {
+        cx.update(|_window, app| {
+            main_pane.update(app, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.set_cursor_offset(offset, cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_window, app| main_pane.read(app).file_editor_occurrences.clone())
+    };
+
+    let foo: Vec<std::ops::Range<usize>> = vec![6..10, 22..26];
+    let bar: Vec<std::ops::Range<usize>> = vec![10..14, 34..38];
+
+    assert_eq!(
+        set_cursor(cx, 8),
+        foo,
+        "the caret inside `$foo` lights `$foo`"
+    );
+    // Walk right, one offset at a time, across the boundary.
+    let _ = set_cursor(cx, 9);
+    assert_eq!(
+        set_cursor(cx, 10),
+        bar,
+        "offset 10 is the first byte of `$bar`, whichever side the caret came from"
+    );
+
+    assert_eq!(
+        set_cursor(cx, 12),
+        bar,
+        "the caret inside `$bar` lights `$bar`"
+    );
+    let _ = set_cursor(cx, 11);
+    assert_eq!(
+        set_cursor(cx, 10),
+        bar,
+        "and arriving from the right agrees with arriving from the left"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}

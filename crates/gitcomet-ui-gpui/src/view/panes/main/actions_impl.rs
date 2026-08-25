@@ -169,8 +169,12 @@ impl MainPaneView {
         }
 
         self.diff_selection_anchor = Some(clicked_visible_ix);
-        self.diff_selection_range =
-            row_click_selection_range(DiffClickKind::Line, clicked_visible_ix, clicked_visible_ix);
+        // A file diff has no hunk or file headers to click, so every row here is
+        // a line -- and a plain line click anchors without selecting a range, as
+        // [`row_click_selection_range`]'s `Line` arm says. Written out rather
+        // than called, because passing a constant kind to a helper reads as a
+        // decision being made per click when there is nothing to decide.
+        self.diff_selection_range = None;
     }
 
     pub(super) fn file_change_visible_indices(&self) -> Vec<usize> {

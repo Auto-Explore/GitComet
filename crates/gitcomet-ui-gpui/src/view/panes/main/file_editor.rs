@@ -1455,11 +1455,18 @@ impl MainPaneView {
         // A caret moving inside the name it is already on changes nothing, and
         // the scan is O(document) -- so hold the answer until the caret leaves
         // the set or the text changes under it.
+        //
+        // Asked of the tree rather than by comparing the caret against each
+        // cached range: an inclusive range test also accepts the offset where
+        // the *next* name begins, because two name tokens can abut -- Perl's
+        // `$foo$bar` is `scalar_variable` 0..4 followed by 4..8. The caret
+        // reaching 4 from the left then kept `$foo` lit while it sat on `$bar`,
+        // and reaching the same offset from the right lit `$bar`. One tree
+        // descent is both exact and cheaper than the scan it is guarding.
         let occurrences_still_apply = self.file_editor_occurrences_version == Some(version)
-            && self
-                .file_editor_occurrences
-                .iter()
-                .any(|range| range.start <= cursor && cursor <= range.end);
+            && snapshot
+                .name_token_at(cursor)
+                .is_some_and(|token| self.file_editor_occurrences.contains(&token));
         if has_selection {
             self.file_editor_occurrences = Vec::new();
             self.file_editor_occurrences_version = None;

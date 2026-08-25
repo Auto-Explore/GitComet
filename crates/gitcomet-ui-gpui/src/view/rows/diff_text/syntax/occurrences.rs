@@ -267,6 +267,11 @@ pub(in crate::view) fn syntax_occurrences_in_rope(
 /// is held for one byte so its trailing boundary can be decided. The result is
 /// therefore identical to the contiguous scan, including names split between
 /// two 512-byte rope leaves, without copying the document.
+///
+/// With nothing matched and nothing pending, the only byte that can matter next
+/// is the needle's first, so `memchr` jumps to it rather than stepping every
+/// byte through the automaton. That is nearly the whole document for an ordinary
+/// name, and this runs on the editor's caret-move path.
 fn rope_name_candidates(rope: &Rope, name: &str) -> Vec<Range<usize>> {
     let needle = name.as_bytes();
     if needle.is_empty() {
@@ -293,40 +298,69 @@ fn rope_name_candidates(rope: &Rope, name: &str) -> Vec<Range<usize>> {
     let mut pending: Option<Range<usize>> = None;
     let mut out = Vec::new();
 
-    for byte in rope.chunks().flat_map(|chunk| chunk.bytes()) {
-        if let Some(candidate) = pending.take()
-            && (!needs_after_boundary || !is_word_byte(byte))
-        {
-            out.push(candidate);
-            if out.len() >= MAX_OCCURRENCE_CANDIDATES {
-                return out;
+    let first = needle[0];
+    let recent_len = recent.len();
+    for chunk in rope.chunks() {
+        let bytes = chunk.as_bytes();
+        let mut ix = 0usize;
+        while ix < bytes.len() {
+            // Nothing is half-matched and no match is waiting on its trailing
+            // boundary, so every byte up to the next `first` is inert. Skipping
+            // them still has to leave behind the one byte a boundary test can
+            // ask for -- the byte immediately before wherever the scan resumes.
+            if matched == 0 && pending.is_none() {
+                match memchr::memchr(first, &bytes[ix..]) {
+                    Some(0) => {}
+                    Some(hit) => {
+                        recent[(offset + hit - 1) % recent_len] = bytes[ix + hit - 1];
+                        offset += hit;
+                        ix += hit;
+                    }
+                    None => {
+                        let remaining = bytes.len() - ix;
+                        recent[(offset + remaining - 1) % recent_len] = bytes[bytes.len() - 1];
+                        offset += remaining;
+                        break;
+                    }
+                }
             }
-        }
+            let byte = bytes[ix];
 
-        while matched > 0 && byte != needle[matched] {
-            matched = failure[matched - 1];
-        }
-        if byte == needle[matched] {
-            matched += 1;
-        }
-        if matched == needle.len() {
-            let start = offset + 1 - needle.len();
-            let before_ok = !needs_before_boundary
-                || start == 0
-                || !is_word_byte(recent[(start - 1) % recent.len()]);
-            if before_ok {
-                pending = Some(start..offset + 1);
+            if let Some(candidate) = pending.take()
+                && (!needs_after_boundary || !is_word_byte(byte))
+            {
+                out.push(candidate);
+                if out.len() >= MAX_OCCURRENCE_CANDIDATES {
+                    return out;
+                }
             }
-            // The contiguous implementation advances by the whole name. A
-            // word-bounded name cannot have a valid overlapping occurrence,
-            // and discarding overlaps prevents hostile repeated bytes from
-            // spending the candidate budget before a real name is reached.
-            matched = 0;
-        }
 
-        let recent_ix = offset % recent.len();
-        recent[recent_ix] = byte;
-        offset += 1;
+            while matched > 0 && byte != needle[matched] {
+                matched = failure[matched - 1];
+            }
+            if byte == needle[matched] {
+                matched += 1;
+            }
+            if matched == needle.len() {
+                let start = offset + 1 - needle.len();
+                let before_ok = !needs_before_boundary
+                    || start == 0
+                    || !is_word_byte(recent[(start - 1) % recent.len()]);
+                if before_ok {
+                    pending = Some(start..offset + 1);
+                }
+                // The contiguous implementation advances by the whole name. A
+                // word-bounded name cannot have a valid overlapping occurrence,
+                // and discarding overlaps prevents hostile repeated bytes from
+                // spending the candidate budget before a real name is reached.
+                matched = 0;
+            }
+
+            let recent_ix = offset % recent.len();
+            recent[recent_ix] = byte;
+            offset += 1;
+            ix += 1;
+        }
     }
 
     if let Some(candidate) = pending {
@@ -368,4 +402,84 @@ fn syntax_occurrences_from_candidates(
         ranges.sort_by_key(|range| range.start);
     }
     SyntaxOccurrences { token, ranges }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rope scan and the contiguous scan must agree, byte for byte.
+    ///
+    /// [`rope_name_candidates`] never materializes the document, so it carries a
+    /// partial match, the preceding byte a word-boundary test needs, and a match
+    /// waiting on its trailing boundary across every chunk seam -- and it now
+    /// skips whole runs of inert bytes with `memchr`, which has to leave that
+    /// same state behind. The contiguous form is the reference: anywhere the two
+    /// disagree, one of them is wrong.
+    ///
+    /// Names are placed at every offset either side of a chunk boundary so a
+    /// match starts before a seam, spans one, and begins exactly on one.
+    #[test]
+    fn rope_scan_agrees_with_the_contiguous_scan_across_chunk_seams() {
+        let chunk = crate::kit::rope::MAX_CHUNK_BYTES;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .expect("rust language");
+
+        let name = "boundary_name";
+        // Straddling, ending on, and starting on a seam, plus a second chunk's
+        // worth so the scan has seams with no match in them at all.
+        for shift in 0..(name.len() + 2) {
+            let padding = " ".repeat(chunk.saturating_sub(shift));
+            let text = format!(
+                "{padding}fn {name}() {{ {name}(); }}\n\
+                 fn other() {{ let {name}_longer = 1; }}\n\
+                 // {name} in a comment\n\
+                 fn tail() {{ {name}(); }}\n"
+            );
+            let tree = parser.parse(&text, None).expect("parse");
+            let rope = Rope::from(text.as_str());
+            assert_eq!(rope.len(), text.len());
+
+            for hit in text.match_indices(name).map(|(at, _)| at) {
+                for probe in [hit, hit + 1, hit + name.len()] {
+                    let contiguous = syntax_occurrences_in_tree(&tree, &text, probe);
+                    let from_rope = syntax_occurrences_in_rope(&tree, &rope, probe);
+                    assert_eq!(
+                        contiguous, from_rope,
+                        "shift {shift}, probe {probe}: the rope scan must match the \
+                         contiguous scan"
+                    );
+                }
+            }
+        }
+    }
+
+    /// A name whose own edges are not word bytes still has to be found, and the
+    /// `memchr` skip must not step over the byte a boundary test reads.
+    #[test]
+    fn rope_scan_agrees_for_names_with_punctuation_edges() {
+        let chunk = crate::kit::rope::MAX_CHUNK_BYTES;
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_perl::LANGUAGE.into())
+            .expect("perl language");
+
+        for shift in 0..6usize {
+            let padding = "# pad\n".repeat(chunk.div_ceil(6).saturating_sub(shift));
+            let text = format!("{padding}print $sigil_name;\nprint $sigil_name;\n");
+            let tree = parser.parse(&text, None).expect("parse");
+            let rope = Rope::from(text.as_str());
+            for hit in text.match_indices("$sigil_name").map(|(at, _)| at) {
+                for probe in [hit, hit + 1, hit + 5] {
+                    assert_eq!(
+                        syntax_occurrences_in_tree(&tree, &text, probe),
+                        syntax_occurrences_in_rope(&tree, &rope, probe),
+                        "shift {shift}, probe {probe}"
+                    );
+                }
+            }
+        }
+    }
 }

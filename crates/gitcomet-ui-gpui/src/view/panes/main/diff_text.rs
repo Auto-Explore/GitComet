@@ -832,7 +832,12 @@ impl MainPaneView {
             self.set_diff_text_click_highlights(&pos, hit.past_painted_text)
         {
             self.diff_text_pending_syntax_click = Some((pos, document_region));
-            self.request_file_diff_click_syntax_document(document_region, cx);
+            // The preview builds its own document from the render path and
+            // replays the click when that lands; the file-diff worker reads
+            // `file_diff_*` state, which is not the preview's document.
+            if !self.is_file_preview_active() {
+                self.request_file_diff_click_syntax_document(document_region, cx);
+            }
         }
     }
 
@@ -1006,7 +1011,12 @@ impl MainPaneView {
                 return DiffTextPairDocumentLookup::Unavailable;
             }
             let Some(document) = self.worktree_preview_prepared_syntax_document() else {
-                return DiffTextPairDocumentLookup::Unavailable;
+                // Pending, not unavailable: the preview schedules its own
+                // prepare, so a cold document here means "not yet", exactly as
+                // it does for a file diff. Reporting it as unavailable recorded
+                // no pending click, and a click made during the warm-up window
+                // then produced nothing and was never replayed.
+                return DiffTextPairDocumentLookup::Pending(DiffTextRegion::Inline);
             };
             return DiffTextPairDocumentLookup::Ready(
                 document,

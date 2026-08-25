@@ -1024,6 +1024,23 @@ impl LiveSyntaxSnapshot {
             .unwrap_or_default()
     }
 
+    /// The name token the caret at `offset` is on, without searching for its
+    /// other occurrences.
+    ///
+    /// This is the same lookup [`Self::occurrences_at`] starts with, exposed on
+    /// its own so a caller holding a previous answer can ask "is the caret still
+    /// on one of these?" for the price of a tree descent rather than another
+    /// O(document) scan. Answering that by range arithmetic instead cannot be
+    /// exact: two name tokens can abut, and then one offset sits at the end of
+    /// the first and the start of the second.
+    pub(in crate::view) fn name_token_at(&self, offset: usize) -> Option<Range<usize>> {
+        let inner = self.0.as_ref();
+        let offset = offset.min(inner.rope.len());
+        name_token_at(&inner.tree, offset, |range| {
+            Some(inner.rope.text_for_range(range))
+        })
+    }
+
     /// The matching open/close pair the caret at `offset` belongs to: the
     /// delimiter it sits on (or immediately after), otherwise the innermost
     /// pair enclosing it.

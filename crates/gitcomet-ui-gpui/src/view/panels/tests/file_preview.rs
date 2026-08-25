@@ -2771,3 +2771,131 @@ fn file_preview_search_scrolls_sideways_to_a_match_far_along_a_line(cx: &mut gpu
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
+
+/// A click landing before the preview's document is built must be replayed when
+/// it lands, not silently dropped.
+///
+/// The preview arm of the pair lookup used to report a cold document as
+/// `Unavailable` where the file-diff arms report `Pending`, so no pending click
+/// was recorded -- and the preview's own background prepare never called the
+/// replay. Clicking a bracket during warm-up did nothing at all, and only a
+/// second click worked.
+#[gpui::test]
+fn preview_click_before_the_document_lands_is_replayed(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(919);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_preview_replay_json",
+        std::process::id()
+    ));
+    let file_rel = std::path::PathBuf::from("preview_replay.json");
+    let preview_abs_path = workdir.join(&file_rel);
+    let preview_lines: Arc<Vec<String>> = Arc::new(vec![
+        "{".to_string(),
+        r#"  "items": [1, 2],"#.to_string(),
+        r#"  "name": "x""#.to_string(),
+        "}".to_string(),
+    ]);
+    let preview_text = preview_lines.join("\n");
+
+    let _ = std::fs::remove_dir_all(&workdir);
+    std::fs::create_dir_all(&workdir).expect("create preview replay workdir");
+    std::fs::write(&preview_abs_path, &preview_text).expect("write preview replay fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                file_rel.clone(),
+                gitcomet_core::domain::FileStatusKind::Untracked,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let preview_abs_path = preview_abs_path.clone();
+            let preview_lines = Arc::clone(&preview_lines);
+            this.main_pane.update(cx, |pane, cx| {
+                set_ready_worktree_preview(
+                    pane,
+                    preview_abs_path,
+                    preview_lines,
+                    preview_text.len(),
+                    cx,
+                );
+            });
+        });
+    });
+
+    // Line 1 is `  "items": [1, 2],`: the brackets sit at columns 11 and 16.
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        1,
+        DiffTextRegion::Inline,
+        11..12,
+        "preview replay bracket hitbox",
+    );
+
+    // Drop the prepared document to reproduce the warm-up window, and click
+    // without a redraw in between that would rebuild it first.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.prepared_syntax_documents.clear();
+                assert!(
+                    pane.worktree_preview_prepared_syntax_document().is_none(),
+                    "the probe needs a genuinely cold preview document"
+                );
+                pane.begin_diff_text_selection(1, DiffTextRegion::Inline, click, cx);
+                assert!(
+                    pane.diff_text_pair_match_for_tests().is_none(),
+                    "there is no document yet, so the click cannot resolve now"
+                );
+                assert!(
+                    pane.diff_text_pending_syntax_click.is_some(),
+                    "but it must be recorded as pending so it can be replayed"
+                );
+            });
+        });
+    });
+
+    // The preview builds its document exactly here -- the same call the pane
+    // makes when a preview becomes ready -- and the replay hangs off it.
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.refresh_worktree_preview_syntax_document(cx)
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.worktree_preview_prepared_syntax_document().is_some(),
+            "the preview should have rebuilt its document"
+        );
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("the pending click should be replayed once the document lands");
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| (span.source_visible_ix, span.range.clone()))
+                .collect::<Vec<_>>(),
+            vec![(1, 11..12), (1, 16..17)],
+            "and it resolves to the pair the original click was on"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}

@@ -751,6 +751,69 @@ mod tests {
         result
     }
 
+    /// Incremental reparsing must leave the injection cache one document deep.
+    ///
+    /// Prefix injections used to be *copied* under the new document hash while
+    /// the originals stayed resident, and nothing ever reclaimed a superseded
+    /// hash -- so every edit to a template-heavy document grew the cache until
+    /// `TS_INJECTION_CACHE_MAX_ENTRIES` forced the LRU to drop half of it,
+    /// including entries the next chunk build wanted.
+    #[test]
+    fn incremental_reparse_leaves_one_document_in_the_injection_cache() {
+        let make = |suffix: &str| -> String {
+            let mut text = String::new();
+            for ix in 0..12 {
+                text.push_str(&format!(
+                    "## Section {ix}\n\n```rust\nfn item{ix}() {{ let v = {ix}; }}\n```\n\n"
+                ));
+            }
+            text.push_str(suffix);
+            text
+        };
+
+        prepared::clear_injection_cache_for_tests();
+        let mut document = prepare_test_document(DiffSyntaxLanguage::Markdown, &make("tail 0\n"));
+        for line_ix in 0..80 {
+            let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+        }
+        let (baseline, by_hash) = prepared::injection_cache_occupancy_by_document_hash_for_tests();
+        assert!(
+            baseline > 1,
+            "the fixture must actually cache injections, got {baseline}"
+        );
+        assert_eq!(by_hash.len(), 1, "one document parsed, one hash");
+
+        for step in 1..=6 {
+            let text = make(&format!("tail {step}\n"));
+            match prepare_test_document_with_budget_reuse(
+                DiffSyntaxLanguage::Markdown,
+                &text,
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(500),
+                },
+                Some(document),
+            ) {
+                PrepareTreesitterDocumentResult::Ready(next) => document = next,
+                other => panic!("reparse {step} should succeed, got {other:?}"),
+            }
+            for line_ix in 0..80 {
+                let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+            }
+
+            let (total, by_hash) = prepared::injection_cache_occupancy_by_document_hash_for_tests();
+            assert_eq!(
+                by_hash.len(),
+                1,
+                "reparse {step} left {} document hashes in the cache: {by_hash:?}",
+                by_hash.len()
+            );
+            assert_eq!(
+                total, baseline,
+                "reparse {step} changed occupancy from {baseline} to {total}; the cache                  must not grow with the number of edits"
+            );
+        }
+    }
+
     fn prepare_test_document(language: DiffSyntaxLanguage, text: &str) -> PreparedSyntaxDocument {
         let input = treesitter_document_input_from_text(text);
         match prepare_treesitter_document_with_budget_reuse_text(
@@ -1073,6 +1136,93 @@ mod tests {
             .expect("a plain grouping paren still pairs");
         assert_eq!(hit.open[0].display_range, 5..6);
         assert_eq!(hit.close[0].display_range, 11..12);
+    }
+
+    /// A `)` that one opener has already claimed must not also be offered to an
+    /// opener spelled differently.
+    ///
+    /// The open side counted depth on its own token kind only, while the close
+    /// side used `closes_open` -- so in the many-opens-one-close case the two
+    /// ends of the same delimiter disagreed. Recovery is what puts the openers
+    /// side by side: well-formed PowerShell keeps `$( ... )` inside its own
+    /// `sub_expression`, but a half-typed line flattens them into one ERROR
+    /// node, which is exactly the state the editor sees while you type.
+    #[test]
+    fn powershell_open_side_does_not_claim_a_paren_another_opener_closed() {
+        // Recovers as one ERROR whose children are `$(`, `(`, `)`, a name --
+        // the `)` belongs to the `(`, and `$(` is left unclosed.
+        let document = prepare_test_document(DiffSyntaxLanguage::PowerShell, "$( ( ) a\n");
+
+        let from_close = prepared_document_syntax_pair_at_display_offset(document, 0, 5)
+            .expect("the `)` pairs with the `(` that opened it");
+        assert_eq!(from_close.open[0].display_range, 3..4);
+        assert_eq!(from_close.close[0].display_range, 5..6);
+
+        assert!(
+            prepared_document_syntax_pair_at_display_offset(document, 0, 1).is_none(),
+            "the unclosed `$(` has no partner here, and must not borrow the `(`'s"
+        );
+    }
+
+    /// A wide node whose children are all named still pairs, where the grammar
+    /// spells its delimiters as named nodes.
+    ///
+    /// The caret-move path skips walking a node's children when they are all
+    /// named and the grammar has no named delimiter -- two O(1) counts instead
+    /// of stepping tens of thousands of siblings. HTML is the case that must not
+    /// take that shortcut: an element's children are `start_tag`, its content,
+    /// and `end_tag`, every one of them named, so the skip firing here would
+    /// silently stop tag matching in any element with a lot of children.
+    #[test]
+    fn wide_all_named_node_still_pairs_where_delimiters_are_named() {
+        let mut text = String::from("<div>\n");
+        for ix in 0..100 {
+            text.push_str(&format!("<p>item {ix}</p>\n"));
+            if ix == 50 {
+                text.push_str("MARKER\n");
+            }
+        }
+        text.push_str("</div>\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, &text);
+
+        let marker_line = text[..text.find("MARKER").expect("marker")]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        let hit = prepared_document_syntax_pair_at_display_offset(document, marker_line, 3)
+            .expect("text directly inside a wide element still pairs the element's tags");
+        assert_eq!(hit.kind, SyntaxPairKind::Tag);
+        assert_eq!(hit.open[0].line_ix, 0, "the `<div>` start tag");
+        assert_eq!(hit.open[0].display_range, 0..5);
+        assert_eq!(
+            hit.close[0].line_ix,
+            text.lines().count() - 1,
+            "the `</div>` end tag"
+        );
+    }
+
+    /// The two halves of that shortcut, stated directly: which grammars name a
+    /// delimiter, and which leave every one of them anonymous.
+    #[test]
+    fn named_delimiter_grammars_are_recognised() {
+        let named = |language: DiffSyntaxLanguage| -> bool {
+            let (ts_language, _) = tree_sitter_grammar(language).expect("language should be wired");
+            super::pairs::language_has_named_delimiters_for_tests(&ts_language)
+        };
+
+        // `start_tag`/`end_tag`, `STag`/`ETag`, `jsx_opening_element`.
+        assert!(named(DiffSyntaxLanguage::Html));
+        assert!(named(DiffSyntaxLanguage::Xml));
+        assert!(named(DiffSyntaxLanguage::Tsx));
+        // `string_start`/`string_end`.
+        assert!(named(DiffSyntaxLanguage::Python));
+        // `block_start`, `object_start`, `tuple_start`, `quoted_template_start`.
+        assert!(named(DiffSyntaxLanguage::Hcl));
+
+        // Every delimiter is an anonymous token, so the shortcut applies.
+        assert!(!named(DiffSyntaxLanguage::Rust));
+        assert!(!named(DiffSyntaxLanguage::Json));
+        assert!(!named(DiffSyntaxLanguage::C));
     }
 
     /// A delimiter its grammar wraps in a named node of its own must pair from
@@ -6637,6 +6787,79 @@ mod tests {
                 },
             ]
         );
+    }
+
+    /// Subtracting a batch of ranges in one sweep must land exactly where
+    /// subtracting them one at a time did.
+    ///
+    /// The batched form exists because the one-at-a-time loop rebuilt the whole
+    /// line's token vector per intersecting cut, which is quadratic in the
+    /// injected tokens on a line -- but it is only worth having if it is the
+    /// same function. Cross-checked here against the single-range form on
+    /// shapes that stress the differences: cuts given out of order, cuts that
+    /// overlap each other, empty cuts, cuts that fall entirely outside the
+    /// line, and cuts that swallow a token whole.
+    #[test]
+    fn batched_line_token_subtraction_matches_one_cut_at_a_time() {
+        use super::prepared::{
+            subtract_relative_range_from_line_tokens, subtract_relative_ranges_from_line_tokens,
+        };
+
+        let kinds = [
+            SyntaxTokenKind::Comment,
+            SyntaxTokenKind::Keyword,
+            SyntaxTokenKind::String,
+        ];
+        // A deterministic spread of shapes rather than a handful of literals:
+        // the failure mode here is an off-by-one at a boundary, and boundaries
+        // are what vary.
+        let mut seed = 0x9E3779B9u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as usize
+        };
+
+        for case in 0..400 {
+            let token_count = 1 + next() % 6;
+            let mut line_tokens: Vec<SyntaxToken> = Vec::new();
+            let mut at = 0usize;
+            for _ in 0..token_count {
+                let gap = next() % 3;
+                let width = 1 + next() % 9;
+                let start = at + gap;
+                line_tokens.push(SyntaxToken {
+                    range: start..start + width,
+                    kind: kinds[next() % kinds.len()],
+                });
+                at = start + width;
+            }
+            let cut_count = next() % 8;
+            let cuts: Vec<std::ops::Range<usize>> = (0..cut_count)
+                .map(|_| {
+                    let start = next() % (at + 4);
+                    // Deliberately includes zero-width cuts, which both forms
+                    // must ignore rather than split on.
+                    let width = next() % 6;
+                    start..start + width
+                })
+                .collect();
+
+            let mut one_at_a_time = line_tokens.clone();
+            for cut in &cuts {
+                subtract_relative_range_from_line_tokens(&mut one_at_a_time, cut.clone());
+            }
+
+            let mut batched = line_tokens.clone();
+            let mut batch = cuts.clone();
+            subtract_relative_ranges_from_line_tokens(&mut batched, &mut batch);
+
+            assert_eq!(
+                batched, one_at_a_time,
+                "case {case}: tokens {line_tokens:?} minus {cuts:?}"
+            );
+        }
     }
 
     #[test]

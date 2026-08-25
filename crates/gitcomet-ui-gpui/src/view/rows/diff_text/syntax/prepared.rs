@@ -2600,28 +2600,44 @@ fn clone_prefix_injection_cache_entries(
     }
 
     TS_INJECTION_CACHE.with(|cache| {
-        let clones = cache
-            .borrow()
-            .iter()
-            .filter(|(key, _)| {
-                key.document_hash == old_document_hash && key.byte_end <= prefix_byte_end
-            })
-            .map(|(key, entry)| {
-                let mut key = *key;
-                key.document_hash = new_document_hash;
-                (key, entry.clone())
-            })
-            .collect::<Vec<_>>();
-
         let mut cache = cache.borrow_mut();
-        for (key, mut entry) in clones {
-            if cache.contains_key(&key) {
+        // Moved under the new hash rather than copied under it. The old hash
+        // names a document that has just been replaced, so a duplicate is dead
+        // weight -- and each one holds the injection's whole `all_line_tokens`
+        // and its tree. Copying them grew the cache by the reused prefix on
+        // every incremental reparse, so a template-heavy document reached
+        // `TS_INJECTION_CACHE_MAX_ENTRIES` in a handful of edits and
+        // `evict_injection_cache_if_full` then threw away half of it, including
+        // entries the very next chunk build wanted. Nothing else reclaims a
+        // stale document hash.
+        let stale: Vec<TreesitterInjectionMatch> = cache
+            .keys()
+            .filter(|key| key.document_hash == old_document_hash && key.byte_end <= prefix_byte_end)
+            .copied()
+            .collect();
+
+        for old_key in stale {
+            let mut new_key = old_key;
+            new_key.document_hash = new_document_hash;
+            if cache.contains_key(&new_key) {
                 continue;
             }
+            let Some(mut entry) = cache.remove(&old_key) else {
+                continue;
+            };
             evict_injection_cache_if_full(&mut cache);
             entry.last_access = next_injection_access();
-            cache.insert(key, entry);
+            cache.insert(new_key, entry);
         }
+
+        // Whatever is left under the old hash lies past the reusable prefix, so
+        // it describes bytes the edit may have changed and the new document can
+        // never look it up -- `document_hash` is part of the key. Nothing else
+        // in this module reclaims a superseded hash, so without this the cache
+        // fills with dead entries and the LRU starts evicting live ones. A
+        // document still painting from the old hash simply re-parses that
+        // injection on demand, which is the same thing eviction already does.
+        cache.retain(|key, _| key.document_hash != old_document_hash);
     });
 }
 
@@ -3527,6 +3543,9 @@ fn apply_injection_query_tokens_for_document(
         // for plain prose, so the heading came out uncoloured. Cutting per
         // painted token keeps last-wins where the two overlap and leaves the
         // host's answer standing in the gaps.
+        // Reused across lines so a document full of fenced blocks does not
+        // allocate a cut list per line.
+        let mut cuts: Vec<Range<usize>> = Vec::new();
         for (parent_line_ix, tokens) in &injected_tokens {
             // Same window guard as the append loop below: `saturating_sub` on a
             // line below the window would clamp to index 0 and subtract these
@@ -3543,9 +3562,12 @@ fn apply_injection_query_tokens_for_document(
             else {
                 continue;
             };
-            for token in tokens {
-                subtract_relative_range_from_line_tokens(line_tokens, token.range.clone());
-            }
+            // One merged sweep rather than one rebuild of `line_tokens` per
+            // injected token -- see
+            // [`subtract_relative_ranges_from_line_tokens`].
+            cuts.clear();
+            cuts.extend(tokens.iter().map(|token| token.range.clone()));
+            subtract_relative_ranges_from_line_tokens(line_tokens, &mut cuts);
         }
 
         for (parent_line_ix, tokens) in injected_tokens {
@@ -4559,6 +4581,73 @@ pub(super) fn subtract_relative_range_from_line_tokens(
     *line_tokens = out;
 }
 
+/// Subtract every one of `cuts` from `line_tokens` in a single sweep.
+///
+/// The same result as calling [`subtract_relative_range_from_line_tokens`] once
+/// per cut -- a token minus a sequence of ranges is the token minus their union
+/// -- at a fraction of the work. Cutting one at a time rebuilds the whole line's
+/// vector per intersecting cut *and* leaves more fragments behind for the next
+/// cut to re-scan, so an injection painting `k` tokens over one host run cost
+/// O(k^2). That is the ordinary shape of a minified inline `<script>`: measured
+/// on an 11 KB one-line script, 800 injected tokens took 27.8 ms against 5.4 ms
+/// for the same bytes spread over lines.
+pub(super) fn subtract_relative_ranges_from_line_tokens(
+    line_tokens: &mut Vec<SyntaxToken>,
+    cuts: &mut Vec<Range<usize>>,
+) {
+    cuts.retain(|cut| cut.start < cut.end);
+    if cuts.is_empty() || line_tokens.is_empty() {
+        return;
+    }
+    cuts.sort_unstable_by_key(|cut| cut.start);
+    // Merged so the sweep below can advance monotonically through them, and so
+    // overlapping captures cannot each split the same token again.
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(cuts.len());
+    for cut in cuts.iter() {
+        match merged.last_mut() {
+            Some(last) if cut.start <= last.end => last.end = last.end.max(cut.end),
+            _ => merged.push(cut.clone()),
+        }
+    }
+
+    // The same cheap miss the single-range form takes: most lines of a template
+    // are host text that no injected token touches.
+    let hull = merged[0].start..merged[merged.len() - 1].end;
+    if line_tokens
+        .iter()
+        .all(|token| token.range.end <= hull.start || token.range.start >= hull.end)
+    {
+        return;
+    }
+
+    let mut out = Vec::with_capacity(line_tokens.len().saturating_add(merged.len()));
+    for token in line_tokens.drain(..) {
+        // First cut that could reach this token. Tokens are not required to be
+        // sorted, so this is found per token rather than carried along.
+        let first = merged.partition_point(|cut| cut.end <= token.range.start);
+        let mut cursor = token.range.start;
+        for cut in &merged[first..] {
+            if cut.start >= token.range.end {
+                break;
+            }
+            if cut.start > cursor {
+                out.push(SyntaxToken {
+                    range: cursor..cut.start,
+                    kind: token.kind,
+                });
+            }
+            cursor = cursor.max(cut.end);
+        }
+        if cursor < token.range.end {
+            out.push(SyntaxToken {
+                range: cursor..token.range.end,
+                kind: token.kind,
+            });
+        }
+    }
+    *line_tokens = out;
+}
+
 pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
     let tokens = tokens
         .into_iter()
@@ -4578,25 +4667,58 @@ pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<
 
     // Convert overlapping captures into non-overlapping segments while preserving
     // tree-sitter's "later capture wins" semantics within each overlapped slice.
+    //
+    // Every boundary is some token's endpoint, so a segment between two adjacent
+    // boundaries is either wholly inside a token or wholly outside it -- there is
+    // no partial overlap to resolve. The winner is therefore just the last token
+    // in input order that covers the segment.
+    //
+    // Found by painting the segments *backwards* through the token list and
+    // never repainting one that is already owned, with a skip list so a token
+    // lying under later ones costs one step rather than its whole width. Asking
+    // each segment which token wins instead meant scanning every token per
+    // segment -- O(tokens^2), and tokens pile up on one line exactly where
+    // injections do: a minified inline `<script>` put 4006 of them on a single
+    // line, which took 27.8 ms per chunk build.
+    let segment_count = boundaries.len().saturating_sub(1);
+    let mut owner: Vec<Option<SyntaxTokenKind>> = vec![None; segment_count];
+    // `next_unowned[i]` is the first segment at or after `i` with no owner yet,
+    // found through path-compressed jumps. One extra slot so the last segment
+    // has somewhere to point.
+    let mut next_unowned: Vec<usize> = (0..=segment_count).collect();
+    fn find_unowned(next_unowned: &mut [usize], mut ix: usize) -> usize {
+        let mut root = ix;
+        while next_unowned[root] != root {
+            root = next_unowned[root];
+        }
+        while next_unowned[ix] != root {
+            let parent = next_unowned[ix];
+            next_unowned[ix] = root;
+            ix = parent;
+        }
+        root
+    }
+
+    for token in tokens.iter().rev() {
+        let start_ix = boundaries.partition_point(|boundary| *boundary < token.range.start);
+        let end_ix = boundaries.partition_point(|boundary| *boundary < token.range.end);
+        let mut ix = find_unowned(&mut next_unowned, start_ix.min(segment_count));
+        while ix < end_ix {
+            owner[ix] = Some(token.kind);
+            next_unowned[ix] = ix + 1;
+            ix = find_unowned(&mut next_unowned, ix + 1);
+        }
+    }
+
     let mut normalized: Vec<SyntaxToken> = Vec::with_capacity(tokens.len());
-    for window in boundaries.windows(2) {
-        let start = window[0];
-        let end = window[1];
+    for (ix, kind) in owner.into_iter().enumerate() {
+        let Some(kind) = kind else {
+            continue;
+        };
+        let (start, end) = (boundaries[ix], boundaries[ix + 1]);
         if start >= end {
             continue;
         }
-
-        let mut winner = None;
-        for token in &tokens {
-            if token.range.start <= start && end <= token.range.end {
-                winner = Some(token.kind);
-            }
-        }
-
-        let Some(kind) = winner else {
-            continue;
-        };
-
         if let Some(last) = normalized.last_mut()
             && last.kind == kind
             && last.range.end == start
@@ -4604,7 +4726,6 @@ pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<
             last.range.end = end;
             continue;
         }
-
         normalized.push(SyntaxToken {
             range: start..end,
             kind,
@@ -4612,4 +4733,25 @@ pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<
     }
 
     normalized
+}
+
+/// How many injection cache entries there are, grouped by the document they
+/// belong to. Used to pin that an incremental reparse leaves the cache one
+/// document deep rather than accumulating superseded ones.
+#[cfg(test)]
+pub(super) fn injection_cache_occupancy_by_document_hash_for_tests()
+-> (usize, std::collections::BTreeMap<u64, usize>) {
+    TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let mut by_hash: std::collections::BTreeMap<u64, usize> = Default::default();
+        for key in cache.keys() {
+            *by_hash.entry(key.document_hash).or_default() += 1;
+        }
+        (cache.len(), by_hash)
+    })
+}
+
+#[cfg(test)]
+pub(super) fn clear_injection_cache_for_tests() {
+    TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 }

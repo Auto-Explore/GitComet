@@ -1724,6 +1724,8 @@ impl MainPaneView {
             file_diff_click_syntax_inflight: FxHashSet::default(),
             file_diff_old_source_path: None,
             file_diff_new_source_path: None,
+            file_diff_old_source_identity: None,
+            file_diff_new_source_identity: None,
             file_diff_old_line_to_row: Arc::default(),
             file_diff_old_line_to_inline_row: Arc::default(),
             file_diff_new_text: SharedString::default(),

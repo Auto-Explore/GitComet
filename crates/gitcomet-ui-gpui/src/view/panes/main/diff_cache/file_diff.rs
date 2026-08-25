@@ -1589,6 +1589,20 @@ fn file_diff_source_path(source: &IndexedFileDiffSource) -> Option<Arc<std::path
     }
 }
 
+/// What the file behind a source-backed side looked like when this generation
+/// indexed it: path, length and mtime, hashed.
+///
+/// Read back at click time to answer "is this still the document the rows are
+/// showing?". [`line_starts_describe`] cannot answer that -- it validates where
+/// the newlines are and says nothing about the bytes between them, so an edit
+/// that keeps the line lengths passes it while changing every column the pair
+/// projection is about to report.
+pub(in crate::view) fn file_diff_source_identity(
+    path: Option<&Arc<std::path::PathBuf>>,
+) -> Option<Arc<str>> {
+    path.map(|path| gitcomet_core::domain::FileDiffTextSource::new(path.as_ref().clone()).identity)
+}
+
 fn file_diff_source_plan_text(source: &IndexedFileDiffSource) -> Result<SharedString, String> {
     match &source.content {
         IndexedFileDiffContent::Shared(text) => Ok(SharedString::from(Arc::clone(text))),
@@ -1877,6 +1891,10 @@ pub(in crate::view) struct FileDiffCacheRebuild {
     pub(in crate::view) inline_row_provider: Arc<PagedFileDiffInlineRows>,
     pub(in crate::view) old_source_path: Option<Arc<std::path::PathBuf>>,
     pub(in crate::view) new_source_path: Option<Arc<std::path::PathBuf>>,
+    /// Filesystem identity of each source-backed side as indexed, so a click can
+    /// tell whether the file has moved on. See [`file_diff_source_identity`].
+    pub(in crate::view) old_source_identity: Option<Arc<str>>,
+    pub(in crate::view) new_source_identity: Option<Arc<str>>,
     pub(in crate::view) old_text: SharedString,
     pub(in crate::view) old_line_starts: Arc<[usize]>,
     pub(in crate::view) old_line_to_row: Arc<[Option<usize>]>,
@@ -1912,6 +1930,10 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     let new_text = file_diff_source_text(&new_source);
     let old_source_path = file_diff_source_path(&old_source);
     let new_source_path = file_diff_source_path(&new_source);
+    // Taken straight after the index read, so it describes the same bytes the
+    // rows and `line_starts` below were built from.
+    let old_source_identity = file_diff_source_identity(old_source_path.as_ref());
+    let new_source_identity = file_diff_source_identity(new_source_path.as_ref());
     let old_line_starts = Arc::clone(&old_source.line_starts);
     let new_line_starts = Arc::clone(&new_source.line_starts);
     let old_line_count = old_source.line_count();
@@ -1967,6 +1989,8 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
         language,
         old_source_path,
         new_source_path,
+        old_source_identity,
+        new_source_identity,
         row_provider,
         inline_row_provider,
         old_text,

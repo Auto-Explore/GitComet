@@ -3210,6 +3210,11 @@ pub(crate) struct MainPaneView {
     /// when it needs a whole-document parse.
     pub(in crate::view) file_diff_old_source_path: Option<Arc<std::path::PathBuf>>,
     pub(in crate::view) file_diff_new_source_path: Option<Arc<std::path::PathBuf>>,
+    /// Filesystem identity of each source-backed side as this generation indexed
+    /// it. A click re-reads the file, so it needs to know whether the file is
+    /// still the one the rows are showing.
+    pub(in crate::view) file_diff_old_source_identity: Option<Arc<str>>,
+    pub(in crate::view) file_diff_new_source_identity: Option<Arc<str>>,
     /// Real old-side file text used for split and inline syntax projection.
     /// Empty when the side is source-backed; `file_diff_old_source_path` says so.
     pub(in crate::view) file_diff_old_text: SharedString,

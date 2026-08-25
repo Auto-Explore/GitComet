@@ -45,18 +45,19 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     // is what a Lisp looks like and what distinguishes it from `code.svg`'s
     // braces. `.edn` is Clojure's data notation and shares it.
     ("clojure", &["clj", "cljc", "cljd", "cljs", "edn"]),
-    // `solidity.svg` is the Ethereum octahedron, which is the mark every Solidity
-    // toolchain uses.
-    ("solidity", &["sol"]),
     // The generic code glyph rather than one each: Groovy, Perl and Pascal have no
     // mark simple enough to read at 16px -- Perl's camel and Groovy's logo both
     // turn to mush -- and a shared glyph still separates "a language" from
     // "unknown", which is what the blank page failed to do.
+    //
+    // Gleam and V are deliberately absent: both have marks of their own further
+    // down this table, and since the map is built with `insert` the later row
+    // wins. Listing them here too said the opposite of what shipped.
     (
         "code",
         &[
-            "gradle", "groovy", "gsh", "gvy", "gy", "pas", "dpr", "pl", "pm", "proto", "gleam",
-            "v", "vsh", "ron", "ebnf", "dhall",
+            "gradle", "groovy", "gsh", "gvy", "gy", "pas", "dpr", "pl", "pm", "proto", "ron",
+            "ebnf", "dhall",
         ],
     ),
     // Jsonnet is JSON with functions, and `json` is already the generic code
@@ -223,6 +224,8 @@ const FILE_SUFFIXES_BY_ICON_KEY: &[(&str, &[&str])] = &[
     ("sass", &["sass", "scss"]),
     ("scala", &["scala", "sc"]),
     ("settings", &["conf", "ini"]),
+    // `solidity.svg` is the Ethereum octahedron, which is the mark every Solidity
+    // toolchain uses.
     ("solidity", &["sol"]),
     (
         "storage",
@@ -583,6 +586,39 @@ fn extension_or_hidden_file_name(path: &Path) -> Option<&str> {
 
 #[cfg(test)]
 mod tests {
+    /// No association may be listed twice, under any icon key.
+    ///
+    /// [`icon_keys_by_association`] builds its map with `insert`, so a suffix
+    /// named in two rows silently resolves to whichever row comes last -- the
+    /// earlier one is dead, and the comment beside it says something that is not
+    /// true of what ships. That is invisible in a directory listing, because the
+    /// file still gets *an* icon.
+    #[test]
+    fn no_association_is_listed_under_two_icon_keys() {
+        for (table, label) in [
+            (FILE_SUFFIXES_BY_ICON_KEY, "FILE_SUFFIXES_BY_ICON_KEY"),
+            (FILE_STEMS_BY_ICON_KEY, "FILE_STEMS_BY_ICON_KEY"),
+        ] {
+            let mut owner: FxHashMap<&str, &str> = FxHashMap::default();
+            let mut duplicates: Vec<String> = Vec::new();
+            for (icon_key, associations) in table {
+                for association in *associations {
+                    if let Some(previous) = owner.insert(association, icon_key) {
+                        duplicates.push(format!(
+                            "{association:?} is listed under {previous:?} and again under \
+                             {icon_key:?}; only {icon_key:?} takes effect"
+                        ));
+                    }
+                }
+            }
+            assert!(
+                duplicates.is_empty(),
+                "{label} has dead rows:\n  {}",
+                duplicates.join("\n  ")
+            );
+        }
+    }
+
     use super::*;
     use std::path::Path;
 
