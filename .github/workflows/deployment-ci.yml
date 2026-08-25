@@ -17,6 +17,9 @@ on:
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/emit-breakpad-symbols.sh"
+      - "scripts/install-dump-syms.sh"
+      - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
       - "scripts/microsoft-store-listing-languages.sh"
@@ -43,6 +46,9 @@ on:
       - "scripts/macos-cargo-config.sh"
       - "scripts/generate-homebrew-cask.sh"
       - "scripts/build-apt-repo.sh"
+      - "scripts/emit-breakpad-symbols.sh"
+      - "scripts/install-dump-syms.sh"
+      - "scripts/symbolicate-minidump.sh"
       - "scripts/windows/verify-signed-artifact.ps1"
       - "scripts/microsoft-store-fetch-listings.sh"
       - "scripts/microsoft-store-listing-languages.sh"
@@ -94,6 +100,9 @@ jobs:
           bash -n scripts/macos-cargo-config.sh
           bash -n scripts/generate-homebrew-cask.sh
           bash -n scripts/build-apt-repo.sh
+          bash -n scripts/emit-breakpad-symbols.sh
+          bash -n scripts/install-dump-syms.sh
+          bash -n scripts/symbolicate-minidump.sh
           bash -n scripts/microsoft-store-fetch-listings.sh
           bash -n scripts/microsoft-store-listing-languages.sh
           bash -n scripts/microsoft-store-listing-metadata.sh
@@ -209,6 +218,11 @@ jobs:
           grep -Fq 'timestamp-digest:' .github/workflows/build-release-artifacts.yml
           grep -Fq 'append-signature:' .github/workflows/build-release-artifacts.yml
           grep -Fq 'verify-signed-artifact.ps1' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'AZURE_STORAGE_ACCOUNT_KEY' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'publish_symbols' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'emit-breakpad-symbols.sh' .github/workflows/build-release-artifacts.yml
+          grep -Fq 'SYMBOLS_CONTAINER: $''{{ vars.APT_STORAGE_CONTAINER }}' .github/workflows/build-release-artifacts.yml
+          grep -Fq "grep -v '^symbols/'" .github/workflows/deploy-apt-repo.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY' .github/workflows/deploy-aur.yml
           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml

@@ -4,8 +4,8 @@ use gix::index::entry::Mode as GitIndexMode;
 use notify::event::{AccessKind, AccessMode, EventKindMask};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use rustc_hash::{FxHashMap, FxHashSet};
-use std::any::Any;
 use std::fs;
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use super::repo_load_trace;
-use super::send_diagnostics::{SendFailureKind, send_or_log};
+use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
 use super::worker_channel::StoreWorkerSender;
 
 enum MonitorMsg {
@@ -87,7 +87,10 @@ fn record_monitor_failure(
     detail: impl std::fmt::Display,
 ) {
     let count = monitor_failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
-    eprintln!(
+    // See send_diagnostics::record_send_failure: `eprintln!` panics when stderr
+    // is unavailable, and this runs on threads with no unwind guard.
+    let _ = writeln!(
+        std::io::stderr(),
         "gitcomet-state: repo monitor failure ({kind:?}) in {context}: {detail}; total_failures={count}"
     );
 }
@@ -122,16 +125,6 @@ fn send_watcher_event_or_log(
     true
 }
 
-fn panic_payload_to_string(payload: Box<dyn Any + Send + 'static>) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
-}
-
 pub(super) fn join_monitor_or_log(
     join: thread::JoinHandle<()>,
     repo_id: RepoId,
@@ -143,7 +136,7 @@ pub(super) fn join_monitor_or_log(
             context,
             format!(
                 "repo_id={repo_id:?}; join failed: {}",
-                panic_payload_to_string(error)
+                panic_payload_to_string(error.as_ref())
             ),
         );
     }
@@ -1276,7 +1269,11 @@ fn setup_workdir_watch_with_limit(
             subdir_count,
             max_dirs
         );
-        eprintln!(
+        // `eprintln!` would panic with no stderr (see record_monitor_failure);
+        // this runs on the unguarded monitor thread, and a degraded-watch repo
+        // is a path users hit routinely.
+        let _ = writeln!(
+            std::io::stderr(),
             "gitcomet-state: repo monitor is not watching the {subdir_count} worktree folders of \
              repo_id={repo_id:?} (workdir={}) because that exceeds the watch budget ({max_dirs}); \
              live file watching is disabled and changes refresh when the window regains focus. Add \
@@ -1322,7 +1319,8 @@ fn setup_workdir_watch_with_limit(
         // The worktree is then only partially watched, so some external edits will not be observed
         // until the next refresh. Surface it so the limit can be raised if it keeps happening; the
         // `failed_dirs` count also drives the user-facing degraded-watch warning.
-        eprintln!(
+        let _ = writeln!(
+            std::io::stderr(),
             "gitcomet-state: repo monitor could not watch {failed}/{subdir_count} worktree \
              subdirectories for repo_id={repo_id:?} (workdir={}); some external changes may be \
              missed until the next refresh. If this persists, raise fs.inotify.max_user_watches. \
@@ -2929,13 +2927,10 @@ mod tests {
     #[test]
     fn panic_payload_to_string_handles_string_and_unknown_payloads() {
         assert_eq!(
-            panic_payload_to_string(Box::new("panic message".to_string())),
+            panic_payload_to_string(&"panic message".to_string()),
             "panic message"
         );
-        assert_eq!(
-            panic_payload_to_string(Box::new(123usize)),
-            "unknown panic payload"
-        );
+        assert_eq!(panic_payload_to_string(&123usize), "unknown panic payload");
     }
 
     #[test]

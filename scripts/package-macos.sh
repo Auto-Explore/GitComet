@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'USAGE'
-Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH] [--codesign-identity NAME] [--codesign-keychain PATH]
+Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH] [--symbols-out PATH] [--codesign-identity NAME] [--codesign-keychain PATH]
 
 Builds a macOS app bundle and release artifacts:
   - gitcomet-v<VERSION>-macos-<ARCH>.tar.gz
@@ -11,6 +11,11 @@ Builds a macOS app bundle and release artifacts:
 
 Defaults:
   --release, build if needed, output to ./dist
+
+With --symbols-out, Breakpad symbols are written to that directory as a symbol
+store. This happens here rather than in the release workflow because this script
+owns the macOS build, and symbols must be extracted after linking but before the
+binary is copied into the bundle and codesigned.
 
 Environment:
   GITCOMET_MACOS_X86_RELEASE_LTO=thin|fat|false|off|inherit
@@ -27,6 +32,7 @@ mode="release"
 build=1
 create_dmg=1
 out_dir="dist"
+symbols_out=""
 codesign_identity=""
 codesign_keychain=""
 
@@ -58,6 +64,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --out-dir)
       out_dir="${2:-}"
+      shift 2
+      ;;
+    --symbols-out)
+      symbols_out="${2:-}"
       shift 2
       ;;
     --codesign-identity)
@@ -136,6 +146,91 @@ if [[ ! -x "$bin_src" ]]; then
   echo "Binary not found or not executable: $bin_src" >&2
   echo "Build first or omit --no-build." >&2
   exit 1
+fi
+
+# Extract symbols while the build output is still untouched: below, the binary
+# is copied into the bundle and codesigned, and clean_target_intermediates_for_ci
+# may delete build intermediates.
+if [[ -n "$symbols_out" ]]; then
+  if [[ "$symbols_out" = /* ]]; then
+    symbols_abs="$symbols_out"
+  else
+    symbols_abs="${repo_root}/${symbols_out}"
+  fi
+
+  # Read the .dSYM rather than the binary: with split-debuginfo = "packed" the
+  # DWARF lives in the bundle, and the binary alone would yield symbols with no
+  # line numbers.
+  symbol_input="${repo_root}/target/${mode}/gitcomet.dSYM"
+  if [[ ! -d "$symbol_input" ]]; then
+    # Cargo normally uplifts the bundle next to the binary, but depending on the
+    # version it can stay beside the hashed artifact in deps/. The `|| true`
+    # matters: without it `set -euo pipefail` aborts here when deps/ is absent,
+    # skipping the diagnostic below.
+    candidates="$(find "${repo_root}/target/${mode}/deps" -maxdepth 1 -type d \
+      -name 'gitcomet-*.dSYM' 2>/dev/null | sort || true)"
+
+    if [[ -n "$candidates" ]]; then
+      candidate_count="$(printf '%s\n' "$candidates" | wc -l | tr -d '[:space:]')"
+      if [[ "$candidate_count" -gt 1 ]]; then
+        # `cargo test` and benches leave identically-named bundles here. Picking
+        # one arbitrarily would publish symbols keyed to the wrong binary's
+        # UUID, and every later check would still pass.
+        echo "Multiple dSYM bundles under ${repo_root}/target/${mode}/deps:" >&2
+        printf '%s\n' "$candidates" >&2
+        echo "Cannot tell which belongs to the gitcomet binary; clean the target directory." >&2
+        exit 1
+      fi
+      symbol_input="$candidates"
+    fi
+  fi
+
+  if [[ ! -d "$symbol_input" ]]; then
+    echo "No dSYM bundle found under ${repo_root}/target/${mode}." >&2
+    echo "Build with split-debuginfo = \"packed\" (the release workflow sets" >&2
+    echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO) to produce one." >&2
+    exit 1
+  fi
+
+  # A bundle left over from an earlier build sits at exactly the canonical path
+  # and passes every later check, publishing symbols under the wrong build's
+  # UUID while the shipped binary resolves to nothing. Compare identities.
+  if command -v dwarfdump >/dev/null 2>&1; then
+    bin_uuid="$(dwarfdump --uuid "$bin_src" 2>/dev/null | awk '{print $2}' | head -1 || true)"
+    if [[ -z "$bin_uuid" ]]; then
+      echo "Could not read a UUID from ${bin_src}; refusing to guess which dSYM matches." >&2
+      exit 1
+    fi
+    if ! dwarfdump --uuid "$symbol_input" 2>/dev/null | grep -qF "$bin_uuid"; then
+      echo "dSYM does not match the binary being packaged." >&2
+      echo "  binary: ${bin_src} (${bin_uuid})" >&2
+      echo "  dSYM:   ${symbol_input}" >&2
+      dwarfdump --uuid "$symbol_input" 2>/dev/null >&2 || true
+      echo "It is stale; remove it or clean target/${mode} and rebuild." >&2
+      exit 1
+    fi
+  else
+    echo "::warning title=dSYM identity unverified::dwarfdump is unavailable, so ${symbol_input} was not checked against ${bin_src}."
+  fi
+
+  # Normalize the location: clean_target_intermediates_for_ci deletes deps/, so
+  # a bundle left there would not survive for CI to archive.
+  canonical_dsym="${repo_root}/target/${mode}/gitcomet.dSYM"
+  if [[ "$symbol_input" != "$canonical_dsym" ]]; then
+    rm -rf "$canonical_dsym"
+    cp -R "$symbol_input" "$canonical_dsym"
+    symbol_input="$canonical_dsym"
+  fi
+
+  # A dSYM carries DWARF but not __eh_frame, which stays in the linked binary,
+  # and dump_syms reads a single file with no macOS equivalent of the .pdb/.exe
+  # re-pairing it does on Windows. Requiring CFI here would fail every macOS
+  # release; the warning keeps the gap visible instead.
+  "${repo_root}/scripts/emit-breakpad-symbols.sh" \
+    --input "$symbol_input" \
+    --store "$symbols_abs" \
+    --arch "$arch" \
+    --allow-missing-cfi
 fi
 
 if [[ "$out_dir" = /* ]]; then

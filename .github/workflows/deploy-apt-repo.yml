@@ -449,7 +449,16 @@ jobs:
             --prefix "$blob_prefix" \
             --num-results "*" \
             --query "[].name" \
-            -o tsv > "$existing_blobs_file"
+            -o tsv > "${existing_blobs_file}.all"
+
+          # APT_STORAGE_PREFIX is empty, so the listing above covers the whole
+          # container — which also holds the Breakpad symbol store published by
+          # build-release-artifacts.yml. Mirroring that through the runner would
+          # download and re-upload every .sym on every release, one az call per
+          # blob and gigabytes per deploy. Excluding it here also keeps it out
+          # of the stale-blob set below, so the sweep cannot delete it.
+          # `|| true`: grep exits 1 when nothing survives the filter.
+          grep -v '^symbols/' "${existing_blobs_file}.all" > "$existing_blobs_file" || true
           mapfile -t existing_blobs < "$existing_blobs_file"
 
           if [ "${#existing_blobs[@]}" -eq 0 ]; then
