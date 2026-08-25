@@ -15,13 +15,12 @@
 //! It also keeps benchmark numbers representative of a real run.
 
 use std::ffi::c_void;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
-use std::sync::{Mutex, Once};
 
 use libmimalloc_sys::{mi_calloc, mi_free, mi_malloc, mi_realloc, mi_usable_size};
 
-static INSTALL: Once = Once::new();
-static INSTALL_PLAIN: Once = Once::new();
+static INSTALLED: Mutex<Installed> = Mutex::new(Installed::None);
 static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
 static MEASUREMENT_ENABLED: AtomicBool = AtomicBool::new(false);
 static COUNTERS: AllocCounters = AllocCounters::new();
@@ -70,30 +69,61 @@ impl AllocMetrics {
 /// Call it before anything parses. It is idempotent, and safe to combine with
 /// [`install_tracking_allocator`] in either order -- both wrap the same `mi_*`
 /// functions, so a block allocated under one is freed correctly under the other.
+/// Tracking outranks this: once it is installed this call leaves it in place,
+/// so a benchmark that also runs the normal startup path keeps its counters
+/// instead of silently losing them to whichever installer happened to run last.
 pub fn install_mimalloc_allocator() {
-    INSTALL_PLAIN.call_once(|| unsafe {
+    let mut installed = lock_installed();
+    if *installed != Installed::None {
+        return;
+    }
+    unsafe {
         tree_sitter::set_allocator(
             Some(mi_malloc),
             Some(mi_calloc),
             Some(mi_realloc),
             Some(mi_free),
         );
-    });
+    }
+    *installed = Installed::Plain;
 }
 
 /// Point tree-sitter's C at mimalloc *and* count what it allocates.
 ///
 /// The counters cost an atomic load per allocation, so this is for benchmarks;
-/// [`install_mimalloc_allocator`] is what a normal run wants.
+/// [`install_mimalloc_allocator`] is what a normal run wants. It upgrades the
+/// plain hooks if those are already in place, and nothing downgrades it back.
 pub fn install_tracking_allocator() {
-    INSTALL.call_once(|| unsafe {
+    let mut installed = lock_installed();
+    if *installed == Installed::Tracking {
+        return;
+    }
+    unsafe {
         tree_sitter::set_allocator(
             Some(tree_sitter_malloc),
             Some(tree_sitter_calloc),
             Some(tree_sitter_realloc),
             Some(tree_sitter_free),
         );
-    });
+    }
+    *installed = Installed::Tracking;
+}
+
+/// Which hooks `ts_set_allocator` currently holds. `ts_set_allocator` is global
+/// and last-writer-wins, so the installers rank themselves rather than each
+/// guarding its own `Once` -- two independent `Once`s let the plain installer
+/// overwrite the tracking one whenever it happened to run second.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Installed {
+    None,
+    Plain,
+    Tracking,
+}
+
+fn lock_installed() -> std::sync::MutexGuard<'static, Installed> {
+    INSTALLED
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 pub fn measure_allocations<T>(f: impl FnOnce() -> T) -> (T, AllocMetrics) {
@@ -309,9 +339,9 @@ mod tests {
     ///
     /// If either installer is ever pointed at a different allocator, this frees
     /// a mimalloc block through the wrong `free` and the test aborts rather than
-    /// failing -- which is the point. Both orders run here because
-    /// `ts_set_allocator` is global and a benchmark binary installs tracking
-    /// after startup has already installed the plain one.
+    /// failing -- which is the point. Plain-then-tracking is the switch that can
+    /// happen at runtime: `ts_set_allocator` is global and a benchmark binary
+    /// installs tracking after startup has already installed the plain hooks.
     #[test]
     fn trees_survive_switching_between_the_two_installers() {
         install_mimalloc_allocator();
@@ -324,9 +354,26 @@ mod tests {
         drop(allocated_plain);
         drop(allocated_tracked);
 
-        install_mimalloc_allocator();
         let after = parse_json();
         assert_eq!(after.root_node().kind(), "document");
+    }
+
+    /// The plain installer must not take the hooks back off the tracking one.
+    ///
+    /// Each installer used to guard its own `Once`, which made the winner
+    /// whichever ran last: a benchmark binary running the normal startup path,
+    /// or -- as CI hit -- the sibling test above installing the plain hooks from
+    /// another thread, would leave every measurement reading zero.
+    #[test]
+    fn plain_installer_does_not_downgrade_tracking() {
+        install_tracking_allocator();
+        install_mimalloc_allocator();
+
+        let (_tree, metrics) = measure_allocations(parse_json);
+        assert!(
+            metrics.alloc_ops > 0,
+            "the plain installer dropped the tracking hooks, got {metrics:?}"
+        );
     }
 
     /// `measure_allocations` should see tree-sitter's C allocations, which it can
