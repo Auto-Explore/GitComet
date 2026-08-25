@@ -601,19 +601,27 @@ fn log_paged_walk_handle(repo: &gix::ThreadSafeRepository) -> gix::OdbHandleArc 
 /// end of what was cloned. `repo.rev_walk(..)` installs exactly this, but its
 /// filter borrows the repository, and a walk parked in the walk cache outlives
 /// any such borrow — hence the owned handle and the boxed closure.
-fn log_paged_walk_filter(repo: &gix::ThreadSafeRepository) -> Result<super::LogPagedWalkFilter> {
+///
+/// Returns the filter together with whether the repository is shallow at all:
+/// that is the same question the boundary list answers, and the walk builder
+/// needs it. Asking `gix::Repository::is_shallow` instead would stat the file
+/// and run a `core.shallowFile` config lookup a second time, for an answer this
+/// function has already read.
+fn log_paged_walk_filter(
+    repo: &gix::ThreadSafeRepository,
+) -> Result<(super::LogPagedWalkFilter, bool)> {
     let shallow_commits = repo
         .to_thread_local()
         .shallow_commits()
         .map_err(|e| Error::new(ErrorKind::Backend(format!("gix shallow commits: {e}"))))?;
     let Some(shallow_commits) = shallow_commits else {
-        return Ok(Box::new(|_| true));
+        return Ok((Box::new(|_| true), false));
     };
 
     let objects = log_paged_walk_handle(repo);
     let mut grafted_parents_to_skip: Vec<gix::ObjectId> = Vec::new();
     let mut buf = Vec::new();
-    Ok(Box::new(move |id| {
+    let filter: super::LogPagedWalkFilter = Box::new(move |id| {
         let id = id.to_owned();
         if let Ok(index) = grafted_parents_to_skip.binary_search(&id) {
             grafted_parents_to_skip.remove(index);
@@ -626,7 +634,109 @@ fn log_paged_walk_filter(repo: &gix::ThreadSafeRepository) -> Result<super::LogP
             grafted_parents_to_skip.sort();
         }
         true
-    }))
+    });
+    Ok((filter, true))
+}
+
+/// How the log orders its rows.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum LogRowOrder {
+    /// Newest committer date first, over everything currently queued.
+    CommitTime,
+    /// `git log --date-order`: newest committer date first, except that no
+    /// parent is shown before all of its children.
+    DateOrder,
+}
+
+/// Env override for [`log_row_order`]: `0`/`false`/`off`/`no` selects the plain
+/// commit-date queue, anything else the default date order.
+const LOG_ROW_ORDER_ENV: &str = "GITCOMET_LOG_DATE_ORDER";
+
+/// Reads a [`LogRowOrder`] out of a raw [`LOG_ROW_ORDER_ENV`] value.
+///
+/// Split from [`log_row_order`] because that one caches into a `OnceLock`: the
+/// first call in a process fixes the answer, so a test that set the variable
+/// afterwards would be testing nothing, and two tests in one binary could never
+/// cover both orderings. This is the part worth testing, and it is pure.
+fn log_row_order_from_env(raw: Option<&str>) -> LogRowOrder {
+    match raw.map(|raw| raw.trim().to_ascii_lowercase()) {
+        Some(value) if matches!(value.as_str(), "0" | "false" | "off" | "no") => {
+            LogRowOrder::CommitTime
+        }
+        _ => LogRowOrder::DateOrder,
+    }
+}
+
+/// The order the log walk sorts rows in, read once per process.
+///
+/// `--date-order` is the default because a plain commit-date queue disagrees
+/// with git whenever a commit's committer date is newer than one of its
+/// children's — a rebase with `--committer-date-is-author-date`, a `git am`, a
+/// machine whose clock runs behind — and then a parent is drawn above its own
+/// child and every row below it shifts by one against `git log` (issue #390).
+///
+/// It is the default *unconditionally*, because the rows being right matters
+/// more here than the page being quick. That is a real bill, and this is what
+/// it costs. The two orderings differ in what they must know before they can
+/// name the **first** row, which is all a page needs: the commit-date queue
+/// seeds itself from the tips and pops the newest, so it is O(tips), while date
+/// order cannot release a commit until no unemitted child of it is left, so it
+/// computes in-degrees first — down to the *lowest generation number among the
+/// tips*, which one long-abandoned branch drags to the floor.
+///
+/// Where a commit-graph supplies generation numbers that pass is bounded and
+/// the ordering is close to free. Where there is none every generation is
+/// `GENERATION_NUMBER_INFINITY`, the bound degenerates, and the pass covers the
+/// whole reachable graph. Measured here on a 50k-commit repository, 200-row
+/// first page, no commit-graph: 423ms against 2.5ms for the commit-date queue —
+/// where `git log --date-order -n 200` over the same repository pays 147ms
+/// against 3ms, so git is buying the same ordering at the same shape of price.
+/// With a commit-graph written (`git commit-graph write --reachable`, 155ms for
+/// those 50k commits) the same page costs 1.4ms, i.e. *below* the commit-date
+/// queue, and a graph that has gone stale still works: an ungraphed tip only
+/// keeps the bound off until the walk reaches its first graphed ancestor.
+///
+/// So the escape hatch is the env var below, and the cure is a commit-graph —
+/// not a quieter ordering. Nothing in this crate writes one today.
+pub(super) fn log_row_order() -> LogRowOrder {
+    static ORDER: std::sync::OnceLock<LogRowOrder> = std::sync::OnceLock::new();
+    *ORDER.get_or_init(|| log_row_order_from_env(std::env::var(LOG_ROW_ORDER_ENV).ok().as_deref()))
+}
+
+/// The commit-date queue, which every walk can fall back to.
+///
+/// Loads its own commit-graph rather than borrowing one: `gix_commitgraph::Graph`
+/// is not `Clone`, and this is either the only walk built or the one built after
+/// the topo builder consumed the first graph. Opening it is an mmap, not a read.
+/// The filter is passed in for the same reason in reverse — building one reads
+/// the shallow boundary, and the caller has already done that.
+fn new_commit_time_walk(
+    repo: &gix::ThreadSafeRepository,
+    tips: &[gix::ObjectId],
+    parents: gix::traverse::commit::Parents,
+    filter: super::LogPagedWalkFilter,
+) -> Result<super::LogPagedWalk> {
+    let commit_graph = repo
+        .to_thread_local()
+        .commit_graph_if_enabled()
+        .ok()
+        .flatten();
+    Ok(super::LogPagedWalk::CommitTime(
+        gix::traverse::commit::Simple::filtered(
+            tips.iter().copied(),
+            log_paged_walk_handle(repo),
+            filter,
+        )
+        .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
+            CommitTimeOrder::NewestFirst,
+        ))
+        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?
+        // Set after the sorting, the way `rev_walk` does: first-parent mode
+        // walks the chain in order rather than by date, and asking for it
+        // swaps the queue.
+        .parents(parents)
+        .commit_graph(commit_graph),
+    ))
 }
 
 /// A resumable walk of `mode` seeded from `tips`.
@@ -638,30 +748,75 @@ fn new_log_paged_walk(
     // Without the commit-graph the traversal decodes every commit object just to
     // read its parents and date, and the page builder then decodes the same
     // objects again — two inflates per commit across the whole history on a
-    // filtered walk. `repo.rev_walk(..)` wires the graph up by default; this
-    // walk is built from `Simple` directly, so it has to ask for it.
-    let commit_graph = repo
-        .to_thread_local()
-        .commit_graph_if_enabled()
-        .ok()
-        .flatten();
-    let walk = gix::traverse::commit::Simple::filtered(
-        tips,
-        log_paged_walk_handle(repo),
-        log_paged_walk_filter(repo)?,
-    )
-    .sorting(gix::traverse::commit::simple::Sorting::ByCommitTime(
-        CommitTimeOrder::NewestFirst,
-    ))
-    .map_err(|e| Error::new(ErrorKind::Backend(format!("gix walk: {e}"))))?
-    // Set after the sorting, the way `rev_walk` does: first-parent mode walks the
-    // chain in order rather than by date, and asking for it swaps the queue.
-    .parents(if mode == HistoryMode::FirstParent {
+    // filtered walk. `repo.rev_walk(..)` wires the graph up by default; these
+    // walks are built from the traversals directly, so they have to ask for it.
+    let parents = if mode == HistoryMode::FirstParent {
         gix::traverse::commit::Parents::First
     } else {
         gix::traverse::commit::Parents::All
-    })
-    .commit_graph(commit_graph);
+    };
+    // Collected because the commit-date queue is also the fallback below, and a
+    // fallback cannot re-consume an iterator the topo builder already drained.
+    let tips: Vec<gix::ObjectId> = tips.into_iter().collect();
+    let (filter, is_shallow) = log_paged_walk_filter(repo)?;
+
+    // Two walks stay on the commit-date queue whatever the setting says, and
+    // neither is a performance judgement — both are about the rows coming out
+    // wrong, or not at all, the other way.
+    //
+    // First-parent mode has nothing to gain: it is seeded from one tip and
+    // follows one parent per step, so only ever one commit is queued and the
+    // rows come out in chain order either way — `Simple` does not even sort it,
+    // `Parents::First` routes it to the breadth-first queue. It would lose
+    // something, though: `Simple` reports just the followed parent in
+    // `Info::parent_ids` while the topo walk reports every parent, and that list
+    // is what becomes `Commit::parent_ids`. Merges would start drawing as merges
+    // in a view whose whole point is that the merged-in branch is not shown.
+    //
+    // A shallow boundary records parents that were never cloned. `Simple` asks
+    // its filter before following one, which is what `log_paged_walk_filter`
+    // exists for; the topo walk resolves parents in its in-degree pass, before
+    // any predicate can drop them, and fails the whole walk on the first one it
+    // cannot find. Shallow repositories therefore keep the plain commit-date
+    // queue — worse ordering under date skew, but a log that loads.
+    let order = match log_row_order() {
+        LogRowOrder::DateOrder if mode == HistoryMode::FirstParent || is_shallow => {
+            LogRowOrder::CommitTime
+        }
+        order => order,
+    };
+
+    let walk = match order {
+        LogRowOrder::CommitTime => new_commit_time_walk(repo, &tips, parents, filter)?,
+        LogRowOrder::DateOrder => {
+            let commit_graph = repo
+                .to_thread_local()
+                .commit_graph_if_enabled()
+                .ok()
+                .flatten();
+            match gix::traverse::commit::topo::Builder::new(log_paged_walk_handle(repo))
+                .with_predicate(filter)
+                .with_tips(tips.iter().copied())
+                .sorting(gix::traverse::commit::topo::Sorting::DateOrder)
+                .parents(parents)
+                .with_commit_graph(commit_graph)
+                .build()
+            {
+                Ok(walk) => super::LogPagedWalk::DateOrder(walk),
+                // The in-degree pass resolves the whole reachable region before
+                // it will yield a first row, so one unreachable ancestor —
+                // an expired stash reflog entry whose commit was gc'd, a
+                // half-fetched pack — fails a page that would never have
+                // touched it. The commit-date queue only fails if the walk
+                // actually arrives there, so a damaged history still renders
+                // the rows above the damage.
+                Err(_) => {
+                    let (filter, _) = log_paged_walk_filter(repo)?;
+                    new_commit_time_walk(repo, &tips, parents, filter)?
+                }
+            }
+        }
+    };
     Ok(super::LogPagedWalkState {
         pending: std::collections::VecDeque::new(),
         walk,
@@ -747,11 +902,6 @@ pub(super) struct ChunkEmitter<'a> {
 }
 
 const CHUNK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120);
-/// How often the clock is consulted. Reading it per commit would cost more than
-/// the throttling saves on a million-commit walk; a thousand commits is well
-/// under a millisecond of work, far below the emit interval. Kept equal to
-/// [`DECODE_BATCH`] so a batched caller consults the clock once per batch.
-const CHUNK_CLOCK_STRIDE: u64 = DECODE_BATCH as u64;
 
 impl<'a> ChunkEmitter<'a> {
     pub(super) fn new(on_chunk: &'a mut dyn FnMut(LogChunk)) -> Self {
@@ -766,15 +916,16 @@ impl<'a> ChunkEmitter<'a> {
     /// interval has elapsed — including when nothing new matched, so a filter
     /// that is finding nothing still shows that it is working.
     ///
-    /// Callers that count one commit at a time only reach the clock once per
-    /// stride; a batched caller passes a whole batch, which is the stride, so
-    /// its quotient always moves and every batch consults the clock.
+    /// Called once per decode batch, so the clock is read once per batch: a
+    /// `Instant::now()` is tens of nanoseconds against the microseconds a batch
+    /// costs to decode. There used to be a stride here that only let every
+    /// `DECODE_BATCH`-th commit reach the clock, on the theory that a caller
+    /// might count one commit at a time. None does, and once a page capped its
+    /// batches at what it could still use, the stride swallowed whole batches
+    /// and progress stopped being reported at all.
     fn visited(&mut self, count: u64, commits: &[Commit]) {
-        let before = self.scanned;
         self.scanned += count;
-        if before / CHUNK_CLOCK_STRIDE == self.scanned / CHUNK_CLOCK_STRIDE
-            || std::time::Instant::now() < self.next_emit_at
-        {
+        if std::time::Instant::now() < self.next_emit_at {
             return;
         }
         self.next_emit_at = std::time::Instant::now() + CHUNK_INTERVAL;
@@ -798,18 +949,25 @@ fn mode_includes(mode: HistoryMode, parent_count: usize) -> bool {
     }
 }
 
-/// Commits handed to one round of decoding.
+/// Commits handed to one round of decoding, and the ceiling on a gather.
+/// An unfiltered page caps its gather at what it can still use, so for any page
+/// smaller than this the cap binds first and this bounds only the
+/// author-filtered walks, whose hit rate cannot be predicted.
 ///
 /// A page that fills mid-batch parks the rest of that batch in
 /// [`super::LogPagedWalkState::pending`], and the walk cache holds it until the
-/// walk is resumed or evicted — up to `LOG_PAGED_WALK_CACHE_LIMIT` walks at 72
-/// bytes an entry, so the batch size is what bounds that. The rounds can be this
-/// small because [`DecodeWorkers`] outlive them: the per-round cost is a thread
-/// spawn and join, not a repository handle and fresh inflate buffers.
+/// walk is resumed or evicted, so the batch size is what bounds that part of a
+/// parked walk. It is no longer the part that matters: a parked *date-order*
+/// walk also holds the in-degree bookkeeping for everything it explored, which
+/// is ~3.3MB per 50k commits of history against the ~2048 `Info`s here — see
+/// [`super::LOG_PAGED_TOPO_WALK_CACHE_LIMIT`], which is what bounds that.
 ///
-/// Measured on the 100k-commit rare-author benchmark: 8192 costs ~472ms and
-/// retains up to ~19MB, 2048 costs ~481ms and retains up to ~4.7MB, 1024 costs
-/// ~491ms. 2% for a quarter of the worst-case retention is the trade taken here.
+/// The rounds can be this small because [`DecodeWorkers`] outlive them: the
+/// per-round cost is a thread spawn and join, not a repository handle and fresh
+/// inflate buffers. Measured on the 100k-commit rare-author benchmark: 8192
+/// costs ~472ms and retains up to ~19MB, 2048 costs ~481ms and retains up to
+/// ~4.7MB, 1024 costs ~491ms. 2% for a quarter of the worst-case retention is
+/// the trade taken here.
 const DECODE_BATCH: usize = 2_048;
 /// Commit-decode threads in flight across the whole process. Object inflation is
 /// what a filtered walk spends its time on and it parallelizes cleanly, but the
@@ -818,7 +976,18 @@ const DECODE_BATCH: usize = 2_048;
 const DECODE_THREADS_MAX: usize = 8;
 /// Below this a batch decodes on the calling thread alone — the spawn and join
 /// round trip costs more than it saves.
-const DECODE_PARALLEL_MIN: usize = 256;
+///
+/// It has to sit under the batch an ordinary page asks for, or the page decodes
+/// on one thread: with the gather capped at what the page can use, a 200-row
+/// page hands over 200 commits and not the 2048 of a full [`DECODE_BATCH`].
+/// Measured on a 50k-commit repository with a commit-graph, nine pages after the
+/// first, best of seven: at 200 rows parallel decoding takes 4.1ms against 6.1ms
+/// on one thread, at 100 rows 3.2ms against 3.6ms, and at 64 rows it loses,
+/// 2.9ms against 2.6ms. The crossover is between 64 and 100, so the threshold
+/// goes just under the smaller of the two. No caller asks for a page that small
+/// anyway — `DEFAULT_LOG_PAGE_SIZE` is 200 — so this only decides what happens
+/// if one ever does.
+const DECODE_PARALLEL_MIN: usize = 96;
 static DECODE_THREADS_IN_USE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -980,11 +1149,40 @@ fn log_page_from_paged_walk_state(
     let mut walk_done = false;
 
     while !walk_done {
+        // Decoding is the expensive half, so never gather more than the page can
+        // use. One past the limit is the exception: that commit is what proves
+        // there is a next page, and it is gathered but *not* decoded — it goes
+        // back to `pending` as the raw `Info` it arrived as, and the next page
+        // decodes it once.
+        //
+        // Two different sizes have been cut away here and they are worth very
+        // different amounts. Gathering a whole [`DECODE_BATCH`] of 2048 for a
+        // 200-row page and throwing 1848 away was reported to cost two thirds of
+        // the wall time on chromium. Trimming the remaining slack — a floor of
+        // 256 down to the 201 a page actually reads — is a fifth less decoding
+        // for the same rows and *no measurable time at all*: on a 50k-commit
+        // repository with a commit-graph, nine pages after the first come to
+        // 4.0-4.7ms either way, where repeated runs of one binary spread by ~6%
+        // on their own. It is kept for the work it does not do, not for a speed
+        // up it does not deliver.
+        //
+        // What the trim must not do is drop the batch below
+        // [`DECODE_PARALLEL_MIN`]: decoding those 200 rows on one thread costs
+        // about 30%, far more than the trim saves.
+        //
+        // An author filter breaks the arithmetic — the hit rate is unknown, and
+        // most of a batch can be filtered out — so those walks keep the full
+        // batch and amortize the round over it.
+        let batch_cap = match author {
+            Some(_) => DECODE_BATCH,
+            None => DECODE_BATCH.min(limit.saturating_sub(commits.len()).saturating_add(1)),
+        };
+
         // Gathering ids is the cheap half — with a commit-graph it touches no
         // objects at all — so the gate and the mode predicate run here, before
         // anything is handed to the decoders.
         batch.clear();
-        while batch.len() < DECODE_BATCH {
+        while batch.len() < batch_cap {
             let Some(info) = walk_state.pending.pop_front() else {
                 // Checked per commit walked, not per batch: a mode predicate or
                 // a cursor gate that rejects everything can traverse an entire
@@ -1022,8 +1220,20 @@ fn log_page_from_paged_walk_state(
             break;
         }
 
+        // The commit past the limit proves a next page exists; it is not part
+        // of this one, so it is put back undecoded rather than decoded and
+        // dropped. An author-filtered batch has no such commit — which of it
+        // matches is only known after decoding — so it decodes whole.
+        let decode_len = match author {
+            Some(_) => batch.len(),
+            None => batch.len().min(limit.saturating_sub(commits.len())),
+        };
+        let scanned = decode_len as u64;
+        for info in batch.drain(decode_len..).rev() {
+            walk_state.pending.push_front(info);
+        }
+
         workers.decode(&batch, author, &mut decoded)?;
-        let scanned = batch.len() as u64;
 
         for (index, commit) in decoded.drain(..).enumerate() {
             let Some(commit) = commit else {
@@ -1049,22 +1259,31 @@ fn log_page_from_paged_walk_state(
         if let Some(chunks) = chunks.as_deref_mut() {
             chunks.visited(scanned, &commits);
         }
+
+        if commits.len() >= limit {
+            // Whatever the gather reached past the limit is parked, so pending
+            // holding anything is exactly "there is a next page". An empty one
+            // means the gather ran the walk out.
+            return Ok((commits, !walk_state.pending.is_empty()));
+        }
     }
 
     Ok((commits, false))
 }
 
 impl GixRepo {
-    fn log_head_page_cache_key(
+    fn log_page_cache_key(
+        &self,
         mode: HistoryMode,
-        head_oid: Option<gix::ObjectId>,
+        seed: super::LogPageSeed,
         limit: usize,
         cursor: Option<&LogCursor>,
         author: Option<&AuthorFilter>,
-    ) -> super::LogHeadPageCacheKey {
-        super::LogHeadPageCacheKey {
+    ) -> super::LogPageCacheKey {
+        super::LogPageCacheKey {
             mode,
-            head_oid,
+            seed,
+            shallow: self.shallow_stamp(),
             limit,
             last_seen: cursor.map(|cursor| cursor.last_seen.clone()),
             resume_from: cursor.and_then(|cursor| cursor.resume_from.clone()),
@@ -1072,30 +1291,80 @@ impl GixRepo {
         }
     }
 
-    fn cached_log_head_page(&self, key: &super::LogHeadPageCacheKey) -> Option<LogPage> {
-        let mut cache = self
-            .log_head_page_cache
-            .lock()
-            .expect("log head page cache");
+    /// Stamp of the shallow boundary file, for [`Self::log_page_cache_key`].
+    /// Read through gix so a `core.shallowFile` override is honoured.
+    fn shallow_stamp(&self) -> super::RepoFileStamp {
+        super::repo_file_stamp(&self._repo.to_thread_local().shallow_file())
+    }
+
+    /// Serve a page from the cache, keeping its scroll lineage alive with it.
+    ///
+    /// A page hands out a resume token for a walk that the *next* page consumes,
+    /// so once page 2 has been read once, page 1's cached cursor names a walk
+    /// that no longer exists. That costs nothing while page 2 is cached too —
+    /// it answers from here. It costs a great deal if page 2 has been evicted
+    /// while page 1 stayed fresh, which is exactly what a plain LRU does to a
+    /// log that is refreshed at the top and scrolled rarely: the request then
+    /// misses both caches and rebuilds the walk from the tips, which for date
+    /// order means the whole in-degree pass again. Measured on a 50k-commit
+    /// repository: 1.97ms with the token live against 21.5ms rebuilt with a
+    /// commit-graph, and 3.11ms against 426ms without one.
+    ///
+    /// So a hit touches the successor as well — the entry whose cursor starts
+    /// where this page ends — and a lineage ages as one.
+    fn cached_log_page(&self, key: &super::LogPageCacheKey) -> Option<LogPage> {
+        let mut cache = self.log_page_cache.lock().expect("log page cache");
         let index = cache.iter().position(|entry| &entry.key == key)?;
         let entry = cache.remove(index);
         let page = entry.page.clone();
+        let successor_starts_at = page.commits.last().map(|commit| commit.id.clone());
         cache.push(entry);
+
+        if let Some(last_seen) = successor_starts_at
+            && let Some(successor) = cache.iter().position(|entry| {
+                entry.key.last_seen.as_ref() == Some(&last_seen)
+                    && entry.key.mode == key.mode
+                    && entry.key.seed == key.seed
+                    && entry.key.author == key.author
+            })
+        {
+            let successor = cache.remove(successor);
+            cache.push(successor);
+        }
         Some(page)
     }
 
-    fn store_log_head_page(&self, key: super::LogHeadPageCacheKey, page: &LogPage) {
-        let mut cache = self
-            .log_head_page_cache
-            .lock()
-            .expect("log head page cache");
+    /// Cache `page` under `key` and hand it back — unless the request it was
+    /// built for has been superseded in the meantime, in which case the caller
+    /// hears that instead.
+    ///
+    /// Both page paths finish here so neither can quietly drop the re-check: a
+    /// load cancelled after the last batch was decoded but before the call
+    /// returned would otherwise hand a completed page to a caller that has
+    /// already moved on. The page is still cached first — it is correct work,
+    /// and the next request for it should not have to be walked again.
+    fn finish_log_page(
+        &self,
+        key: super::LogPageCacheKey,
+        page: LogPage,
+        cancellation: Option<&CancellationToken>,
+    ) -> Result<LogPage> {
+        self.store_log_page(key, &page);
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
+        Ok(page)
+    }
+
+    fn store_log_page(&self, key: super::LogPageCacheKey, page: &LogPage) {
+        let mut cache = self.log_page_cache.lock().expect("log page cache");
         if let Some(index) = cache.iter().position(|entry| entry.key == key) {
             cache.remove(index);
         }
-        if cache.len() >= super::LOG_HEAD_PAGE_CACHE_LIMIT {
+        if cache.len() >= super::LOG_PAGE_CACHE_LIMIT {
             cache.remove(0);
         }
-        cache.push(super::LogHeadPageCacheEntry {
+        cache.push(super::LogPageCacheEntry {
             key,
             page: page.clone(),
         });
@@ -1179,6 +1448,27 @@ impl GixRepo {
         cache.next_id = cache.next_id.wrapping_add(1);
         if cache.entries.len() >= super::LOG_PAGED_WALK_CACHE_LIMIT {
             cache.entries.remove(0);
+        }
+        // Date-order walks are parked under a tighter bound of their own: they
+        // retain the in-degree bookkeeping for everything they explored, which
+        // grows with the history and not with the page.
+        if state.walk.is_date_order() {
+            while cache
+                .entries
+                .iter()
+                .filter(|entry| entry.state.walk.is_date_order())
+                .count()
+                >= super::LOG_PAGED_TOPO_WALK_CACHE_LIMIT
+            {
+                let Some(oldest) = cache
+                    .entries
+                    .iter()
+                    .position(|entry| entry.state.walk.is_date_order())
+                else {
+                    break;
+                };
+                cache.entries.remove(oldest);
+            }
         }
         cache.entries.push(super::LogPagedWalkCacheEntry {
             token: Arc::clone(&token),
@@ -1538,8 +1828,14 @@ impl GixRepo {
 
         let repo = self._repo.to_thread_local();
         let head_id = gix_head_id_or_none(&repo)?;
-        let cache_key = Self::log_head_page_cache_key(mode, head_id, limit, cursor, author);
-        if let Some(page) = self.cached_log_head_page(&cache_key) {
+        let cache_key = self.log_page_cache_key(
+            mode,
+            super::LogPageSeed::Head(head_id),
+            limit,
+            cursor,
+            author,
+        );
+        if let Some(page) = self.cached_log_page(&cache_key) {
             return Ok(page);
         }
 
@@ -1556,11 +1852,7 @@ impl GixRepo {
             None => empty_log_page(),
         };
 
-        self.store_log_head_page(cache_key, &page);
-        if let Some(cancellation) = cancellation {
-            cancellation.check_cancelled()?;
-        }
-        Ok(page)
+        self.finish_log_page(cache_key, page, cancellation)
     }
 
     pub(super) fn log_all_branches_page_impl(
@@ -1580,34 +1872,30 @@ impl GixRepo {
         self.log_all_branches_page_impl_inner(limit, cursor, Some(cancellation), None, None)
     }
 
-    fn log_all_branches_page_impl_inner(
+    /// Every tip `git log --all` would walk, deduplicated and sorted.
+    ///
+    /// Sorted because the tips identify the walk in the walk cache, so they have
+    /// to come out the same way on every page: ref enumeration order is not
+    /// guaranteed, and a reshuffled list would reject a perfectly good resume
+    /// token. It costs the walk nothing — every tip is just a seed.
+    fn all_branches_tips(
         &self,
-        limit: usize,
-        cursor: Option<&LogCursor>,
         cancellation: Option<&CancellationToken>,
-        author: Option<&AuthorFilter>,
-        chunks: Option<&mut ChunkEmitter<'_>>,
-    ) -> Result<LogPage> {
-        if let Some(cancellation) = cancellation {
-            cancellation.check_cancelled()?;
-        }
-        if limit == 0 {
-            return Ok(empty_log_page());
-        }
-
+    ) -> Result<Arc<[gix::ObjectId]>> {
         let repo = self._repo.to_thread_local();
-        let head_id = gix_head_id_or_none(&repo)?;
-
         let refs = repo
             .references()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
 
-        // Emulate `git log --all`: include all refs under `refs/`, not just `refs/heads` and
-        // `refs/remotes`. Some repositories (e.g. Chromium) use additional namespaces like
-        // `refs/branch-heads/*`.
+        // Every ref under `refs/`, not just `refs/heads` and `refs/remotes`: some
+        // repositories (e.g. Chromium) keep branches in namespaces of their own,
+        // like `refs/branch-heads/*`. Tags are the one namespace left out, and
+        // walking past them is not free — on a repository with 39k tags this
+        // iteration is ~10ms — but `prefixed()` would have to name the
+        // namespaces to keep, and missing one drops branches from the graph.
         let mut tips = Vec::new();
         let mut seen = FxHashSet::default();
-        if let Some(head_id) = head_id {
+        if let Some(head_id) = gix_head_id_or_none(&repo)? {
             tips.push(head_id);
             seen.insert(head_id);
         }
@@ -1635,31 +1923,80 @@ impl GixRepo {
             }
         }
 
-        // `git log --all` includes only `refs/stash` tip, but users expect history scope=all
-        // to also surface older stash entries (reflog-backed). Add stash reflog commits as extra
-        // walk tips so stash rows can be rendered consistently in history graph.
+        // `git log --all` includes only the `refs/stash` tip, but users expect
+        // scope=all to surface older stash entries (reflog-backed) as well, so
+        // those become tips too and their rows render like any other.
         for id in stash_reflog_tips(&repo, 50).unwrap_or_default() {
             if seen.insert(id) {
                 tips.push(id);
             }
         }
 
-        // The tips identify the walk in the walk cache, so they have to come out
-        // the same way each page: ref enumeration order is not guaranteed, and a
-        // reshuffled list would reject a perfectly good resume token. Sorting
-        // costs the walk nothing — every tip is just a seed, and the traversal
-        // orders what it yields by commit time regardless.
         tips.sort();
 
-        self.log_paged_page(
+        // Hand back the same `Arc` as last time while the refs still produce the
+        // same tips. Every page request rebuilds this list, and every cached
+        // page holds the seed it was walked from, so without this a cacheful of
+        // pages holds a cacheful of identical tip vectors — on a fork with tens
+        // of thousands of `refs/pull/*` heads, tens of megabytes of them.
+        let mut cached = self
+            .all_branches_tips
+            .lock()
+            .expect("all branches tips cache");
+        match cached.as_ref() {
+            Some(previous) if previous.as_ref() == tips.as_slice() => Ok(Arc::clone(previous)),
+            _ => {
+                let tips: Arc<[gix::ObjectId]> = Arc::from(tips);
+                *cached = Some(Arc::clone(&tips));
+                Ok(tips)
+            }
+        }
+    }
+
+    fn log_all_branches_page_impl_inner(
+        &self,
+        limit: usize,
+        cursor: Option<&LogCursor>,
+        cancellation: Option<&CancellationToken>,
+        author: Option<&AuthorFilter>,
+        chunks: Option<&mut ChunkEmitter<'_>>,
+    ) -> Result<LogPage> {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
+        if limit == 0 {
+            return Ok(empty_log_page());
+        }
+
+        let tips = self.all_branches_tips(cancellation)?;
+
+        // Every primary refresh asks for this page again, and most of them are
+        // triggered by something that left the refs alone — a file edit, an
+        // index write. Re-walking for those is the difference between a redraw
+        // and a second of traversal on a large repository, so the page is cached
+        // against the tips it was walked from, exactly as the head modes cache
+        // theirs against HEAD.
+        let cache_key = self.log_page_cache_key(
             HistoryMode::AllBranches,
-            Arc::from(tips),
+            super::LogPageSeed::Tips(Arc::clone(&tips)),
+            limit,
+            cursor,
+            author,
+        );
+        if let Some(page) = self.cached_log_page(&cache_key) {
+            return Ok(page);
+        }
+
+        let page = self.log_paged_page(
+            HistoryMode::AllBranches,
+            tips,
             limit,
             cursor,
             cancellation,
             author,
             chunks,
-        )
+        )?;
+        self.finish_log_page(cache_key, page, cancellation)
     }
 
     pub(super) fn log_file_page_impl(
@@ -2538,5 +2875,160 @@ mod tests {
         let repo = open_repo(workdir);
         let entries = repo.reflog_head_impl(0).expect("reflog_head_impl");
         assert!(entries.is_empty());
+    }
+
+    /// Both page paths finish through `finish_log_page`, so covering it covers
+    /// the all-branches path too — the one that used to return a completed page
+    /// for a request that had already been superseded.
+    #[test]
+    fn finishing_a_page_reports_a_request_that_was_superseded_while_it_was_built() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        commit_file(workdir, "a.txt", "one\n", "first");
+        let repo = open_repo(workdir);
+
+        let key = repo.log_page_cache_key(
+            HistoryMode::AllBranches,
+            super::super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
+            10,
+            None,
+            None,
+        );
+        let page = empty_log_page();
+
+        let live = CancellationToken::new();
+        repo.finish_log_page(key.clone(), page.clone(), Some(&live))
+            .expect("a live request gets its page");
+
+        let cancelled = CancellationToken::new();
+        cancelled.cancel();
+        let error = repo
+            .finish_log_page(key.clone(), page, Some(&cancelled))
+            .expect_err("a superseded request must not be handed a page");
+        assert!(
+            matches!(error.kind(), ErrorKind::Cancelled),
+            "expected Cancelled, got {:?}",
+            error.kind()
+        );
+
+        // The page is cached either way: it is correct work, and the next
+        // request for it should not have to walk again.
+        assert!(
+            repo.cached_log_page(&key).is_some(),
+            "a cancelled request still leaves the page it finished in the cache"
+        );
+    }
+
+    /// A page and the page after it are one scroll lineage: page 1's cursor
+    /// names a walk that page 2 consumes, so page 1 outliving page 2 in the
+    /// cache is what turns an ordinary scroll-after-refresh into a full rebuild.
+    /// Refreshing the top must therefore keep the page below it alive too.
+    #[test]
+    fn a_cached_page_keeps_the_page_that_follows_it_from_being_evicted() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        for index in 0..12 {
+            commit_file(
+                workdir,
+                "a.txt",
+                &format!("v{index}\n"),
+                &format!("c{index}"),
+            );
+        }
+        let repo = open_repo(workdir);
+
+        let mode = HistoryMode::FullReachable;
+        let first = repo
+            .log_history_mode_page_impl(mode, 4, None)
+            .expect("first page");
+        let cursor = first.next_cursor.clone().expect("a second page exists");
+        repo.log_history_mode_page_impl(mode, 4, Some(&cursor))
+            .expect("second page");
+
+        let head = gix_head_id_or_none(&repo._repo.to_thread_local()).expect("head");
+        let second_key = repo.log_page_cache_key(
+            mode,
+            super::super::LogPageSeed::Head(head),
+            4,
+            Some(&cursor),
+            None,
+        );
+
+        // Enough distinct keys to turn the whole cache over, with the top of the
+        // log re-read in between the way a refresh re-reads it.
+        for round in 0..super::super::LOG_PAGE_CACHE_LIMIT + 4 {
+            repo.log_history_mode_page_impl(mode, 5 + round, None)
+                .expect("filler page");
+            repo.log_history_mode_page_impl(mode, 4, None)
+                .expect("refresh of the first page");
+        }
+
+        assert!(
+            repo.cached_log_page(&second_key).is_some(),
+            "the page below the one being refreshed was evicted, so scrolling \
+             down rebuilds the walk instead of resuming it"
+        );
+    }
+
+    /// The env override is the only way out of the date-order bill, so both of
+    /// its answers have to be covered — which is why the parsing is a pure
+    /// function and the `OnceLock` wraps it rather than containing it.
+    #[test]
+    fn log_row_order_reads_every_spelling_of_off() {
+        for raw in ["0", "false", "off", "no", "OFF", " No ", "FALSE"] {
+            assert_eq!(
+                log_row_order_from_env(Some(raw)),
+                LogRowOrder::CommitTime,
+                "{raw:?} asks for the commit-date queue"
+            );
+        }
+    }
+
+    /// Unset, and anything that is not a spelling of off, is date order: the
+    /// rows being right is the default, and an unrecognised value must not
+    /// silently opt a user out of it.
+    #[test]
+    fn log_row_order_defaults_to_date_order() {
+        for raw in [
+            None,
+            Some(""),
+            Some("  "),
+            Some("1"),
+            Some("yes"),
+            Some("nope"),
+        ] {
+            assert_eq!(
+                log_row_order_from_env(raw),
+                LogRowOrder::DateOrder,
+                "{raw:?} must not turn date order off"
+            );
+        }
+    }
+
+    /// A page walk hands [`ChunkEmitter::visited`] one batch at a time, and a
+    /// batch is only as big as the page can still use — 200 rows, not the 2048
+    /// a full [`DECODE_BATCH`] holds. Progress has to keep flowing at that size:
+    /// the walks that need it most are the ones whose mode predicate rejects
+    /// nearly everything, and they are exactly the walks that spend seconds
+    /// gathering a single batch.
+    #[test]
+    fn chunk_emitter_reports_progress_for_the_smallest_batch_a_page_can_ask_for() {
+        let mut seen: Vec<u64> = Vec::new();
+        let mut on_chunk = |chunk: LogChunk| seen.push(chunk.scanned);
+        let mut emitter = ChunkEmitter::new(&mut on_chunk);
+
+        // Past the interval, so only the stride can hold a report back.
+        std::thread::sleep(CHUNK_INTERVAL + std::time::Duration::from_millis(20));
+        for _ in 0..3 {
+            emitter.visited(200, &[]);
+        }
+
+        assert!(
+            !seen.is_empty(),
+            "a batched caller must reach the clock: three 200-commit batches past \
+             the interval reported nothing"
+        );
     }
 }
