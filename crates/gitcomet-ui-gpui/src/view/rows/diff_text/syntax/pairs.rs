@@ -234,6 +234,7 @@ fn delimiter_node_for_click(node: tree_sitter::Node<'_>) -> tree_sitter::Node<'_
 pub(in crate::view) fn syntax_pair_in_tree(
     tree: &tree_sitter::Tree,
     offset: usize,
+    source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
 ) -> Option<SyntaxPair> {
     let root = tree.root_node();
     let limit = root.end_byte();
@@ -246,7 +247,8 @@ pub(in crate::view) fn syntax_pair_in_tree(
         }
         if let Some(node) = root.descendant_for_byte_range(probe, probe + 1)
             && is_delimiter_token(&node)
-            && let Some(pair) = partner_of_delimiter(delimiter_node_for_click(node))
+            && let Some(pair) =
+                partner_of_delimiter(delimiter_node_for_click(node), source_ranges_equal)
         {
             return Some(pair);
         }
@@ -258,11 +260,11 @@ pub(in crate::view) fn syntax_pair_in_tree(
     // anywhere in `<div class="x">` reaches the element's tag pair.
     let mut node = root.descendant_for_byte_range(offset.min(limit), offset.min(limit))?;
     loop {
-        if let Some(pair) = enclosing_pair_among_children(&node, offset) {
+        if let Some(pair) = enclosing_pair_among_children(&node, offset, source_ranges_equal) {
             return Some(pair);
         }
         if pair_role(&node).is_some()
-            && let Some(pair) = partner_of_delimiter(node)
+            && let Some(pair) = partner_of_delimiter(node, source_ranges_equal)
         {
             return Some(pair);
         }
@@ -275,7 +277,10 @@ pub(in crate::view) fn syntax_pair_in_tree(
 /// Nesting is counted rather than assuming one pair per parent: a node can hold
 /// several same-kind pairs side by side (`(a)(b)` as arguments), and a deeper
 /// pair lives under a deeper node, so counting direct children is exact.
-fn partner_of_delimiter(node: tree_sitter::Node<'_>) -> Option<SyntaxPair> {
+fn partner_of_delimiter(
+    node: tree_sitter::Node<'_>,
+    source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
+) -> Option<SyntaxPair> {
     let parent = node.parent()?;
     let role = pair_role(&node)?;
     let kind = node.kind();
@@ -309,7 +314,7 @@ fn partner_of_delimiter(node: tree_sitter::Node<'_>) -> Option<SyntaxPair> {
                 } else if child.kind() == close {
                     depth -= 1;
                     if depth == 0 {
-                        return Some(SyntaxPair::new(node.byte_range(), child.byte_range(), pair));
+                        return syntax_pair_for_nodes(node, *child, pair, source_ranges_equal);
                     }
                 }
             }
@@ -323,7 +328,7 @@ fn partner_of_delimiter(node: tree_sitter::Node<'_>) -> Option<SyntaxPair> {
                 } else if closes_open(child.kind(), kind, pair) {
                     depth -= 1;
                     if depth == 0 {
-                        return Some(SyntaxPair::new(child.byte_range(), node.byte_range(), pair));
+                        return syntax_pair_for_nodes(*child, node, pair, source_ranges_equal);
                     }
                 }
             }
@@ -337,6 +342,7 @@ fn partner_of_delimiter(node: tree_sitter::Node<'_>) -> Option<SyntaxPair> {
 fn enclosing_pair_among_children(
     node: &tree_sitter::Node<'_>,
     offset: usize,
+    source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
 ) -> Option<SyntaxPair> {
     let mut best: Option<SyntaxPair> = None;
     let mut consider = |candidate: SyntaxPair| {
@@ -400,13 +406,46 @@ fn enclosing_pair_among_children(
                 // ERROR node, or a grammar that flattens a malformed construct
                 // -- produced a `[ ... ]` pair spanning the `)`.
                 open_stack.truncate(position);
-                consider(SyntaxPair::new(open.byte_range(), child.byte_range(), pair));
+                if let Some(candidate) =
+                    syntax_pair_for_nodes(open, child, pair, source_ranges_equal)
+                {
+                    consider(candidate);
+                }
             }
             _ => {}
         }
     }
 
     best
+}
+
+/// Constructs a pair only when delimiters that carry semantic names agree.
+///
+/// Tree-sitter TSX deliberately recovers `<Foo></Bar>` as one `jsx_element`,
+/// with the ordinary opening and closing node kinds. Node kinds alone therefore
+/// cannot distinguish a real tag pair from a transient mismatch while the user
+/// is editing. JSX tag names are case-sensitive, so compare their source bytes
+/// exactly before accepting the parser's recovered shape.
+fn syntax_pair_for_nodes(
+    open: tree_sitter::Node<'_>,
+    close: tree_sitter::Node<'_>,
+    kind: SyntaxPairKind,
+    source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
+) -> Option<SyntaxPair> {
+    if kind == SyntaxPairKind::Tag && open.kind() == "jsx_opening_element" {
+        match (
+            open.child_by_field_name("name"),
+            close.child_by_field_name("name"),
+        ) {
+            (Some(open_name), Some(close_name))
+                if source_ranges_equal(open_name.byte_range(), close_name.byte_range()) => {}
+            // JSX fragments use the same delimiter node kinds but have no name
+            // on either side; `<>...</>` remains a valid pair.
+            (None, None) => {}
+            _ => return None,
+        }
+    }
+    Some(SyntaxPair::new(open.byte_range(), close.byte_range(), kind))
 }
 
 /// Whether `open` and `close` are the outermost bytes of `node`.

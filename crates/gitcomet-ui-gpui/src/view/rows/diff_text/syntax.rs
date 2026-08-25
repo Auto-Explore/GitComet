@@ -12797,6 +12797,137 @@ mod tests {
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
     }
 
+    /// Prepared token chunks outlive the small injection-tree LRU. Returning to
+    /// an early fence must rebuild its tree for pair lookup even though asking
+    /// for that line's already-cached tokens does no work.
+    #[test]
+    fn prepared_pair_lookup_rebuilds_an_evicted_injection_tree() {
+        reset_prepared_syntax_cache();
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = Vec::new();
+        let mut body_line_indices = Vec::new();
+        let mut bodies = Vec::new();
+        for ix in 0..=TS_INJECTION_CACHE_MAX_ENTRIES {
+            lines.push("```html".to_owned());
+            body_line_indices.push(lines.len());
+            let body = format!(r#"<div data-index="{ix}">value</div>"#);
+            lines.push(body.clone());
+            bodies.push(body);
+            lines.push("```".to_owned());
+            lines.push(String::new());
+        }
+        let text = lines.join("\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Markdown, &text);
+
+        // Materialize every chunk so more distinct fence injections are parsed
+        // than the LRU can retain. The first region is then necessarily among
+        // the least-recently-used half evicted on overflow.
+        for &line_ix in &body_line_indices {
+            let _ = syntax_tokens_for_prepared_document_line(document, line_ix)
+                .expect("every fenced body line should have prepared tokens");
+        }
+        let first_body_offset = text.find(&bodies[0]).expect("first fenced body");
+        assert!(
+            TS_INJECTION_CACHE.with(|cache| !cache.borrow().keys().any(|key| {
+                key.document_hash == document.cache_key.doc_hash
+                    && first_body_offset >= key.byte_start
+                    && first_body_offset < key.byte_end
+            })),
+            "the test must evict the first fence's injection tree before lookup"
+        );
+
+        let pair =
+            prepared_document_syntax_pair_at_display_offset(document, body_line_indices[0], 0)
+                .expect("pair lookup should rebuild the evicted HTML injection tree");
+        let first_body = &bodies[0];
+        assert_eq!(pair.kind, SyntaxPairKind::Tag);
+        assert_eq!(
+            pair.open[0].display_range,
+            0..first_body.find('>').expect("opening tag end") + 1
+        );
+        let close_start = first_body.rfind("</div>").expect("closing tag");
+        assert_eq!(
+            pair.close[0].display_range,
+            close_start..close_start + "</div>".len()
+        );
+        assert!(
+            TS_INJECTION_CACHE.with(|cache| cache.borrow().keys().any(|key| {
+                key.document_hash == document.cache_key.doc_hash
+                    && first_body_offset >= key.byte_start
+                    && first_body_offset < key.byte_end
+            })),
+            "the rebuilt injection should be retained for the next lookup"
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// The surviving cache entry at a click can be only the outer layer. Pair
+    /// lookup must still inspect it and recreate an evicted nested layer rather
+    /// than accepting the outer grammar's answer.
+    #[test]
+    fn prepared_pair_lookup_rebuilds_an_evicted_nested_injection_tree() {
+        reset_prepared_syntax_cache();
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = vec!["```html".to_owned()];
+        let mut script_line_indices = Vec::new();
+        let mut script_bodies = Vec::new();
+        for ix in 0..=TS_INJECTION_CACHE_MAX_ENTRIES {
+            lines.push("<script>".to_owned());
+            script_line_indices.push(lines.len());
+            let body = format!("const value{ix} = ({ix});");
+            lines.push(body.clone());
+            script_bodies.push(body);
+            lines.push("</script>".to_owned());
+        }
+        lines.push("```".to_owned());
+        let text = lines.join("\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Markdown, &text);
+        for &line_ix in &script_line_indices {
+            let _ = syntax_tokens_for_prepared_document_line(document, line_ix)
+                .expect("every nested script line should have prepared tokens");
+        }
+
+        let first_body_offset = text
+            .find(&script_bodies[0])
+            .expect("first nested script body");
+        TS_INJECTION_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert!(
+                cache.keys().any(|key| {
+                    key.document_hash == document.cache_key.doc_hash
+                        && key.language == DiffSyntaxLanguage::Html
+                        && first_body_offset >= key.byte_start
+                        && first_body_offset < key.byte_end
+                }),
+                "the outer HTML injection must survive for this nested-cache regression"
+            );
+            assert!(
+                !cache.keys().any(|key| {
+                    key.document_hash == document.cache_key.doc_hash
+                        && key.language == DiffSyntaxLanguage::JavaScript
+                        && first_body_offset >= key.byte_start
+                        && first_body_offset < key.byte_end
+                }),
+                "the first nested JavaScript tree must be evicted before lookup"
+            );
+        });
+
+        let first_body = &script_bodies[0];
+        let open = first_body.find('(').expect("opening parenthesis");
+        let close = first_body.rfind(')').expect("closing parenthesis");
+        let pair =
+            prepared_document_syntax_pair_at_display_offset(document, script_line_indices[0], open)
+                .expect("pair lookup should rebuild the evicted nested JavaScript tree");
+        assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+        assert_eq!(pair.open[0].display_range, open..open + 1);
+        assert_eq!(pair.close[0].display_range, close..close + 1);
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
     #[test]
     fn injection_cache_lru_eviction_preserves_recent_entries() {
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());

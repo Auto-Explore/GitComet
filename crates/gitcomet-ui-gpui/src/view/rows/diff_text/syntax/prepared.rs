@@ -1847,8 +1847,16 @@ pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
     let offset =
         clicked.start + clicked_raw_offset_for_display_offset(clicked_line, display_offset)?;
 
+    let source_ranges_equal = |left: Range<usize>, right: Range<usize>| {
+        let bytes = text.as_bytes();
+        match (bytes.get(left), bytes.get(right)) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
+    };
+    ensure_injection_chain_cached_for_pair_lookup(&state, offset);
     let pair = injected_syntax_pair_at(text, state.source_hash, offset)
-        .or_else(|| syntax_pair_in_tree(&state.tree, offset))?;
+        .or_else(|| syntax_pair_in_tree(&state.tree, offset, &source_ranges_equal))?;
 
     let project = |range: &Range<usize>| -> Vec<PreparedSyntaxPairSpan> {
         // `partition_point` gives the count of starts at or before `range.start`,
@@ -2907,7 +2915,9 @@ pub(super) struct CachedInjection {
     /// had only the *host* tree -- so in an injected region there was no
     /// structure to pair against at all: clicking the `<` of `<html>` in a PHP
     /// file did nothing, because to PHP that whole span is one `text` node.
-    /// Parsed here rather than on the click so a click never pays for a parse.
+    /// Parsed during tokenization so the normal click path does not pay for a
+    /// parse. Pair lookup recreates it only when this entry was evicted while
+    /// the prepared document itself remained cached.
     ///
     /// Its offsets are injection-local: the injected text is parsed standalone,
     /// not with `included_ranges`, so document offsets need shifting by
@@ -4270,7 +4280,14 @@ fn injected_syntax_pair_at(text: &str, document_hash: u64, offset: usize) -> Opt
         }
         let (key, entry) = best?;
         let local = offset.checked_sub(key.byte_start)?;
-        let pair = syntax_pair_in_tree(&entry.tree, local)?;
+        let content = text.as_bytes().get(key.byte_start..key.byte_end)?;
+        let source_ranges_equal =
+            |left: Range<usize>, right: Range<usize>| match (content.get(left), content.get(right))
+            {
+                (Some(left), Some(right)) => left == right,
+                _ => false,
+            };
+        let pair = syntax_pair_in_tree(&entry.tree, local, &source_ranges_equal)?;
         let shift = |range: Range<usize>| {
             range.start.saturating_add(key.byte_start)..range.end.saturating_add(key.byte_start)
         };
@@ -4280,6 +4297,108 @@ fn injected_syntax_pair_at(text: &str, document_hash: u64, offset: usize) -> Opt
             kind: pair.kind,
         })
     })
+}
+
+/// Recreates the injection chain containing `offset` after one of its LRU
+/// entries was evicted while the prepared document and token chunks remained
+/// cached.
+///
+/// Pair lookup normally reads the already-tokenized injection tree. A document
+/// can outlive the 32-entry injection cache, though, and requesting an old token
+/// chunk does not run its injection query again. Re-run just the clicked line's
+/// query at each permitted layer, then feed the matching regions through the
+/// same cache construction path used by token painting. Walking through cached
+/// parents matters too: a parent can survive the LRU while its narrower child
+/// was evicted.
+fn ensure_injection_chain_cached_for_pair_lookup(state: &PreparedSyntaxTreeState, offset: usize) {
+    let Some(highlight) = tree_sitter_highlight_spec(state.language) else {
+        return;
+    };
+    let line_ix = line_ix_for_byte(state.line_starts.as_ref(), offset);
+    let matches = collect_treesitter_injection_matches_for_line_window_at(
+        &state.tree,
+        highlight,
+        state.text.as_bytes(),
+        state.line_starts.as_ref(),
+        line_ix,
+        line_ix.saturating_add(1),
+        state.source_hash,
+        0,
+    );
+    let Some(injection) = matches
+        .singles
+        .into_iter()
+        .filter(|injection| offset >= injection.byte_start && offset < injection.byte_end)
+        .min_by_key(|injection| injection.byte_end.saturating_sub(injection.byte_start))
+    else {
+        return;
+    };
+    // `ensure_injection_cached` is normally called inside the host token
+    // collector's depth guard. Pair lookup enters the equivalent guards itself
+    // so rebuilding a nested entry cannot parse deeper than the configured
+    // root-to-injection limit.
+    let Some(root_depth_guard) = InjectionDepthGuard::enter() else {
+        return;
+    };
+    let mut depth_guards = vec![root_depth_guard];
+    if !ensure_injection_cached(
+        state.text.as_bytes(),
+        state.line_starts.as_ref(),
+        injection,
+        0,
+    ) {
+        return;
+    }
+
+    let mut parent = injection;
+    for _ in 1..TS_MAX_INJECTION_DEPTH {
+        let Some((tree, line_starts)) = TS_INJECTION_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .get(&parent)
+                .map(|entry| (entry.tree.clone(), entry.injection_line_starts.clone()))
+        }) else {
+            break;
+        };
+        let Some(input) = state
+            .text
+            .as_bytes()
+            .get(parent.byte_start..parent.byte_end)
+        else {
+            break;
+        };
+        let Some(highlight) = tree_sitter_highlight_spec(parent.language) else {
+            break;
+        };
+        let local_offset = offset.saturating_sub(parent.byte_start);
+        let line_ix = line_ix_for_byte(&line_starts, local_offset);
+        let matches = collect_treesitter_injection_matches_for_line_window_at(
+            &tree,
+            highlight,
+            input,
+            &line_starts,
+            line_ix,
+            line_ix.saturating_add(1),
+            state.source_hash,
+            parent.byte_start,
+        );
+        let Some(child) = matches
+            .singles
+            .into_iter()
+            .filter(|child| offset >= child.byte_start && offset < child.byte_end)
+            .min_by_key(|child| child.byte_end.saturating_sub(child.byte_start))
+        else {
+            break;
+        };
+        let Some(child_depth_guard) = InjectionDepthGuard::enter() else {
+            break;
+        };
+        if !ensure_injection_cached(input, &line_starts, child, parent.byte_start) {
+            break;
+        }
+        depth_guards.push(child_depth_guard);
+        parent = child;
+    }
 }
 
 fn collect_injected_tokens_for_parent_line_window(

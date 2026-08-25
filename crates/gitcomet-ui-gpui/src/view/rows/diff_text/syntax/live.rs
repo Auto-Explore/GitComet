@@ -1043,6 +1043,9 @@ impl LiveSyntaxSnapshot {
     pub(in crate::view) fn syntax_pair_at(&self, offset: usize) -> Option<SyntaxPair> {
         let inner = self.0.as_ref();
         let offset = offset.min(inner.rope.len());
+        let source_ranges_equal = |left: Range<usize>, right: Range<usize>| {
+            inner.rope.text_for_range(left) == inner.rope.text_for_range(right)
+        };
         // Injected grammars first: a brace inside an interpolated region is the
         // inner grammar's. Layer trees are parsed with `included_ranges`, so
         // their node offsets are already document coordinates.
@@ -1062,12 +1065,12 @@ impl LiveSyntaxSnapshot {
                     }
                 })
                 .is_ok()
-                && let Some(pair) = syntax_pair_in_tree(&layer.tree, offset)
+                && let Some(pair) = syntax_pair_in_tree(&layer.tree, offset, &source_ranges_equal)
             {
                 return Some(pair);
             }
         }
-        syntax_pair_in_tree(&inner.tree, offset)
+        syntax_pair_in_tree(&inner.tree, offset, &source_ranges_equal)
     }
 }
 
@@ -1983,6 +1986,17 @@ mod tests {
             "jsx names them jsx_opening_element and jsx_closing_element"
         );
 
+        let tsx_fragment = "const a = <>text</>;\n";
+        assert_eq!(
+            pair_text_in(
+                DiffSyntaxLanguage::Tsx,
+                tsx_fragment,
+                tsx_fragment.find("text").expect("fragment child")
+            ),
+            Some(("<>", "</>")),
+            "nameless JSX fragments should remain pairable"
+        );
+
         let vue = "<template><p>hi</p></template>\n";
         assert_eq!(
             pair_text_in(DiffSyntaxLanguage::Vue, vue, vue.find("hi").expect("text")),
@@ -2003,7 +2017,7 @@ mod tests {
     /// A tag with no partner matches nothing rather than pairing with the wrong
     /// element. Both cases are decisions, not gaps.
     #[test]
-    fn syntax_pair_leaves_self_closing_and_unclosed_tags_unpaired() {
+    fn syntax_pair_leaves_invalid_or_self_closing_tags_unpaired() {
         let self_closing = "<br/>\n";
         assert_eq!(
             pair_text_in(
@@ -2035,6 +2049,19 @@ mod tests {
             ),
             None
         );
+
+        let jsx_mismatched = "const a = <Foo>text</Bar>;\n";
+        for needle in ["Foo", "text", "Bar"] {
+            assert_eq!(
+                pair_text_in(
+                    DiffSyntaxLanguage::Tsx,
+                    jsx_mismatched,
+                    jsx_mismatched.find(needle).expect("mismatched JSX part")
+                ),
+                None,
+                "mismatched JSX tags must not pair when clicking {needle:?}"
+            );
+        }
     }
 
     /// Quotes flanking a string's content pair with each other, in the two
