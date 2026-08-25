@@ -64,14 +64,59 @@ impl AllocMetrics {
     }
 }
 
+/// Point tree-sitter at mimalloc before `main`, in every binary that links this.
+///
+/// The ordering rule on [`install_mimalloc_allocator`] says the first switch has
+/// to precede tree-sitter's first allocation. A caller *can* satisfy that by
+/// installing from whatever lazily builds its parsers -- `gitcomet-ui-gpui` does
+/// -- but only for routes it controls. Test binaries are where that breaks down:
+/// a test that builds a `Query` straight off a `LANGUAGE` allocates through
+/// `ts_malloc` without passing any such funnel, and libtest runs it in parallel
+/// with tests that do, so a lazy install lands mid-flight and those blocks get
+/// freed by `mi_free`. With `MI_DEBUG` off that is not survivable: mimalloc's
+/// `mi_validate_ptr_page` compiles to `_mi_ptr_page(p)` and checks nothing, so a
+/// foreign pointer yields a garbage page and corrupts the heap in silence.
+///
+/// Running before `main` deletes the question rather than answering it -- there
+/// is no "before" left for an allocation to happen in. It also means the whole
+/// of a crate's test suite exercises the same allocator pairing production uses,
+/// so a mimalloc bump is covered by every test that parses anything instead of
+/// only by the ones in this crate.
+///
+/// Nothing here can allocate or fail: it stores four `mi_*` function pointers
+/// into tree-sitter's globals behind a `const`-constructed, uncontended mutex
+/// and never calls them, so mimalloc is not initialised at this point either.
+#[ctor::ctor(unsafe)]
+fn install_before_main() {
+    install_mimalloc_allocator();
+}
+
 /// Point tree-sitter's C at mimalloc, with no accounting.
 ///
-/// Call it before anything parses. It is idempotent, and safe to combine with
-/// [`install_tracking_allocator`] in either order -- both wrap the same `mi_*`
-/// functions, so a block allocated under one is freed correctly under the other.
-/// Tracking outranks this: once it is installed this call leaves it in place,
-/// so a benchmark that also runs the normal startup path keeps its counters
-/// instead of silently losing them to whichever installer happened to run last.
+/// Idempotent, and safe to combine with [`install_tracking_allocator`] in either
+/// order -- both wrap the same `mi_*` functions, so a block allocated under one
+/// is freed correctly under the other. Tracking outranks this: once it is
+/// installed this call leaves it in place, so a benchmark that also runs the
+/// normal startup path keeps its counters instead of silently losing them to
+/// whichever installer happened to run last.
+///
+/// # The one ordering rule
+///
+/// The *first* installer to run switches tree-sitter from libc to mimalloc, and
+/// a block allocated before that switch would later be freed through `mi_free`
+/// -- a foreign pointer, which corrupts the heap. Every later switch is
+/// mimalloc-to-mimalloc and harmless.
+///
+/// That rule is not left to callers to remember. [`install_before_main`] runs it
+/// from a `#[ctor]`, so in any binary linking this crate the switch happens
+/// while the process is still single-threaded and has executed no user code at
+/// all. `gitcomet-ui-gpui` additionally calls this from the lazy initialisers
+/// in front of its parsers -- the `TS_PARSER`/`TS_CURSOR` thread-locals and
+/// `init_highlight_spec` -- which is a backstop for the linker dropping an
+/// `.init_array` entry, not a second mechanism to keep in sync.
+///
+/// Do not replace either with a call in a `main`: that covers one entry point
+/// and silently leaves every other binary and every test on libc.
 pub fn install_mimalloc_allocator() {
     let mut installed = lock_installed();
     if *installed != Installed::None {
@@ -93,6 +138,11 @@ pub fn install_mimalloc_allocator() {
 /// The counters cost an atomic load per allocation, so this is for benchmarks;
 /// [`install_mimalloc_allocator`] is what a normal run wants. It upgrades the
 /// plain hooks if those are already in place, and nothing downgrades it back.
+///
+/// A benchmark reaches this long after startup, which is safe *because* it is an
+/// upgrade: the plain hooks are already in, so the blocks it inherits are
+/// mimalloc's. See [`install_mimalloc_allocator`] for why the libc-to-mimalloc
+/// switch it would otherwise be performing can no longer happen here.
 pub fn install_tracking_allocator() {
     let mut installed = lock_installed();
     if *installed == Installed::Tracking {
@@ -107,6 +157,15 @@ pub fn install_tracking_allocator() {
         );
     }
     *installed = Installed::Tracking;
+}
+
+/// Whether tree-sitter's allocator has been pointed away from libc yet.
+///
+/// Exists so a caller that depends on the switch having already happened can
+/// assert it instead of assuming it -- see the `#[ctor]` in `gitcomet-ui-gpui`,
+/// whose whole job is to make this true before the test harness starts.
+pub fn is_installed() -> bool {
+    *lock_installed() != Installed::None
 }
 
 /// Which hooks `ts_set_allocator` currently holds. `ts_set_allocator` is global
@@ -274,17 +333,17 @@ unsafe extern "C" fn tree_sitter_realloc(ptr: *mut c_void, size: usize) -> *mut 
         0
     };
     let result = unsafe { mi_realloc(ptr, size) };
-    if size > 0 && result.is_null() {
+    // mimalloc reallocates to a *zero-sized block* rather than freeing and
+    // returning NULL, so unlike glibc a null result always means failure and
+    // `ptr` has not been freed (`c_src/mimalloc/v3/src/alloc.c`, the comment on
+    // `_mi_theap_realloc_zero`). That makes the abort below the only null case
+    // to handle, and makes charging `size == 0` as a small live block correct:
+    // the block really is still allocated.
+    if result.is_null() {
         abort_alloc("reallocate", size);
     }
     if measured {
-        if result.is_null() {
-            if size == 0 && !ptr.is_null() {
-                COUNTERS.record_realloc(old_bytes, 0);
-            }
-        } else {
-            COUNTERS.record_realloc(old_bytes, measured_bytes(result, size));
-        }
+        COUNTERS.record_realloc(old_bytes, measured_bytes(result, size));
     }
     result
 }
@@ -312,6 +371,13 @@ fn measured_bytes(ptr: *mut c_void, fallback: usize) -> usize {
 /// One call for every platform: the libc equivalents (`malloc_usable_size`,
 /// `malloc_size`, `_msize`) would be the wrong question now, and would report
 /// nothing useful for a pointer mimalloc owns.
+///
+/// `mi_usable_size` is only defined for a pointer mimalloc owns -- it reads page
+/// metadata derived from the pointer's segment address, so a foreign block gives
+/// garbage rather than a wrong-but-safe number the way glibc's does. Every
+/// pointer that reaches here came from `mi_malloc`/`mi_calloc`/`mi_realloc`
+/// above, which holds because the allocator switch happens before tree-sitter's
+/// first allocation; see [`install_mimalloc_allocator`].
 unsafe fn usable_size(ptr: *mut c_void) -> usize {
     if ptr.is_null() {
         return 0;
@@ -362,8 +428,8 @@ mod tests {
     ///
     /// Each installer used to guard its own `Once`, which made the winner
     /// whichever ran last: a benchmark binary running the normal startup path,
-    /// or -- as CI hit -- the sibling test above installing the plain hooks from
-    /// another thread, would leave every measurement reading zero.
+    /// or the sibling test above installing the plain hooks from another thread,
+    /// would leave every measurement reading zero.
     #[test]
     fn plain_installer_does_not_downgrade_tracking() {
         install_tracking_allocator();

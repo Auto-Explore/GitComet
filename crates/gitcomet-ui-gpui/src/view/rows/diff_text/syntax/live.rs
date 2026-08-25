@@ -1546,6 +1546,7 @@ mod tests {
             line_starts.as_ref(),
             0,
             line_starts.len(),
+            treesitter_text_hash(text),
         );
         let mut prepared_by_byte = vec![None; text.len()];
         for (line_ix, tokens) in per_line.iter().enumerate() {

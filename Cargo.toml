@@ -44,6 +44,7 @@ exclude = [
   "vendor/tree-sitter-spirv",
   "vendor/tree-sitter-swift",
   "vendor/tree-sitter-typescript",
+  "vendor/tree-sitter-v",
   "vendor/tree-sitter-vue",
   "vendor/tree-sitter-wat",
 ]
@@ -71,6 +72,7 @@ gitcomet-core = { path = "crates/gitcomet-core" }
 gitcomet-git = { path = "crates/gitcomet-git" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
+gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 
 # External crates
@@ -78,6 +80,11 @@ alacritty_terminal = "0.26"
 anyhow = "1"
 clap = { version = "4.6.6", features = ["derive"] }
 criterion = "0.8.2"
+# Runs the tree-sitter allocator install before `main` in every binary that
+# links gitcomet-tree-sitter-alloc, tests included, so no process ever switches
+# allocators while tree-sitter is already holding blocks. Already in the graph
+# via gpui, so this adds no new compilation.
+ctor = "1.0.13"
 # Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
 # which ships no highlights query. This one does.
 dekobon-tree-sitter-groovy = "0.2.2"
@@ -98,6 +105,16 @@ mimalloc = "0.1.52"
 # calls still reach libc unless mimalloc is built to interpose the symbol, which
 # this is not. "extended" adds `mi_calloc`/`mi_usable_size` bindings and does not
 # change how the C library is compiled.
+#
+# Both crates must resolve to one native library or `mi_free` would be handed
+# pointers from a heap it does not own. They do, and cargo enforces it rather
+# than us: libmimalloc-sys declares `links = "mimalloc"`, so two versions of it
+# in one graph is a resolve error, not a silent second heap.
+#
+# Neither enables the `v2` feature, so this builds mimalloc **v3**. That was
+# already true of the Rust side via `mimalloc`; pointing tree-sitter here puts
+# its C on the same v3 heap rather than introducing a new one, which is the
+# point of the exercise.
 libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
@@ -241,7 +258,7 @@ tree-sitter-svelte-ng = "1.0.2"
 tree-sitter-swift = { path = "vendor/tree-sitter-swift" }
 tree-sitter-toml-ng = "0.7.0"
 tree-sitter-typescript = { path = "vendor/tree-sitter-typescript" }
-tree-sitter-v = "0.0.4"
+tree-sitter-v = { path = "vendor/tree-sitter-v" }
 tree-sitter-vue = { path = "vendor/tree-sitter-vue" }
 # Vendored: nothing on crates.io provides a WebAssembly text grammar.
 tree-sitter-wat = { path = "vendor/tree-sitter-wat" }

@@ -9,7 +9,8 @@ own `Cargo.toml` header. There are three reasons in play:
   0.26. Depending on `tree-sitter-language` instead drops the pin.
 - **No release, or a needed fix.** No crates.io release exists, or upstream's
   grammar has a bug GitComet patches (`tree-sitter-asm`'s `mnemonic` token,
-  `tree-sitter-ruby`'s `=begin` rule).
+  `tree-sitter-ruby`'s `=begin` rule), or its published build wiring is not
+  portable (`tree-sitter-v` hard-codes GNU object and archiver conventions).
 - **The small-state retune.** Fifteen grammars are upstream's own source,
   regenerated only to make the parse tables smaller. That is what the rest of
   this file is about.

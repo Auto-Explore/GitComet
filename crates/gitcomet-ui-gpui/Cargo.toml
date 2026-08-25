@@ -27,9 +27,9 @@ dekobon-tree-sitter-groovy = { workspace = true }
 fontdb = { workspace = true }
 futures = { workspace = true }
 gitcomet-core = { workspace = true }
-gitcomet-tree-sitter-alloc = { path = "../gitcomet-tree-sitter-alloc" }
 gitcomet-git-gix = { workspace = true, optional = true }
 gitcomet-state = { workspace = true }
+gitcomet-tree-sitter-alloc = { workspace = true }
 gpui = { workspace = true }
 gpui_platform = { workspace = true }
 image = { workspace = true }

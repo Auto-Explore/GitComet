@@ -1,7 +1,9 @@
 ; Protocol Buffers.
 ;
-; Authored here: `tree-sitter-proto` 0.4.0 ships a parser and node types but no
-; highlights query at all.
+; Authored here: `tree-sitter-proto` (0.5.0) ships a parser and node types but no
+; highlights query at all, so every construct below has to be named by hand --
+; including anything a grammar bump adds. 0.5.0 added three: the proto2 `group`
+; declaration and the edition-2023 `export`/`local` visibility modifiers.
 ;
 ; The grammar spells the scalar types (`int32`, `string`, `bytes`, ...) and the
 ; declaration words as *anonymous* tokens, so most of this is a literal list
@@ -74,6 +76,12 @@
   "reserved"
   "to"
   "max"
+  ; proto2's `group Foo = 1 { ... }`. Its name arrives as a `message_name`, so
+  ; the rule above already types it; only the keyword itself needs naming.
+  "group"
+  ; Edition 2023 visibility, written ahead of `message` / `enum`.
+  "export"
+  "local"
 ] @keyword
 
 ; Field labels.

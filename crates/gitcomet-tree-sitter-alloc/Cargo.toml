@@ -7,7 +7,15 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+# No `[lints] workspace = true` here, deliberately. The workspace sets
+# `unsafe_code = "forbid"`, and `forbid` cannot be relaxed by a crate-level
+# `allow` -- that is what separates it from `deny` -- so inheriting would make
+# this crate unbuildable. Its whole job is the `extern "C"` allocator hooks
+# tree-sitter calls, and `#[ctor]` expands to an `allow(unsafe_code)` of its own.
+# CI names this crate explicitly on the clippy line instead.
+
 [dependencies]
+ctor = { workspace = true }
 libmimalloc-sys = { workspace = true }
 tree-sitter = { workspace = true }
 

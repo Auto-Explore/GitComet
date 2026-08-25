@@ -179,11 +179,6 @@ impl LaunchFixture {
 }
 
 fn main() {
-    // Match the real binary: tree-sitter is C and reaches libc's allocator unless
-    // told otherwise, so without this a perf run measures a different allocator
-    // than production uses. See gitcomet-tree-sitter-alloc.
-    gitcomet_tree_sitter_alloc::install_mimalloc_allocator();
-
     match parse_cli_args(env::args().skip(1)) {
         Ok(args) => {
             let result = if args.child {

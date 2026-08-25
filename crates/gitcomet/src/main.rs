@@ -40,6 +40,12 @@ pub(crate) fn hex_encode(bytes: &[u8]) -> String {
 }
 use std::io::{self, Write};
 
+/// This covers Rust only. tree-sitter is C and calls `malloc`, which resolves to
+/// libc unless it is told otherwise, so it needs pointing at mimalloc separately
+/// -- but *not* from here. `gitcomet-ui-gpui` does it from the lazy initialisers
+/// that front every parser and query it builds, which covers every binary and
+/// every test rather than this one entry point. See
+/// `gitcomet_tree_sitter_alloc::install_mimalloc_allocator`.
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
 
@@ -152,12 +158,6 @@ fn should_launch_focused_diff_gui(
 }
 
 fn main() {
-    // `GLOBAL` above only covers Rust. tree-sitter is C and calls `malloc`, which
-    // resolves to libc unless it is told otherwise -- so without this the process
-    // parses every file through a second, slower allocator. Must run before
-    // anything parses, since a block has to be freed by whoever allocated it.
-    gitcomet_tree_sitter_alloc::install_mimalloc_allocator();
-
     #[cfg(feature = "ui-gpui-runtime")]
     crashlog::install();
 

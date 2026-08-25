@@ -688,6 +688,11 @@ pub(super) fn tree_sitter_grammar(
 }
 
 fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec {
+    // A `Query` allocates through tree-sitter's C, and this is the only place
+    // the app builds one -- so like the `TS_PARSER`/`TS_CURSOR` initialisers,
+    // it has to route that C at mimalloc before the first byte is taken. A
+    // thread that only ever compiles queries never touches those thread-locals.
+    super::ensure_tree_sitter_allocator();
     let (ts_language, asset) =
         tree_sitter_grammar(language).expect("tree-sitter grammar should exist");
     let combined;
