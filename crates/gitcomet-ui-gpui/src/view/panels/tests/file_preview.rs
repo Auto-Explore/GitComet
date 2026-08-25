@@ -791,6 +791,59 @@ fn file_preview_click_lights_the_matching_json_braces(cx: &mut gpui::TestAppCont
         );
     });
 
+    // Line 3 is just `}`. Its right half resolves to caret boundary 1, exactly
+    // the offset that trailing blank space clamps to, but it is still visibly a
+    // click on the delimiter and must light the outer braces.
+    let final_glyph_click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        3,
+        DiffTextRegion::Inline,
+        1..2,
+        "right half of final preview delimiter",
+    );
+    simulate_counted_click(cx, final_glyph_click, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let pair = pane
+            .diff_text_pair_match_for_tests()
+            .expect("the right half of the final `}` should light its pair");
+        assert_eq!(
+            pair.spans
+                .iter()
+                .map(|span| (span.source_visible_ix, span.range.clone()))
+                .collect::<Vec<_>>(),
+            vec![(0, 0..1), (3, 0..1)]
+        );
+    });
+
+    // A real click in the blank portion of that same row resolves to the same
+    // caret boundary, but its pixel position is beyond the painted glyph and
+    // therefore must clear, rather than recreate, the highlight.
+    let trailing_blank_click = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        let hitbox = pane
+            .diff_text_hitboxes
+            .get(&(3, DiffTextRegion::Inline))
+            .expect("closing-brace row hitbox");
+        let position = point(
+            (hitbox.bounds.right() - px(1.0)).max(hitbox.bounds.left()),
+            hitbox.bounds.center().y,
+        );
+        assert_eq!(
+            pane.diff_text_offset_for_position(3, DiffTextRegion::Inline, position),
+            Some(1),
+            "blank space and the glyph's right half intentionally share a caret boundary"
+        );
+        position
+    });
+    simulate_counted_click(cx, trailing_blank_click, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(pane.diff_text_pair_match_for_tests().is_none());
+        assert!(pane.diff_text_occurrences_for_tests().is_empty());
+    });
+
     // A double-click selects a word, and a selection is the user working on a
     // span rather than sitting in one -- the pair must not stay lit under it.
     simulate_counted_click(cx, click, 2);

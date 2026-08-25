@@ -1823,7 +1823,8 @@ fn prepared_line_span(text: &str, line_starts: &[usize], ix: usize) -> Option<Ra
 ///
 /// Returns `None` when the document has no retained tree (it was evicted, or the
 /// parse never finished), when `line_ix` is past the end, when the click landed
-/// past the line's last character, or when nothing pairs.
+/// at a caret boundary beyond the line, or when nothing pairs. Geometric clicks
+/// in trailing blank space are rejected by the view before reaching this API.
 ///
 /// Injections *are* consulted, and first -- see [`injected_syntax_pair_at`]. The
 /// injected region's own tree is kept for exactly this, because to the host
@@ -1928,8 +1929,9 @@ pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
     let Some(clicked_line) = text.get(clicked.clone()) else {
         return Vec::new();
     };
-    // A click past the line's last character places a caret but names nothing;
-    // see [`clicked_raw_offset_for_display_offset`].
+    // A caret boundary beyond the line names nothing. The view separately
+    // rejects pixel clicks in trailing blank space, whose clamped boundary can
+    // equal the valid end boundary produced by the final glyph's right half.
     let Some(raw_offset) = clicked_raw_offset_for_display_offset(clicked_line, display_offset)
     else {
         return Vec::new();

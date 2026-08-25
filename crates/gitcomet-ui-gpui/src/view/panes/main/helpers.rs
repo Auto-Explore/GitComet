@@ -3143,6 +3143,11 @@ pub(crate) struct MainPaneView {
     /// times matches, repeated at frame rate for as long as the highlight is up.
     pub(in crate::view) diff_text_occurrences:
         FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>>,
+    /// A click waiting for a cold full-document syntax parse. The second region
+    /// is the real old/new side to prepare (inline rows still belong to one of
+    /// those documents). Projection resets clear this before its worker can
+    /// replay stale coordinates.
+    pub(in crate::view) diff_text_pending_syntax_click: Option<(DiffTextPos, DiffTextRegion)>,
     pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
@@ -3192,9 +3197,13 @@ pub(crate) struct MainPaneView {
     /// allocation of the same length can alias. Retaining it also means a second
     /// click resolves by identity instead of re-reading and re-parsing the file.
     ///
-    /// Cleared whenever the cache rebuilds, so what it holds is always the body
-    /// the current generation's line index was built from.
+    /// The read happens inline only for small files and otherwise on the click
+    /// syntax worker. Cleared whenever the cache rebuilds, so what it holds is
+    /// always the body the current generation's line index was built from.
     pub(in crate::view) file_diff_pair_syntax_text: FxHashMap<DiffTextRegion, SharedString>,
+    /// Source sides currently being read and parsed for an interactive click.
+    /// Prevents repeated clicks from launching duplicate full-document work.
+    pub(in crate::view) file_diff_click_syntax_inflight: FxHashSet<DiffTextRegion>,
     /// Where each side's content lives when it is a file rather than text in
     /// memory. A source-backed side keeps its text off the heap so a huge diff
     /// can render from per-line slices; the click path reads it back from here

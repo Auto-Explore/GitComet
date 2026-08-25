@@ -9,13 +9,17 @@
 
 use std::ops::Range;
 
-/// Ceiling for the occurrence scan.
+use crate::kit::rope::Rope;
+
+/// Interactive names and pairs are available whenever full-document syntax is.
 ///
-/// The scan is O(document), and the editor asks on every caret move, so a large
-/// buffer must not pay for it per keystroke. The diff side is bounded by the
-/// same number rather than by the prepared document's own 8 MB ceiling: a click
-/// is cheaper than a keystroke but not free, and it runs on the UI thread too.
-pub(in crate::view) const OCCURRENCE_MAX_TEXT_BYTES: usize = 256 * 1024;
+/// Keeping this as an alias, rather than another literal, makes the capability
+/// boundary impossible to drift: if a document has a prepared/live tree, a
+/// click can use it. The editor scans its rope without flattening it, and cold
+/// diff documents are completed off-thread, so matching the larger ceiling does
+/// not put an 8 MiB allocation or parse on the input path.
+pub(in crate::view) const OCCURRENCE_MAX_TEXT_BYTES: usize =
+    super::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES;
 
 /// The most matches worth reporting for one click.
 ///
@@ -100,10 +104,6 @@ fn is_name(text: &str) -> bool {
 /// `string` or a `call_expression` has children, an `identifier` does not. The
 /// kind check then drops the leaf nodes that are content rather than names --
 /// comment bodies and string contents, which are single tokens too.
-fn is_name_token(node: &tree_sitter::Node<'_>, text: &str) -> bool {
-    is_name_token_kind(node) && text.get(node.byte_range()).is_some_and(is_name)
-}
-
 /// Leaf kinds whose name contains `string` but which are not string content.
 ///
 /// The substring test in [`is_name_token_kind`] is a heuristic over how ~60
@@ -197,15 +197,13 @@ pub(in crate::view) fn syntax_occurrences_in_tree(
     text: &str,
     offset: usize,
 ) -> Option<SyntaxOccurrences> {
-    let root = tree.root_node();
     let token = name_token_at(tree, offset, |range| {
         text.get(range).map(std::borrow::ToOwned::to_owned)
     })?;
 
     let name = text.get(token.clone())?;
     let bytes = text.as_bytes();
-    let mut ranges = Vec::new();
-    let mut candidates = 0usize;
+    let mut candidates = Vec::new();
     let mut search_from = 0usize;
     // `name.len()`, not one byte: a word-bounded name cannot overlap itself, and
     // stepping a single byte lands *inside* the leading character of a name like
@@ -240,21 +238,124 @@ pub(in crate::view) fn syntax_occurrences_in_tree(
         // the descents and only a word-bounded hit pays for one. Counting raw
         // substring hits instead spends the whole budget on `uuid` and `valid`
         // and then stops before the real uses of `id`.
-        candidates += 1;
-        if candidates > MAX_OCCURRENCE_CANDIDATES {
+        candidates.push(start..end);
+        if candidates.len() >= MAX_OCCURRENCE_CANDIDATES {
             break;
         }
-        // And the grammar has to agree this span is one whole name token -- the
-        // same test the clicked token had to pass. Exact range alone is not
-        // enough: a string's content is a leaf that starts and ends exactly at
-        // the quoted text, so `"total"` would otherwise match `total`.
-        let Some(node) = root.descendant_for_byte_range(start, end) else {
+    }
+
+    Some(syntax_occurrences_from_candidates(tree, token, candidates))
+}
+
+/// The occurrences lookup used by the live editor, without materializing the
+/// persistent rope into one document-sized `String`.
+pub(in crate::view) fn syntax_occurrences_in_rope(
+    tree: &tree_sitter::Tree,
+    rope: &Rope,
+    offset: usize,
+) -> Option<SyntaxOccurrences> {
+    let token = name_token_at(tree, offset, |range| Some(rope.text_for_range(range)))?;
+    let name = rope.text_for_range(token.clone());
+    let candidates = rope_name_candidates(rope, &name);
+    Some(syntax_occurrences_from_candidates(tree, token, candidates))
+}
+
+/// Search a chunked rope as one byte stream.
+///
+/// KMP carries a partial match across chunk seams, while the ring holds the one
+/// preceding byte needed by the cheap word-boundary filter. A completed match
+/// is held for one byte so its trailing boundary can be decided. The result is
+/// therefore identical to the contiguous scan, including names split between
+/// two 512-byte rope leaves, without copying the document.
+fn rope_name_candidates(rope: &Rope, name: &str) -> Vec<Range<usize>> {
+    let needle = name.as_bytes();
+    if needle.is_empty() {
+        return Vec::new();
+    }
+
+    let mut failure = vec![0usize; needle.len()];
+    for ix in 1..needle.len() {
+        let mut prefix = failure[ix - 1];
+        while prefix > 0 && needle[ix] != needle[prefix] {
+            prefix = failure[prefix - 1];
+        }
+        if needle[ix] == needle[prefix] {
+            prefix += 1;
+        }
+        failure[ix] = prefix;
+    }
+
+    let needs_before_boundary = needle.first().copied().is_some_and(is_word_byte);
+    let needs_after_boundary = needle.last().copied().is_some_and(is_word_byte);
+    let mut recent = vec![0u8; needle.len().saturating_add(1)];
+    let mut matched = 0usize;
+    let mut offset = 0usize;
+    let mut pending: Option<Range<usize>> = None;
+    let mut out = Vec::new();
+
+    for byte in rope.chunks().flat_map(|chunk| chunk.bytes()) {
+        if let Some(candidate) = pending.take()
+            && (!needs_after_boundary || !is_word_byte(byte))
+        {
+            out.push(candidate);
+            if out.len() >= MAX_OCCURRENCE_CANDIDATES {
+                return out;
+            }
+        }
+
+        while matched > 0 && byte != needle[matched] {
+            matched = failure[matched - 1];
+        }
+        if byte == needle[matched] {
+            matched += 1;
+        }
+        if matched == needle.len() {
+            let start = offset + 1 - needle.len();
+            let before_ok = !needs_before_boundary
+                || start == 0
+                || !is_word_byte(recent[(start - 1) % recent.len()]);
+            if before_ok {
+                pending = Some(start..offset + 1);
+            }
+            // The contiguous implementation advances by the whole name. A
+            // word-bounded name cannot have a valid overlapping occurrence,
+            // and discarding overlaps prevents hostile repeated bytes from
+            // spending the candidate budget before a real name is reached.
+            matched = 0;
+        }
+
+        let recent_ix = offset % recent.len();
+        recent[recent_ix] = byte;
+        offset += 1;
+    }
+
+    if let Some(candidate) = pending {
+        out.push(candidate);
+    }
+    out
+}
+
+fn syntax_occurrences_from_candidates(
+    tree: &tree_sitter::Tree,
+    token: Range<usize>,
+    candidates: impl IntoIterator<Item = Range<usize>>,
+) -> SyntaxOccurrences {
+    let root = tree.root_node();
+    let mut ranges = Vec::new();
+    for candidate in candidates.into_iter().take(MAX_OCCURRENCE_CANDIDATES) {
+        let Some(node) = root.descendant_for_byte_range(candidate.start, candidate.end) else {
             continue;
         };
-        if node.start_byte() != start || node.end_byte() != end || !is_name_token(&node, text) {
+        // The grammar has to agree this span is one whole name token. Exact
+        // range alone is not enough: string content can also be one leaf with
+        // exactly the quoted body's range.
+        if node.start_byte() != candidate.start
+            || node.end_byte() != candidate.end
+            || !is_name_token_kind(&node)
+        {
             continue;
         }
-        ranges.push(start..end);
+        ranges.push(candidate);
         if ranges.len() >= MAX_OCCURRENCES {
             break;
         }
@@ -266,5 +367,5 @@ pub(in crate::view) fn syntax_occurrences_in_tree(
         ranges.push(token.clone());
         ranges.sort_by_key(|range| range.start);
     }
-    Some(SyntaxOccurrences { token, ranges })
+    SyntaxOccurrences { token, ranges }
 }

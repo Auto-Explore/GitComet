@@ -812,10 +812,9 @@ mod tests {
         }
         assert_eq!(raw_offset_for_display_offset(plain, 999), plain.len());
 
-        // The click variant declines the offsets the plain conversion clamps:
-        // the row hitbox is as wide as the pane, so "past the last character"
-        // and "on the last character" arrive as the same clamped column
-        // otherwise.
+        // The click variant accepts the end caret boundary: hit testing can
+        // produce it from the right half of the final glyph. The view rejects
+        // trailing blank-space clicks from their pixel position instead.
         assert_eq!(
             clicked_raw_offset_for_display_offset(plain, plain.len() - 1),
             Some(plain.len() - 1),
@@ -823,13 +822,16 @@ mod tests {
         );
         assert_eq!(
             clicked_raw_offset_for_display_offset(plain, plain.len()),
-            None
+            Some(plain.len())
         );
         assert_eq!(clicked_raw_offset_for_display_offset(plain, 999), None);
         // `\t\tx = 1` is 13 display columns wide, not 7 bytes.
         assert_eq!(clicked_raw_offset_for_display_offset(line, 8), Some(2));
         assert_eq!(clicked_raw_offset_for_display_offset(line, 12), Some(6));
-        assert_eq!(clicked_raw_offset_for_display_offset(line, 13), None);
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(line, 13),
+            Some(line.len())
+        );
         assert_eq!(
             clicked_raw_offset_for_display_offset(line, line.len()),
             Some(1),
@@ -909,7 +911,7 @@ mod tests {
             "clicking the name itself still lights its uses"
         );
 
-        for past in [line.len(), line.len() + 1, line.len() + 200] {
+        for past in [line.len() + 1, line.len() + 200] {
             assert!(
                 prepared_document_occurrences_at_display_offset(document, 2, past).is_empty(),
                 "column {past} is past the line's last character"
@@ -920,9 +922,42 @@ mod tests {
             );
         }
 
-        // The closing brace on its own line: on it still pairs, past it does not.
+        // The closing brace on its own line: both caret boundaries produced by
+        // its left and right halves pair, while a boundary beyond it does not.
         assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 0).is_some());
-        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 1).is_none());
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 1).is_some());
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 2).is_none());
+    }
+
+    #[test]
+    fn prepared_syntax_end_caret_selects_a_final_closing_parenthesis() {
+        let text = "fn main() {\n    run()\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        let line = "    run()";
+
+        let pair = prepared_document_syntax_pair_at_display_offset(document, 1, line.len())
+            .expect("the right half of the final `)` should still select its pair");
+        assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+        assert_eq!(pair.open[0].display_range, 7..8);
+        assert_eq!(pair.close[0].display_range, 8..9);
+
+        let occurrences_text = "let total = 1;\ntotal";
+        let occurrences_document =
+            prepare_test_document(DiffSyntaxLanguage::Rust, occurrences_text);
+        assert_eq!(
+            prepared_document_occurrences_at_display_offset(occurrences_document, 1, "total".len(),),
+            vec![
+                PreparedSyntaxPairSpan {
+                    line_ix: 0,
+                    display_range: 4..9,
+                },
+                PreparedSyntaxPairSpan {
+                    line_ix: 1,
+                    display_range: 0..5,
+                },
+            ],
+            "the right half of a final name should still light its occurrences"
+        );
     }
 
     #[test]

@@ -496,20 +496,18 @@ pub(in crate::view) fn raw_offset_for_display_offset(line: &str, display_offset:
     line.len()
 }
 
-/// The raw offset a *click* at `display_offset` landed on, or `None` when the
-/// click fell past the line's last character.
+/// The raw offset for a click's caret boundary, or `None` when that boundary is
+/// beyond the line.
 ///
-/// The row hitbox spans the full width of the pane, not the width of the text,
-/// and it clamps a point past the end of the line to the line's last column. A
-/// caret belongs there, but a highlight does not: without this, clicking the
-/// blank area to the right of `let sum = total;` resolves to the byte after the
-/// `;` and the caret-adjacency probe one byte to its left then washes the whole
-/// file's uses of the last name on the line.
+/// The boundary exactly at the display length is valid. Hit testing returns it
+/// when the pointer is on the right half of the final glyph as well as when the
+/// pointer is in trailing blank space; the view keeps those geometrically
+/// distinct and rejects the latter before calling the syntax layer.
 pub(in crate::view) fn clicked_raw_offset_for_display_offset(
     line: &str,
     display_offset: usize,
 ) -> Option<usize> {
-    (display_offset < crate::view::diff_utils::diff_text_display_len(line))
+    (display_offset <= crate::view::diff_utils::diff_text_display_len(line))
         .then(|| raw_offset_for_display_offset(line, display_offset))
 }
 

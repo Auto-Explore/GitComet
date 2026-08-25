@@ -134,6 +134,410 @@ fn source_backed_pair_text_tracks_accepted_file_diff_generation(cx: &mut gpui::T
     std::fs::remove_dir_all(&workdir).expect("cleanup source-backed generation fixture");
 }
 
+/// Source-backed sides have no resident full text. A syntax-sized side above
+/// the small synchronous-click allowance must still become interactive, but its
+/// disk read and full parse must happen after the input event rather than
+/// blocking it.
+#[gpui::test]
+fn source_backed_diff_click_syntax_prepares_a_two_megabyte_document_off_thread(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(882);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_source_backed_large_click_syntax",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create large click-syntax fixture");
+    let path = std::path::PathBuf::from("src/large_click_syntax.rs");
+    let old_source_path = source_dir.join("old.rs");
+    let new_source_path = source_dir.join("new.rs");
+
+    let padding_line = "// source-backed click-syntax padding ........................................................\n";
+    let old_foreground_completion_ceiling = 1024usize * 1024;
+    let target_bytes = old_foreground_completion_ceiling
+        .saturating_mul(2)
+        .saturating_add(16 * 1024);
+    let padding_count = target_bytes.div_ceil(padding_line.len());
+    let prefix = padding_line.repeat(padding_count);
+    let old_target = "fn target() { let target_value = 1; target_value }\n";
+    let new_target = "fn target() { let target_value = 2; target_value }\n";
+    let old_text = format!("{prefix}{old_target}");
+    let new_text = format!("{prefix}{new_target}");
+    assert!(new_text.len() > old_foreground_completion_ceiling);
+    assert!(new_text.len() <= rows::OCCURRENCE_MAX_TEXT_BYTES);
+    std::fs::write(&old_source_path, &old_text).expect("write old large source");
+    std::fs::write(&new_source_path, &new_text).expect("write new large source");
+
+    let target_line = padding_count + 1;
+    let unified = format!("@@ -{target_line} +{target_line} @@\n-{old_target}+{new_target}");
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "two-megabyte source-backed file diff",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_text.is_empty()
+                && pane.file_diff_new_source_path.is_some()
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?} text_len={} source_path={:?}",
+                pane.file_diff_cache_rev,
+                pane.file_diff_cache_inflight,
+                pane.file_diff_new_text.len(),
+                pane.file_diff_new_source_path,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                assert!(
+                    pane.file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
+                        .is_none(),
+                    "a cold multi-megabyte click must not finish its parse on the input path"
+                );
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    let visible_ix = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (0..pane.diff_visible_len())
+            .find(|&visible_ix| {
+                pane.diff_mapped_ix_for_visible_ix(visible_ix)
+                    .and_then(|row_ix| pane.file_diff_inline_render_data(row_ix))
+                    .is_some_and(|row| row.new_line == Some(target_line as u32))
+            })
+            .expect("two-megabyte target row should be visible")
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    cx.run_until_parked();
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        visible_ix,
+        DiffTextRegion::Inline,
+        18..30,
+        "two-megabyte target name",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "replayed click syntax for a two-megabyte source",
+        |pane| {
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                .is_some()
+                && pane
+                    .file_diff_pair_syntax_text
+                    .get(&DiffTextRegion::SplitRight)
+                    .is_some_and(|text| text.len() == new_text.len())
+                && pane
+                    .diff_text_occurrences_for_tests()
+                    .iter()
+                    .any(|(row, range)| *row == visible_ix && range.contains(&18))
+        },
+        |pane| {
+            format!(
+                "prepared={} retained_len={} inflight={:?}",
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some(),
+                pane.file_diff_pair_syntax_text
+                    .get(&DiffTextRegion::SplitRight)
+                    .map_or(0, |text| text.len()),
+                pane.file_diff_click_syntax_inflight,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                let document = pane
+                    .file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
+                    .expect("a two-megabyte source-backed side should be cached after its worker");
+                let line_ix = target_line - 1;
+                let pair = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, 12)
+                    .expect("clicking the target function's brace should find its pair");
+                assert_eq!(
+                    pair.open
+                        .iter()
+                        .chain(pair.close.iter())
+                        .map(|span| (span.line_ix, span.display_range.clone()))
+                        .collect::<Vec<_>>(),
+                    vec![(line_ix, 12..13), (line_ix, 49..50)]
+                );
+                assert_eq!(
+                    rows::prepared_diff_syntax_occurrences_at_display_offset(
+                        document, line_ix, 18,
+                    )
+                    .iter()
+                    .map(|span| (span.line_ix, span.display_range.clone()))
+                    .collect::<Vec<_>>(),
+                    vec![(line_ix, 18..30), (line_ix, 36..48)],
+                    "a syntax-sized diff should light occurrences after background preparation"
+                );
+            });
+        });
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup large click-syntax fixture");
+}
+
+/// Exercise the reported file itself through row mapping, a real mouse event,
+/// the source-backed parse, span projection, and canvas paint. Collapsed inline
+/// is the most indirect projection; split/full behavior is covered by the
+/// neighboring click tests.
+#[gpui::test]
+fn source_backed_syntax_rs_mouse_click_lights_syntax(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(883);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_actual_syntax_rs_click",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create actual syntax.rs click fixture");
+    let path = std::path::PathBuf::from("src/view/rows/diff_text/syntax.rs");
+    let new_source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(&path);
+    let old_source_path = source_dir.join("old.rs");
+    let new_text = std::fs::read_to_string(&new_source_path).expect("read actual syntax.rs");
+    let new_target = "fn ensure_tree_sitter_allocator() {";
+    let old_target = "fn ensure_tree_sitter_allocator_old() {";
+    let target_offset = new_text
+        .find(new_target)
+        .expect("actual syntax.rs should retain the allocator funnel");
+    let target_line = new_text.as_bytes()[..target_offset]
+        .iter()
+        .filter(|&&byte| byte == b'\n')
+        .count()
+        + 1;
+    let old_text = new_text.replacen(new_target, old_target, 1);
+    std::fs::write(&old_source_path, old_text).expect("write old actual syntax.rs source");
+    let unified = format!("@@ -{target_line} +{target_line} @@\n-{old_target}\n+{new_target}\n");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, &unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "actual source-backed syntax.rs file diff",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_text.is_empty()
+                && pane.file_diff_new_source_path.as_deref() == Some(&new_source_path)
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?} text_len={} source_path={:?}",
+                pane.file_diff_cache_rev,
+                pane.file_diff_cache_inflight,
+                pane.file_diff_new_text.len(),
+                pane.file_diff_new_source_path,
+            )
+        },
+    );
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.diff_view = DiffViewMode::Inline;
+                cx.notify();
+            });
+        });
+    });
+    draw_and_drain_test_window(cx);
+    set_diff_content_mode_for_test(cx, &view, DiffContentMode::Collapsed);
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "actual syntax.rs collapsed inline projection",
+        |pane| pane.is_collapsed_diff_projection_active() && pane.diff_view == DiffViewMode::Inline,
+        |pane| {
+            format!(
+                "collapsed={} view={:?} visible_len={}",
+                pane.is_collapsed_diff_projection_active(),
+                pane.diff_view,
+                pane.diff_visible_len(),
+            )
+        },
+    );
+
+    let visible_ix = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (0..pane.diff_visible_len())
+            .find(|&visible_ix| {
+                pane.diff_mapped_ix_for_visible_ix(visible_ix)
+                    .and_then(|row_ix| pane.file_diff_inline_render_data(row_ix))
+                    .is_some_and(|row| row.new_line == Some(target_line as u32))
+            })
+            .expect("actual syntax.rs target row should be visible in the full projection")
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.scroll_diff_to_item_strict(visible_ix, gpui::ScrollStrategy::Top);
+                cx.notify();
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    let click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        visible_ix,
+        DiffTextRegion::Inline,
+        3..3 + "ensure_tree_sitter_allocator".len(),
+        "actual syntax.rs allocator name",
+    );
+    simulate_counted_click(cx, click, 1);
+
+    let occurrences = cx.update(|_window, app| {
+        view.read(app)
+            .main_pane
+            .read(app)
+            .diff_text_occurrences_for_tests()
+    });
+    assert!(
+        occurrences
+            .iter()
+            .any(|(row, range)| *row == visible_ix && range.contains(&3)),
+        "the actual syntax.rs click should light the allocator name; occurrences={occurrences:?}"
+    );
+
+    cx.update(|_window, _app| rows::clear_diff_paint_log_for_tests());
+    draw_and_drain_test_window(cx);
+    let painted = rows::diff_paint_log_for_tests()
+        .into_iter()
+        .find(|record| record.visible_ix == visible_ix && record.region == DiffTextRegion::Inline)
+        .expect("the clicked actual syntax.rs row should paint");
+    assert!(
+        painted
+            .occurrence_quads
+            .iter()
+            .any(|range| range.contains(&3)),
+        "the clicked allocator occurrence should reach paint; quads={:?}",
+        painted.occurrence_quads,
+    );
+
+    let brace_col = new_target.find('{').expect("target has an opening brace");
+    let brace_click = wait_for_diff_text_click_position_for_offset_range(
+        cx,
+        &view,
+        visible_ix,
+        DiffTextRegion::Inline,
+        brace_col..brace_col + 1,
+        "actual syntax.rs allocator opening brace",
+    );
+    simulate_counted_click(cx, brace_click, 1);
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            pane.diff_text_pair_match_for_tests().is_some(),
+            "clicking the actual syntax.rs function brace should light its pair"
+        );
+        assert!(
+            pane.diff_text_local_pair_ranges(visible_ix, DiffTextRegion::Inline)
+                .iter()
+                .any(|range| range.contains(&brace_col)),
+            "the clicked opening brace should reach the visible row"
+        );
+    });
+
+    std::fs::remove_dir_all(&workdir).expect("cleanup actual syntax.rs click fixture");
+}
+
 #[gpui::test]
 fn large_file_diff_keeps_prepared_syntax_documents_above_old_line_gate(
     cx: &mut gpui::TestAppContext,

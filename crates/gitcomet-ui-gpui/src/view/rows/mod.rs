@@ -442,12 +442,10 @@ pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document;
 // Every pair kind is painted alike, so only assertions name one; see
 // `DiffTextPairMatch::kind`.
-#[cfg(test)]
-pub(in crate::view) use diff_text::SyntaxPairKind;
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSearchMatchEmphasis, DiffSyntaxBudget,
     DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument, LiveSyntaxSnapshot,
-    LiveSyntaxSyncOutcome, OCCURRENCE_MAX_TEXT_BYTES, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
+    LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
     PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine,
     PreparedDiffSyntaxReparseSeed, SyntaxPair, diff_syntax_language_for_code_fence_info,
     diff_syntax_language_for_path, diff_wrap_ranges_for_text,
@@ -463,6 +461,8 @@ pub(in crate::view) use diff_text::{
     query_highlight_colors, request_syntax_highlights_for_prepared_document_byte_range,
     resolved_output_line_text, syntax_highlights_for_line, whitespace_visible_line_text,
 };
+#[cfg(test)]
+pub(in crate::view) use diff_text::{OCCURRENCE_MAX_TEXT_BYTES, SyntaxPairKind};
 
 pub(in crate::view) use self::diff_canvas::{
     AnnotArea, DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX,

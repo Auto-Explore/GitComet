@@ -786,6 +786,78 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
+/// The editor used to apply its 256 KiB caret-scan ceiling before asking what
+/// the caret was on, so this crate's own `syntax.rs` parsed and colored normally
+/// but no identifier click produced occurrence highlights.
+#[gpui::test]
+async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(965);
+    let workdir = unique_workdir("file_editor_actual_syntax_rs_click");
+    let file_rel = std::path::PathBuf::from("syntax.rs");
+    let source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/view/rows/diff_text/syntax.rs");
+    let contents = std::fs::read_to_string(source_path).expect("read actual syntax.rs");
+    assert!(
+        contents.len() > 256 * 1024,
+        "the regression needs a large file"
+    );
+    assert!(
+        contents.len() <= rows::OCCURRENCE_MAX_TEXT_BYTES,
+        "the actual source must stay inside the interactive scan ceiling"
+    );
+    std::fs::write(workdir.join(&file_rel), &contents).expect("write syntax.rs editor fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
+            this.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        });
+    });
+    cx.run_until_parked();
+
+    let target = "ensure_tree_sitter_allocator";
+    let target_start = contents
+        .find(target)
+        .expect("actual syntax.rs should retain the allocator funnel");
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            assert!(
+                pane.file_editor_live_syntax.is_some(),
+                "the large Rust file should have a live syntax tree"
+            );
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.set_cursor_offset(target_start + 3, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = main_pane.read(app);
+        assert!(
+            pane.file_editor_occurrences.iter().any(
+                |range| range.start == target_start && range.end == target_start + target.len()
+            ),
+            "clicking the allocator name should highlight it in the actual half-megabyte file; \
+             occurrences={:?}",
+            pane.file_editor_occurrences,
+        );
+        assert!(
+            pane.file_editor_occurrences.len() >= 3,
+            "the definition and calls should all be highlighted"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 /// Two lines of blame for the `open_annotated_editor` fixture file.
 fn editor_blame_lines() -> Vec<gitcomet_core::services::BlameLine> {
     vec![

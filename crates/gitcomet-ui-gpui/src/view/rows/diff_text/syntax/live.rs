@@ -1002,10 +1002,10 @@ impl LiveSyntaxSnapshot {
 
     /// Everywhere the document names the token at `offset`.
     ///
-    /// Bounded, unlike [`Self::syntax_pair_at`]: that is O(tree depth), this is
-    /// O(document), and the editor recomputes highlights on every caret move.
-    /// Past the ceiling the answer is empty rather than slow -- a missing
-    /// highlight beats a stuttering keystroke.
+    /// Unlike [`Self::syntax_pair_at`], this is O(document), but it scans the
+    /// rope's borrowed chunks directly and the editor holds a successful answer
+    /// while the caret remains on any occurrence. It is available up to the
+    /// same ceiling as the live syntax tree itself.
     ///
     /// Injected regions are not searched: the root tree has their bodies as one
     /// unparsed leaf, so a name inside one matches nothing there.
@@ -1016,18 +1016,10 @@ impl LiveSyntaxSnapshot {
             return Vec::new();
         }
         let offset = offset.min(len);
-        // Ask the tree first. Deciding "not a name" costs a descent; deciding it
-        // after flattening the rope costs the whole document, and most caret
-        // moves land on punctuation, whitespace or a literal.
-        if name_token_at(&inner.tree, offset, |range| {
-            Some(inner.rope.text_for_range(range))
-        })
-        .is_none()
-        {
-            return Vec::new();
-        }
-        let text = inner.rope.text_for_range(0..len);
-        syntax_occurrences_in_tree(&inner.tree, &text, offset)
+        // The rope lookup asks the tree for the small token under the caret
+        // before starting its document scan, so punctuation and whitespace
+        // remain one cheap descent.
+        syntax_occurrences_in_rope(&inner.tree, &inner.rope, offset)
             .map(|found| found.ranges)
             .unwrap_or_default()
     }
@@ -1151,6 +1143,63 @@ mod tests {
                 "byte {offset} should style identically whether queried whole or windowed"
             );
         }
+    }
+
+    #[test]
+    fn occurrence_scan_crosses_rope_chunk_boundaries_without_flattening() {
+        let padding = " ".repeat(crate::kit::rope::MAX_CHUNK_BYTES - 5);
+        let text = format!("{padding}fn boundary_name() {{ boundary_name(); }}\n");
+        let name_start = text.find("boundary_name").expect("fixture name");
+        assert!(
+            name_start < crate::kit::rope::MAX_CHUNK_BYTES
+                && name_start + "boundary_name".len() > crate::kit::rope::MAX_CHUNK_BYTES,
+            "the first name must straddle two rope chunks"
+        );
+
+        let doc = document(&text, Vec::new());
+        let occurrences = doc
+            .snapshot(AppTheme::gitcomet_dark())
+            .occurrences_at(name_start + 1);
+        assert_eq!(
+            occurrences,
+            vec![
+                name_start..name_start + "boundary_name".len(),
+                text.rfind("boundary_name").expect("fixture call")
+                    ..text.rfind("boundary_name").expect("fixture call") + "boundary_name".len(),
+            ]
+        );
+    }
+
+    #[test]
+    fn occurrences_share_the_full_document_syntax_ceiling() {
+        assert_eq!(
+            OCCURRENCE_MAX_TEXT_BYTES,
+            PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
+        );
+        let old_interactive_ceiling = 1024usize * 1024;
+        let prefix = "fn shared_name() {}\n";
+        let suffix = "fn caller() { shared_name(); }\n";
+        let padding_line = "// syntax-sized live occurrence padding ..............................................\n";
+        let padding = padding_line.repeat(
+            old_interactive_ceiling
+                .saturating_mul(2)
+                .div_ceil(padding_line.len()),
+        );
+        let text = format!("{prefix}{padding}{suffix}");
+        assert!(text.len() > old_interactive_ceiling);
+        assert!(text.len() <= PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES);
+
+        let first = text.find("shared_name").expect("fixture declaration");
+        let second = text.rfind("shared_name").expect("fixture call");
+        let doc = document(&text, Vec::new());
+        assert_eq!(
+            doc.snapshot(AppTheme::gitcomet_dark())
+                .occurrences_at(first + 1),
+            vec![
+                first..first + "shared_name".len(),
+                second..second + "shared_name".len(),
+            ]
+        );
     }
 
     #[test]
