@@ -1,33 +1,30 @@
+//! Which allocator tree-sitter's C uses, and optional accounting on top of it.
+//!
+//! `#[global_allocator]` replaces Rust's `GlobalAlloc` and nothing else. tree-sitter
+//! is C: its `ts_malloc` calls plain `malloc`, which the linker resolves to libc
+//! unless mimalloc is built to interpose the symbol -- and the `mimalloc` crate
+//! does not do that by default. Left alone, a GitComet process runs two
+//! allocators, with every subtree, parse stack and lexer buffer on libc's while
+//! the Rust side is on mimalloc.
+//!
+//! `ts_set_allocator` is the supported way to fix that, so both entry points here
+//! route to `mi_*`: [`install_mimalloc_allocator`] for normal runs, and
+//! [`install_tracking_allocator`] for benchmarks, which adds counters on the same
+//! underlying allocator. Sharing the allocator is what makes the two safe to mix:
+//! whichever was installed when a block was allocated, the other can still free it.
+//! It also keeps benchmark numbers representative of a real run.
+
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
 use std::sync::{Mutex, Once};
 
+use libmimalloc_sys::{mi_calloc, mi_free, mi_malloc, mi_realloc, mi_usable_size};
+
 static INSTALL: Once = Once::new();
+static INSTALL_PLAIN: Once = Once::new();
 static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
 static MEASUREMENT_ENABLED: AtomicBool = AtomicBool::new(false);
 static COUNTERS: AllocCounters = AllocCounters::new();
-
-unsafe extern "C" {
-    fn malloc(size: usize) -> *mut c_void;
-    fn calloc(count: usize, size: usize) -> *mut c_void;
-    fn realloc(ptr: *mut c_void, size: usize) -> *mut c_void;
-    fn free(ptr: *mut c_void);
-}
-
-#[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
-unsafe extern "C" {
-    fn malloc_usable_size(ptr: *mut c_void) -> usize;
-}
-
-#[cfg(target_os = "macos")]
-unsafe extern "C" {
-    fn malloc_size(ptr: *const c_void) -> usize;
-}
-
-#[cfg(windows)]
-unsafe extern "C" {
-    fn _msize(ptr: *mut c_void) -> usize;
-}
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AllocMetrics {
@@ -68,6 +65,26 @@ impl AllocMetrics {
     }
 }
 
+/// Point tree-sitter's C at mimalloc, with no accounting.
+///
+/// Call it before anything parses. It is idempotent, and safe to combine with
+/// [`install_tracking_allocator`] in either order -- both wrap the same `mi_*`
+/// functions, so a block allocated under one is freed correctly under the other.
+pub fn install_mimalloc_allocator() {
+    INSTALL_PLAIN.call_once(|| unsafe {
+        tree_sitter::set_allocator(
+            Some(mi_malloc),
+            Some(mi_calloc),
+            Some(mi_realloc),
+            Some(mi_free),
+        );
+    });
+}
+
+/// Point tree-sitter's C at mimalloc *and* count what it allocates.
+///
+/// The counters cost an atomic load per allocation, so this is for benchmarks;
+/// [`install_mimalloc_allocator`] is what a normal run wants.
 pub fn install_tracking_allocator() {
     INSTALL.call_once(|| unsafe {
         tree_sitter::set_allocator(
@@ -194,7 +211,7 @@ impl Drop for MeasurementGuard<'_> {
 }
 
 unsafe extern "C" fn tree_sitter_malloc(size: usize) -> *mut c_void {
-    let ptr = unsafe { malloc(size) };
+    let ptr = unsafe { mi_malloc(size) };
     if size > 0 && ptr.is_null() {
         abort_alloc("allocate", size);
     }
@@ -209,7 +226,7 @@ unsafe extern "C" fn tree_sitter_calloc(count: usize, size: usize) -> *mut c_voi
         eprintln!("tree-sitter failed to allocate {count} * {size} bytes");
         std::process::abort();
     });
-    let ptr = unsafe { calloc(count, size) };
+    let ptr = unsafe { mi_calloc(count, size) };
     if requested > 0 && ptr.is_null() {
         abort_alloc("allocate", requested);
     }
@@ -226,7 +243,7 @@ unsafe extern "C" fn tree_sitter_realloc(ptr: *mut c_void, size: usize) -> *mut 
     } else {
         0
     };
-    let result = unsafe { realloc(ptr, size) };
+    let result = unsafe { mi_realloc(ptr, size) };
     if size > 0 && result.is_null() {
         abort_alloc("reallocate", size);
     }
@@ -246,7 +263,7 @@ unsafe extern "C" fn tree_sitter_free(ptr: *mut c_void) {
     if measurement_enabled() && !ptr.is_null() {
         COUNTERS.record_dealloc(unsafe { usable_size(ptr) });
     }
-    unsafe { free(ptr) };
+    unsafe { mi_free(ptr) };
 }
 
 fn abort_alloc(kind: &str, size: usize) -> ! {
@@ -259,34 +276,69 @@ fn measured_bytes(ptr: *mut c_void, fallback: usize) -> usize {
     usable.max(fallback)
 }
 
+/// The block size mimalloc actually handed out, which is what the counters should
+/// charge.
+///
+/// One call for every platform: the libc equivalents (`malloc_usable_size`,
+/// `malloc_size`, `_msize`) would be the wrong question now, and would report
+/// nothing useful for a pointer mimalloc owns.
 unsafe fn usable_size(ptr: *mut c_void) -> usize {
     if ptr.is_null() {
         return 0;
     }
+    unsafe { mi_usable_size(ptr) }
+}
 
-    #[cfg(any(target_os = "linux", target_os = "android", target_os = "freebsd"))]
-    {
-        unsafe { malloc_usable_size(ptr) }
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse_json() -> tree_sitter::Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_json::LANGUAGE.into())
+            .expect("json grammar should load");
+        parser
+            .parse(r#"{"a":[1,2,{"b":"c"}],"d":null}"#, None)
+            .expect("json should parse")
     }
 
-    #[cfg(target_os = "macos")]
-    {
-        unsafe { malloc_size(ptr.cast_const()) }
+    /// The invariant both installers rest on: they wrap the same `mi_*`
+    /// functions, so a tree allocated while one is installed can be freed after
+    /// the other has replaced it.
+    ///
+    /// If either installer is ever pointed at a different allocator, this frees
+    /// a mimalloc block through the wrong `free` and the test aborts rather than
+    /// failing -- which is the point. Both orders run here because
+    /// `ts_set_allocator` is global and a benchmark binary installs tracking
+    /// after startup has already installed the plain one.
+    #[test]
+    fn trees_survive_switching_between_the_two_installers() {
+        install_mimalloc_allocator();
+        let allocated_plain = parse_json();
+
+        install_tracking_allocator();
+        let allocated_tracked = parse_json();
+
+        // Freed under the tracking hooks, though allocated under the plain ones.
+        drop(allocated_plain);
+        drop(allocated_tracked);
+
+        install_mimalloc_allocator();
+        let after = parse_json();
+        assert_eq!(after.root_node().kind(), "document");
     }
 
-    #[cfg(windows)]
-    {
-        unsafe { _msize(ptr) }
-    }
-
-    #[cfg(not(any(
-        target_os = "linux",
-        target_os = "android",
-        target_os = "freebsd",
-        target_os = "macos",
-        windows
-    )))]
-    {
-        0
+    /// `measure_allocations` should see tree-sitter's C allocations, which it can
+    /// only do if the counters sit on the allocator tree-sitter actually calls.
+    #[test]
+    fn measurement_sees_tree_sitter_allocations() {
+        install_tracking_allocator();
+        let (tree, metrics) = measure_allocations(parse_json);
+        assert_eq!(tree.root_node().kind(), "document");
+        assert!(
+            metrics.alloc_ops > 0 && metrics.alloc_bytes > 0,
+            "parsing should allocate through the installed allocator, got {metrics:?}"
+        );
     }
 }

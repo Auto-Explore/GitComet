@@ -8,4 +8,10 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+libmimalloc-sys = { workspace = true }
 tree-sitter = { workspace = true }
+
+# A small grammar, only so the tests below can actually allocate through
+# tree-sitter rather than assert about the hooks in the abstract.
+[dev-dependencies]
+tree-sitter-json = { workspace = true }

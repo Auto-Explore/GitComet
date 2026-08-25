@@ -152,6 +152,12 @@ fn should_launch_focused_diff_gui(
 }
 
 fn main() {
+    // `GLOBAL` above only covers Rust. tree-sitter is C and calls `malloc`, which
+    // resolves to libc unless it is told otherwise -- so without this the process
+    // parses every file through a second, slower allocator. Must run before
+    // anything parses, since a block has to be freed by whoever allocated it.
+    gitcomet_tree_sitter_alloc::install_mimalloc_allocator();
+
     #[cfg(feature = "ui-gpui-runtime")]
     crashlog::install();
 

@@ -30,6 +30,7 @@ gitcomet-state = { workspace = true }
 gitcomet-ui-gpui = { workspace = true, optional = true }
 log = { workspace = true }
 mimalloc = { workspace = true }
+gitcomet-tree-sitter-alloc = { path = "../gitcomet-tree-sitter-alloc" }
 rustc-hash = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
