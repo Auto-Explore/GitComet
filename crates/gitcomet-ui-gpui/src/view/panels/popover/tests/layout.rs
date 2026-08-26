@@ -52,6 +52,7 @@ fn branch_exists_prompt_uses_the_wide_dialog_layout() {
         repo_id: RepoId(1),
         name: "feature".to_string(),
         target: "origin/a-long-feature-branch".to_string(),
+        operation: BranchExistsPromptOperation::CreateBranch,
     })
     .expect("branch-exists dialog width");
 

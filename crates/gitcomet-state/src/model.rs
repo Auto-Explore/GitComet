@@ -596,11 +596,18 @@ pub struct AppState {
     pub default_tag_type: DefaultTagType,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum BranchExistsPromptOperation {
+    CreateBranch,
+    CheckoutRemoteBranch { remote: String, branch: String },
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct BranchExistsPromptState {
     pub repo_id: RepoId,
     pub name: String,
     pub target: String,
+    pub operation: BranchExistsPromptOperation,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

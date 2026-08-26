@@ -15,6 +15,7 @@ pub(super) fn panel(
     _repo_id: RepoId,
     name: String,
     target: String,
+    operation: BranchExistsPromptOperation,
     cx: &mut gpui::Context<PopoverHost>,
 ) -> gpui::Div {
     let theme = this.theme;
@@ -28,6 +29,15 @@ pub(super) fn panel(
         target_text = target_text.full_text_tooltip(this.tooltip_host.clone());
     }
     let dialog_width = DIALOG_540_WIDTH.preferred_px(popover_ui_scale(cx));
+
+    let overwrite_note = match operation {
+        BranchExistsPromptOperation::CreateBranch => {
+            "Overwriting moves the branch to the target commit and checks it out."
+        }
+        BranchExistsPromptOperation::CheckoutRemoteBranch { .. } => {
+            "Overwriting moves the local branch to the remote commit, configures it to track that remote branch, and checks it out."
+        }
+    };
 
     ConfirmDialog::new("Branch already exists", DIALOG_540_WIDTH)
         .text(
@@ -44,10 +54,7 @@ pub(super) fn panel(
                 .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
                 .child(target_text.render(cx)),
         )
-        .note(
-            theme,
-            "Overwriting moves the branch to the target commit and checks it out.",
-        )
+        .note(theme, overwrite_note)
         .render(
             theme,
             cancel_button("branch_exists_cancel", "branch_exists_cancel_hint", theme).on_click(
@@ -74,7 +81,7 @@ pub(super) fn panel(
                         .debug_selector(|| "branch_exists_checkout_existing".to_string()),
                 )
                 .child(
-                    components::Button::new("branch_exists_overwrite", "Overwrite & checkout")
+                    components::Button::new("branch_exists_overwrite", "Overwrite and checkout")
                         .style(components::ButtonStyle::Danger)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.resolve_open_branch_exists_prompt(

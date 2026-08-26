@@ -4471,6 +4471,7 @@ fn create_branch_collision_opens_prompt_without_recording_a_repo_error() {
             repo_id,
             name: "feature".to_string(),
             target: "origin/feature-one".to_string(),
+            operation: crate::model::BranchExistsPromptOperation::CreateBranch,
         })
     );
     assert_eq!(state.repos[0].local_actions_in_flight, 0);

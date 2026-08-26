@@ -6,7 +6,7 @@ use crate::util::{
 };
 use gitcomet_core::domain::{CommitId, FileStatusKind, StashEntry};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
-use gitcomet_core::services::{CommitOperationOutcome, Result};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, CommitOperationOutcome, Result};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
 use std::io::Write as _;
@@ -18,10 +18,6 @@ fn stash_spec(index: usize) -> String {
 
 fn local_branch_ref_name(branch: &str) -> String {
     format!("refs/heads/{branch}")
-}
-
-fn remote_tracking_ref_name(remote: &str, branch: &str) -> String {
-    format!("refs/remotes/{remote}/{branch}")
 }
 
 fn head_targets_branch(repo: &gix::Repository, branch_ref_name: &str) -> Result<bool> {
@@ -399,26 +395,6 @@ impl GixRepo {
         Self::local_branch_exists_in_repo(&repo, branch)
     }
 
-    fn remote_tracking_branch_exists_in_repo(
-        repo: &gix::Repository,
-        remote: &str,
-        branch: &str,
-    ) -> Result<bool> {
-        let ref_name = remote_tracking_ref_name(remote, branch);
-        Self::ref_exists_in_repo(repo, ref_name.as_str())
-    }
-
-    fn checkout_remote_branch_can_reuse_local_branch(
-        &self,
-        remote: &str,
-        branch: &str,
-        local_branch: &str,
-    ) -> Result<bool> {
-        let repo = self.reopen_repo()?;
-        Ok(Self::local_branch_exists_in_repo(&repo, local_branch)?
-            && Self::remote_tracking_branch_exists_in_repo(&repo, remote, branch)?)
-    }
-
     fn create_local_branch_reference(&self, branch: &str, target: &str) -> Result<()> {
         let mut repo = self.reopen_repo()?;
         if Self::local_branch_exists_in_repo(&repo, branch)? {
@@ -443,25 +419,6 @@ impl GixRepo {
             ))));
         }
         Ok(())
-    }
-
-    fn checkout_local_branch_and_set_upstream(
-        &self,
-        local_branch: &str,
-        upstream: &str,
-    ) -> Result<()> {
-        let mut checkout = self.git_workdir_cmd();
-        checkout.arg("checkout").arg(local_branch);
-        run_git_simple(checkout, "git checkout")?;
-
-        let mut set_upstream = self.git_workdir_cmd();
-        set_upstream
-            .arg("branch")
-            .arg("--set-upstream-to")
-            .arg(upstream)
-            .arg("--")
-            .arg(local_branch);
-        run_git_simple(set_upstream, "git branch --set-upstream-to")
     }
 
     pub(super) fn create_branch_impl(&self, name: &str, target: &CommitId) -> Result<()> {
@@ -555,39 +512,23 @@ impl GixRepo {
         remote: &str,
         branch: &str,
         local_branch: &str,
+        mode: CheckoutRemoteBranchMode,
     ) -> Result<()> {
         validate_ref_like_arg(remote, "remote name")?;
         validate_ref_like_arg(branch, "branch name")?;
         validate_ref_like_arg(local_branch, "branch name")?;
 
         let upstream = format!("{remote}/{branch}");
-        if self.checkout_remote_branch_can_reuse_local_branch(remote, branch, local_branch)? {
-            return self.checkout_local_branch_and_set_upstream(local_branch, &upstream);
-        }
-
         let mut cmd = self.git_workdir_cmd();
         cmd.arg("checkout")
             .arg("--track")
-            .arg("-b")
+            .arg(match mode {
+                CheckoutRemoteBranchMode::Create => "-b",
+                CheckoutRemoteBranchMode::Overwrite => "-B",
+            })
             .arg(local_branch)
             .arg(&upstream);
-        match run_git_simple(cmd, "git checkout --track") {
-            Ok(()) => Ok(()),
-            Err(err) => {
-                // Another Git process can still create the branch after the
-                // fresh preflight above. Re-check refs instead of parsing
-                // stderr for "already exists".
-                if self.checkout_remote_branch_can_reuse_local_branch(
-                    remote,
-                    branch,
-                    local_branch,
-                )? {
-                    self.checkout_local_branch_and_set_upstream(local_branch, &upstream)
-                } else {
-                    Err(err)
-                }
-            }
-        }
+        run_git_simple(cmd, "git checkout --track")
     }
 
     pub(super) fn checkout_commit_impl(&self, id: &CommitId) -> Result<()> {

@@ -4582,13 +4582,14 @@ pub(super) enum PopoverKind {
     MergeAbortConfirm {
         repo_id: RepoId,
     },
-    /// Shown when "Create branch from…" with Checkout enabled names a branch
-    /// that already exists locally. Asks whether to check out the existing
-    /// branch, overwrite it with the target commit and check it out, or cancel.
+    /// Shown when a branch-creation checkout names a branch that already exists
+    /// locally. Asks whether to check out the existing branch, overwrite it
+    /// with the target commit and check it out, or cancel.
     BranchExistsPrompt {
         repo_id: RepoId,
         name: String,
         target: String,
+        operation: BranchExistsPromptOperation,
     },
     ForceDeleteBranchConfirm {
         repo_id: RepoId,

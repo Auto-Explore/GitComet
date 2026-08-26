@@ -15,8 +15,8 @@ use gitcomet_core::conflict_session::{ConflictRegionResolution, ConflictResolver
 use gitcomet_core::domain::{DiffTarget, FileConflictKind};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::{
-    CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode, RemoteUrlKind, ResetMode,
-    SafePushAfterCommitTarget,
+    CheckoutRemoteBranchMode, CommandOutput, GitRepository, InteractiveRebaseEntry, PullMode,
+    RemoteUrlKind, ResetMode, SafePushAfterCommitTarget,
 };
 use rustc_hash::FxHashMap;
 use std::path::PathBuf;
@@ -31,12 +31,14 @@ pub(super) fn checkout_remote_branch(
     remote: String,
     branch: String,
     local_branch: String,
+    mode: CheckoutRemoteBranchMode,
 ) -> Vec<Effect> {
     vec![Effect::CheckoutRemoteBranch {
         repo_id,
         remote,
         branch,
         local_branch,
+        mode,
     }]
 }
 

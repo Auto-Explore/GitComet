@@ -4,7 +4,7 @@ use gitcomet_core::domain::{
     FileDiffText, FileDiffTextSource, FileStatusKind,
 };
 use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
-use gitcomet_core::services::GitBackend;
+use gitcomet_core::services::{CheckoutRemoteBranchMode, GitBackend};
 use gitcomet_core::services::{ConflictSide, InteractiveRebaseAction, InteractiveRebaseEntry};
 use gitcomet_git_gix::GixBackend;
 use std::fs;
@@ -7070,7 +7070,12 @@ fn checkout_remote_branch_creates_tracking_branch_when_missing_locally() {
     let backend = GixBackend;
     let opened = backend.open(&clone).unwrap();
     opened
-        .checkout_remote_branch("origin", "feature", "feature")
+        .checkout_remote_branch(
+            "origin",
+            "feature",
+            "feature",
+            CheckoutRemoteBranchMode::Create,
+        )
         .unwrap();
 
     let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
@@ -7089,7 +7094,7 @@ fn checkout_remote_branch_creates_tracking_branch_when_missing_locally() {
 }
 
 #[test]
-fn checkout_remote_branch_existing_local_branch_updates_upstream_and_checks_out() {
+fn checkout_remote_branch_overwrite_resets_existing_branch_and_preserves_compatible_edits() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
@@ -7136,7 +7141,20 @@ fn checkout_remote_branch_existing_local_branch_updates_upstream_and_checks_out(
         ],
     );
     run_git(&clone, &["checkout", "-b", "topic"]);
+    run_git(&clone, &["config", "user.email", "you@example.com"]);
+    run_git(&clone, &["config", "user.name", "You"]);
+    run_git(&clone, &["config", "commit.gpgsign", "false"]);
+    write(&clone, "local-only.txt", "local\n");
+    run_git(&clone, &["add", "local-only.txt"]);
+    run_git(
+        &clone,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "local-only"],
+    );
+    let topic_before = run_git_output(&clone, &["rev-parse", "topic"]);
     run_git(&clone, &["checkout", "main"]);
+    write(&clone, "a.txt", "dirty but compatible\n");
+    let remote_target = run_git_output(&clone, &["rev-parse", "origin/feature"]);
+    assert_ne!(topic_before, remote_target);
 
     let upstream_before = git_command()
         .arg("-C")
@@ -7157,11 +7175,24 @@ fn checkout_remote_branch_existing_local_branch_updates_upstream_and_checks_out(
     let backend = GixBackend;
     let opened = backend.open(&clone).unwrap();
     opened
-        .checkout_remote_branch("origin", "feature", "topic")
+        .checkout_remote_branch(
+            "origin",
+            "feature",
+            "topic",
+            CheckoutRemoteBranchMode::Overwrite,
+        )
         .unwrap();
 
     let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
     assert_eq!(head, "topic");
+    assert_eq!(
+        run_git_output(&clone, &["rev-parse", "topic"]),
+        remote_target
+    );
+    assert_eq!(
+        fs::read_to_string(clone.join("a.txt")).unwrap(),
+        "dirty but compatible\n"
+    );
     let upstream = run_git_output(
         &clone,
         &[
@@ -7175,7 +7206,7 @@ fn checkout_remote_branch_existing_local_branch_updates_upstream_and_checks_out(
 }
 
 #[test]
-fn checkout_remote_branch_sees_local_branch_created_after_backend_open() {
+fn checkout_remote_branch_create_refuses_branch_created_after_backend_open() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
@@ -7226,6 +7257,7 @@ fn checkout_remote_branch_sees_local_branch_created_after_backend_open() {
     let opened = backend.open(&clone).unwrap();
 
     run_git(&clone, &["checkout", "-b", "topic"]);
+    let topic_before = run_git_output(&clone, &["rev-parse", "topic"]);
     run_git(&clone, &["checkout", "main"]);
 
     let upstream_before = git_command()
@@ -7244,22 +7276,37 @@ fn checkout_remote_branch_sees_local_branch_created_after_backend_open() {
         "topic should start without upstream tracking"
     );
 
-    opened
-        .checkout_remote_branch("origin", "feature", "topic")
-        .unwrap();
+    let err = opened
+        .checkout_remote_branch(
+            "origin",
+            "feature",
+            "topic",
+            CheckoutRemoteBranchMode::Create,
+        )
+        .expect_err("create mode must not reuse a branch created after the backend opened");
+    assert_git_failure(&err, "git checkout --track", GitFailureId::CommandFailed);
 
     let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
-    assert_eq!(head, "topic");
-    let upstream = run_git_output(
-        &clone,
-        &[
+    assert_eq!(head, "main");
+    assert_eq!(
+        run_git_output(&clone, &["rev-parse", "topic"]),
+        topic_before
+    );
+    let upstream = git_command()
+        .arg("-C")
+        .arg(&clone)
+        .args([
             "rev-parse",
             "--abbrev-ref",
             "--symbolic-full-name",
-            "@{upstream}",
-        ],
+            "topic@{upstream}",
+        ])
+        .status()
+        .expect("topic upstream probe");
+    assert!(
+        !upstream.success(),
+        "create mode must leave the existing branch's upstream unchanged"
     );
-    assert_eq!(upstream, "origin/feature");
 }
 
 #[test]
@@ -7295,7 +7342,12 @@ fn checkout_remote_branch_returns_structured_git_error_for_missing_remote_branch
     let backend = GixBackend;
     let opened = backend.open(&repo).unwrap();
     let err = opened
-        .checkout_remote_branch("origin", "missing-branch", "topic")
+        .checkout_remote_branch(
+            "origin",
+            "missing-branch",
+            "topic",
+            CheckoutRemoteBranchMode::Create,
+        )
         .expect_err("missing remote branch should return structured git error");
     match err.kind() {
         ErrorKind::Git(failure) => {
@@ -7355,17 +7407,27 @@ fn checkout_remote_branch_with_existing_local_branch_and_missing_remote_keeps_he
         ],
     );
     run_git(&clone, &["checkout", "-b", "topic"]);
+    let topic_before = run_git_output(&clone, &["rev-parse", "topic"]);
     run_git(&clone, &["checkout", "main"]);
 
     let backend = GixBackend;
     let opened = backend.open(&clone).unwrap();
     let err = opened
-        .checkout_remote_branch("origin", "missing-branch", "topic")
+        .checkout_remote_branch(
+            "origin",
+            "missing-branch",
+            "topic",
+            CheckoutRemoteBranchMode::Overwrite,
+        )
         .expect_err("missing remote branch should not switch to the existing local branch");
     assert_git_failure(&err, "git checkout --track", GitFailureId::CommandFailed);
 
     let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
     assert_eq!(head, "main");
+    assert_eq!(
+        run_git_output(&clone, &["rev-parse", "topic"]),
+        topic_before
+    );
 
     let upstream = git_command()
         .arg("-C")
@@ -7385,7 +7447,7 @@ fn checkout_remote_branch_with_existing_local_branch_and_missing_remote_keeps_he
 }
 
 #[test]
-fn checkout_remote_branch_dirty_worktree_failure_does_not_create_local_branch() {
+fn checkout_remote_branch_overwrite_dirty_worktree_failure_keeps_existing_branch() {
     if !require_git_shell_for_status_integration_tests() {
         return;
     }
@@ -7431,29 +7493,46 @@ fn checkout_remote_branch_dirty_worktree_failure_does_not_create_local_branch() 
             git_path_arg(&clone).as_str(),
         ],
     );
+    run_git(&clone, &["branch", "topic"]);
+    let topic_before = run_git_output(&clone, &["rev-parse", "topic"]);
     write(&clone, "a.txt", "dirty\n");
 
     let backend = GixBackend;
     let opened = backend.open(&clone).unwrap();
     let err = opened
-        .checkout_remote_branch("origin", "feature", "topic")
+        .checkout_remote_branch(
+            "origin",
+            "feature",
+            "topic",
+            CheckoutRemoteBranchMode::Overwrite,
+        )
         .expect_err("dirty checkout should fail");
     assert_git_failure(&err, "git checkout --track", GitFailureId::CommandFailed);
 
-    let topic_exists = git_command()
-        .arg("-C")
-        .arg(&clone)
-        .args(["show-ref", "--verify", "--quiet", "refs/heads/topic"])
-        .status()
-        .expect("show-ref topic");
-    assert!(
-        !topic_exists.success(),
-        "topic branch should not be created when checkout fails"
+    assert_eq!(
+        run_git_output(&clone, &["rev-parse", "topic"]),
+        topic_before
     );
 
     let head = run_git_output(&clone, &["rev-parse", "--abbrev-ref", "HEAD"]);
     assert_eq!(head, "main");
     assert_eq!(fs::read_to_string(clone.join("a.txt")).unwrap(), "dirty\n");
+
+    let upstream = git_command()
+        .arg("-C")
+        .arg(&clone)
+        .args([
+            "rev-parse",
+            "--abbrev-ref",
+            "--symbolic-full-name",
+            "topic@{upstream}",
+        ])
+        .status()
+        .expect("topic upstream probe");
+    assert!(
+        !upstream.success(),
+        "failed overwrite must not change the existing branch's upstream"
+    );
 }
 
 #[test]

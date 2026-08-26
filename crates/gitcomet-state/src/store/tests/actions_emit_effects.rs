@@ -2020,12 +2020,14 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
             remote: "origin".to_string(),
             branch: "feature".to_string(),
             local_branch: "feature".to_string(),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
         },
     );
     assert!(matches!(
         effects.as_slice(),
         [Effect::CheckoutRemoteBranch {
             repo_id: RepoId(1),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
             ..
         }]
     ));
@@ -2484,6 +2486,7 @@ fn branch_collision_prompt_choices_emit_exact_follow_up_actions() {
         repo_id,
         name: "feature".to_string(),
         target: "origin/feature-one".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::CreateBranch,
     };
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -2518,6 +2521,52 @@ fn branch_collision_prompt_choices_emit_exact_follow_up_actions() {
         effects.as_slice(),
         [Effect::CheckoutBranch { repo_id: id, name }]
             if *id == repo_id && name == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let remote_prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "upstream/feature-two".to_string(),
+        operation: crate::model::BranchExistsPromptOperation::CheckoutRemoteBranch {
+            remote: "upstream".to_string(),
+            branch: "feature-two".to_string(),
+        },
+    };
+    let mut state = seeded_state(repo_id);
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ShowBranchExistsPrompt {
+            prompt: remote_prompt.clone(),
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.branch_exists_prompt, Some(remote_prompt.clone()));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: remote_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CheckoutRemoteBranch {
+            repo_id: id,
+            remote,
+            branch,
+            local_branch,
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
+        }] if *id == repo_id
+            && remote == "upstream"
+            && branch == "feature-two"
+            && local_branch == "feature"
     ));
     assert!(state.branch_exists_prompt.is_none());
     assert_eq!(state.repos[0].local_actions_in_flight, 1);

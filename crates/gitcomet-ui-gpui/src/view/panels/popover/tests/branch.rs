@@ -205,6 +205,26 @@ impl GitRepository for TrackingRepo {
         Ok(())
     }
 
+    fn checkout_remote_branch(
+        &self,
+        remote: &str,
+        branch: &str,
+        local_branch: &str,
+        mode: CheckoutRemoteBranchMode,
+    ) -> Result<()> {
+        self.actions
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .push(format!(
+                "checkout-remote:{remote}/{branch}:{local_branch}:{mode:?}"
+            ));
+        *self
+            .current_branch
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = local_branch.to_string();
+        Ok(())
+    }
+
     fn checkout_commit(&self, _id: &CommitId) -> Result<()> {
         Ok(())
     }
@@ -375,6 +395,142 @@ pub(super) fn create_tracking_store(
             })
     });
     (store, events, repo, workdir)
+}
+
+fn open_checkout_remote_collision_prompt(
+    cx: &mut gpui::TestAppContext,
+) -> (
+    gpui::Entity<GitCometView>,
+    &mut gpui::VisualTestContext,
+    Arc<TrackingRepo>,
+    AppStore,
+) {
+    let (store, events, repo, _workdir) = create_tracking_store("checkout-remote-branch-collision");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    wait_until("local branches to load", || {
+        store
+            .snapshot()
+            .repos
+            .iter()
+            .find(|state| state.id == repo_id)
+            .is_some_and(|state| {
+                matches!(
+                    &state.branches,
+                    Loadable::Ready(branches) if branches.iter().any(|branch| branch.name == "main")
+                )
+            })
+    });
+
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|window, app| {
+        crate::app::bind_text_input_keys_for_test(app);
+        let _ = window.draw(app);
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.open_popover_at(
+                    PopoverKind::CheckoutRemoteBranchPrompt {
+                        repo_id,
+                        remote: "origin".to_string(),
+                        branch: "feature".to_string(),
+                    },
+                    gpui::point(gpui::px(120.0), gpui::px(72.0)),
+                    window,
+                    cx,
+                );
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("main", cx));
+                host.submit_checkout_remote_branch(cx);
+            });
+        });
+    });
+    wait_for_branch_exists_prompt(&store, &view, cx);
+
+    let kind = cx.update(|_window, app| {
+        view.read(app)
+            .popover_host
+            .read(app)
+            .popover_kind_for_tests()
+    });
+    assert!(
+        matches!(
+            kind,
+            Some(PopoverKind::BranchExistsPrompt {
+                ref name,
+                ref target,
+                operation: BranchExistsPromptOperation::CheckoutRemoteBranch {
+                    ref remote,
+                    ref branch,
+                },
+                ..
+            }) if remote == "origin"
+                && branch == "feature"
+                && name == "main"
+                && target == "origin/feature"
+        ),
+        "expected the branch collision dialog, got {kind:?}"
+    );
+    assert!(repo.actions().is_empty());
+
+    (view, cx, repo, store)
+}
+
+#[gpui::test]
+fn checkout_remote_branch_collision_dialog_escape_cancels(cx: &mut gpui::TestAppContext) {
+    let (view, cx, repo, store) = open_checkout_remote_collision_prompt(cx);
+
+    assert!(
+        cx.debug_bounds("branch_exists_cancel_hint").is_some(),
+        "expected a visible Cancel action"
+    );
+    assert!(
+        cx.debug_bounds("branch_exists_checkout_existing").is_some(),
+        "expected a visible Checkout existing action"
+    );
+    assert!(
+        cx.debug_bounds("branch_exists_overwrite").is_some(),
+        "expected a visible Overwrite and checkout action"
+    );
+
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    wait_until("branch collision prompt cancellation", || {
+        store.snapshot().branch_exists_prompt.is_none()
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected Escape to dismiss the collision dialog");
+    assert!(repo.actions().is_empty());
+}
+
+#[gpui::test]
+fn checkout_remote_branch_collision_dialog_checks_out_existing_branch(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (view, cx, repo, _store) = open_checkout_remote_collision_prompt(cx);
+
+    click_debug_selector(cx, "branch_exists_checkout_existing");
+    wait_until("existing branch checkout", || {
+        repo.actions() == vec!["checkout:main".to_string()]
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected checkout to close the collision dialog");
+}
+
+#[gpui::test]
+fn checkout_remote_branch_collision_dialog_overwrites_from_remote(cx: &mut gpui::TestAppContext) {
+    let (view, cx, repo, _store) = open_checkout_remote_collision_prompt(cx);
+
+    click_debug_selector(cx, "branch_exists_overwrite");
+    wait_until("remote branch overwrite checkout", || {
+        repo.actions() == vec!["checkout-remote:origin/feature:main:Overwrite".to_string()]
+    });
+
+    let is_open = cx.update(|_window, app| view.read(app).popover_host.read(app).is_open());
+    assert!(!is_open, "expected overwrite to close the collision dialog");
 }
 
 #[gpui::test]

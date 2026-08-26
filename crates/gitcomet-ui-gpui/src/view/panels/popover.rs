@@ -2176,6 +2176,7 @@ impl PopoverHost {
             repo_id,
             name,
             target,
+            operation,
         }) = self.popover.as_ref()
         else {
             return false;
@@ -2186,6 +2187,7 @@ impl PopoverHost {
                 repo_id: *repo_id,
                 name: name.clone(),
                 target: target.clone(),
+                operation: operation.clone(),
             },
             choice,
         });
@@ -2837,19 +2839,42 @@ impl PopoverHost {
             })
             .unwrap_or(false);
         if local_branch_exists {
-            self.push_toast(
-                components::ToastKind::Error,
-                format!("Branch already exists: {local_branch}"),
-                cx,
-            );
+            self.store.dispatch(Msg::ShowBranchExistsPrompt {
+                prompt: BranchExistsPromptState {
+                    repo_id,
+                    name: local_branch,
+                    target: format!("{remote}/{branch}"),
+                    operation: BranchExistsPromptOperation::CheckoutRemoteBranch { remote, branch },
+                },
+            });
             return;
         }
 
+        self.dispatch_checkout_remote_branch(
+            repo_id,
+            remote,
+            branch,
+            local_branch,
+            CheckoutRemoteBranchMode::Create,
+            cx,
+        );
+    }
+
+    pub(super) fn dispatch_checkout_remote_branch(
+        &mut self,
+        repo_id: RepoId,
+        remote: String,
+        branch: String,
+        local_branch: String,
+        mode: CheckoutRemoteBranchMode,
+        cx: &mut gpui::Context<Self>,
+    ) {
         self.store.dispatch(Msg::CheckoutRemoteBranch {
             repo_id,
             remote,
             branch,
             local_branch,
+            mode,
         });
         self.main_pane.update(cx, |pane, cx| {
             pane.rebuild_diff_cache(cx);
@@ -4056,7 +4081,8 @@ impl PopoverHost {
                 repo_id,
                 name,
                 target,
-            } => branch_exists_prompt::panel(self, repo_id, name, target, cx),
+                operation,
+            } => branch_exists_prompt::panel(self, repo_id, name, target, operation, cx),
             PopoverKind::StashPrompt => stash_prompt::panel(self, cx),
             PopoverKind::CommitPrompt { repo_id } => commit_prompt::panel(self, repo_id, cx),
             PopoverKind::StashPickerPrompt { repo_id, purpose } => {

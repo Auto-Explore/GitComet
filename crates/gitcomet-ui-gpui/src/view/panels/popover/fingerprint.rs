@@ -568,11 +568,13 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             repo_id,
             name,
             target,
+            operation,
         } => {
             84u8.hash(hasher);
             repo_id.hash(hasher);
             name.hash(hasher);
             target.hash(hasher);
+            operation.hash(hasher);
         }
         PopoverKind::ForceDeleteBranchConfirm { repo_id, name } => {
             32u8.hash(hasher);

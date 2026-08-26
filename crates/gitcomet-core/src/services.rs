@@ -147,6 +147,12 @@ pub enum ResetMode {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CheckoutRemoteBranchMode {
+    Create,
+    Overwrite,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RemoteUrlKind {
     Fetch,
     Push,
@@ -670,6 +676,7 @@ pub trait GitRepository: Send + Sync {
         _remote: &str,
         _branch: &str,
         _local_branch: &str,
+        _mode: CheckoutRemoteBranchMode,
     ) -> Result<()> {
         Err(Error::new(ErrorKind::Unsupported(
             "remote branch checkout is not implemented for this backend",

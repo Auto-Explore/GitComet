@@ -3950,12 +3950,18 @@ impl GitRepository for RecordingCheckoutRepo {
             .push(format!("checkout {name}"));
         Ok(())
     }
-    fn checkout_remote_branch(&self, remote: &str, branch: &str, local_branch: &str) -> Result<()> {
+    fn checkout_remote_branch(
+        &self,
+        remote: &str,
+        branch: &str,
+        local_branch: &str,
+        mode: gitcomet_core::services::CheckoutRemoteBranchMode,
+    ) -> Result<()> {
         self.calls
             .lock()
             .expect("checkout recording mutex")
             .push(format!(
-                "checkout_remote {remote}/{branch} -> {local_branch}"
+                "checkout_remote {remote}/{branch} -> {local_branch} ({mode:?})"
             ));
         Ok(())
     }
@@ -4136,13 +4142,14 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
             remote: "origin".to_string(),
             branch: "feature".to_string(),
             local_branch: "feature".to_string(),
+            mode: gitcomet_core::services::CheckoutRemoteBranchMode::Overwrite,
         },
     );
 
     wait_for_checkout_refresh_messages(&msg_rx, repo_id, true, true);
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
-        vec!["checkout_remote origin/feature -> feature".to_string()]
+        vec!["checkout_remote origin/feature -> feature (Overwrite)".to_string()]
     );
 }
 
@@ -5242,6 +5249,7 @@ fn schedule_effect_dispatches_many_variants_with_repo_present() {
                 remote: "origin".to_string(),
                 branch: "main".to_string(),
                 local_branch: "main".to_string(),
+                mode: gitcomet_core::services::CheckoutRemoteBranchMode::Create,
             },
             1,
         ),

@@ -157,13 +157,14 @@ pub(super) fn schedule_checkout_remote_branch(
     remote: String,
     branch: String,
     local_branch: String,
+    mode: gitcomet_core::services::CheckoutRemoteBranchMode,
 ) {
     schedule_repo_action_with_hook(
         executor,
         repos,
         msg_tx,
         repo_id,
-        move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch),
+        move |repo| repo.checkout_remote_branch(&remote, &branch, &local_branch, mode),
         send_refresh_branches_and_load_worktrees_on_success,
         repo_action_finished(RepoActionKind::CheckoutRemoteBranch),
     );

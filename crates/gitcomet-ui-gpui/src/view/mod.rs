@@ -15,11 +15,11 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::process::refresh_git_runtime;
-use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
+use gitcomet_core::services::{CheckoutRemoteBranchMode, PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptState, CloneOpState,
-    CloneOpStatus, DefaultTagType, DiagnosticKind, Loadable, RepoId, RepoState,
-    SubmoduleTrustPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptOperation,
+    BranchExistsPromptState, CloneOpState, CloneOpStatus, DefaultTagType, DiagnosticKind, Loadable,
+    RepoId, RepoState, SubmoduleTrustPromptOperation,
 };
 use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
@@ -3778,6 +3778,7 @@ impl Render for GitCometView {
                     repo_id: prompt.repo_id,
                     name: prompt.name,
                     target: prompt.target,
+                    operation: prompt.operation,
                 },
                 window,
                 cx,
