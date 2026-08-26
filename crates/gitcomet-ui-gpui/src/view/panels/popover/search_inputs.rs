@@ -180,16 +180,39 @@ impl PopoverHost {
                 |this| &mut this.repo_picker_selected_index,
                 // Navigation walks the same filtered order the picker renders,
                 // so Enter can't land on a different repository than the
-                // highlighted row — including across the two sections. While
+                // highlighted row — including across all three sections. While
                 // the sort menu covers the list, it walks the sort options
                 // instead.
                 |this, query, cx| {
+                    let query_changed = this.repo_picker_search_query != query;
+                    if query_changed {
+                        this.repo_picker_search_query.clear();
+                        this.repo_picker_search_query.push_str(query);
+                    }
                     // Editing the filter re-orders the rows a row menu is
                     // floating over, so the menu goes before the targets below
                     // are read — otherwise it keeps the arrow keys while the
                     // list moves under its highlight.
                     picker_row_menu::close_on_query_change(this, query, cx);
-                    Some(repo_picker::nav_targets(this, query, cx))
+                    if query_changed {
+                        // Typing into the still-focused input while Sort is open
+                        // returns to repository results, just like typing while
+                        // a row menu is open dismisses that menu.
+                        this.repo_picker_sort_menu_open = false;
+                    }
+
+                    let targets = repo_picker::nav_targets(this, query, cx);
+                    if query_changed {
+                        // A real search always starts at its top-ranked visible
+                        // result. Empty and no-match queries remain neutral, and
+                        // resetting the scroll keeps row zero and its section
+                        // header on screen after navigation deep into the list.
+                        this.repo_picker_selected_index =
+                            (!query.is_empty() && !targets.is_empty()).then_some(0);
+                        this.picker_prompt_scroll
+                            .set_offset(point(px(0.0), px(0.0)));
+                    }
+                    Some(targets)
                 },
                 repo_picker::dismiss,
                 |this, sel, cx| {
