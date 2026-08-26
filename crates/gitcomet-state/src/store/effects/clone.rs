@@ -586,7 +586,7 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
         }
     };
 
-    let mut removal_result = remove();
+    let removal_result = remove();
     #[cfg(windows)]
     for _ in 0..10 {
         if removal_result.is_ok() || !dest.exists() {
