@@ -9,6 +9,15 @@ impl Render for GitCometView {
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
 
+        let external_repo_drop_enabled =
+            renders_full_chrome(self.view_mode) && !self.state.repos.is_empty();
+        if self.external_drag_paths.is_some()
+            && (!external_repo_drop_enabled
+                || (!cx.has_active_drag() && !self.external_drag_drop_pending))
+        {
+            self.clear_external_drag_state(false, cx);
+        }
+
         let theme = self.theme;
         let font_preferences = crate::font_preferences::current(cx);
         debug_assert!(matches!(
@@ -474,6 +483,13 @@ impl Render for GitCometView {
             .cursor(cursor)
             .text_color(theme.colors.foreground.primary);
         root = root.relative();
+        if external_repo_drop_enabled {
+            root = root.on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, _window, cx| {
+                    this.begin_external_drag_classification(event.drag(cx).clone(), false, cx);
+                },
+            ));
+        }
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
             .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {

@@ -832,6 +832,10 @@ pub struct GitCometView {
 
     pub(super) open_repo_panel: bool,
     pub(super) open_repo_input: Entity<components::TextInput>,
+    pub(super) external_drag_paths: Option<gpui::ExternalPaths>,
+    pub(super) external_drag_payload: Option<external_drag::ClassifiedExternalPaths>,
+    pub(super) external_drag_classification_seq: u64,
+    pub(super) external_drag_drop_pending: bool,
 
     pub(super) hover_resize_edge: Option<ResizeEdge>,
 

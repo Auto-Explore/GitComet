@@ -791,6 +791,65 @@ fn snapshot_repos_from_state_reuses_cached_open_repo_slice_for_same_repo_list() 
 }
 
 #[test]
+fn snapshot_excludes_provisional_drop_and_preserves_its_previous_active_tab() {
+    clear_session_repos_snapshot_cache();
+
+    let repo_a = PathBuf::from("/tmp/repo-a");
+    let repo_b = PathBuf::from("/tmp/repo-b");
+    let dropped = PathBuf::from("/tmp/dropped-repo");
+    let mut first = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: repo_a.clone(),
+        },
+    );
+    first.last_active_at =
+        Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1));
+    let mut second = RepoState::new_opening(
+        RepoId(2),
+        RepoSpec {
+            workdir: repo_b.clone(),
+        },
+    );
+    second.last_active_at =
+        Some(std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(2));
+    let provisional = RepoState::new_external_drop_opening(
+        RepoId(3),
+        RepoSpec {
+            workdir: dropped.clone(),
+        },
+        Some(RepoId(1)),
+    );
+    let mut state = AppState {
+        repos: vec![first, second, provisional],
+        active_repo: Some(RepoId(3)),
+        ..Default::default()
+    };
+
+    let pending = snapshot_repos_from_state(&state);
+    assert_eq!(
+        pending.open_repos.as_ref(),
+        &[
+            path_storage_key_shared(&repo_a),
+            path_storage_key_shared(&repo_b),
+        ]
+    );
+    assert_eq!(pending.active_repo_index, Some(0));
+
+    assert!(state.repos[2].commit_external_drop_open());
+    let committed = snapshot_repos_from_state(&state);
+    assert_eq!(
+        committed.open_repos.as_ref(),
+        &[
+            path_storage_key_shared(&repo_a),
+            path_storage_key_shared(&repo_b),
+            path_storage_key_shared(&dropped),
+        ]
+    );
+    assert_eq!(committed.active_repo_index, Some(2));
+}
+
+#[test]
 fn snapshot_repos_from_state_cache_keeps_dedup_index_for_duplicate_workdirs() {
     let repo_a = PathBuf::from("/tmp/repo-a");
     let mut state = AppState {

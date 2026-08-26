@@ -1,6 +1,7 @@
 use super::*;
 use crate::model::{
-    GitLogSettings, GitLogTagFetchMode, RepoLoadsInFlight, SidebarDataRequest, SidebarMode,
+    AppNotificationKind, GitLogSettings, GitLogTagFetchMode, RepoLoadsInFlight, SidebarDataRequest,
+    SidebarMode,
 };
 use rustc_hash::{FxHashMap, FxHashSet};
 
@@ -490,6 +491,332 @@ fn open_repo_sets_opening_and_emits_effect() {
             .iter()
             .any(|e| matches!(e, Effect::PersistSession { .. }))
     );
+}
+
+#[test]
+fn dropped_repo_stays_provisional_until_the_backend_opens_it() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let path = PathBuf::from("/tmp/dropped-repo");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(path),
+    );
+
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert_eq!(state.repos.len(), 1);
+    assert!(state.repos[0].open.is_loading());
+    assert!(state.repos[0].is_provisional_external_drop_open());
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::OpenRepo {
+            repo_id: RepoId(1),
+            ..
+        }]
+    ));
+    assert!(!effects.iter().any(|effect| matches!(
+        effect,
+        Effect::PersistRecentRepo { .. }
+            | Effect::PersistSession { .. }
+            | Effect::PersistRepoHistoryMode { .. }
+    )));
+}
+
+#[test]
+fn repeating_or_closing_a_provisional_drop_never_records_it_as_recent() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let path = PathBuf::from("/tmp/dropped-repo");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(path.clone()),
+    );
+    let repeated_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(path),
+    );
+    assert_eq!(state.repos.len(), 1);
+    assert!(state.repos[0].is_provisional_external_drop_open());
+    assert!(
+        !repeated_effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistRecentRepo { .. }))
+    );
+
+    let close_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepo { repo_id: RepoId(1) },
+    );
+    assert!(state.repos.is_empty());
+    assert!(
+        !close_effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistRecentRepo { .. }))
+    );
+    assert!(
+        close_effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::PersistSession { .. }))
+    );
+}
+
+#[test]
+fn bulk_close_skips_provisional_drop_when_recording_recents() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepo(PathBuf::from("/tmp/committed-repo")),
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(PathBuf::from("/tmp/dropped-repo")),
+    );
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::CloseRepos {
+            repo_ids: vec![RepoId(1), RepoId(2)],
+            activate_after: None,
+        },
+    );
+
+    let recent_repo_ids: Vec<_> = effects
+        .iter()
+        .filter_map(|effect| match effect {
+            Effect::PersistRecentRepo { repo_id, .. } => *repo_id,
+            _ => None,
+        })
+        .collect();
+    assert_eq!(recent_repo_ids, vec![RepoId(1)]);
+}
+
+#[test]
+fn successful_dropped_repo_commits_and_emits_deferred_persistence() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let path = PathBuf::from("/tmp/dropped-repo");
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(path.clone()),
+    );
+    let spec = state.repos[0].spec.clone();
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedOk {
+            repo_id: RepoId(1),
+            spec,
+            repo: Arc::new(DummyRepo::new(path.to_string_lossy().as_ref())),
+        }),
+    );
+
+    assert!(matches!(state.repos[0].open, Loadable::Ready(())));
+    assert!(!state.repos[0].is_provisional_external_drop_open());
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::PersistRecentRepo {
+            repo_id: Some(RepoId(1)),
+            ..
+        }
+    )));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::PersistSession {
+            repo_id: Some(RepoId(1)),
+            ..
+        }
+    )));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::PersistRepoHistoryMode {
+            repo_id: Some(RepoId(1)),
+            ..
+        }
+    )));
+}
+
+#[test]
+fn dropped_existing_repo_focuses_its_tab_without_creating_a_duplicate() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(PathBuf::from("/tmp/repo1")),
+    );
+
+    assert_eq!(state.repos.len(), 2);
+    assert_eq!(state.active_repo, Some(RepoId(1)));
+    assert!(
+        state
+            .repos
+            .iter()
+            .all(|repo| !repo.is_provisional_external_drop_open())
+    );
+    assert!(has_status_refresh_effects(&effects, RepoId(1)));
+}
+
+#[test]
+fn operational_error_discards_dropped_tab_and_preserves_existing_recents() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let existing = dir.path().join("existing");
+    let dropped = dir.path().join("dropped");
+    let unrelated = dir.path().join("unrelated");
+    let session_file = dir.path().join("session.json");
+    for path in [&existing, &dropped, &unrelated] {
+        std::fs::create_dir(path).expect("create repository candidate directory");
+    }
+    let _session_file_override =
+        crate::session::push_test_session_file_path_override(Some(session_file.clone()));
+    crate::session::persist_recent_repo_to_path(&dropped, &session_file)
+        .expect("seed dropped recent");
+    crate::session::persist_recent_repo_to_path(&unrelated, &session_file)
+        .expect("seed unrelated recent");
+
+    let existing_id = open_repo_ready(&mut repos, &id_alloc, &mut state, existing);
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(dropped.clone()),
+    );
+    let dropped_id = state.active_repo.expect("dropped tab becomes active");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+            repo_id: dropped_id,
+            spec: RepoSpec {
+                workdir: dropped.clone(),
+            },
+            error: Error::new(ErrorKind::Backend("permission denied".to_string())),
+        }),
+    );
+
+    assert_eq!(state.repos.len(), 1);
+    assert_eq!(state.active_repo, Some(existing_id));
+    assert_eq!(state.repos[0].id, existing_id);
+    assert!(state.notifications.iter().any(|notification| {
+        notification.kind == AppNotificationKind::Warning
+            && notification.message
+                == format!(
+                    "Could not open repository at {}: permission denied",
+                    super::reducer::normalize_repo_path(dropped.clone()).display()
+                )
+    }));
+
+    let session = crate::session::load_from_path(&session_file);
+    assert_eq!(
+        session.recent_repos,
+        vec![
+            super::reducer::normalize_repo_path(unrelated),
+            super::reducer::normalize_repo_path(dropped),
+        ]
+    );
+}
+
+#[test]
+fn failed_dropped_repo_restores_the_repo_active_before_the_drop() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let session_dir = tempfile::tempdir().expect("session tempdir");
+    let _session_file_override = crate::session::push_test_session_file_path_override(Some(
+        session_dir.path().join("session.json"),
+    ));
+
+    let original_active = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+    let adjacent_repo = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo3");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo {
+            repo_id: original_active,
+        },
+    );
+
+    let dropped_path = PathBuf::from("/tmp/not-a-repository");
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::OpenRepoFromExternalDrop(dropped_path.clone()),
+    );
+    let dropped_id = state.active_repo.expect("dropped tab becomes active");
+    assert_ne!(dropped_id, original_active);
+    assert_eq!(
+        state
+            .repos
+            .iter()
+            .find(|repo| repo.id == dropped_id)
+            .and_then(RepoState::external_drop_previous_active_repo),
+        Some(original_active)
+    );
+
+    let failure_effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
+            repo_id: dropped_id,
+            spec: RepoSpec {
+                workdir: dropped_path,
+            },
+            error: Error::new(ErrorKind::Backend("open failed".to_string())),
+        }),
+    );
+
+    assert_eq!(state.repos.len(), 3);
+    assert_eq!(state.active_repo, Some(original_active));
+    assert_ne!(state.active_repo, Some(adjacent_repo));
+    assert!(
+        has_status_refresh_effects(&failure_effects, original_active),
+        "restoring the active repository must restart loads canceled by the dropped tab"
+    );
+    assert!(failure_effects.iter().any(
+        |effect| matches!(effect, Effect::LoadLog { repo_id, .. } if *repo_id == original_active)
+    ));
+    assert!(failure_effects.iter().any(
+        |effect| matches!(effect, Effect::LoadBranches { repo_id } if *repo_id == original_active)
+    ));
 }
 
 #[test]
@@ -4648,11 +4975,13 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
+    let invalid_repo = PathBuf::from("/tmp/not-a-repo");
+    let normalized_invalid_repo = crate::store::reducer::normalize_repo_path(invalid_repo.clone());
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/not-a-repo")),
+        Msg::OpenRepo(invalid_repo.clone()),
     );
 
     let error = Error::new(ErrorKind::NotARepository);
@@ -4663,7 +4992,7 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id: RepoId(1),
             spec: RepoSpec {
-                workdir: PathBuf::from("/tmp/not-a-repo"),
+                workdir: invalid_repo.clone(),
             },
             error,
         }),
@@ -4671,12 +5000,14 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
 
     assert!(state.repos.is_empty());
     assert_eq!(state.active_repo, None);
-    assert!(
-        state
-            .notifications
-            .iter()
-            .any(|n| n.message.contains("not a git repository"))
-    );
+    assert!(state.notifications.iter().any(|notification| {
+        notification.kind == AppNotificationKind::Warning
+            && notification.message
+                == format!(
+                    "No valid Git repository was found at {}.",
+                    normalized_invalid_repo.display()
+                )
+    }));
 }
 
 #[test]

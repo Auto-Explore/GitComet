@@ -11,7 +11,7 @@ use gitcomet_state::model::{AppState, AuthPromptState, AuthRetryOperation, RepoI
 use gitcomet_state::store::AppStore;
 use std::path::Path;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 struct TestBackend;
@@ -20,6 +20,22 @@ impl GitBackend for TestBackend {
     fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
         Err(Error::new(ErrorKind::Unsupported(
             "Test backend does not open repositories",
+        )))
+    }
+}
+
+struct RecordingFailingBackend {
+    opened: Arc<Mutex<Vec<PathBuf>>>,
+}
+
+impl GitBackend for RecordingFailingBackend {
+    fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
+        self.opened
+            .lock()
+            .expect("recording backend lock")
+            .push(workdir.to_path_buf());
+        Err(Error::new(ErrorKind::Unsupported(
+            "Recording backend does not open repositories",
         )))
     }
 }
@@ -58,6 +74,14 @@ fn click_debug_selector(cx: &mut gpui::VisualTestContext, selector: &'static str
     cx.simulate_mouse_up(center, gpui::MouseButton::Left, gpui::Modifiers::default());
 }
 
+fn dispatch_file_drop(cx: &mut gpui::VisualTestContext, event: gpui::FileDropEvent) {
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(gpui::PlatformInput::FileDrop(event), app);
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+}
+
 fn install_repo_tab_test_state(
     store: &AppStore,
     view: &gpui::Entity<GitCometView>,
@@ -76,6 +100,7 @@ fn install_repo_tab_test_state_with_count(
 ) {
     let mut state = AppState {
         active_repo: Some(active_repo),
+        git_runtime: available_git_runtime_state(),
         ..AppState::default()
     };
     for ix in 1..=repo_count {
@@ -182,6 +207,262 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
         active_repo: Some(repo_id),
         ..Default::default()
     }
+}
+
+#[gpui::test]
+fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let store_for_state = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    install_repo_tab_test_state_with_count(&store_for_state, &view, cx, RepoId(1), 1);
+
+    let folder = tempfile::tempdir().expect("create dropped folder");
+    let outside_bar = cx.update(|window, _app| {
+        let viewport = window.viewport_size();
+        gpui::point(viewport.width / 2.0, viewport.height / 2.0)
+    });
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Entered {
+                position: outside_bar,
+                paths: gpui::ExternalPaths([folder.path().to_path_buf()].into_iter().collect()),
+            }),
+            app,
+        );
+        assert!(test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+        assert!(!test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+    test_support::redraw(cx);
+
+    cx.update(|_window, app| {
+        assert!(test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+        assert!(!test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+    });
+
+    let bar_point = cx
+        .debug_bounds("repo_external_folder_drop_target")
+        .expect("repository bar drop target should be rendered")
+        .center();
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Pending {
+            position: bar_point,
+        },
+    );
+    cx.update(|_window, app| {
+        assert!(test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+    });
+
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Pending {
+            position: outside_bar,
+        },
+    );
+    cx.update(|_window, app| {
+        assert!(!test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+    });
+
+    let classification_seq =
+        cx.update(|_window, app| test_support::external_drag_classification_seq(view.read(app)));
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position: outside_bar,
+            paths: gpui::ExternalPaths([folder.path().to_path_buf()].into_iter().collect()),
+        },
+    );
+    cx.update(|_window, app| {
+        assert_eq!(
+            test_support::external_drag_classification_seq(view.read(app)),
+            classification_seq,
+            "repeated move events for one payload must reuse its background classification"
+        );
+    });
+
+    dispatch_file_drop(cx, gpui::FileDropEvent::Exited);
+    test_support::redraw(cx);
+    cx.update(|_window, app| {
+        assert!(!test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+        assert!(!test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+    });
+}
+
+#[gpui::test]
+fn dropping_one_folder_on_repository_bar_dispatches_external_repo_open(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
+        opened: Arc::clone(&opened),
+    });
+    let (store, events) = AppStore::new(backend);
+    let store_for_state = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    install_repo_tab_test_state_with_count(&store_for_state, &view, cx, RepoId(1), 1);
+
+    let folder = tempfile::tempdir().expect("create dropped folder");
+    let drop_point = cx
+        .debug_bounds("repo_external_folder_drop_target")
+        .expect("repository bar drop target should be rendered")
+        .center();
+    // Submit in the same UI turn as Entered. The background metadata probe
+    // cannot apply its result until this update completes, so this exercises
+    // the pending-drop path rather than relying on a fast local filesystem.
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Entered {
+                position: drop_point,
+                paths: gpui::ExternalPaths([folder.path().to_path_buf()].into_iter().collect()),
+            }),
+            app,
+        );
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Submit {
+                position: drop_point,
+            }),
+            app,
+        );
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
+
+    wait_until("folder drop to dispatch a repository open", || {
+        store_for_state
+            .snapshot()
+            .repos
+            .iter()
+            .any(|repo| repo.spec.workdir == folder.path())
+            || !opened.lock().expect("recording backend lock").is_empty()
+    });
+    let opened = opened.lock().expect("recording backend lock");
+    assert!(
+        opened.is_empty() || opened.as_slice() == [folder.path().to_path_buf()],
+        "the repository-load effect must receive the dropped folder"
+    );
+    cx.update(|_window, app| {
+        assert!(!test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+    });
+}
+
+#[gpui::test]
+fn repository_bar_ignores_files_multiple_paths_and_drops_outside_the_bar(
+    cx: &mut gpui::TestAppContext,
+) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let opened = Arc::new(Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(RecordingFailingBackend {
+        opened: Arc::clone(&opened),
+    });
+    let (store, events) = AppStore::new(backend);
+    let store_for_state = store.clone();
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+    install_repo_tab_test_state_with_count(&store_for_state, &view, cx, RepoId(1), 1);
+
+    let folder_a = tempfile::tempdir().expect("create first dropped folder");
+    let folder_b = tempfile::tempdir().expect("create second dropped folder");
+    let file = tempfile::NamedTempFile::new().expect("create dropped file");
+    let bar_point = cx
+        .debug_bounds("repo_external_folder_drop_target")
+        .expect("repository bar drop target should be rendered")
+        .center();
+    let outside_bar = cx.update(|window, _app| {
+        let viewport = window.viewport_size();
+        gpui::point(viewport.width / 2.0, viewport.height / 2.0)
+    });
+
+    for paths in [
+        vec![file.path().to_path_buf()],
+        vec![folder_a.path().to_path_buf(), folder_b.path().to_path_buf()],
+    ] {
+        dispatch_file_drop(
+            cx,
+            gpui::FileDropEvent::Entered {
+                position: bar_point,
+                paths: gpui::ExternalPaths(paths.into_iter().collect()),
+            },
+        );
+        cx.update(|_window, app| {
+            assert!(!test_support::repo_external_folder_drag_active(
+                view.read(app),
+                app
+            ));
+        });
+        dispatch_file_drop(
+            cx,
+            gpui::FileDropEvent::Submit {
+                position: bar_point,
+            },
+        );
+    }
+
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Entered {
+            position: outside_bar,
+            paths: gpui::ExternalPaths([folder_a.path().to_path_buf()].into_iter().collect()),
+        },
+    );
+    cx.update(|_window, app| {
+        assert!(test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+    });
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Submit {
+            position: outside_bar,
+        },
+    );
+    pump_for(cx, Duration::from_millis(100));
+
+    assert!(
+        opened.lock().expect("recording backend lock").is_empty(),
+        "unsupported payloads and drops outside the repository bar must remain unhandled"
+    );
+    cx.update(|_window, app| {
+        assert!(!test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+    });
 }
 
 #[gpui::test]

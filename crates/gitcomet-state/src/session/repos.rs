@@ -80,7 +80,80 @@ fn snapshot_repos_from_cache(state: &AppState) -> Option<SessionReposSnapshot> {
     })
 }
 
+/// Builds the persisted repository list while one or more external-drop
+/// candidates are still being validated. Those temporary tabs must not leak
+/// into the session through an unrelated save (for example, switching back to
+/// another tab while a drop is opening).
+fn snapshot_repos_without_provisional_drops(state: &AppState) -> Option<SessionReposSnapshot> {
+    if !state
+        .repos
+        .iter()
+        .any(|repo| repo.is_provisional_external_drop_open())
+    {
+        return None;
+    }
+
+    let active_repo_id = state
+        .active_repo
+        .filter(|active_id| {
+            state
+                .repos
+                .iter()
+                .any(|repo| repo.id == *active_id && !repo.is_provisional_external_drop_open())
+        })
+        .or_else(|| {
+            state
+                .active_repo
+                .and_then(|active_id| state.repos.iter().find(|repo| repo.id == active_id))
+                .filter(|repo| repo.is_provisional_external_drop_open())
+                .and_then(|repo| repo.external_drop_previous_active_repo())
+                .filter(|previous_active| {
+                    state.repos.iter().any(|repo| {
+                        repo.id == *previous_active && !repo.is_provisional_external_drop_open()
+                    })
+                })
+        })
+        .or_else(|| {
+            state
+                .repos
+                .iter()
+                .filter(|repo| !repo.is_provisional_external_drop_open())
+                .max_by_key(|repo| repo.last_active_at)
+                .map(|repo| repo.id)
+        });
+
+    let mut unique_keys = SmallVec::<[Arc<str>; 24]>::new();
+    let mut active_repo_index = None;
+    for repo in state
+        .repos
+        .iter()
+        .filter(|repo| !repo.is_provisional_external_drop_open())
+    {
+        let key = repo.session_workdir_key();
+        let unique_ix = if let Some(ix) = unique_keys
+            .iter()
+            .position(|seen| seen.as_ref() == key.as_ref())
+        {
+            ix
+        } else {
+            unique_keys.push(Arc::clone(key));
+            unique_keys.len() - 1
+        };
+        if active_repo_index.is_none() && Some(repo.id) == active_repo_id {
+            active_repo_index = Some(unique_ix);
+        }
+    }
+
+    Some(SessionReposSnapshot {
+        open_repos: unique_keys.into_vec().into(),
+        active_repo_index,
+    })
+}
+
 pub fn snapshot_repos_from_state(state: &AppState) -> SessionReposSnapshot {
+    if let Some(snapshot) = snapshot_repos_without_provisional_drops(state) {
+        return snapshot;
+    }
     if let Some(snapshot) = snapshot_repos_from_cache(state) {
         return snapshot;
     }
