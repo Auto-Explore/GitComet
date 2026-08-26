@@ -414,6 +414,111 @@ fn repo_picker_sort_menu_takes_over_navigation_and_escape(cx: &mut gpui::TestApp
     });
 }
 
+#[gpui::test]
+fn repo_picker_search_selects_first_result_and_enter_activates_it(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events, _repo, _workdir) = create_tracking_store("repo-picker-auto-select");
+    let snapshot = store.snapshot();
+    let repo_id = snapshot.active_repo.expect("expected an active repository");
+    let open_workdir = snapshot
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .expect("expected active repository state")
+        .spec
+        .workdir
+        .clone();
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    cx.update(|_window, app| crate::app::bind_text_input_keys_for_test(app));
+    open_repo_picker(&view, cx);
+    let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
+    let input = cx.update(|_window, app| {
+        popover_host.update(app, |host, cx| {
+            // Two matching rows in different sections prove index zero is the
+            // first displayed result across the whole picker, not merely the
+            // first Recently Closed match.
+            host.cached_pinned_repos = vec![open_workdir.clone()];
+            host.cached_recent_repos = vec![std::path::PathBuf::from(
+                "/tmp/repo-picker-auto-select-closed",
+            )];
+            repo_picker::toggle_sort_menu(host, cx);
+            host.repo_picker_search_input
+                .clone()
+                .expect("repository picker search input")
+        })
+    });
+
+    input.update(cx, |input, cx| input.set_text("repo-picker", cx));
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let host = popover_host.read(app);
+        assert!(
+            !host.repo_picker_sort_menu_open,
+            "typing should dismiss the Sort menu and reveal repository results"
+        );
+        assert_eq!(
+            host.repo_picker_selected_index,
+            Some(0),
+            "a non-empty query should select its first visible match"
+        );
+        assert!(matches!(
+            repo_picker::filtered_layout(host, "repo-picker").0.first(),
+            Some(repo_picker::RepoPickerEntry::Open(id)) if *id == repo_id
+        ));
+    });
+
+    // Navigation remains manual until the text changes again. Refining the
+    // query then returns selection and scroll to its first result.
+    cx.simulate_keystrokes("down");
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        popover_host.update(app, |host, _cx| {
+            assert_eq!(host.repo_picker_selected_index, Some(1));
+            host.picker_prompt_scroll
+                .set_offset(gpui::point(gpui::px(0.0), gpui::px(-100.0)));
+        });
+    });
+    input.update(cx, |input, cx| input.set_text("repo-picker-auto", cx));
+    cx.run_until_parked();
+    cx.update(|_window, app| {
+        let host = popover_host.read(app);
+        assert_eq!(host.repo_picker_selected_index, Some(0));
+        assert_eq!(
+            host.picker_prompt_scroll.offset(),
+            gpui::point(gpui::px(0.0), gpui::px(0.0)),
+            "a query edit should bring the newly selected first row into view"
+        );
+    });
+
+    input.update(cx, |input, cx| input.set_text("definitely-no-match", cx));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| popover_host.read(app).repo_picker_selected_index),
+        None,
+        "a query with no results should not leave an Enter target"
+    );
+
+    input.update(cx, |input, cx| input.set_text("", cx));
+    cx.run_until_parked();
+    assert_eq!(
+        cx.update(|_window, app| popover_host.read(app).repo_picker_selected_index),
+        None,
+        "clearing the query should restore neutral selection"
+    );
+
+    input.update(cx, |input, cx| input.set_text("repo-picker-auto", cx));
+    cx.run_until_parked();
+    cx.simulate_keystrokes("enter");
+    cx.run_until_parked();
+    assert!(
+        !cx.update(|_window, app| popover_host.read(app).is_open()),
+        "Enter should activate the automatically selected first repository"
+    );
+}
+
 /// Seeds a session where one repository is pinned and has already fallen off
 /// the recents list, then checks the picker still lists it — under Pinned, and
 /// nowhere else. Runs in a subprocess so the session-file override is set
@@ -856,8 +961,8 @@ fn repo_picker_row_menu_floats_above_the_picker_and_dismisses_on_its_own(
 /// Typing re-filters the rows the menu is floating over, so the row its stored
 /// index highlights is no longer the row it was opened on — and it would go on
 /// owning the arrow keys over a list that had moved underneath it. Any edit to
-/// the filter therefore dismisses it, and the selection follows the row itself
-/// rather than the index it used to sit at.
+/// the filter therefore dismisses it. A search edit then starts selection at
+/// the first filtered result instead of preserving the menu's invoking row.
 #[gpui::test]
 fn repo_picker_row_menu_closes_when_the_filter_changes(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -870,11 +975,11 @@ fn repo_picker_row_menu_closes_when_the_filter_changes(cx: &mut gpui::TestAppCon
     let popover_host = cx.update(|_window, app| view.read(app).popover_host.clone());
 
     // Two closed rows below the open one, so the filter has something to drop.
-    let kept = std::path::PathBuf::from("/tmp/zebra-repo");
+    let first_match = std::path::PathBuf::from("/tmp/zebra-a");
+    let kept = std::path::PathBuf::from("/tmp/zebra-z");
     cx.update(|_window, app| {
         popover_host.update(app, |host, _cx| {
-            host.cached_recent_repos =
-                vec![std::path::PathBuf::from("/tmp/aardvark-repo"), kept.clone()];
+            host.cached_recent_repos = vec![first_match.clone(), kept.clone()];
         });
     });
 
@@ -921,9 +1026,19 @@ fn repo_picker_row_menu_closes_when_the_filter_changes(cx: &mut gpui::TestAppCon
         );
         let filtered = repo_picker::filtered_layout(host, "zeb").0;
         assert_eq!(
+            filtered.len(),
+            2,
+            "both zebra rows should survive the filter"
+        );
+        assert_eq!(
+            host.repo_picker_selected_index,
+            Some(0),
+            "editing the filter should restart selection at the first result"
+        );
+        assert_ne!(
             host.repo_picker_selected_index,
             filtered.iter().position(|candidate| *candidate == entry),
-            "the selection should follow the row the menu belonged to into the filtered list"
+            "the menu's invoking row should not override the first-result selection"
         );
     });
 }
