@@ -126,9 +126,6 @@ fn run_git_at(repo: &Path, args: &[&str], unix_seconds: i64) {
     run_git_with_env(repo, args, &envs);
 }
 
-/// A linear history of `count` commits, built in one `git fast-import` pass.
-/// Used where a test needs more commits than a page's gather batch holds and
-/// does not care what is in them.
 fn fast_import_linear_history(repo: &Path, count: usize) {
     let mut stream = String::new();
     for index in 0..count {
@@ -501,11 +498,6 @@ fn full_reachable_history_mode_paginates_without_repeating_commits() {
     assert_eq!(legacy_second.commits, second.commits);
 }
 
-/// Every history mode pages through the resumable walk, first-parent and
-/// all-branches included. Without a resume token the walk is rebuilt from the
-/// tips and re-traversed to the cursor for every page, so an author filter that
-/// had to cross the whole history to fill one page crosses it again for the
-/// next, and again for the one after that.
 #[test]
 fn every_history_mode_paginates_through_a_resumable_walk() {
     let fixture = HistoryModeFixture::new();
@@ -554,8 +546,6 @@ fn every_history_mode_paginates_through_a_resumable_walk() {
     }
 }
 
-/// The scope this mattered most for: `AllBranches` walks from every ref, so
-/// rebuilding it per page is the most expensive rebuild there is.
 #[test]
 fn all_branches_author_filter_resumes_instead_of_re_walking() {
     let fixture = HistoryModeFixture::new();
@@ -589,9 +579,6 @@ fn all_branches_author_filter_resumes_instead_of_re_walking() {
     );
 }
 
-/// A shallow clone pages through the same resumable walk as everything else —
-/// its boundary is a filter on the traversal, not a reason to re-walk from the
-/// tip for every page — and still stops dead at the boundary.
 #[test]
 fn shallow_history_modes_paginate_and_stop_at_the_boundary() {
     let dir = tempfile::tempdir().unwrap();
@@ -803,12 +790,6 @@ fn log_all_branches_includes_remote_tracking_branches() {
     );
 }
 
-/// Issue #390. A commit whose committer date is newer than one of its children's
-/// -- a rebase with `--committer-date-is-author-date`, a `git am`, a machine
-/// whose clock runs behind -- comes out of a plain commit-date priority queue
-/// *between* its own children. The graph then paints a parent above its child,
-/// its lane cannot connect downwards, and every row below it sits one off what
-/// `git log` shows, which reads as ref labels on the wrong commits.
 #[test]
 fn log_all_branches_orders_rows_like_git_date_order_under_committer_date_skew() {
     let dir = tempfile::tempdir().unwrap();
@@ -830,8 +811,6 @@ fn log_all_branches_orders_rows_like_git_date_order_under_committer_date_skew() 
 
     commit_at("base", "2026-08-20T10:00:00+0000");
     commit_at("master-tip", "2026-08-20T12:00:00+0000");
-    // Both branches are children of master's tip, and their committer dates
-    // straddle it.
     run_git(repo, &["checkout", "-q", "-b", "topic-b", "master"]);
     commit_at("topic-b-tip", "2026-08-20T11:50:00+0000");
     run_git(repo, &["checkout", "-q", "-b", "topic-a", "master"]);
@@ -869,13 +848,6 @@ fn log_all_branches_orders_rows_like_git_date_order_under_committer_date_skew() 
     );
 }
 
-/// Issue #390 across the history modes. The reordering needs a commit with two
-/// children whose committer date sits between theirs, so every mode that can
-/// queue a fork is affected: `FullReachable`, `NoMerges`, `MergesOnly` and
-/// `AllBranches`. `FirstParent` cannot be — it is seeded from one tip and
-/// follows one parent per step, so only ever one commit is queued — and it
-/// stays on the commit-date walk, which is also what keeps it reporting a single
-/// parent per row in `Commit::parent_ids`.
 #[test]
 fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
     let dir = tempfile::tempdir().unwrap();
@@ -910,9 +882,6 @@ fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
         );
     };
 
-    // `P` is the fork: `X`, `Z` and `Y` all hang off it, and its committer date
-    // sits between theirs. `X` and `Z` are then merged back into master, so the
-    // skew is reachable from HEAD alone and not only in the all-branches scope.
     commit_at("base", "2026-08-20T10:00:00+0000");
     commit_at("P", "2026-08-20T12:00:00+0000");
     let fork = git_stdout(repo, &["rev-parse", "HEAD"]);
@@ -969,8 +938,6 @@ fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
         );
     }
 
-    // First-parent mode shows the merged-in branch nowhere, so its rows must not
-    // claim a second parent either: that list is what the graph draws lanes from.
     let first_parent = opened
         .log_history_mode_page(HistoryMode::FirstParent, 50, None)
         .unwrap();
@@ -992,14 +959,6 @@ fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
     );
 }
 
-/// The all-branches page is cached against the tips it was walked from, which
-/// is what keeps a refresh that touched no ref from re-walking the history. The
-/// cache is only safe while every way the tip set can change invalidates it —
-/// commits, branches that HEAD does not point at, ref deletion, and the stash
-/// reflog, which seeds tips of its own.
-///
-/// Deepening a shallow clone changes the history without changing a tip at all;
-/// that one has its own test below.
 #[test]
 fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
     let dir = tempfile::tempdir().unwrap();
@@ -1008,9 +967,6 @@ fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
     run_git(repo, &["config", "user.email", "you@example.com"]);
     run_git(repo, &["config", "user.name", "You"]);
 
-    // Explicit, increasing commit times: with date order the row sequence is
-    // otherwise a tie-break between commits made in the same second, which is
-    // not what this test is about.
     let mut clock = 0i64;
     let mut commit = |name: &str| {
         clock += 60;
@@ -1033,28 +989,19 @@ fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
     };
 
     assert_eq!(summaries(), vec!["one"]);
-    // Served from cache the second time; same answer either way.
     assert_eq!(summaries(), vec!["one"]);
 
-    // HEAD moves.
     commit("two");
     assert_eq!(summaries(), vec!["two", "one"]);
 
-    // A branch that HEAD does not point at moves.
     run_git(repo, &["checkout", "-q", "-b", "side"]);
     commit("three");
     run_git(repo, &["checkout", "-q", "master"]);
     assert_eq!(summaries(), vec!["three", "two", "one"]);
 
-    // A stash entry appears: the stash reflog seeds tips too. The stash commit
-    // and its index parent both become rows, so the assertion is on the exact
-    // set — a length check would pass for any growth, including a wrong one.
     std::fs::write(repo.join("one.txt"), "dirty").unwrap();
     run_git(repo, &["stash", "push", "-m", "stashed"]);
     let with_stash = summaries();
-    // The stash commit and the index commit under it are both rows. Their date
-    // is "now" rather than anything this test set, so they are matched by what
-    // they are and not by where they land.
     assert_eq!(
         with_stash.len(),
         5,
@@ -1080,8 +1027,6 @@ fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
         "the rows that were already there must be unchanged, got {with_stash:?}"
     );
 
-    // A ref is deleted: the tip set shrinks, which a keyed-on-tips cache has to
-    // notice just as it notices growth.
     run_git(repo, &["stash", "drop"]);
     run_git(repo, &["branch", "-D", "side"]);
     let after_delete = summaries();
@@ -1091,9 +1036,7 @@ fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
         "deleting a branch must drop the commits only it reached"
     );
 
-    // Tags are deliberately not tips — `git log --all` walks them, this does
-    // not, so that a tag cannot pull an abandoned line of history back into the
-    // graph. A tag therefore neither invalidates the page nor adds a row.
+    // Tags are not all-branches tips.
     run_git(repo, &["tag", "-a", "v1", "-m", "v1", "master"]);
     assert_eq!(
         summaries(),
@@ -1112,11 +1055,6 @@ fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
     );
 }
 
-/// The all-branches page cache is keyed on the tips it walked from, on the
-/// grounds that the objects a page names never change. A shallow deepen breaks
-/// exactly that assumption: `git fetch --unshallow` moves no ref, it only makes
-/// ancestors that were always named by those tips resolvable. The cached page
-/// is then a truncated history that nothing will ever invalidate.
 #[test]
 fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
     let dir = tempfile::tempdir().unwrap();
@@ -1197,15 +1135,6 @@ fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
     );
 }
 
-/// A history whose objects are not all present must still render the rows above
-/// the hole. A page that stops short of a missing ancestor never had to resolve
-/// it, so it is a complete page — a repository with a pruned reflog entry or a
-/// half-fetched pack has to stay readable.
-///
-/// The history is deliberately longer than one gather batch and the hole is at
-/// its root, so a lazy walk cannot reach the hole while filling the page. What
-/// must not happen is failing before the first row, which is what an up-front
-/// in-degree pass over the whole reachable graph does.
 #[test]
 fn a_missing_ancestor_object_still_renders_the_rows_above_it() {
     let dir = tempfile::tempdir().unwrap();

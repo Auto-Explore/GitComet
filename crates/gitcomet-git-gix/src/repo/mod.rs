@@ -144,12 +144,7 @@ struct TreeIndexCacheEntry {
 /// What a cached log page was walked from.
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum LogPageSeed {
-    /// The current-branch modes walk from HEAD alone.
     Head(Option<gix::ObjectId>),
-    /// `AllBranches` walks from every ref. Held as the same `Arc` every page
-    /// with these tips was given — see `GixRepo::all_branches_tips` — so a
-    /// cacheful of pages costs one tip list and a refcount each, not a copy
-    /// each.
     Tips(Arc<[gix::ObjectId]>),
 }
 
@@ -157,11 +152,7 @@ enum LogPageSeed {
 struct LogPageCacheKey {
     mode: HistoryMode,
     seed: LogPageSeed,
-    /// The shallow boundary file, which is the one way a page can go stale
-    /// without a ref moving. `git fetch --deepen`/`--unshallow` leaves every tip
-    /// where it was and only makes ancestors resolvable, so a page keyed on tips
-    /// alone would keep serving the truncated history it walked before — with
-    /// nothing left to invalidate it, since the next ref move may be days away.
+    /// Invalidates cached pages when a shallow repository is deepened.
     shallow: RepoFileStamp,
     limit: usize,
     last_seen: Option<CommitId>,
@@ -194,24 +185,12 @@ struct LogFileFollowCacheEntry {
 /// so it can borrow nothing.
 type LogPagedWalkFilter = Box<dyn FnMut(&gix::oid) -> bool + Send>;
 
-/// A resumable log walk, in whichever of the two orderings
-/// [`log::log_row_order`] asked for. The variants are different gix traversals
-/// with different error types, so the log's one consumption site
-/// (`log_page_from_paged_walk_state`) goes through this rather than through
-/// either of them directly.
 enum LogPagedWalk {
-    /// Commits ordered purely by committer date, newest first. Cheap to start:
-    /// it yields the newest queued commit and only then looks up its parents.
     CommitTime(gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>),
-    /// `git log --date-order`: committer date again, but no parent is yielded
-    /// before all of its children. Costs an in-degree pass over the tips before
-    /// the first row (bounded by generation number where a commit-graph exists).
     DateOrder(gix::traverse::commit::Topo<gix::OdbHandleArc, LogPagedWalkFilter>),
 }
 
 impl LogPagedWalk {
-    /// Whether this walk is one of the expensive-to-park kind. See
-    /// [`LOG_PAGED_TOPO_WALK_CACHE_LIMIT`].
     fn is_date_order(&self) -> bool {
         matches!(self, Self::DateOrder(_))
     }
@@ -232,11 +211,6 @@ impl Iterator for LogPagedWalk {
 }
 
 struct LogPagedWalkState {
-    /// Commits pulled from the walk but not yet placed on a page. Decoding runs
-    /// in batches, so a page can end mid-batch and the rest has to wait for the
-    /// next one — in walk order. Bounded by one batch, which is what keeps the
-    /// walks parked in [`LogPagedWalkCache`] from retaining an unbounded amount
-    /// of traversal state.
     pending: std::collections::VecDeque<gix::traverse::commit::Info>,
     walk: LogPagedWalk,
 }
@@ -265,22 +239,7 @@ struct LogPagedWalkCache {
 const LOG_PAGE_CACHE_LIMIT: usize = 32;
 const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
 const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
-/// How many *date-order* walks may sit parked, out of the
-/// [`LOG_PAGED_WALK_CACHE_LIMIT`] slots.
-///
-/// A commit-date walk parks its frontier and nothing else. A date-order walk
-/// parks the in-degree bookkeeping for everything it explored, which is the
-/// whole reachable region: measured on a 50k-commit repository, each additional
-/// parked walk holds ~3.3MB resident against ~77kB for a commit-date walk — a
-/// factor of 43, and it scales with the history rather than the page. Thirty-two
-/// of them would be ~105MB on those 50k commits and several GB on a repository
-/// the size of chromium.
-///
-/// Four is enough for the access pattern the cache exists for: paging is
-/// sequential, so one lineage needs one parked walk, and the extras cover a
-/// couple of modes or filters being scrolled in turn. Past that the oldest is
-/// dropped and its next page rebuilds the walk — slower, once, instead of
-/// resident forever.
+/// Date-order walks retain in-degree state for the reachable history.
 const LOG_PAGED_TOPO_WALK_CACHE_LIMIT: usize = 4;
 
 pub(crate) struct GixRepo {
@@ -290,10 +249,6 @@ pub(crate) struct GixRepo {
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
     log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
-    /// The last `AllBranches` tip list, reused while the refs still produce the
-    /// same one. Every page request rebuilds the list from the refs; without
-    /// this each cached page would hold its own copy of it, and a repository
-    /// with tens of thousands of `refs/pull/*` heads makes that copy large.
     all_branches_tips: std::sync::Mutex<Option<Arc<[gix::ObjectId]>>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
