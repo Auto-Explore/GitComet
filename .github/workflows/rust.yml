@@ -66,8 +66,8 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
     - name: Cache Rust artifacts
       uses: Swatinem/rust-cache@v2
-    - name: Clippy (core + state + git backends)
-      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git -p gitcomet-git-gix -- -D warnings
+    - name: Clippy (core + state + git backends + tree-sitter allocator)
+      run: cargo clippy -p gitcomet-core -p gitcomet-state -p gitcomet-git -p gitcomet-git-gix -p gitcomet-tree-sitter-alloc -- -D warnings
     - name: Clippy (GPUI UI crate -- intentionally skipped on headless CI)
       run: |
         echo "Skipping cargo clippy -p gitcomet-ui-gpui in this job."

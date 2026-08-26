@@ -11,15 +11,17 @@
 # version the workspace resolves, so upgrading tree-sitter needs no change here
 # as long as those tests still pass.
 #
-# `src/` and `bindings/rust/lib.rs` are upstream verbatim. `bindings/rust/build.rs`
-# differs by rustfmt line-wrapping -- `cargo fmt --all` reaches path dependencies
-# even though this crate is excluded from the workspace -- and by a block that
-# silences the C warnings the generated scanner emits; see the comment there.
+# `bindings/rust/lib.rs` is upstream verbatim. `src/` is too, except that its
+# `tree_sitter/` headers now come from vendor/tree-sitter-headers -- see the
+# README there. `bindings/rust/build.rs` is not upstream's at all: every vendored
+# grammar compiles identically, so the body lives in vendor/tree-sitter-build and
+# this is a one-line call into it.
 #
 # `queries/` is deliberately not vendored. GitComet keeps its own Vue queries in
 # crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/, and leaving the
-# directory absent keeps build.rs's `with_*_query` cfgs off so the optional
-# query consts in lib.rs compile out.
+# directory absent keeps the `with_*_query` cfgs off -- `tree-sitter-build` still
+# declares them, because this lib.rs is verbatim and references all four -- so the
+# optional query consts in lib.rs compile out.
 [package]
 name = "tree-sitter-vue"
 description = "vue grammar for the tree-sitter parsing library"
@@ -39,7 +41,8 @@ path = "bindings/rust/lib.rs"
 tree-sitter-language = "0.1"
 
 [build-dependencies]
-cc = "1"
+# The build script body, shared by every vendored grammar.
+tree-sitter-build = { path = "../tree-sitter-build" }
 
 # Upstream's dev-dependency, kept so `bindings/rust/lib.rs`'s own test module and
 # doc example still build. This crate is workspace-`exclude`d, so those only run
@@ -47,4 +50,4 @@ cc = "1"
 # exactly the check whoever regenerates the grammar wants to be able to run. The
 # version tracks `tree-sitter` in the root Cargo.toml.
 [dev-dependencies]
-tree-sitter = "0.26.12"
+tree-sitter = "0.26.13"

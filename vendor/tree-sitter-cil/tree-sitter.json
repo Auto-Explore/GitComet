@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "cil", "camelcase": "Cil", "scope": "source.cil", "path": ".", "file-types": ["il"] }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "CIL (MSIL) grammar for tree-sitter",
+    "links": { "repository": "https://github.com/Havunen/GitComet" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

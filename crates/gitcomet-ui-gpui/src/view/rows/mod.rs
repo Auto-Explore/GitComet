@@ -440,12 +440,14 @@ pub(in crate::view) use self::sidebar::listed_workspace_paths_by_branch;
 
 #[cfg(any(test, feature = "benchmarks"))]
 pub(in crate::view) use diff_text::has_pending_prepared_diff_syntax_chunk_builds_for_document;
+// Every pair kind is painted alike, so only assertions name one; see
+// `DiffTextPairMatch::kind`.
 pub(in crate::view) use diff_text::{
     BackgroundPreparedDiffSyntaxDocument, DiffSearchMatchEmphasis, DiffSyntaxBudget,
     DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument, LiveSyntaxSnapshot,
     LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
     PrepareDiffSyntaxDocumentResult, PreparedDiffSyntaxDocument, PreparedDiffSyntaxLine,
-    PreparedDiffSyntaxReparseSeed, diff_syntax_language_for_code_fence_info,
+    PreparedDiffSyntaxReparseSeed, SyntaxPair, diff_syntax_language_for_code_fence_info,
     diff_syntax_language_for_path, diff_wrap_ranges_for_text,
     drain_completed_prepared_diff_syntax_chunk_builds,
     drain_completed_prepared_diff_syntax_chunk_builds_for_document,
@@ -453,11 +455,15 @@ pub(in crate::view) use diff_text::{
     live_syntax_document_supported, live_syntax_reparse,
     prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
-    prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
-    prepared_diff_syntax_reparse_seed, query_highlight_colors,
-    request_syntax_highlights_for_prepared_document_byte_range, resolved_output_line_text,
-    syntax_highlights_for_line, whitespace_visible_line_text,
+    prepared_diff_syntax_document_is_available, prepared_diff_syntax_line_for_inline_diff_row,
+    prepared_diff_syntax_line_for_one_based_line,
+    prepared_diff_syntax_occurrences_at_display_offset,
+    prepared_diff_syntax_pair_at_display_offset, prepared_diff_syntax_reparse_seed,
+    query_highlight_colors, request_syntax_highlights_for_prepared_document_byte_range,
+    resolved_output_line_text, syntax_highlights_for_line, whitespace_visible_line_text,
 };
+#[cfg(test)]
+pub(in crate::view) use diff_text::{OCCURRENCE_MAX_TEXT_BYTES, SyntaxPairKind};
 
 pub(in crate::view) use self::diff_canvas::{
     AnnotArea, DIFF_ANNOTATION_COLUMN_WIDTH_PX, DIFF_ANNOTATION_MAX_WIDTH_PX,

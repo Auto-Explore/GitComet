@@ -1,0 +1,39 @@
+# Vendored from the `tree-sitter-html 0.23.2` crates.io release
+# (https://github.com/tree-sitter/tree-sitter-html, MIT -- see LICENSE), for one
+# fix in `src/scanner.c`, marked `GitComet:` there.
+#
+# `scan_raw_text` closed a `<script>` on the characters `</script` alone. The HTML
+# spec's script-data end-tag-name state closes it only when the tag name is
+# followed by whitespace, `/` or `>` -- anything else is text. The difference
+# matters because `"</script"` inside a JavaScript string or comment is exactly
+# where those characters appear in practice, and closing there left the rest of
+# the script rendered as markup.
+#
+# `src/` is regenerated (tree-sitter-cli 0.26.13, ABI 15) and the `tree_sitter/`
+# headers come from vendor/tree-sitter-headers -- see the README there.
+#
+# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
+# GitComet keeps its own HTML queries in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+[package]
+name = "tree-sitter-html"
+description = "HTML grammar for the tree-sitter parsing library"
+version = "0.23.2"
+repository = "https://github.com/tree-sitter/tree-sitter-html"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.26.13"

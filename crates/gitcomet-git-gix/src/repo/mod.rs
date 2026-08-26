@@ -141,10 +141,41 @@ struct TreeIndexCacheEntry {
     staged: Vec<gitcomet_core::domain::FileStatus>,
 }
 
+/// What a cached log page was walked from.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct LogHeadPageCacheKey {
+enum LogPageSeed {
+    Head(Option<gix::ObjectId>),
+    Tips(Arc<[gix::ObjectId]>),
+}
+
+/// An exact, parsed snapshot of the repository's shallow boundary.
+///
+/// The shallow file is tiny and its object ids are the state that affects a
+/// history walk. Keeping those ids directly avoids the same-length/same-mtime
+/// collisions a stat-only stamp permits, and lets walk construction use the
+/// exact same boundary that keyed its caches.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ShallowSnapshot(Arc<[gix::ObjectId]>);
+
+impl ShallowSnapshot {
+    fn from_commits(mut commits: Vec<gix::ObjectId>) -> Self {
+        commits.sort();
+        commits.dedup();
+        Self(Arc::from(commits))
+    }
+
+    fn is_shallow(&self) -> bool {
+        !self.0.is_empty()
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct LogPageCacheKey {
     mode: HistoryMode,
-    head_oid: Option<gix::ObjectId>,
+    seed: LogPageSeed,
+    /// Invalidates cached pages when a shallow repository is deepened or its
+    /// boundary is otherwise replaced without moving a ref.
+    shallow: ShallowSnapshot,
     limit: usize,
     last_seen: Option<CommitId>,
     resume_from: Option<CommitId>,
@@ -153,8 +184,8 @@ struct LogHeadPageCacheKey {
 }
 
 #[derive(Clone, Debug)]
-struct LogHeadPageCacheEntry {
-    key: LogHeadPageCacheKey,
+struct LogPageCacheEntry {
+    key: LogPageCacheKey,
     page: LogPage,
 }
 
@@ -176,16 +207,35 @@ struct LogFileFollowCacheEntry {
 /// so it can borrow nothing.
 type LogPagedWalkFilter = Box<dyn FnMut(&gix::oid) -> bool + Send>;
 
-type LogPagedWalk = gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>;
+enum LogPagedWalk {
+    CommitTime(gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>),
+    DateOrder(gix::traverse::commit::Topo<log::CancellableLogWalkFind, LogPagedWalkFilter>),
+}
+
+impl LogPagedWalk {
+    fn is_date_order(&self) -> bool {
+        matches!(self, Self::DateOrder(_))
+    }
+}
+
+impl Iterator for LogPagedWalk {
+    type Item = std::result::Result<
+        gix::traverse::commit::Info,
+        Box<dyn std::error::Error + Send + Sync + 'static>,
+    >;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::CommitTime(walk) => walk.next().map(|info| info.map_err(Into::into)),
+            Self::DateOrder(walk) => walk.next().map(|info| info.map_err(Into::into)),
+        }
+    }
+}
 
 struct LogPagedWalkState {
-    /// Commits pulled from the walk but not yet placed on a page. Decoding runs
-    /// in batches, so a page can end mid-batch and the rest has to wait for the
-    /// next one — in walk order. Bounded by one batch, which is what keeps the
-    /// walks parked in [`LogPagedWalkCache`] from retaining an unbounded amount
-    /// of traversal state.
     pending: std::collections::VecDeque<gix::traverse::commit::Info>,
     walk: LogPagedWalk,
+    cancellation: log::LogWalkCancellation,
 }
 
 struct LogPagedWalkCacheEntry {
@@ -195,6 +245,9 @@ struct LogPagedWalkCacheEntry {
     /// ref for `AllBranches`. A walk started from different tips covers a
     /// different history, so a token minted for one must not resume the other.
     tips: Arc<[gix::ObjectId]>,
+    /// The exact shallow boundary the walk was built against. A cursor minted
+    /// before a deepen must not resume the old, truncated walk.
+    shallow: ShallowSnapshot,
     /// Author filter the walk was started with, or `None` for the unfiltered
     /// walk. The walk's *position* depends on the filter — every non-matching
     /// commit was already consumed — so resuming one walk under a different
@@ -209,9 +262,11 @@ struct LogPagedWalkCache {
     entries: Vec<LogPagedWalkCacheEntry>,
 }
 
-const LOG_HEAD_PAGE_CACHE_LIMIT: usize = 32;
+const LOG_PAGE_CACHE_LIMIT: usize = 32;
 const LOG_FILE_FOLLOW_CACHE_LIMIT: usize = 16;
 const LOG_PAGED_WALK_CACHE_LIMIT: usize = 32;
+/// Date-order walks retain in-degree state for the reachable history.
+const LOG_PAGED_TOPO_WALK_CACHE_LIMIT: usize = 4;
 
 pub(crate) struct GixRepo {
     spec: RepoSpec,
@@ -219,7 +274,8 @@ pub(crate) struct GixRepo {
     gitlink_status_capability: std::sync::Mutex<Option<GitlinkStatusCapabilityCacheEntry>>,
     branch_tracking_config: std::sync::Mutex<Option<BranchTrackingConfigCacheEntry>>,
     tree_index_cache: std::sync::Mutex<Option<TreeIndexCacheEntry>>,
-    log_head_page_cache: std::sync::Mutex<Vec<LogHeadPageCacheEntry>>,
+    log_page_cache: std::sync::Mutex<Vec<LogPageCacheEntry>>,
+    all_branches_tips: std::sync::Mutex<Option<Arc<[gix::ObjectId]>>>,
     log_file_follow_cache: std::sync::Mutex<Vec<LogFileFollowCacheEntry>>,
     log_paged_walk_cache: std::sync::Mutex<LogPagedWalkCache>,
 }
@@ -232,7 +288,8 @@ impl GixRepo {
             gitlink_status_capability: std::sync::Mutex::new(None),
             branch_tracking_config: std::sync::Mutex::new(None),
             tree_index_cache: std::sync::Mutex::new(None),
-            log_head_page_cache: std::sync::Mutex::new(Vec::new()),
+            log_page_cache: std::sync::Mutex::new(Vec::new()),
+            all_branches_tips: std::sync::Mutex::new(None),
             log_file_follow_cache: std::sync::Mutex::new(Vec::new()),
             log_paged_walk_cache: std::sync::Mutex::new(LogPagedWalkCache::default()),
         }

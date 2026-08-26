@@ -14,10 +14,10 @@ mod word_highlight;
 #[cfg(any(test, feature = "benchmarks"))]
 #[allow(unused_imports)]
 pub(in crate::view) use self::file_diff::build_file_diff_cache_rebuild;
-use self::file_diff::file_diff_text_signature;
 pub(in crate::view) use self::file_diff::{
     PagedFileDiffInlineRows, PagedFileDiffRows, build_file_diff_cache_rebuild_with_patch,
 };
+use self::file_diff::{file_diff_source_identity, file_diff_text_signature, line_starts_describe};
 #[cfg(feature = "benchmarks")]
 pub(in crate::view) use self::image_cache::render_svg_image_diff_preview;
 
@@ -33,6 +33,10 @@ const PREPARED_SYNTAX_DOCUMENT_CACHE_MAX_ENTRIES: usize = 256;
 const FILE_DIFF_PAGE_SIZE: usize = 256;
 const FILE_DIFF_MAX_CACHED_PAGES: usize = 64;
 const COLLAPSED_DIFF_REVEAL_STEP: usize = 20;
+// A cold click may do a small read/parse inline so ordinary files respond in
+// the same event. Larger syntax-sized documents are prepared by the dedicated
+// worker below and the click is replayed when it completes.
+const DIFF_CLICK_FOREGROUND_COMPLETION_MAX_TEXT_BYTES: usize = 1024 * 1024;
 
 // Full-document views (file diff, worktree preview) always attempt prepared
 // syntax and fall back to plain/heuristic rendering until it is ready.
@@ -1413,7 +1417,8 @@ impl MainPaneView {
         &self,
         key: &PreparedSyntaxDocumentKey,
     ) -> Option<rows::PreparedDiffSyntaxDocument> {
-        self.prepared_syntax_documents.get(key).copied()
+        let document = self.prepared_syntax_documents.get(key).copied()?;
+        rows::prepared_diff_syntax_document_is_available(document).then_some(document)
     }
 
     fn prepared_syntax_reparse_seed_document(
@@ -1487,6 +1492,21 @@ impl MainPaneView {
         }
     }
 
+    fn remove_file_diff_prepared_syntax_documents_for_rev(
+        &mut self,
+        repo_id: RepoId,
+        rev: u64,
+        path: &std::path::Path,
+    ) {
+        for view_mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            let key = prepared_syntax_document_key(repo_id, rev, path, view_mode);
+            self.prepared_syntax_documents.remove(&key);
+        }
+    }
+
     pub(super) fn full_document_syntax_budget(&self) -> rows::DiffSyntaxBudget {
         #[cfg(test)]
         if let Some(budget) = self.diff_syntax_budget_override {
@@ -1526,6 +1546,394 @@ impl MainPaneView {
         self.prepared_syntax_document(&key)
     }
 
+    /// One side's document for a click-time lookup, preparing small cold
+    /// documents inline if the render path has not left one behind.
+    ///
+    /// The rendered document is keyed by the diff revision and is genuinely
+    /// often absent: an unstaged file's revision moves under it as the worktree
+    /// is polled, the first paint can blow its 1 ms foreground budget and defer
+    /// to a background build, and this view-level map holds only a handful of
+    /// entries. Rendering copes because it falls back to per-line tokens; a
+    /// delimiter pair cannot, because it needs the whole tree.
+    ///
+    /// Small files are prepared here instead of depending on having won that
+    /// race, from the in-memory text when there is one and from the side's file
+    /// when there is not. Larger syntax-sized files return `None` here and are
+    /// handed to [`Self::request_file_diff_click_syntax_document`], which
+    /// replays the click after its worker completes. When rendering got there
+    /// first this costs nothing: the cached document returns immediately.
+    /// Whether a source-backed side's file is still the one this generation
+    /// indexed.
+    ///
+    /// A worktree file can change under an open diff -- the poll is 250 ms --
+    /// and the click path reads that file back, while the rows are per-line
+    /// slices of whatever it holds now. Any answer computed across that boundary
+    /// is projected onto columns it does not describe, so a changed file means
+    /// decline until the rebuild catches up. Sides with no file (an in-memory
+    /// blob) cannot go stale and always pass.
+    ///
+    /// One `stat`, on a click.
+    fn file_diff_source_is_current(&self, side: DiffTextRegion) -> bool {
+        let (source_path, indexed) = match side {
+            DiffTextRegion::SplitLeft => (
+                self.file_diff_old_source_path.as_ref(),
+                self.file_diff_old_source_identity.as_ref(),
+            ),
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => (
+                self.file_diff_new_source_path.as_ref(),
+                self.file_diff_new_source_identity.as_ref(),
+            ),
+        };
+        let Some(source_path) = source_path else {
+            return true;
+        };
+        let Some(indexed) = indexed else {
+            return true;
+        };
+        file_diff_source_identity(Some(source_path)).as_deref() == Some(indexed.as_ref())
+    }
+
+    /// The split side a region reads its source from. Inline shares the new
+    /// side's file, so only the left side is its own source.
+    fn split_side_for_region(region: DiffTextRegion) -> DiffTextRegion {
+        match region {
+            DiffTextRegion::SplitLeft => DiffTextRegion::SplitLeft,
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => DiffTextRegion::SplitRight,
+        }
+    }
+
+    pub(in crate::view) fn file_diff_pair_syntax_document(
+        &mut self,
+        region: DiffTextRegion,
+    ) -> Option<rows::PreparedDiffSyntaxDocument> {
+        let side = Self::split_side_for_region(region);
+        // A prepared cache hit is still source-dependent. The file can move in
+        // the 250 ms before the diff revision advances, while rows already read
+        // its current bytes, so freshness must precede every return path.
+        //
+        // A source-backed side is re-read further down, and a retained body is a
+        // read from an earlier click. Both describe the file as it was, and the
+        // rows beside them are slices of the file as it is -- so neither may be
+        // used once the file has moved on. The retained body is why this has to
+        // come first: it never re-reads, and would otherwise answer from bytes
+        // that are two edits old.
+        if !self.file_diff_source_is_current(side) {
+            self.file_diff_pair_syntax_text.remove(&side);
+            return None;
+        }
+        if let Some(document) = self.file_diff_split_prepared_syntax_document(region) {
+            return Some(document);
+        }
+        let language = self.file_diff_cache_language?;
+        let (text, line_starts, source_path) = match region {
+            DiffTextRegion::SplitLeft => (
+                self.file_diff_old_text.clone(),
+                Arc::clone(&self.file_diff_old_line_starts),
+                self.file_diff_old_source_path.clone(),
+            ),
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => (
+                self.file_diff_new_text.clone(),
+                Arc::clone(&self.file_diff_new_line_starts),
+                self.file_diff_new_source_path.clone(),
+            ),
+        };
+        let source_path = source_path.as_ref();
+        // A source-backed side keeps its text out of memory on purpose, so a
+        // huge diff can render from per-line slices. That is the ordinary case
+        // for a worktree file, whose new side *is* the file, and it leaves
+        // nothing to parse a document from. Small sources are read back here;
+        // larger syntax-sized sources are deliberately left for the worker.
+        let text = if text.is_empty() {
+            match self.file_diff_pair_syntax_text.get(&side) {
+                // Kept from an earlier click: the same allocation, so the parse
+                // below resolves by source identity instead of re-parsing. The
+                // guard above is what keeps it honest -- it is dropped when the
+                // cache rebuilds *and* when the file behind it changes.
+                Some(retained) => retained.clone(),
+                None => {
+                    let path = source_path?;
+                    let len = std::fs::metadata(path.as_ref()).ok()?.len();
+                    // Availability follows the prepared document's 8 MiB
+                    // ceiling, but only the smaller foreground allowance may
+                    // read synchronously. The request worker handles the rest.
+                    if len > rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES as u64 {
+                        return None;
+                    }
+                    if len > DIFF_CLICK_FOREGROUND_COMPLETION_MAX_TEXT_BYTES as u64 {
+                        return None;
+                    }
+                    let read = SharedString::from(std::fs::read_to_string(path.as_ref()).ok()?);
+                    // The rows' line numbers, and the `line_starts` the parse is
+                    // handed, were indexed from this file when the diff was
+                    // built. A worktree file can have changed since -- the poll
+                    // is 250 ms -- and then the index describes a document this
+                    // text no longer is: at best the pair lands on the wrong
+                    // line, at worst a start sits past the end of the shortened
+                    // text. Decline until the rebuild catches up.
+                    if !line_starts_describe(read.as_ref(), line_starts.as_ref()) {
+                        return None;
+                    }
+                    self.file_diff_pair_syntax_text.insert(side, read.clone());
+                    read
+                }
+            }
+        } else {
+            text.clone()
+        };
+        if text.is_empty() || line_starts.is_empty() {
+            return None;
+        }
+        // Text the view already holds is bounded by the ceiling the *render*
+        // path uses, not by the occurrence one: nothing is read here, so the
+        // only cost is the parse, and using a lower ceiling would mean the same
+        // file paired or did not depending on whether the render path had won
+        // the race to prepare its document. The occurrence scan, which really is
+        // O(document), keeps its own ceiling inside
+        // `prepared_document_occurrences_at_display_offset`.
+        if text.len() > rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES {
+            return None;
+        }
+        // A click is not a frame: it can afford a real parse where the render
+        // path deliberately cannot. It is still the UI thread, though, so the
+        // budget is the whole of what a click may spend here.
+        let budget = rows::DiffSyntaxBudget {
+            foreground_parse: std::time::Duration::from_millis(50),
+        };
+        match rows::prepare_diff_syntax_document_with_budget_reuse_text(
+            language,
+            FULL_DOCUMENT_SYNTAX_MODE,
+            text.clone(),
+            Arc::clone(&line_starts),
+            budget,
+            None,
+            None,
+        ) {
+            rows::PrepareDiffSyntaxDocumentResult::Ready(document) => Some(document),
+            // Timing out means the parse is too slow to sit in front of a mouse
+            // press, so it goes to the worker -- `None` here makes the caller
+            // record the click as pending and
+            // [`Self::request_file_diff_click_syntax_document`] replays it when
+            // the document lands. Finishing it inline instead was the same parse
+            // with the budget removed: a 900 KiB C++ file spent its 50 ms,
+            // discarded that, and then blocked the UI thread for a further
+            // 210 ms before the mouse-down returned.
+            //
+            // The retained body above is what keeps this cheap -- the worker
+            // reuses that allocation instead of reading the file again.
+            rows::PrepareDiffSyntaxDocumentResult::TimedOut
+            | rows::PrepareDiffSyntaxDocumentResult::Unsupported => None,
+        }
+    }
+
+    /// Completes a cold click's full-document syntax work away from the UI
+    /// thread. This is what lets interaction share the 8 MiB syntax ceiling:
+    /// the click remains responsive, and its exact row/offset is replayed once
+    /// the prepared tree is installed.
+    pub(in crate::view) fn request_file_diff_click_syntax_document(
+        &mut self,
+        region: DiffTextRegion,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let side = Self::split_side_for_region(region);
+        // As in the synchronous path, a cache hit is not proof that a
+        // source-backed file still matches the indexed generation: a file that
+        // has moved on since this generation indexed it describes different
+        // columns than the rows do, so there is nothing worth parsing until the
+        // rebuild lands.
+        if !self.file_diff_source_is_current(side) {
+            self.file_diff_pair_syntax_text.remove(&side);
+            self.clear_pending_diff_text_syntax_click_for(side);
+            return;
+        }
+        if self
+            .file_diff_split_prepared_syntax_document(side)
+            .is_some()
+        {
+            self.retry_pending_diff_text_syntax_click();
+            cx.notify();
+            return;
+        }
+        let syntax_generation = self.file_diff_syntax_generation;
+        if self.file_diff_click_syntax_inflight.contains_key(&side) {
+            return;
+        }
+        self.file_diff_click_syntax_inflight
+            .insert(side, syntax_generation);
+
+        let Some(language) = self.file_diff_cache_language else {
+            self.file_diff_click_syntax_inflight.remove(&side);
+            self.clear_pending_diff_text_syntax_click_for(side);
+            return;
+        };
+        let (resident_text, line_starts, source_path, view_mode) = match side {
+            DiffTextRegion::SplitLeft => (
+                self.file_diff_old_text.clone(),
+                Arc::clone(&self.file_diff_old_line_starts),
+                self.file_diff_old_source_path.clone(),
+                PreparedSyntaxViewMode::FileDiffSplitLeft,
+            ),
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => (
+                self.file_diff_new_text.clone(),
+                Arc::clone(&self.file_diff_new_line_starts),
+                self.file_diff_new_source_path.clone(),
+                PreparedSyntaxViewMode::FileDiffSplitRight,
+            ),
+        };
+        let retained_text = self.file_diff_pair_syntax_text.get(&side).cloned();
+        let text = (!resident_text.is_empty())
+            .then_some(resident_text)
+            .or(retained_text);
+        if text
+            .as_ref()
+            .is_some_and(|text| text.len() > rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES)
+        {
+            self.file_diff_click_syntax_inflight.remove(&side);
+            self.clear_pending_diff_text_syntax_click_for(side);
+            return;
+        }
+        if text.is_none()
+            && !source_path.as_ref().is_some_and(|path| {
+                std::fs::metadata(path.as_ref())
+                    .ok()
+                    .is_some_and(|metadata| {
+                        metadata.len() <= rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES as u64
+                    })
+            })
+        {
+            self.file_diff_click_syntax_inflight.remove(&side);
+            self.clear_pending_diff_text_syntax_click_for(side);
+            return;
+        }
+
+        let Some(key) = self.file_diff_prepared_syntax_key(view_mode) else {
+            self.file_diff_click_syntax_inflight.remove(&side);
+            self.clear_pending_diff_text_syntax_click_for(side);
+            return;
+        };
+        let repo_id = self.file_diff_cache_repo_id;
+        let diff_file_rev = self.file_diff_cache_rev;
+        let diff_target = self.file_diff_cache_target.clone();
+        let source_backed = text.is_none();
+        let indexed_identity = match side {
+            DiffTextRegion::SplitLeft => self.file_diff_old_source_identity.clone(),
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => {
+                self.file_diff_new_source_identity.clone()
+            }
+        };
+        #[cfg(test)]
+        let after_prepare_hook = self.file_diff_click_syntax_after_prepare_hook.clone();
+        #[cfg(test)]
+        let before_complete_hook = self.file_diff_click_syntax_before_complete_hook.clone();
+
+        cx.spawn(
+            async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
+                let prepare_document = move || {
+                    let text = match text {
+                        Some(text) => text,
+                        None => {
+                            let path = source_path?;
+                            let read =
+                                SharedString::from(std::fs::read_to_string(path.as_ref()).ok()?);
+                            // Re-checked after the read, not only before the
+                            // spawn: the file can change in between, and this
+                            // side of the check is off the UI thread anyway.
+                            if let Some(indexed) = indexed_identity.as_ref()
+                                && file_diff_source_identity(Some(&path)).as_deref()
+                                    != Some(indexed.as_ref())
+                            {
+                                return None;
+                            }
+                            read
+                        }
+                    };
+                    if text.is_empty()
+                        || text.len() > rows::PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
+                        || !line_starts_describe(text.as_ref(), line_starts.as_ref())
+                    {
+                        return None;
+                    }
+                    let document =
+                        rows::prepare_diff_syntax_document_in_background_text_with_reuse(
+                            language,
+                            FULL_DOCUMENT_SYNTAX_MODE,
+                            text.clone(),
+                            line_starts,
+                            None,
+                            None,
+                        )?;
+                    Some((text, document))
+                };
+                let prepared = if crate::ui_runtime::current().uses_background_compute() {
+                    smol::unblock(prepare_document).await
+                } else {
+                    prepare_document()
+                };
+                #[cfg(test)]
+                if prepared.is_some()
+                    && let Some(hook) = after_prepare_hook
+                {
+                    hook();
+                }
+
+                let _ = view.update(cx, |this, cx| {
+                    #[cfg(test)]
+                    if let Some(hook) = before_complete_hook {
+                        hook(this);
+                    }
+                    // Before the guard below, so a superseded worker releases
+                    // its own marker. A rebuild can clear and reacquire the side
+                    // for a newer generation while this task is still parsing;
+                    // in that case the newer worker remains the owner.
+                    if this.file_diff_click_syntax_inflight.get(&side) == Some(&syntax_generation) {
+                        this.file_diff_click_syntax_inflight.remove(&side);
+                    }
+                    if this.file_diff_syntax_generation != syntax_generation
+                        || this.file_diff_cache_repo_id != repo_id
+                        || this.file_diff_cache_rev != diff_file_rev
+                        || this.file_diff_cache_target != diff_target
+                    {
+                        return;
+                    }
+                    // The worker's pre-spawn and post-read checks do not cover
+                    // an edit during parsing. Re-stat at completion before the
+                    // parsed tree or its retained source can enter the cache.
+                    if !this.file_diff_source_is_current(side) {
+                        this.file_diff_pair_syntax_text.remove(&side);
+                        this.clear_pending_diff_text_syntax_click_for(side);
+                        return;
+                    }
+                    let Some((text, document)) = prepared else {
+                        this.clear_pending_diff_text_syntax_click_for(side);
+                        return;
+                    };
+                    if source_backed {
+                        // Prepared-document identity includes the source
+                        // allocation's address, so keep it alive for cache hits
+                        // and for subsequent occurrence scans.
+                        this.file_diff_pair_syntax_text.insert(side, text);
+                    }
+                    let inserted = this.insert_prepared_syntax_document(
+                        key,
+                        rows::inject_background_prepared_diff_syntax_document(document),
+                    );
+                    if inserted {
+                        match side {
+                            DiffTextRegion::SplitLeft => {
+                                this.file_diff_style_cache_epochs.bump_left()
+                            }
+                            DiffTextRegion::SplitRight | DiffTextRegion::Inline => {
+                                this.file_diff_style_cache_epochs.bump_right()
+                            }
+                        }
+                    }
+                    this.retry_pending_diff_text_syntax_click();
+                    cx.notify();
+                });
+            },
+        )
+        .detach();
+    }
+
     pub(in crate::view) fn file_diff_split_style_cache_epoch(&self, region: DiffTextRegion) -> u64 {
         self.file_diff_style_cache_epochs.split_epoch(region)
     }
@@ -1563,6 +1971,24 @@ impl MainPaneView {
             }
         };
         self.file_diff_prepared_syntax_document(view_mode)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn cache_file_diff_pair_syntax_document_for_tests(
+        &mut self,
+        region: DiffTextRegion,
+        document: rows::PreparedDiffSyntaxDocument,
+    ) {
+        let view_mode = match region {
+            DiffTextRegion::SplitLeft => PreparedSyntaxViewMode::FileDiffSplitLeft,
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => {
+                PreparedSyntaxViewMode::FileDiffSplitRight
+            }
+        };
+        let key = self
+            .file_diff_prepared_syntax_key(view_mode)
+            .expect("test file diff should have a prepared syntax key");
+        self.insert_prepared_syntax_document(key, document);
     }
 
     pub(in crate::view) fn worktree_preview_prepared_syntax_key(
@@ -1767,6 +2193,7 @@ impl MainPaneView {
             self.worktree_preview_content_rev = self.worktree_preview_content_rev.wrapping_add(1);
             self.worktree_preview_style_cache_epoch =
                 self.worktree_preview_style_cache_epoch.wrapping_add(1);
+            self.clear_diff_text_projected_highlights();
             self.worktree_markdown_preview_path = None;
             self.worktree_markdown_preview_source_rev = 0;
             self.worktree_markdown_preview = Loadable::NotLoaded;
@@ -1908,7 +2335,11 @@ impl MainPaneView {
             None,
         ) {
             rows::PrepareDiffSyntaxDocumentResult::Ready(document) => {
-                self.insert_prepared_syntax_document(key, document);
+                if self.insert_prepared_syntax_document(key, document) {
+                    // A click made before this landed is waiting on exactly this
+                    // document -- the same replay the file-diff paths run.
+                    self.retry_pending_diff_text_syntax_click();
+                }
             }
             rows::PrepareDiffSyntaxDocumentResult::TimedOut => {
                 cx.spawn(
@@ -1947,6 +2378,7 @@ impl MainPaneView {
                             {
                                 this.worktree_preview_style_cache_epoch =
                                     this.worktree_preview_style_cache_epoch.wrapping_add(1);
+                                this.retry_pending_diff_text_syntax_click();
                                 cx.notify();
                             }
                         });
@@ -2178,6 +2610,7 @@ impl MainPaneView {
                         if applied.split_right {
                             this.file_diff_style_cache_epochs.bump_right();
                         }
+                        this.retry_pending_diff_text_syntax_click();
                         cx.notify();
                     }
                 });
@@ -2193,12 +2626,16 @@ impl MainPaneView {
         self.file_diff_cache_content_signature = None;
         self.file_diff_cache_inflight = None;
         self.file_diff_cache_error = None;
-        self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
+        self.advance_file_diff_syntax_generation();
         self.file_diff_style_cache_epochs.bump_both();
         self.file_diff_cache_path = None;
         self.file_diff_cache_language = None;
         self.file_diff_cache_rows.clear();
         self.file_diff_row_provider = None;
+        self.file_diff_old_source_path = None;
+        self.file_diff_new_source_path = None;
+        self.file_diff_old_source_identity = None;
+        self.file_diff_new_source_identity = None;
         self.file_diff_old_text = SharedString::default();
         self.file_diff_old_line_starts = Arc::default();
         self.file_diff_old_line_to_row = Arc::default();
@@ -2211,6 +2648,18 @@ impl MainPaneView {
         self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
         self.reset_file_diff_word_highlight_caches();
+    }
+
+    /// Invalidates syntax work tied to the currently displayed file-diff rows.
+    ///
+    /// Advance this only when those rows are cleared or atomically replaced. A
+    /// same-target rebuild deliberately leaves the old rows interactive while
+    /// it runs, so advancing at rebuild start would let a worker read the old
+    /// sources while claiming to belong to the replacement generation.
+    fn advance_file_diff_syntax_generation(&mut self) {
+        self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
+        self.file_diff_pair_syntax_text.clear();
+        self.file_diff_click_syntax_inflight.clear();
     }
 
     /// Drop the memoized intra-line word-diff ranges. They are keyed by bare row
@@ -2376,7 +2825,6 @@ impl MainPaneView {
         self.file_diff_cache_seq = self.file_diff_cache_seq.wrapping_add(1);
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
-        self.file_diff_syntax_generation = seq;
         let whitespace_mode = self.diff_whitespace_mode;
 
         cx.spawn(
@@ -2424,9 +2872,26 @@ impl MainPaneView {
                         }
                     };
                     this.file_diff_cache_error = None;
+                    // The old rows remained interactive during a same-target
+                    // rebuild. Invalidate their workers and retained source only
+                    // now that every replacement field is ready to be swapped.
+                    this.advance_file_diff_syntax_generation();
+                    // A worker that finished before this swap could legitimately
+                    // serve the still-visible old rows, but the cache rev already
+                    // names this incoming payload. Drop any documents it put
+                    // under that rev before preparing the replacement sources.
+                    this.remove_file_diff_prepared_syntax_documents_for_rev(
+                        repo_id,
+                        diff_file_rev,
+                        &expected_abs_path,
+                    );
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
                     this.file_diff_row_provider = Some(rebuild.row_provider);
+                    this.file_diff_old_source_path = rebuild.old_source_path;
+                    this.file_diff_new_source_path = rebuild.new_source_path;
+                    this.file_diff_old_source_identity = rebuild.old_source_identity;
+                    this.file_diff_new_source_identity = rebuild.new_source_identity;
                     this.file_diff_old_text = rebuild.old_text;
                     this.file_diff_old_line_starts = rebuild.old_line_starts;
                     this.file_diff_old_line_to_row = rebuild.old_line_to_row;
@@ -2438,6 +2903,7 @@ impl MainPaneView {
                     this.file_diff_inline_row_provider = Some(rebuild.inline_row_provider);
                     this.file_diff_inline_text = rebuild.inline_text;
                     this.file_diff_cache_content_signature = Some(content_signature);
+                    this.clear_diff_text_projected_highlights();
                     // The rows just changed under their own indices. On the
                     // clearing path `reset_file_diff_cache_data` already did
                     // this; the kept-rows path deliberately skips it, so without

@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "ebnf", "camelcase": "Ebnf", "scope": "source.ebnf", "path": ".", "file-types": ["ebnf"] }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Ebnf grammar for tree-sitter",
+    "links": { "repository": "https://github.com/amaanq/tree-sitter-ebnf" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

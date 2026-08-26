@@ -1,0 +1,52 @@
+# Vendored from the tree-sitter-cpp git rev
+# 5cb9b693cfd7bfacab1d9ff4acac1a4150700609
+# (https://github.com/tree-sitter/tree-sitter-cpp, MIT -- see LICENSE), to
+# regenerate `src/parser.c` with a larger small-state threshold. The root
+# Cargo.toml pinned this rev rather than the crates.io release, and its
+# `grammar.json` differs from `tree-sitter-cpp 0.23.4` on crates.io, so the rev is
+# what is vendored here.
+#
+# `tree-sitter generate` decides per parse state whether to emit a dense row in
+# `ts_parse_table` (SYMBOL_COUNT * 2 bytes, O(1) lookup) or a compact entry in
+# `ts_small_parse_table` (scanned), using
+# `threshold = min(64, symbol_count / 2)`. That 64 is only the break-even for a
+# grammar with <= 128 symbols; every large grammar has far more, so thousands of
+# states get a dense row costing several times the compact form. Regenerating
+# with `TS_SMALL_STATE_THRESHOLD=128` saves 1.18 MiB here.
+#
+# It is a representation change only -- the automaton, and so every parse tree, is
+# byte-identical. `vendor/README.md` has the procedure and the proof.
+#
+# Generated with tree-sitter-cli 0.26.13 at ABI 14, the ABI upstream ships, and
+# the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
+# README there.
+#
+# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
+# GitComet keeps its own queries in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+[package]
+name = "tree-sitter-cpp"
+description = "C++ grammar for the tree-sitter parsing library"
+version = "0.23.4"
+repository = "https://github.com/tree-sitter/tree-sitter-cpp"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+# Upstream's dev-dependency, kept so `bindings/rust/lib.rs`'s own test module still
+# builds. This crate is workspace-`exclude`d, so it only runs under
+# `cargo test --manifest-path vendor/tree-sitter-cpp/Cargo.toml`. The version
+# tracks `tree-sitter` in the root Cargo.toml.
+[dev-dependencies]
+tree-sitter = "0.26.13"

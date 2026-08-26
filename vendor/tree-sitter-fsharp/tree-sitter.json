@@ -1,0 +1,30 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "fsharp",
+      "camelcase": "FSharp",
+      "scope": "source.fsharp",
+      "path": "fsharp",
+      "external-files": ["common/scanner.h"],
+      "file-types": ["fs", "fsx"],
+      "injection-regex": "^(fs|fsharp)$"
+    },
+    {
+      "name": "fsharp_signature",
+      "camelcase": "FSharpSignature",
+      "scope": "source.fsharp.signature",
+      "path": "fsharp_signature",
+      "external-files": ["common/scanner.h"],
+      "file-types": ["fsi"],
+      "injection-regex": "^fsi$"
+    }
+  ],
+  "metadata": {
+    "version": "0.3.11",
+    "license": "MIT",
+    "description": "F# grammar for tree-sitter",
+    "links": {"repository": "https://github.com/ionide/tree-sitter-fsharp"}
+  },
+  "bindings": {"c": true, "go": false, "node": false, "python": false, "rust": true, "swift": false}
+}

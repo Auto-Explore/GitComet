@@ -1,6 +1,6 @@
 use super::*;
 use crate::view::panes::main::{
-    apply_file_editor_bracket_highlights, file_editor_blame_line_for_editor_line,
+    apply_file_editor_pair_highlights, file_editor_blame_line_for_editor_line,
     file_editor_provider_binding_key,
 };
 use palette::IntoColor;
@@ -251,7 +251,7 @@ async fn file_editor_refuses_a_non_utf8_file(cx: &mut gpui::TestAppContext) {
 }
 
 #[test]
-fn bracket_overlay_paints_both_delimiters_over_the_syntax_runs() {
+fn pair_overlay_paints_both_delimiters_over_the_syntax_runs() {
     let text = "fn f() {}";
     let keyword = gpui::HighlightStyle {
         color: Some(gpui::rgb(0x112233).into_color()),
@@ -264,9 +264,13 @@ fn bracket_overlay_paints_both_delimiters_over_the_syntax_runs() {
     let open = text.find('{').expect("open brace");
     let close = text.find('}').expect("close brace");
 
-    let highlights = apply_file_editor_bracket_highlights(
+    let highlights = apply_file_editor_pair_highlights(
         vec![(0..2, keyword), (open..close + 1, keyword)],
-        Some(&(open..open + 1, close..close + 1)),
+        Some(&rows::SyntaxPair {
+            open: open..open + 1,
+            close: close..close + 1,
+            kind: rows::SyntaxPairKind::Bracket,
+        }),
         0..text.len(),
         bracket,
     );
@@ -292,56 +296,158 @@ fn bracket_overlay_paints_both_delimiters_over_the_syntax_runs() {
 }
 
 #[test]
-fn bracket_overlay_is_a_no_op_without_a_pair() {
+fn whole_tag_pair_overlay_preserves_disjoint_syntax_runs() {
+    let punctuation = gpui::HighlightStyle {
+        color: Some(gpui::rgb(0x112233).into_color()),
+        ..Default::default()
+    };
+    let tag_name = gpui::HighlightStyle {
+        color: Some(gpui::rgb(0x445566).into_color()),
+        ..Default::default()
+    };
+    let attribute = gpui::HighlightStyle {
+        color: Some(gpui::rgb(0x778899).into_color()),
+        ..Default::default()
+    };
+    let pair_style = gpui::HighlightStyle {
+        background_color: Some(gpui::rgba(0xffffff26).into_color()),
+        ..Default::default()
+    };
+    let runs = vec![
+        (0..1, punctuation),
+        (1..4, tag_name),
+        (5..10, attribute),
+        (10..11, punctuation),
+        (11..12, punctuation),
+        (12..15, tag_name),
+        (15..16, punctuation),
+    ];
+
+    let highlights = apply_file_editor_pair_highlights(
+        runs,
+        Some(&rows::SyntaxPair {
+            open: 0..11,
+            close: 11..16,
+            kind: rows::SyntaxPairKind::Tag,
+        }),
+        0..16,
+        pair_style,
+    );
+
+    assert_eq!(
+        highlights
+            .iter()
+            .map(|(range, style)| (range.clone(), style.color, style.background_color,))
+            .collect::<Vec<_>>(),
+        vec![
+            (0..1, punctuation.color, pair_style.background_color),
+            (1..4, tag_name.color, pair_style.background_color),
+            // The grammar left the whitespace unstyled; the overlay fills only
+            // that gap instead of adding a run across the whole start tag.
+            (4..5, pair_style.color, pair_style.background_color),
+            (5..10, attribute.color, pair_style.background_color),
+            (10..11, punctuation.color, pair_style.background_color),
+            (11..12, punctuation.color, pair_style.background_color),
+            (12..15, tag_name.color, pair_style.background_color),
+            (15..16, punctuation.color, pair_style.background_color),
+        ]
+    );
+
+    for adjacent in highlights.windows(2) {
+        assert_eq!(
+            adjacent[0].0.end, adjacent[1].0.start,
+            "whole-tag overlay runs must form a sorted, disjoint tiling"
+        );
+    }
+}
+
+#[test]
+fn pair_overlay_is_a_no_op_without_a_pair() {
     let style = gpui::HighlightStyle::default();
     let runs = vec![(0..4, style), (6..9, style)];
     assert_eq!(
-        apply_file_editor_bracket_highlights(runs.clone(), None, 0..9, style),
+        apply_file_editor_pair_highlights(runs.clone(), None, 0..9, style),
         runs
     );
 }
 
 #[test]
 fn provider_binding_key_changes_only_when_something_changed() {
-    let pair = (3..4, 9..10);
+    let pair = rows::SyntaxPair {
+        open: 3..4,
+        close: 9..10,
+        kind: rows::SyntaxPairKind::Bracket,
+    };
     let no_matches: &[std::ops::Range<usize>] = &[];
+    let no_occurrences: &[std::ops::Range<usize>] = &[];
     // Two ranges, not one: clippy reads a single-range array literal as a typo.
     let one_match: &[std::ops::Range<usize>] = &[20..25, 40..45];
     let other_match: &[std::ops::Range<usize>] = &[30..35, 40..45];
-    let base = file_editor_provider_binding_key(7, 1, Some(&pair), no_matches);
+    let base = file_editor_provider_binding_key(7, 1, Some(&pair), no_matches, no_occurrences);
 
     assert_eq!(
         base,
-        file_editor_provider_binding_key(7, 1, Some(&pair), no_matches),
+        file_editor_provider_binding_key(7, 1, Some(&pair), no_matches, no_occurrences),
         "an unchanged binding must not rebind — that is what stops the observe cycle"
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(8, 1, Some(&pair), no_matches)
+        file_editor_provider_binding_key(8, 1, Some(&pair), no_matches, no_occurrences)
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 2, Some(&pair), no_matches)
+        file_editor_provider_binding_key(7, 2, Some(&pair), no_matches, no_occurrences)
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 1, Some(&(3..4, 12..13)), no_matches),
+        file_editor_provider_binding_key(
+            7,
+            1,
+            Some(&rows::SyntaxPair {
+                open: 3..4,
+                close: 12..13,
+                kind: rows::SyntaxPairKind::Bracket,
+            }),
+            no_matches,
+            no_occurrences
+        ),
         "moving the caret to another pair must rebind"
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 1, None, no_matches)
+        file_editor_provider_binding_key(
+            7,
+            1,
+            Some(&rows::SyntaxPair {
+                open: 3..4,
+                close: 9..10,
+                kind: rows::SyntaxPairKind::Quote,
+            }),
+            no_matches,
+            no_occurrences
+        ),
+        "same span, different kind: the key must still separate them"
     );
     assert_ne!(
         base,
-        file_editor_provider_binding_key(7, 1, Some(&pair), one_match),
+        file_editor_provider_binding_key(7, 1, None, no_matches, no_occurrences)
+    );
+    assert_ne!(
+        base,
+        file_editor_provider_binding_key(7, 1, Some(&pair), one_match, no_occurrences),
         "a search match moves no text and touches no tree, so this key is the \
          only thing that can tell the input its highlights changed"
     );
     assert_ne!(
-        file_editor_provider_binding_key(7, 1, Some(&pair), one_match),
-        file_editor_provider_binding_key(7, 1, Some(&pair), other_match),
+        file_editor_provider_binding_key(7, 1, Some(&pair), one_match, no_occurrences),
+        file_editor_provider_binding_key(7, 1, Some(&pair), other_match, no_occurrences),
         "stepping to the next match changes which hits are washed"
+    );
+    assert_ne!(
+        base,
+        file_editor_provider_binding_key(7, 1, Some(&pair), no_matches, &[20..25, 40..45]),
+        "moving the caret onto a name moves no text and touches no tree, so this \
+         key is the only thing that can tell the input its highlights changed"
     );
 }
 
@@ -674,6 +780,78 @@ async fn editing_markdown_highlights_and_leaves_the_rendered_preview(
         assert!(
             styled("fn main"),
             "a fenced rust block must pick up the injected grammar"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// The editor used to apply its 256 KiB caret-scan ceiling before asking what
+/// the caret was on, so this crate's own `syntax.rs` parsed and colored normally
+/// but no identifier click produced occurrence highlights.
+#[gpui::test]
+async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(965);
+    let workdir = unique_workdir("file_editor_actual_syntax_rs_click");
+    let file_rel = std::path::PathBuf::from("syntax.rs");
+    let source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("src/view/rows/diff_text/syntax.rs");
+    let contents = std::fs::read_to_string(source_path).expect("read actual syntax.rs");
+    assert!(
+        contents.len() > 256 * 1024,
+        "the regression needs a large file"
+    );
+    assert!(
+        contents.len() <= rows::OCCURRENCE_MAX_TEXT_BYTES,
+        "the actual source must stay inside the interactive scan ceiling"
+    );
+    std::fs::write(workdir.join(&file_rel), &contents).expect("write syntax.rs editor fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
+            this.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        });
+    });
+    cx.run_until_parked();
+
+    let target = "ensure_tree_sitter_allocator";
+    let target_start = contents
+        .find(target)
+        .expect("actual syntax.rs should retain the allocator funnel");
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        main_pane.update(app, |pane, cx| {
+            assert!(
+                pane.file_editor_live_syntax.is_some(),
+                "the large Rust file should have a live syntax tree"
+            );
+            pane.file_editor_input.update(cx, |input, cx| {
+                input.set_cursor_offset(target_start + 3, cx);
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = main_pane.read(app);
+        assert!(
+            pane.file_editor_occurrences.iter().any(
+                |range| range.start == target_start && range.end == target_start + target.len()
+            ),
+            "clicking the allocator name should highlight it in the actual half-megabyte file; \
+             occurrences={:?}",
+            pane.file_editor_occurrences,
+        );
+        assert!(
+            pane.file_editor_occurrences.len() >= 3,
+            "the definition and calls should all be highlighted"
         );
     });
 
@@ -2721,6 +2899,93 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
         editor_selected_range(&view, cx),
         matches[0],
         "the caret is left on the match the search was showing"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// The occurrence set must depend on where the caret *is*, not on how it got
+/// there.
+///
+/// Two name tokens can abut, and the guard that decided whether the cached set
+/// still applied was an inclusive range test -- so the offset where one name
+/// ends and the next begins satisfied both. Walking right out of `$foo` into
+/// `$bar` kept `$foo` lit for one keypress, while arriving at the same offset
+/// from the right lit `$bar`. Perl is the in-tree case: `scalar_variable` is a
+/// sigil plus a name with no separator between two of them.
+#[gpui::test]
+async fn file_editor_occurrences_do_not_depend_on_the_direction_of_approach(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(966);
+    let workdir = unique_workdir("file_editor_abutting_names");
+    let file_rel = std::path::PathBuf::from("abutting.pl");
+    // `$foo` is 6..10 and `$bar` is 10..14, so offset 10 is the boundary. Each
+    // name occurs again below, so the two sets are told apart by more than the
+    // clicked token alone.
+    let contents = "print $foo$bar;\nprint $foo;\nprint $bar;\n";
+    std::fs::write(workdir.join(&file_rel), contents).expect("write abutting-name fixture");
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            push_test_state(this, editor_state(repo_id, &workdir, &file_rel), cx);
+            this.main_pane
+                .update(cx, |pane, cx| pane.ensure_file_editor_loaded(cx));
+        });
+    });
+    cx.run_until_parked();
+
+    let main_pane = cx.update(|_window, app| view.read(app).main_pane.clone());
+    cx.update(|_window, app| {
+        assert!(
+            main_pane.read(app).file_editor_live_syntax.is_some(),
+            "the Perl fixture should have a live syntax tree"
+        );
+    });
+
+    let set_cursor = |cx: &mut gpui::VisualTestContext, offset: usize| {
+        cx.update(|_window, app| {
+            main_pane.update(app, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.set_cursor_offset(offset, cx);
+                });
+            });
+        });
+        cx.run_until_parked();
+        cx.update(|_window, app| main_pane.read(app).file_editor_occurrences.clone())
+    };
+
+    let foo: Vec<std::ops::Range<usize>> = vec![6..10, 22..26];
+    let bar: Vec<std::ops::Range<usize>> = vec![10..14, 34..38];
+
+    assert_eq!(
+        set_cursor(cx, 8),
+        foo,
+        "the caret inside `$foo` lights `$foo`"
+    );
+    // Walk right, one offset at a time, across the boundary.
+    let _ = set_cursor(cx, 9);
+    assert_eq!(
+        set_cursor(cx, 10),
+        bar,
+        "offset 10 is the first byte of `$bar`, whichever side the caret came from"
+    );
+
+    assert_eq!(
+        set_cursor(cx, 12),
+        bar,
+        "the caret inside `$bar` lights `$bar`"
+    );
+    let _ = set_cursor(cx, 11);
+    assert_eq!(
+        set_cursor(cx, 10),
+        bar,
+        "and arriving from the right agrees with arriving from the left"
     );
 
     let _ = std::fs::remove_dir_all(&workdir);
