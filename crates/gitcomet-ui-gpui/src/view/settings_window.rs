@@ -1373,10 +1373,24 @@ impl SettingsWindowView {
     fn test_terminal_launch_from_draft(&mut self, cx: &mut gpui::Context<Self>) {
         let preferences = self.external_terminal_preferences_with_drafts(cx);
         let context = self.preferred_terminal_launch_context(cx);
-        match launch_external_terminal_from_preferences(&preferences, &context) {
-            Ok(()) => self.set_terminal_status(false, "Launch request sent.", cx),
-            Err(err) => self.set_terminal_status(true, format!("Test launch failed: {err}"), cx),
-        }
+        let spec = match resolve_external_terminal_launch_spec(&preferences, &context) {
+            Ok(spec) => spec,
+            Err(err) => {
+                self.set_terminal_status(true, format!("Test launch failed: {err}"), cx);
+                return;
+            }
+        };
+
+        super::platform_open::spawn_launch(
+            cx,
+            move || spec.launch().map_err(|err| err.to_string()),
+            |this, result, cx| match result {
+                Ok(()) => this.set_terminal_status(false, "Launch request sent.", cx),
+                Err(err) => {
+                    this.set_terminal_status(true, format!("Test launch failed: {err}"), cx)
+                }
+            },
+        );
     }
 
     fn show_root(&mut self, cx: &mut gpui::Context<Self>) {
@@ -1425,13 +1439,19 @@ impl SettingsWindowView {
             return;
         };
 
-        if let Err(err) = super::platform_open::open_path(&path) {
-            self.push_main_window_toast(
-                components::ToastKind::Error,
-                format!("Failed to open custom theme folder: {err}"),
-                cx,
-            );
-        }
+        super::platform_open::spawn_launch(
+            cx,
+            move || super::platform_open::open_path_blocking(&path),
+            |this, result, cx| {
+                if let Err(err) = result {
+                    this.push_main_window_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open custom theme folder: {err}"),
+                        cx,
+                    );
+                }
+            },
+        );
     }
 
     pub(crate) fn apply_ui_scale_percent(
