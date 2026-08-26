@@ -80,6 +80,7 @@ pub(super) use trace;
 pub(super) fn msg_name(msg: &Msg) -> &'static str {
     match msg {
         Msg::OpenRepo(_) => "OpenRepo",
+        Msg::OpenRepoFromExternalDrop(_) => "OpenRepoFromExternalDrop",
         Msg::RestoreSession { .. } => "RestoreSession",
         Msg::CloseRepo { .. } => "CloseRepo",
         Msg::CloseRepos { .. } => "CloseRepos",

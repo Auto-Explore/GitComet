@@ -578,11 +578,26 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
         }
     };
 
-    let removal_result = if metadata.file_type().is_dir() {
-        fs::remove_dir_all(dest)
-    } else {
-        fs::remove_file(dest)
+    let remove = || {
+        if metadata.file_type().is_dir() {
+            fs::remove_dir_all(dest)
+        } else {
+            fs::remove_file(dest)
+        }
     };
+
+    #[cfg(windows)]
+    let mut removal_result = remove();
+    #[cfg(not(windows))]
+    let removal_result = remove();
+    #[cfg(windows)]
+    for _ in 0..10 {
+        if removal_result.is_ok() || !dest.exists() {
+            return Ok(());
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        removal_result = remove();
+    }
 
     removal_result.map_err(|err| {
         Error::new(ErrorKind::Backend(format!(

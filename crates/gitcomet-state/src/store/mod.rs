@@ -72,6 +72,7 @@ fn is_control_msg(msg: &Msg) -> bool {
     matches!(
         msg,
         Msg::OpenRepo(_)
+            | Msg::OpenRepoFromExternalDrop(_)
             | Msg::CloseRepo { .. }
             | Msg::CloseRepos { .. }
             | Msg::SetActiveRepo { .. }
