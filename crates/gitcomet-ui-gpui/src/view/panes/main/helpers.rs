@@ -3127,6 +3127,27 @@ pub(crate) struct MainPaneView {
     pub(super) diff_text_autoscroll_target: Option<DiffTextAutoscrollTarget>,
     pub(super) diff_text_last_mouse_pos: Point<Pixels>,
     pub(in crate::view) diff_suppress_clicks_remaining: u8,
+    /// The delimiter pair the last click selected, already projected onto rows.
+    ///
+    /// Not folded into any cache key: unlike the file editor's highlight runs,
+    /// this is painted as a quad outside every cached artifact, and `KeyedCanvas`
+    /// re-runs prepaint and paint every frame regardless of its revision key.
+    pub(in crate::view) diff_text_pair_match: Option<DiffTextPairMatch>,
+    /// Every place the clicked name appears, already projected onto rows and
+    /// bucketed by the row that paints it.
+    ///
+    /// Separate from `diff_text_pair_match` because a click produces both: the
+    /// name's other uses, and the construct enclosing it. Bucketed because the
+    /// paint path asks per row per region per frame, and scanning a flat list of
+    /// up to `MAX_OCCURRENCES` for each of them is work proportional to rows
+    /// times matches, repeated at frame rate for as long as the highlight is up.
+    pub(in crate::view) diff_text_occurrences:
+        FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>>,
+    /// A click waiting for a cold full-document syntax parse. The second region
+    /// is the real old/new side to prepare (inline rows still belong to one of
+    /// those documents). Projection resets clear this before its worker can
+    /// replay stale coordinates.
+    pub(in crate::view) diff_text_pending_syntax_click: Option<(DiffTextPos, DiffTextRegion)>,
     pub(in crate::view) diff_text_hitboxes: FxHashMap<(usize, DiffTextRegion), DiffTextHitbox>,
     /// A search match whose row still has to be brought into view sideways, and
     /// how many more frames to keep trying for.
@@ -3168,12 +3189,52 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_cache_language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) file_diff_cache_rows: Vec<FileDiffRow>,
     pub(in crate::view) file_diff_row_provider: Option<Arc<super::diff_cache::PagedFileDiffRows>>,
+    /// Text read back from a source-backed side for a click, kept alive.
+    ///
+    /// Not just a cache: the prepared-document identity is keyed partly on the
+    /// text's *address*, so handing it a `SharedString` that is dropped when the
+    /// call returns leaves an identity pointing at freed memory, which a later
+    /// allocation of the same length can alias. Retaining it also means a second
+    /// click resolves by identity instead of re-reading and re-parsing the file.
+    ///
+    /// The read happens inline only for small files and otherwise on the click
+    /// syntax worker. Cleared whenever the cache rebuilds, so what it holds is
+    /// always the body the current generation's line index was built from.
+    pub(in crate::view) file_diff_pair_syntax_text: FxHashMap<DiffTextRegion, SharedString>,
+    /// Source sides currently being read and parsed for an interactive click.
+    /// Prevents repeated clicks from launching duplicate full-document work.
+    /// The value identifies the syntax generation that owns the marker, so a
+    /// superseded worker cannot remove a newer generation's marker.
+    pub(in crate::view) file_diff_click_syntax_inflight: FxHashMap<DiffTextRegion, u64>,
+    /// Test-only mutation point after a click worker has parsed but before its
+    /// result is returned to the UI thread.
+    #[cfg(test)]
+    pub(in crate::view) file_diff_click_syntax_after_prepare_hook:
+        Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Test-only observation point immediately before a click worker updates
+    /// its in-flight marker and installs or rejects its prepared document.
+    #[cfg(test)]
+    pub(in crate::view) file_diff_click_syntax_before_complete_hook:
+        Option<Arc<dyn Fn(&MainPaneView) + Send + Sync>>,
+    /// Where each side's content lives when it is a file rather than text in
+    /// memory. A source-backed side keeps its text off the heap so a huge diff
+    /// can render from per-line slices; the click path reads it back from here
+    /// when it needs a whole-document parse.
+    pub(in crate::view) file_diff_old_source_path: Option<Arc<std::path::PathBuf>>,
+    pub(in crate::view) file_diff_new_source_path: Option<Arc<std::path::PathBuf>>,
+    /// Filesystem identity of each source-backed side as this generation indexed
+    /// it. A click re-reads the file, so it needs to know whether the file is
+    /// still the one the rows are showing.
+    pub(in crate::view) file_diff_old_source_identity: Option<Arc<str>>,
+    pub(in crate::view) file_diff_new_source_identity: Option<Arc<str>>,
     /// Real old-side file text used for split and inline syntax projection.
+    /// Empty when the side is source-backed; `file_diff_old_source_path` says so.
     pub(in crate::view) file_diff_old_text: SharedString,
     pub(in crate::view) file_diff_old_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_old_line_to_row: Arc<[Option<usize>]>,
     pub(in crate::view) file_diff_old_line_to_inline_row: Arc<[Option<usize>]>,
     /// Real new-side file text used for split and inline syntax projection.
+    /// Empty when the side is source-backed; `file_diff_new_source_path` says so.
     pub(in crate::view) file_diff_new_text: SharedString,
     pub(in crate::view) file_diff_new_line_starts: Arc<[usize]>,
     pub(in crate::view) file_diff_new_line_to_row: Arc<[Option<usize>]>,
@@ -3187,6 +3248,9 @@ pub(crate) struct MainPaneView {
         rows::LruCache<usize, FileDiffSplitWordHighlights>,
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) file_diff_cache_inflight: Option<u64>,
+    /// Identity of the row/source generation currently visible to clicks.
+    /// Kept stable while a same-target replacement builds, then advanced at the
+    /// atomic row swap.
     pub(in crate::view) file_diff_syntax_generation: u64,
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
     pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,
@@ -3311,7 +3375,12 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_editor_live_syntax_build: Option<gpui::Task<()>>,
     pub(in crate::view) file_editor_live_syntax_reparse: Option<gpui::Task<()>>,
     /// The delimiters currently washed as the caret's bracket pair.
-    pub(in crate::view) file_editor_bracket_match: Option<(Range<usize>, Range<usize>)>,
+    pub(in crate::view) file_editor_syntax_pair: Option<rows::SyntaxPair>,
+    /// Everywhere the editor's buffer names the token under the caret.
+    pub(in crate::view) file_editor_occurrences: Vec<Range<usize>>,
+    /// The document version `file_editor_occurrences` was computed against, so
+    /// a caret moving *within* the same name does not rescan the document.
+    pub(in crate::view) file_editor_occurrences_version: Option<u64>,
     /// Byte ranges of every search match in the editor buffer, one per
     /// occurrence and parallel to `diff_search_matches`, which carries the line
     /// each of them sits on. Keeping the two parallel is what lets the shared

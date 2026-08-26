@@ -1000,29 +1000,66 @@ impl LiveSyntaxSnapshot {
         out
     }
 
-    /// The bracket pair the caret at `offset` belongs to: the delimiter it sits
-    /// on (or immediately after), otherwise the innermost pair enclosing it.
+    /// Everywhere the document names the token at `offset`.
     ///
-    /// Read straight off the tree rather than from `brackets.scm` queries. Every
-    /// such query is a list of `("(" @open ")" @close)` patterns — the delimiters
-    /// are anonymous sibling children of one node — so the tree already carries
-    /// the fact, and taking it from there works for all 47 wired grammars without
-    /// a query file each. It is also exact where a scanner is not: a brace inside
-    /// a string or comment is a leaf *of* that string or comment, never a
-    /// delimiter, so it correctly matches nothing.
+    /// Unlike [`Self::syntax_pair_at`], this is O(document), but it scans the
+    /// rope's borrowed chunks directly and the editor holds a successful answer
+    /// while the caret remains on any occurrence. It is available up to the
+    /// same ceiling as the live syntax tree itself.
     ///
-    /// O(tree depth) — cheap enough to run on the caret-move path.
-    pub(in crate::view) fn bracket_pair_at(
-        &self,
-        offset: usize,
-    ) -> Option<(Range<usize>, Range<usize>)> {
+    /// Injected regions are not searched: the root tree has their bodies as one
+    /// unparsed leaf, so a name inside one matches nothing there.
+    pub(in crate::view) fn occurrences_at(&self, offset: usize) -> Vec<Range<usize>> {
+        let inner = self.0.as_ref();
+        let len = inner.rope.len();
+        if len > OCCURRENCE_MAX_TEXT_BYTES {
+            return Vec::new();
+        }
+        let offset = offset.min(len);
+        // The rope lookup asks the tree for the small token under the caret
+        // before starting its document scan, so punctuation and whitespace
+        // remain one cheap descent.
+        syntax_occurrences_in_rope(&inner.tree, &inner.rope, offset)
+            .map(|found| found.ranges)
+            .unwrap_or_default()
+    }
+
+    /// The name token the caret at `offset` is on, without searching for its
+    /// other occurrences.
+    ///
+    /// This is the same lookup [`Self::occurrences_at`] starts with, exposed on
+    /// its own so a caller holding a previous answer can ask "is the caret still
+    /// on one of these?" for the price of a tree descent rather than another
+    /// O(document) scan. Answering that by range arithmetic instead cannot be
+    /// exact: two name tokens can abut, and then one offset sits at the end of
+    /// the first and the start of the second.
+    pub(in crate::view) fn name_token_at(&self, offset: usize) -> Option<Range<usize>> {
         let inner = self.0.as_ref();
         let offset = offset.min(inner.rope.len());
+        name_token_at(&inner.tree, offset, |range| {
+            Some(inner.rope.text_for_range(range))
+        })
+    }
+
+    /// The matching open/close pair the caret at `offset` belongs to: the
+    /// delimiter it sits on (or immediately after), otherwise the innermost
+    /// pair enclosing it.
+    ///
+    /// Brackets, element tags and quotes all count -- see [`super::pairs`] for
+    /// what each covers and how they are read off the tree.
+    ///
+    /// O(tree depth) -- cheap enough to run on the caret-move path.
+    pub(in crate::view) fn syntax_pair_at(&self, offset: usize) -> Option<SyntaxPair> {
+        let inner = self.0.as_ref();
+        let offset = offset.min(inner.rope.len());
+        let source_ranges_equal = |left: Range<usize>, right: Range<usize>| {
+            inner.rope.text_for_range(left) == inner.rope.text_for_range(right)
+        };
         // Injected grammars first: a brace inside an interpolated region is the
         // inner grammar's. Layer trees are parsed with `included_ranges`, so
         // their node offsets are already document coordinates.
         for layer in &inner.injections {
-            // Membership, not the hull: a caret sitting in a `{% … %}` gap between
+            // Membership, not the hull: a caret sitting in a `{% ... %}` gap between
             // two ranges of a combined layer is host-grammar territory, and the
             // combined tree has no nodes there to answer with.
             if layer
@@ -1037,158 +1074,13 @@ impl LiveSyntaxSnapshot {
                     }
                 })
                 .is_ok()
-                && let Some(pair) = bracket_pair_in_tree(&layer.tree, offset)
+                && let Some(pair) = syntax_pair_in_tree(&layer.tree, offset, &source_ranges_equal)
             {
                 return Some(pair);
             }
         }
-        bracket_pair_in_tree(&inner.tree, offset)
+        syntax_pair_in_tree(&inner.tree, offset, &source_ranges_equal)
     }
-}
-
-/// The delimiter pairs matched by [`LiveSyntaxSnapshot::bracket_pair_at`].
-///
-/// Angle brackets are deliberately absent: `<` and `>` are comparison operators
-/// in most grammars and only sometimes delimiters, so pairing them lights up
-/// arithmetic. Quotes are absent for the same reason Zed excludes them from
-/// rainbow colouring — a matched quote pair tells the reader nothing.
-const BRACKET_PAIRS: [(&str, &str); 3] = [("(", ")"), ("[", "]"), ("{", "}")];
-
-fn close_delimiter_for(open: &str) -> Option<&'static str> {
-    BRACKET_PAIRS
-        .iter()
-        .find(|(o, _)| *o == open)
-        .map(|(_, c)| *c)
-}
-
-fn open_delimiter_for(close: &str) -> Option<&'static str> {
-    BRACKET_PAIRS
-        .iter()
-        .find(|(_, c)| *c == close)
-        .map(|(o, _)| *o)
-}
-
-/// Whether `node` is one of the delimiter tokens, as opposed to a named node
-/// that merely spans one.
-fn is_delimiter_token(node: &tree_sitter::Node<'_>) -> bool {
-    !node.is_named()
-        && (close_delimiter_for(node.kind()).is_some() || open_delimiter_for(node.kind()).is_some())
-}
-
-fn bracket_pair_in_tree(
-    tree: &tree_sitter::Tree,
-    offset: usize,
-) -> Option<(Range<usize>, Range<usize>)> {
-    let root = tree.root_node();
-    let limit = root.end_byte();
-
-    // A caret sits *between* two characters, so it touches the delimiter on
-    // either side. The one to the right wins, matching where the caret is drawn.
-    for probe in [Some(offset), offset.checked_sub(1)].into_iter().flatten() {
-        if probe >= limit {
-            continue;
-        }
-        if let Some(node) = root.descendant_for_byte_range(probe, probe + 1)
-            && is_delimiter_token(&node)
-            && let Some(pair) = partner_of_delimiter(node)
-        {
-            return Some(pair);
-        }
-    }
-
-    // Otherwise the caret is inside something: walk outward and take the first
-    // node that brackets it, which is the innermost enclosing pair.
-    let mut node = root.descendant_for_byte_range(offset.min(limit), offset.min(limit))?;
-    loop {
-        if let Some(pair) = enclosing_pair_among_children(&node, offset) {
-            return Some(pair);
-        }
-        node = node.parent()?;
-    }
-}
-
-/// The delimiter matching `node`, found among its parent's direct children.
-///
-/// Nesting is counted rather than assuming one pair per parent: a node can hold
-/// several same-kind pairs side by side (`(a)(b)` as arguments), and a deeper
-/// pair lives under a deeper node, so counting direct children is exact.
-fn partner_of_delimiter(node: tree_sitter::Node<'_>) -> Option<(Range<usize>, Range<usize>)> {
-    let parent = node.parent()?;
-    let kind = node.kind();
-    let mut cursor = parent.walk();
-    let children: Vec<tree_sitter::Node<'_>> = parent.children(&mut cursor).collect();
-    let index = children.iter().position(|child| child.id() == node.id())?;
-
-    if let Some(close) = close_delimiter_for(kind) {
-        let mut depth = 1usize;
-        for child in &children[index + 1..] {
-            if !child.is_named() && child.kind() == kind {
-                depth += 1;
-            } else if !child.is_named() && child.kind() == close {
-                depth -= 1;
-                if depth == 0 {
-                    return Some((node.byte_range(), child.byte_range()));
-                }
-            }
-        }
-        return None;
-    }
-
-    let open = open_delimiter_for(kind)?;
-    let mut depth = 1usize;
-    for child in children[..index].iter().rev() {
-        if !child.is_named() && child.kind() == kind {
-            depth += 1;
-        } else if !child.is_named() && child.kind() == open {
-            depth -= 1;
-            if depth == 0 {
-                return Some((child.byte_range(), node.byte_range()));
-            }
-        }
-    }
-    None
-}
-
-/// The tightest delimiter pair among `node`'s direct children that contains
-/// `offset` strictly between them.
-fn enclosing_pair_among_children(
-    node: &tree_sitter::Node<'_>,
-    offset: usize,
-) -> Option<(Range<usize>, Range<usize>)> {
-    let mut cursor = node.walk();
-    let mut open_stack: Vec<tree_sitter::Node<'_>> = Vec::new();
-    let mut best: Option<(Range<usize>, Range<usize>)> = None;
-
-    for child in node.children(&mut cursor) {
-        if child.is_named() {
-            continue;
-        }
-        let kind = child.kind();
-        if close_delimiter_for(kind).is_some() {
-            open_stack.push(child);
-            continue;
-        }
-        let Some(open_kind) = open_delimiter_for(kind) else {
-            continue;
-        };
-        let Some(position) = open_stack.iter().rposition(|open| open.kind() == open_kind) else {
-            continue;
-        };
-        let open = open_stack.remove(position);
-        if open.end_byte() > offset || child.start_byte() < offset {
-            continue;
-        }
-        let candidate = (open.byte_range(), child.byte_range());
-        let span = |pair: &(Range<usize>, Range<usize>)| pair.1.end - pair.0.start;
-        if best
-            .as_ref()
-            .is_none_or(|current| span(&candidate) < span(current))
-        {
-            best = Some(candidate);
-        }
-    }
-
-    best
 }
 
 #[cfg(test)]
@@ -1268,6 +1160,63 @@ mod tests {
                 "byte {offset} should style identically whether queried whole or windowed"
             );
         }
+    }
+
+    #[test]
+    fn occurrence_scan_crosses_rope_chunk_boundaries_without_flattening() {
+        let padding = " ".repeat(crate::kit::rope::MAX_CHUNK_BYTES - 5);
+        let text = format!("{padding}fn boundary_name() {{ boundary_name(); }}\n");
+        let name_start = text.find("boundary_name").expect("fixture name");
+        assert!(
+            name_start < crate::kit::rope::MAX_CHUNK_BYTES
+                && name_start + "boundary_name".len() > crate::kit::rope::MAX_CHUNK_BYTES,
+            "the first name must straddle two rope chunks"
+        );
+
+        let doc = document(&text, Vec::new());
+        let occurrences = doc
+            .snapshot(AppTheme::gitcomet_dark())
+            .occurrences_at(name_start + 1);
+        assert_eq!(
+            occurrences,
+            vec![
+                name_start..name_start + "boundary_name".len(),
+                text.rfind("boundary_name").expect("fixture call")
+                    ..text.rfind("boundary_name").expect("fixture call") + "boundary_name".len(),
+            ]
+        );
+    }
+
+    #[test]
+    fn occurrences_share_the_full_document_syntax_ceiling() {
+        assert_eq!(
+            OCCURRENCE_MAX_TEXT_BYTES,
+            PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES
+        );
+        let old_interactive_ceiling = 1024usize * 1024;
+        let prefix = "fn shared_name() {}\n";
+        let suffix = "fn caller() { shared_name(); }\n";
+        let padding_line = "// syntax-sized live occurrence padding ..............................................\n";
+        let padding = padding_line.repeat(
+            old_interactive_ceiling
+                .saturating_mul(2)
+                .div_ceil(padding_line.len()),
+        );
+        let text = format!("{prefix}{padding}{suffix}");
+        assert!(text.len() > old_interactive_ceiling);
+        assert!(text.len() <= PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES);
+
+        let first = text.find("shared_name").expect("fixture declaration");
+        let second = text.rfind("shared_name").expect("fixture call");
+        let doc = document(&text, Vec::new());
+        assert_eq!(
+            doc.snapshot(AppTheme::gitcomet_dark())
+                .occurrences_at(first + 1),
+            vec![
+                first..first + "shared_name".len(),
+                second..second + "shared_name".len(),
+            ]
+        );
     }
 
     #[test]
@@ -1666,6 +1615,7 @@ mod tests {
             line_starts.as_ref(),
             0,
             line_starts.len(),
+            treesitter_text_hash(text),
         );
         let mut prepared_by_byte = vec![None; text.len()];
         for (line_ix, tokens) in per_line.iter().enumerate() {
@@ -1874,25 +1824,25 @@ mod tests {
 
     /// `(open, close)` as `&str` slices, so failures read as source text rather
     /// than as byte offsets.
-    fn bracket_pair_text<'a>(
+    fn syntax_pair_text<'a>(
         document: &LiveSyntaxDocument,
         text: &'a str,
         offset: usize,
     ) -> Option<(&'a str, &'a str)> {
         document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(offset)
-            .map(|(open, close)| (&text[open], &text[close]))
+            .syntax_pair_at(offset)
+            .map(|pair| (&text[pair.open], &text[pair.close]))
     }
 
     #[test]
-    fn bracket_pair_matches_a_delimiter_the_caret_sits_on() {
+    fn syntax_pair_matches_a_delimiter_the_caret_sits_on() {
         let text = "fn main() {\n    let value = compute(1, 2);\n}\n";
         let document = document(text, Vec::new());
 
         let open_paren = text.find("(1").expect("call paren");
         assert_eq!(
-            bracket_pair_text(&document, text, open_paren),
+            syntax_pair_text(&document, text, open_paren),
             Some(("(", ")")),
             "the caret on an opening paren must find its own closer"
         );
@@ -1901,80 +1851,91 @@ mod tests {
         // character to its left too.
         let close_paren = text.find(");").expect("call close");
         assert_eq!(
-            bracket_pair_text(&document, text, close_paren + 1),
+            syntax_pair_text(&document, text, close_paren + 1),
             Some(("(", ")"))
         );
     }
 
     #[test]
-    fn bracket_pair_matches_the_innermost_block_around_the_caret() {
+    fn syntax_pair_matches_the_innermost_block_around_the_caret() {
         let text = "fn main() {\n    let value = compute(1, 2);\n}\n";
         let document = document(text, Vec::new());
 
         let inside_call = text.find("1, 2").expect("call args") + 2;
         assert_eq!(
-            bracket_pair_text(&document, text, inside_call),
+            syntax_pair_text(&document, text, inside_call),
             Some(("(", ")")),
             "inside the argument list the call parens win over the block braces"
         );
 
         let inside_block = text.find("let").expect("statement");
-        let (open, close) = document
+        let pair = document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(inside_block)
+            .syntax_pair_at(inside_block)
             .expect("the body braces enclose the statement");
-        assert_eq!((&text[open.clone()], &text[close.clone()]), ("{", "}"));
-        assert_eq!(open.start, text.find('{').expect("body open"));
+        assert_eq!(
+            (&text[pair.open.clone()], &text[pair.close.clone()]),
+            ("{", "}")
+        );
+        assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+        assert_eq!(pair.open.start, text.find('{').expect("body open"));
     }
 
     #[test]
-    fn bracket_pair_ignores_braces_inside_strings_and_comments() {
+    fn syntax_pair_ignores_braces_inside_strings_and_comments() {
         let text = "fn main() {\n    let s = \"a } b\";\n    // ) not a paren\n}\n";
         let document = document(text, Vec::new());
 
         // Sitting on the brace inside the string literal: it is a byte of the
-        // string node, not a delimiter, so only the enclosing body matches.
+        // string node, not a delimiter, so it pairs with nothing and the answer
+        // comes from the quotes enclosing it instead.
         let in_string = text.find("} b").expect("brace in string");
-        let (open, _) = document
+        let pair = document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(in_string)
-            .expect("the function body still encloses the string");
-        assert_eq!(open.start, text.find('{').expect("body open"));
+            .syntax_pair_at(in_string)
+            .expect("the string's own quotes enclose the brace");
+        assert_eq!(pair.kind, SyntaxPairKind::Quote);
+        assert_eq!(
+            (&text[pair.open.clone()], &text[pair.close.clone()]),
+            ("\"", "\"")
+        );
+        assert_eq!(pair.open.start, text.find('"').expect("string open"));
 
         let in_comment = text.find(") not").expect("paren in comment");
-        let (open, _) = document
+        let pair = document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(in_comment)
+            .syntax_pair_at(in_comment)
             .expect("the function body still encloses the comment");
-        assert_eq!(open.start, text.find('{').expect("body open"));
+        assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+        assert_eq!(pair.open.start, text.find('{').expect("body open"));
     }
 
     #[test]
-    fn bracket_pair_distinguishes_sibling_pairs_of_the_same_kind() {
+    fn syntax_pair_distinguishes_sibling_pairs_of_the_same_kind() {
         let text = "fn main() {\n    f((1), (2));\n}\n";
         let document = document(text, Vec::new());
 
         let first_open = text.find("(1").expect("first inner");
         let first = document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(first_open)
+            .syntax_pair_at(first_open)
             .expect("first inner pair");
         let second_open = text.find("(2").expect("second inner");
         let second = document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(second_open)
+            .syntax_pair_at(second_open)
             .expect("second inner pair");
 
-        assert_eq!(first.0.start, first_open);
-        assert_eq!(second.0.start, second_open);
+        assert_eq!(first.open.start, first_open);
+        assert_eq!(second.open.start, second_open);
         assert_ne!(
-            first.1, second.1,
+            first.close, second.close,
             "two sibling pairs must not share a closer"
         );
     }
 
     #[test]
-    fn bracket_pair_is_correct_after_an_incremental_edit() {
+    fn syntax_pair_is_correct_after_an_incremental_edit() {
         // The case the feature exists for: typing into the middle of the file
         // must not leave the pair pointing at pre-edit offsets.
         let before = "fn main() {\n    let value = 1;\n}\n";
@@ -1997,30 +1958,288 @@ mod tests {
         assert_eq!(outcome, LiveSyntaxSyncOutcome::Reparsed);
 
         let new_block_open = after.find("{ }").expect("new block");
-        let (open, close) = document
+        let pair = document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(new_block_open)
+            .syntax_pair_at(new_block_open)
             .expect("the freshly typed block must pair");
-        assert_eq!(open.start, new_block_open);
-        assert_eq!(&after[close.clone()], "}");
+        assert_eq!(pair.open.start, new_block_open);
+        assert_eq!(&after[pair.close.clone()], "}");
 
         // And the statement that moved down still resolves to the outer body.
         let moved_statement = after.rfind("let").expect("moved statement");
-        let (open, _) = document
+        let pair = document
             .snapshot(AppTheme::gitcomet_dark())
-            .bracket_pair_at(moved_statement)
+            .syntax_pair_at(moved_statement)
             .expect("the body still encloses the moved statement");
-        assert_eq!(open.start, after.find('{').expect("body open"));
+        assert_eq!(pair.open.start, after.find('{').expect("body open"));
+    }
+
+    /// `(open, close)` in `language`, as `&str` slices.
+    fn pair_text_in(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        offset: usize,
+    ) -> Option<(&str, &str)> {
+        let document = document_in(language, text, Vec::new());
+        syntax_pair_text(&document, text, offset)
+    }
+
+    fn pair_kind_in(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        offset: usize,
+    ) -> Option<SyntaxPairKind> {
+        document_in(language, text, Vec::new())
+            .snapshot(AppTheme::gitcomet_dark())
+            .syntax_pair_at(offset)
+            .map(|pair| pair.kind)
+    }
+
+    /// A tag pair covers both tags in full, attributes included -- not just the
+    /// angle brackets and not just the element name.
+    #[test]
+    fn syntax_pair_matches_whole_html_tags() {
+        let text = "<div class=\"card\">\n  <span>hi</span>\n</div>\n";
+
+        // Caret on the element name of the outer start tag.
+        let on_outer_name = text.find("div").expect("outer name");
+        assert_eq!(
+            pair_text_in(DiffSyntaxLanguage::Html, text, on_outer_name),
+            Some(("<div class=\"card\">", "</div>")),
+            "the whole start tag pairs with the whole end tag"
+        );
+        assert_eq!(
+            pair_kind_in(DiffSyntaxLanguage::Html, text, on_outer_name),
+            Some(SyntaxPairKind::Tag)
+        );
+
+        // Caret in the inner element's text content takes the inner pair.
+        let in_inner_text = text.find("hi").expect("inner text");
+        assert_eq!(
+            pair_text_in(DiffSyntaxLanguage::Html, text, in_inner_text),
+            Some(("<span>", "</span>")),
+            "the innermost element wins over the one enclosing it"
+        );
+
+        // Caret in the outer element's content, outside the inner element.
+        let between = text.find("\n  <span").expect("gap before inner");
+        assert_eq!(
+            pair_text_in(DiffSyntaxLanguage::Html, text, between),
+            Some(("<div class=\"card\">", "</div>"))
+        );
+    }
+
+    /// The three tag naming schemes in the wired grammars all resolve, with no
+    /// per-language dispatch: `start_tag`/`end_tag`, `STag`/`ETag`, and JSX's
+    /// `jsx_opening_element`/`jsx_closing_element`.
+    #[test]
+    fn syntax_pair_matches_every_tag_naming_scheme() {
+        let xml = "<root><item>x</item></root>\n";
+        assert_eq!(
+            pair_text_in(DiffSyntaxLanguage::Xml, xml, xml.find("item").expect("tag")),
+            Some(("<item>", "</item>")),
+            "xml names them STag and ETag"
+        );
+
+        let tsx = "const a = <Foo bar={1}>text</Foo>;\n";
+        assert_eq!(
+            pair_text_in(
+                DiffSyntaxLanguage::Tsx,
+                tsx,
+                tsx.find("text").expect("child")
+            ),
+            Some(("<Foo bar={1}>", "</Foo>")),
+            "jsx names them jsx_opening_element and jsx_closing_element"
+        );
+
+        let tsx_fragment = "const a = <>text</>;\n";
+        assert_eq!(
+            pair_text_in(
+                DiffSyntaxLanguage::Tsx,
+                tsx_fragment,
+                tsx_fragment.find("text").expect("fragment child")
+            ),
+            Some(("<>", "</>")),
+            "nameless JSX fragments should remain pairable"
+        );
+
+        let vue = "<template><p>hi</p></template>\n";
+        assert_eq!(
+            pair_text_in(DiffSyntaxLanguage::Vue, vue, vue.find("hi").expect("text")),
+            Some(("<p>", "</p>"))
+        );
+
+        let svelte = "<main><b>hi</b></main>\n";
+        assert_eq!(
+            pair_text_in(
+                DiffSyntaxLanguage::Svelte,
+                svelte,
+                svelte.find("hi").expect("text")
+            ),
+            Some(("<b>", "</b>"))
+        );
+    }
+
+    /// A tag with no partner matches nothing rather than pairing with the wrong
+    /// element. Both cases are decisions, not gaps.
+    #[test]
+    fn syntax_pair_leaves_invalid_or_self_closing_tags_unpaired() {
+        let self_closing = "<br/>\n";
+        assert_eq!(
+            pair_text_in(
+                DiffSyntaxLanguage::Html,
+                self_closing,
+                self_closing.find("br").expect("name")
+            ),
+            None,
+            "a self-closing tag has no partner"
+        );
+
+        let unclosed = "<div>\n";
+        assert_eq!(
+            pair_text_in(
+                DiffSyntaxLanguage::Html,
+                unclosed,
+                unclosed.find("div").expect("name")
+            ),
+            None,
+            "an unclosed tag must not reach for some other element's end tag"
+        );
+
+        let jsx_self_closing = "const a = <Foo />;\n";
+        assert_eq!(
+            pair_text_in(
+                DiffSyntaxLanguage::Tsx,
+                jsx_self_closing,
+                jsx_self_closing.find("Foo").expect("name")
+            ),
+            None
+        );
+
+        let jsx_mismatched = "const a = <Foo>text</Bar>;\n";
+        for needle in ["Foo", "text", "Bar"] {
+            assert_eq!(
+                pair_text_in(
+                    DiffSyntaxLanguage::Tsx,
+                    jsx_mismatched,
+                    jsx_mismatched.find(needle).expect("mismatched JSX part")
+                ),
+                None,
+                "mismatched JSX tags must not pair when clicking {needle:?}"
+            );
+        }
+    }
+
+    /// Quotes flanking a string's content pair with each other, in the two
+    /// shapes grammars use for them.
+    #[test]
+    fn syntax_pair_matches_quote_delimiters() {
+        // Anonymous same-kind tokens: JSON, Rust, JS.
+        let json = "{\"alpha\": \"beta\"}\n";
+        let in_value = json.find("beta").expect("value");
+        assert_eq!(
+            pair_kind_in(DiffSyntaxLanguage::Json, json, in_value),
+            Some(SyntaxPairKind::Quote)
+        );
+        let document = document_in(DiffSyntaxLanguage::Json, json, Vec::new());
+        let pair = document
+            .snapshot(AppTheme::gitcomet_dark())
+            .syntax_pair_at(in_value)
+            .expect("the value's own quotes");
+        assert_eq!(
+            pair.open.start,
+            json.find("\"beta").expect("value open quote"),
+            "the value pairs with its own quotes, not the key's"
+        );
+
+        let rust = "let s = \"abc\";\n";
+        assert_eq!(
+            pair_kind_in(
+                DiffSyntaxLanguage::Rust,
+                rust,
+                rust.find("abc").expect("body")
+            ),
+            Some(SyntaxPairKind::Quote)
+        );
+
+        let js = "const s = 'abc';\n";
+        assert_eq!(
+            pair_kind_in(
+                DiffSyntaxLanguage::JavaScript,
+                js,
+                js.find("abc").expect("body")
+            ),
+            Some(SyntaxPairKind::Quote)
+        );
+
+        // Explicit named marker nodes: Python's string_start / string_end.
+        let python = "s = \"abc\"\n";
+        assert_eq!(
+            pair_kind_in(
+                DiffSyntaxLanguage::Python,
+                python,
+                python.find("abc").expect("body")
+            ),
+            Some(SyntaxPairKind::Quote)
+        );
+    }
+
+    /// Two documented gaps, asserted so they read as decisions.
+    #[test]
+    fn syntax_pair_leaves_raw_strings_and_lifetimes_unpaired() {
+        // A lone `'` has no partner among its parent's children.
+        let lifetime = "struct S<'a> { r: &'a str }\n";
+        let on_tick = lifetime.find("'a>").expect("lifetime");
+        assert_ne!(
+            pair_kind_in(DiffSyntaxLanguage::Rust, lifetime, on_tick),
+            Some(SyntaxPairKind::Quote),
+            "a lifetime tick is not half of a quote pair"
+        );
+
+        // Raw string delimiters are hidden external tokens: they are not in the
+        // tree at all, so there is nothing to pair.
+        let raw = "let s = r#\"abc\"#;\n";
+        assert_ne!(
+            pair_kind_in(
+                DiffSyntaxLanguage::Rust,
+                raw,
+                raw.find("abc").expect("body")
+            ),
+            Some(SyntaxPairKind::Quote)
+        );
+    }
+
+    /// When several kinds enclose the caret, the innermost one answers.
+    #[test]
+    fn syntax_pair_takes_the_innermost_enclosing_kind() {
+        let text = "<div class=\"card\">x</div>\n";
+        let in_attribute = text.find("card").expect("attribute value");
+        assert_eq!(
+            pair_kind_in(DiffSyntaxLanguage::Html, text, in_attribute),
+            Some(SyntaxPairKind::Quote),
+            "inside the attribute value the quotes are nearer than the tags"
+        );
+
+        let rust = "fn f() { let s = \"a\"; }\n";
+        assert_eq!(
+            pair_kind_in(
+                DiffSyntaxLanguage::Rust,
+                rust,
+                rust.find('a').expect("body")
+            ),
+            Some(SyntaxPairKind::Quote),
+            "the string's quotes are nearer than the enclosing block braces"
+        );
     }
 
     #[test]
-    fn bracket_pair_is_none_outside_any_pair() {
+    fn syntax_pair_is_none_outside_any_pair() {
         let text = "fn main() {\n    let value = 1;\n}\n";
         let document = document(text, Vec::new());
         assert_eq!(
             document
                 .snapshot(AppTheme::gitcomet_dark())
-                .bracket_pair_at(0),
+                .syntax_pair_at(0),
             None,
             "the caret before `fn` is inside nothing"
         );
@@ -2134,28 +2353,85 @@ mod injection_tests {
         }
     }
 
-    /// A caret in a gap belongs to the host grammar; the combined tree has no
-    /// nodes there and must not be consulted for it.
+    /// A combined layer may answer for a caret on its own boundary, but neither
+    /// end of the pair it returns may straddle a host-grammar gap.
+    ///
+    /// The gaps here are one byte wide -- the newline between two `///` lines --
+    /// so a caret "in the gap" is always also on some range's edge, which the
+    /// membership check treats as inside the layer on purpose: a caret directly
+    /// after an injected region's last character still belongs to it. What must
+    /// never happen is a delimiter range that covers bytes the layer does not
+    /// own, because those bytes are host text the layer never parsed.
     #[test]
-    fn bracket_pair_at_ignores_a_combined_layer_gap() {
+    fn syntax_pair_at_never_straddles_a_combined_layer_gap() {
         let text = "/// <summary>\n/// Adds.\n/// </summary>\nlet add x y = x + y\n";
         let document = fsharp_document(text);
         let ranges = document.injections[0].ranges.clone();
         let gap = ranges[0].end..ranges[1].start;
+        assert!(gap.start < gap.end, "fixture should have a real gap");
         let snapshot = document.snapshot(AppTheme::gitcomet_dark());
 
-        // Only asserts it does not answer *from the combined layer*; the host
-        // grammar may legitimately have no pair here either.
-        if let Some((open, close)) = snapshot.bracket_pair_at(gap.start) {
+        let pair = snapshot
+            .syntax_pair_at(gap.start)
+            .expect("the caret sits just past `<summary>`, which pairs with `</summary>`");
+        for span in [&pair.open, &pair.close] {
+            assert!(
+                ranges
+                    .iter()
+                    .any(|range| range.start <= span.start && span.end <= range.end),
+                "delimiter {span:?} is not contained in any injected range {ranges:?}"
+            );
+        }
+
+        // And a caret out in the host grammar is never answered from the layer.
+        let host = text.find("let add").expect("host code");
+        if let Some(pair) = snapshot.syntax_pair_at(host) {
             let in_layer = |offset: usize| {
                 ranges
                     .iter()
                     .any(|range| range.start <= offset && offset <= range.end)
             };
             assert!(
-                !(in_layer(open.start) && in_layer(close.start)),
-                "a caret in the host-grammar gap {gap:?} was answered by the combined \
-                 XML layer: {open:?}/{close:?}"
+                !(in_layer(pair.open.start) && in_layer(pair.close.start)),
+                "a caret in host code was answered by the combined XML layer"
+            );
+        }
+    }
+
+    /// A caret strictly inside a wide gap belongs to the host grammar, and the
+    /// combined tree -- which has no nodes there -- must not answer for it.
+    ///
+    /// The `///` fixture's gaps are one byte wide, so every offset in them is
+    /// also on some range's boundary, which membership counts as inside the
+    /// layer on purpose (a caret directly after an injected region's last
+    /// character still belongs to it). Interposing a plain `//` comment makes a
+    /// ten-byte gap with a real interior, which is the case this guards.
+    #[test]
+    fn syntax_pair_at_ignores_a_wide_combined_layer_gap() {
+        let text = "/// <summary>\n// plain\n/// </summary>\nlet add x y = x + y\n";
+        let document = fsharp_document(text);
+        let ranges = document.injections[0].ranges.clone();
+        let gap = ranges[0].end..ranges[1].start;
+        assert!(
+            gap.end - gap.start > 2,
+            "fixture must have a gap with a strict interior, got {gap:?}"
+        );
+        let snapshot = document.snapshot(AppTheme::gitcomet_dark());
+
+        let inside = gap.start + (gap.end - gap.start) / 2;
+        assert!(inside > gap.start && inside < gap.end);
+        if let Some(pair) = snapshot.syntax_pair_at(inside) {
+            let in_layer = |offset: usize| {
+                ranges
+                    .iter()
+                    .any(|range| range.start <= offset && offset <= range.end)
+            };
+            assert!(
+                !(in_layer(pair.open.start) && in_layer(pair.close.start)),
+                "a caret at {inside}, strictly inside the host-grammar gap {gap:?}, \
+                 was answered by the combined XML layer: {:?}/{:?}",
+                pair.open,
+                pair.close
             );
         }
     }

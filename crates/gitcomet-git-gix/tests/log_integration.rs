@@ -126,6 +126,51 @@ fn run_git_at(repo: &Path, args: &[&str], unix_seconds: i64) {
     run_git_with_env(repo, args, &envs);
 }
 
+fn fast_import_linear_history(repo: &Path, count: usize) {
+    fast_import_linear_history_with_authors(repo, count, |_| "You <you@example.com>");
+}
+
+fn fast_import_linear_history_with_authors(
+    repo: &Path,
+    count: usize,
+    mut author_at: impl FnMut(usize) -> &'static str,
+) {
+    let mut stream = String::new();
+    for index in 0..count {
+        let message = format!("c{index}");
+        let timestamp = 1_600_000_000 + index as i64;
+        stream.push_str("commit refs/heads/master\n");
+        stream.push_str(&format!("mark :{}\n", index + 1));
+        stream.push_str(&format!("author {} {timestamp} +0000\n", author_at(index)));
+        stream.push_str(&format!(
+            "committer You <you@example.com> {timestamp} +0000\n"
+        ));
+        stream.push_str(&format!("data {}\n{message}\n", message.len()));
+        if index > 0 {
+            stream.push_str(&format!("from :{}\n", index));
+        }
+        let body = format!("v{index}\n");
+        stream.push_str(&format!(
+            "M 100644 inline file.txt\ndata {}\n{body}",
+            body.len()
+        ));
+    }
+    stream.push_str("done\n");
+
+    let mut cmd = Command::new("git");
+    test_git_env::apply(&mut cmd);
+    let mut child = cmd
+        .arg("-C")
+        .arg(repo)
+        .args(["fast-import", "--quiet", "--done"])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .expect("git fast-import to start");
+    std::io::Write::write_all(child.stdin.as_mut().unwrap(), stream.as_bytes()).unwrap();
+    assert!(child.wait().unwrap().success(), "git fast-import failed");
+    run_git(repo, &["reset", "-q", "--hard", "master"]);
+}
+
 fn commit_file_at(repo: &Path, relative_path: &str, contents: &str, message: &str, time: i64) {
     let path = repo.join(relative_path);
     if let Some(parent) = path.parent() {
@@ -462,11 +507,6 @@ fn full_reachable_history_mode_paginates_without_repeating_commits() {
     assert_eq!(legacy_second.commits, second.commits);
 }
 
-/// Every history mode pages through the resumable walk, first-parent and
-/// all-branches included. Without a resume token the walk is rebuilt from the
-/// tips and re-traversed to the cursor for every page, so an author filter that
-/// had to cross the whole history to fill one page crosses it again for the
-/// next, and again for the one after that.
 #[test]
 fn every_history_mode_paginates_through_a_resumable_walk() {
     let fixture = HistoryModeFixture::new();
@@ -515,8 +555,6 @@ fn every_history_mode_paginates_through_a_resumable_walk() {
     }
 }
 
-/// The scope this mattered most for: `AllBranches` walks from every ref, so
-/// rebuilding it per page is the most expensive rebuild there is.
 #[test]
 fn all_branches_author_filter_resumes_instead_of_re_walking() {
     let fixture = HistoryModeFixture::new();
@@ -550,9 +588,6 @@ fn all_branches_author_filter_resumes_instead_of_re_walking() {
     );
 }
 
-/// A shallow clone pages through the same resumable walk as everything else —
-/// its boundary is a filter on the traversal, not a reason to re-walk from the
-/// tip for every page — and still stops dead at the boundary.
 #[test]
 fn shallow_history_modes_paginate_and_stop_at_the_boundary() {
     let dir = tempfile::tempdir().unwrap();
@@ -761,6 +796,437 @@ fn log_all_branches_includes_remote_tracking_branches() {
     assert!(
         all.commits.iter().any(|c| c.id.as_ref() == feature_tip),
         "all-branches log should include remote-tracking branch commit"
+    );
+}
+
+#[test]
+fn log_all_branches_orders_rows_like_git_date_order_under_committer_date_skew() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "master"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+
+    let commit_at = |name: &str, date: &str| {
+        std::fs::write(repo.join(format!("{name}.txt")), name).unwrap();
+        run_git(repo, &["add", "-A"]);
+        run_git_with_env(
+            repo,
+            &["-c", "commit.gpgsign=false", "commit", "-m", name],
+            &[("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)],
+        );
+    };
+
+    commit_at("base", "2026-08-20T10:00:00+0000");
+    commit_at("master-tip", "2026-08-20T12:00:00+0000");
+    run_git(repo, &["checkout", "-q", "-b", "topic-b", "master"]);
+    commit_at("topic-b-tip", "2026-08-20T11:50:00+0000");
+    run_git(repo, &["checkout", "-q", "-b", "topic-a", "master"]);
+    commit_at("topic-a-tip", "2026-08-20T12:10:00+0000");
+    run_git(repo, &["checkout", "-q", "master"]);
+
+    let expected: Vec<String> = git_stdout(repo, &["log", "--all", "--date-order", "--format=%H"])
+        .lines()
+        .map(str::to_owned)
+        .collect();
+    assert_eq!(expected.len(), 4, "expected a four-commit history");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    let page = opened.log_all_branches_page(200, None).unwrap();
+    let actual: Vec<String> = page
+        .commits
+        .iter()
+        .map(|commit| commit.id.as_ref().to_owned())
+        .collect();
+
+    let summaries: Vec<&str> = page
+        .commits
+        .iter()
+        .map(|commit| commit.summary.as_ref())
+        .collect();
+    assert_eq!(
+        actual, expected,
+        "log rows must match `git log --all --date-order`; got {summaries:?}"
+    );
+    assert_eq!(
+        summaries,
+        vec!["topic-a-tip", "topic-b-tip", "master-tip", "base"],
+        "a parent must not be listed before its own child"
+    );
+}
+
+#[test]
+fn every_history_mode_matches_git_row_order_under_committer_date_skew() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+
+    run_git(repo, &["init", "-b", "master"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+
+    let commit_at = |name: &str, date: &str| {
+        std::fs::write(repo.join(format!("{name}.txt")), name).unwrap();
+        run_git(repo, &["add", "-A"]);
+        run_git_with_env(
+            repo,
+            &["-c", "commit.gpgsign=false", "commit", "-m", name],
+            &[("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)],
+        );
+    };
+    let merge_at = |branch: &str, name: &str, date: &str| {
+        run_git_with_env(
+            repo,
+            &[
+                "-c",
+                "commit.gpgsign=false",
+                "merge",
+                "--no-ff",
+                "-m",
+                name,
+                branch,
+            ],
+            &[("GIT_AUTHOR_DATE", date), ("GIT_COMMITTER_DATE", date)],
+        );
+    };
+
+    commit_at("base", "2026-08-20T10:00:00+0000");
+    commit_at("P", "2026-08-20T12:00:00+0000");
+    let fork = git_stdout(repo, &["rev-parse", "HEAD"]);
+
+    run_git(repo, &["checkout", "-q", "-b", "topic-b", "master"]);
+    commit_at("X", "2026-08-20T11:50:00+0000");
+    run_git(repo, &["checkout", "-q", "-b", "topic-a", "master"]);
+    commit_at("Y", "2026-08-20T12:10:00+0000");
+    run_git(repo, &["checkout", "-q", "-b", "topic-c", fork.as_str()]);
+    commit_at("Z", "2026-08-20T11:40:00+0000");
+
+    run_git(repo, &["checkout", "-q", "master"]);
+    merge_at("topic-b", "M", "2026-08-20T12:20:00+0000");
+    merge_at("topic-c", "N", "2026-08-20T11:45:00+0000");
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    for (mode, git_args) in [
+        (
+            HistoryMode::FullReachable,
+            vec!["log", "--date-order", "--format=%s"],
+        ),
+        (
+            HistoryMode::FirstParent,
+            vec!["log", "--date-order", "--first-parent", "--format=%s"],
+        ),
+        (
+            HistoryMode::NoMerges,
+            vec!["log", "--date-order", "--no-merges", "--format=%s"],
+        ),
+        (
+            HistoryMode::MergesOnly,
+            vec!["log", "--date-order", "--merges", "--format=%s"],
+        ),
+        (
+            HistoryMode::AllBranches,
+            vec!["log", "--all", "--date-order", "--format=%s"],
+        ),
+    ] {
+        let expected: Vec<String> = git_stdout(repo, &git_args)
+            .lines()
+            .map(str::to_owned)
+            .collect();
+        let page = opened.log_history_mode_page(mode, 50, None).unwrap();
+        let actual: Vec<String> = page
+            .commits
+            .iter()
+            .map(|commit| commit.summary.to_string())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "{mode:?} rows must match `git {git_args:?}`"
+        );
+    }
+
+    let first_parent = opened
+        .log_history_mode_page(HistoryMode::FirstParent, 50, None)
+        .unwrap();
+    assert!(
+        first_parent
+            .commits
+            .iter()
+            .all(|commit| commit.parent_ids.len() <= 1),
+        "first-parent rows must report only the parent the walk followed"
+    );
+    let full = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 50, None)
+        .unwrap();
+    assert!(
+        full.commits
+            .iter()
+            .any(|commit| commit.parent_ids.len() == 2),
+        "the merges must still report both parents everywhere else"
+    );
+}
+
+#[test]
+fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init", "-b", "master"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+
+    let mut clock = 0i64;
+    let mut commit = |name: &str| {
+        clock += 60;
+        commit_file_at(repo, &format!("{name}.txt"), name, name, clock);
+        clock
+    };
+
+    commit("one");
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+
+    let summaries = || -> Vec<String> {
+        opened
+            .log_all_branches_page(50, None)
+            .unwrap()
+            .commits
+            .iter()
+            .map(|commit| commit.summary.to_string())
+            .collect()
+    };
+
+    assert_eq!(summaries(), vec!["one"]);
+    assert_eq!(summaries(), vec!["one"]);
+
+    commit("two");
+    assert_eq!(summaries(), vec!["two", "one"]);
+
+    run_git(repo, &["checkout", "-q", "-b", "side"]);
+    commit("three");
+    run_git(repo, &["checkout", "-q", "master"]);
+    assert_eq!(summaries(), vec!["three", "two", "one"]);
+
+    std::fs::write(repo.join("one.txt"), "dirty").unwrap();
+    run_git(repo, &["stash", "push", "-m", "stashed"]);
+    let with_stash = summaries();
+    assert_eq!(
+        with_stash.len(),
+        5,
+        "expected the stash commit and its index parent, got {with_stash:?}"
+    );
+    assert!(
+        with_stash.iter().any(|row| row == "On master: stashed"),
+        "the stash commit must be a row, got {with_stash:?}"
+    );
+    assert!(
+        with_stash
+            .iter()
+            .any(|row| row.starts_with("index on master:")),
+        "the stash's index commit must be a row, got {with_stash:?}"
+    );
+    let kept: Vec<&String> = with_stash
+        .iter()
+        .filter(|row| *row != "On master: stashed" && !row.starts_with("index on master:"))
+        .collect();
+    assert_eq!(
+        kept,
+        ["three", "two", "one"],
+        "the rows that were already there must be unchanged, got {with_stash:?}"
+    );
+
+    run_git(repo, &["stash", "drop"]);
+    run_git(repo, &["branch", "-D", "side"]);
+    let after_delete = summaries();
+    assert_eq!(
+        after_delete,
+        vec!["two", "one"],
+        "deleting a branch must drop the commits only it reached"
+    );
+
+    // Tags are not all-branches tips.
+    run_git(repo, &["tag", "-a", "v1", "-m", "v1", "master"]);
+    assert_eq!(
+        summaries(),
+        vec!["two", "one"],
+        "a tag on a commit that is already reachable changes nothing"
+    );
+    let reachable = git_stdout(repo, &["rev-parse", "master"]);
+    let _ = commit("four");
+    let unreachable = git_stdout(repo, &["rev-parse", "master"]);
+    run_git(repo, &["tag", "orphan", unreachable.as_str()]);
+    run_git(repo, &["update-ref", "refs/heads/master", &reachable]);
+    run_git(repo, &["reset", "-q", "--hard", "master"]);
+    assert_eq!(
+        summaries(),
+        vec!["two", "one"],
+        "a commit reachable only through a tag stays out of the graph"
+    );
+}
+
+#[test]
+fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
+    let dir = tempfile::tempdir().unwrap();
+    let origin_work = dir.path().join("origin-work");
+    let origin_bare = dir.path().join("origin.git");
+    let shallow = dir.path().join("shallow");
+    std::fs::create_dir_all(&origin_work).unwrap();
+
+    run_git(&origin_work, &["init", "-b", "main"]);
+    run_git(&origin_work, &["config", "user.email", "you@example.com"]);
+    run_git(&origin_work, &["config", "user.name", "You"]);
+    run_git(&origin_work, &["config", "commit.gpgsign", "false"]);
+    for (index, name) in ["base", "one", "two", "three", "tip"].iter().enumerate() {
+        commit_file_at(
+            &origin_work,
+            &format!("{name}.txt"),
+            &format!("{name}\n"),
+            name,
+            index as i64 + 1,
+        );
+    }
+
+    let origin_work_str = origin_work.to_string_lossy().to_string();
+    let origin_bare_str = origin_bare.to_string_lossy().to_string();
+    let shallow_str = shallow.to_string_lossy().to_string();
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "--bare",
+            origin_work_str.as_str(),
+            origin_bare_str.as_str(),
+        ],
+    );
+    let origin_url = git_force_file_transport_url(&origin_bare);
+    run_git(
+        dir.path(),
+        &[
+            "clone",
+            "--depth",
+            "2",
+            origin_url.as_str(),
+            shallow_str.as_str(),
+        ],
+    );
+
+    let opened = GixBackend.open(&shallow).unwrap();
+    let tips_before = git_stdout(
+        &shallow,
+        &["for-each-ref", "--format=%(objectname) %(refname)"],
+    );
+    let truncated = opened.log_all_branches_page(50, None).unwrap();
+    assert_eq!(
+        truncated.commits.len(),
+        2,
+        "a depth-2 clone starts with two rows"
+    );
+    let first = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 1, None)
+        .unwrap();
+    assert_eq!(
+        first
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["tip"]
+    );
+    let shallow_cursor = first.next_cursor.clone().expect("one shallow row remains");
+
+    run_git(&shallow, &["fetch", "--unshallow"]);
+    assert_eq!(
+        git_stdout(&shallow, &["rev-parse", "--is-shallow-repository"]),
+        "false"
+    );
+    assert_eq!(
+        git_stdout(
+            &shallow,
+            &["for-each-ref", "--format=%(objectname) %(refname)"]
+        ),
+        tips_before,
+        "the deepen must not move a ref, or the test proves nothing"
+    );
+
+    let deepened = opened.log_all_branches_page(50, None).unwrap();
+    assert_eq!(
+        deepened.commits.len(),
+        5,
+        "the deepened history must not be served from the page cached before the deepen"
+    );
+
+    let continued = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 10, Some(&shallow_cursor))
+        .unwrap();
+    assert_eq!(
+        continued
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["three", "two", "one", "base"],
+        "a cursor issued before deepening must rebuild from the new shallow boundary"
+    );
+    assert!(continued.next_cursor.is_none());
+}
+
+#[test]
+fn a_missing_ancestor_object_still_renders_the_rows_above_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init", "-b", "master"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    fast_import_linear_history(repo, 600);
+
+    let root = git_stdout(repo, &["rev-list", "--max-parents=0", "HEAD"]);
+    // fast-import packs; unpack so a single commit object can be removed.
+    let pack_dir = repo.join(".git/objects/pack");
+    let packs: Vec<std::path::PathBuf> = std::fs::read_dir(&pack_dir)
+        .unwrap()
+        .filter_map(|entry| {
+            let path = entry.unwrap().path();
+            (path.extension().is_some_and(|ext| ext == "pack")).then_some(path)
+        })
+        .collect();
+    for pack in &packs {
+        // The pack has to leave the object store first: `unpack-objects` skips
+        // anything the repository can already find.
+        let bytes = std::fs::read(pack).unwrap();
+        std::fs::remove_file(pack).unwrap();
+        std::fs::remove_file(pack.with_extension("idx")).ok();
+        let mut cmd = Command::new("git");
+        test_git_env::apply(&mut cmd);
+        let mut child = cmd
+            .arg("-C")
+            .arg(repo)
+            .args(["unpack-objects", "-q"])
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        std::io::Write::write_all(child.stdin.as_mut().unwrap(), &bytes).unwrap();
+        assert!(child.wait().unwrap().success(), "git unpack-objects failed");
+    }
+
+    let loose = repo.join(".git/objects").join(&root[..2]).join(&root[2..]);
+    assert!(loose.exists(), "expected a loose root commit at {loose:?}");
+    std::fs::remove_file(&loose).unwrap();
+
+    let opened = GixBackend.open(repo).unwrap();
+    let page = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 2, None)
+        .expect("a page that stops above the hole must not fail");
+    let summaries: Vec<&str> = page
+        .commits
+        .iter()
+        .map(|commit| commit.summary.as_ref())
+        .collect();
+    assert_eq!(
+        summaries,
+        vec!["c599", "c598"],
+        "the rows above the hole must still render"
     );
 }
 
@@ -1729,6 +2195,47 @@ fn author_filter_pages_without_repeating_or_skipping() {
             .all(|c| first.commits.iter().all(|f| f.id != c.id)),
         "pages must not repeat commits"
     );
+}
+
+#[test]
+fn author_filter_page_filled_at_a_decode_boundary_still_has_a_successor() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init", "-b", "master"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+
+    // The walk's first 2,048 commits contain exactly 200 matches. There are
+    // another 102 matches beyond that decode boundary, separated from the
+    // first group by non-matching commits.
+    fast_import_linear_history_with_authors(repo, 2_150, |index| {
+        if !(102..1_950).contains(&index) {
+            "Match <match@example.com>"
+        } else {
+            "Other <other@example.com>"
+        }
+    });
+
+    let opened = GixBackend.open(repo).unwrap();
+    let first = opened
+        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("Match"), 200, None)
+        .unwrap();
+    assert_eq!(first.commits.len(), 200);
+    let cursor = first
+        .next_cursor
+        .as_ref()
+        .expect("matches beyond the decode boundary must remain reachable");
+
+    let second = opened
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("Match"),
+            200,
+            Some(cursor),
+        )
+        .unwrap();
+    assert_eq!(second.commits.len(), 102);
+    assert!(second.next_cursor.is_none());
 }
 
 /// A walk resumed under a different filter would silently skip everything the

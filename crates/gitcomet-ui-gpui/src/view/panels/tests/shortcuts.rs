@@ -1639,7 +1639,7 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
             },
         )
     });
-    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R", "B", "I"]);
+    assert_declared_shortcuts(&commit_model, &["T", "D", "P", "R", "B", "I", "M"]);
     assert_shortcut_action!(
         commit_model,
         "Enter",
@@ -1694,6 +1694,16 @@ fn file_and_diff_context_menu_shortcuts_match_expected_actions(cx: &mut gpui::Te
         "I",
         ContextMenuAction::LoadInteractiveRebaseSetup { repo_id: rid, base }
             if *rid == repo_id && base == commit_id.as_ref()
+    );
+    assert_shortcut_action!(
+        commit_model,
+        "M",
+        ContextMenuAction::OpenPopover {
+            kind: PopoverKind::MergeCommitConfirm {
+                repo_id: rid,
+                commit_id: cid
+            }
+        } if *rid == repo_id && cid == &commit_id
     );
 
     let commit_file_model = cx.update(|_window, app| {

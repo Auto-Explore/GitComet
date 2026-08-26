@@ -1,0 +1,37 @@
+# Vendored from the tree-sitter-v 0.0.4 crates.io package, whose source records
+# https://github.com/undivisible/tree-sitter-v commit
+# ca35516130a1e7044405e2e1c8fc84b7fb20d544 (ISC, see LICENSE).
+#
+# The grammar, generated parser and header, node types, and query are
+# byte-for-byte upstream; the Rust binding differs only by rustfmt whitespace.
+# The private parser header stays with this ABI-13 generated source because its
+# macro API predates the shared ABI-15 header used by newer vendored grammars.
+# Only the build wiring changes. The published build.rs asks `cc` which compiler
+# to use but then drives it with GNU `-c`/`-o` flags and invokes `ar` itself.
+# Under MSVC, `cl.exe` treats `-o` as a deprecated optimizer switch, writes a
+# `.obj` elsewhere, and the subsequent `ar ... parser.o` fails.
+# Using GitComet's shared `tree-sitter-build` helper delegates compilation and
+# archiving to `cc::Build::compile`, which selects the correct tools and object
+# names on GNU, Apple, and MSVC targets.
+[package]
+name = "tree-sitter-v"
+version = "0.0.4"
+description = "V language grammar for tree-sitter — maintained fork"
+repository = "https://github.com/undivisible/tree-sitter-v"
+edition = "2021"
+license = "ISC"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.26.13"

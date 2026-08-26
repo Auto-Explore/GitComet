@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "csv", "camelcase": "Csv", "scope": "source.csv", "path": ".", "file-types": ["csv"] }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Csv grammar for tree-sitter",
+    "links": { "repository": "https://github.com/amaanq/tree-sitter-csv" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

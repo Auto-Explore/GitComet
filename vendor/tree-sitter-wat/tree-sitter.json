@@ -1,0 +1,20 @@
+{
+  "grammars": [
+    {
+      "name": "wat",
+      "camelcase": "Wat",
+      "scope": "source.wat",
+      "path": ".",
+      "file-types": ["wat", "wast"]
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "Apache-2.0 WITH LLVM-exception",
+    "description": "WebAssembly text format grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/wasm-lsp/tree-sitter-wasm"
+    }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

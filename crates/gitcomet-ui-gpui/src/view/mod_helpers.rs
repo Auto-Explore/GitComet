@@ -591,6 +591,76 @@ impl DiffTextPos {
     }
 }
 
+/// Which of the two real documents behind a diff a row's text came from.
+///
+/// A pair is always found in one document, so this is what says which line map
+/// projects it back onto rows -- and why a pair can never span the two halves of
+/// a split view.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum DiffTextPairSide {
+    Old,
+    New,
+    /// The file preview, where rows are document lines one-to-one.
+    Preview,
+}
+
+/// One end of a matched delimiter pair, projected onto a rendered row.
+///
+/// `range` is in the same tab-expanded display space as [`DiffTextPos::offset`],
+/// so painting it reuses the coordinate machinery the selection quad already
+/// has for wrapped, streamed and whitespace-revealed rows.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DiffTextPairSpan {
+    pub(super) source_visible_ix: usize,
+    pub(super) region: DiffTextRegion,
+    pub(super) range: Range<usize>,
+}
+
+/// The delimiter pair a click selected, projected onto rows once at click time
+/// rather than per row per frame.
+///
+/// One flat list rather than an open end and a close end: both are washed the
+/// same colour, either can cover several rows (a start tag split across lines),
+/// and either can be absent from the rendered rows entirely -- off the diff,
+/// inside a collapsed hunk, or scrolled past. Whatever is on screen is painted;
+/// half-lit says "the partner is elsewhere", where painting nothing would say
+/// "there is no pair here", which is false.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(super) struct DiffTextPairMatch {
+    /// Which construct the pair delimits.
+    ///
+    /// Test-only, and deliberately so: the canvas washes brackets, tags and
+    /// quotes with the same `diff_text_pair_match_color()`, so carrying the kind
+    /// into a release build would be state nothing reads -- state that drifts.
+    /// Assertions still want it, because "clicking the tag name paired the
+    /// element" and "it paired some brackets nearby" are different outcomes with
+    /// the same painted ranges.
+    #[cfg(test)]
+    pub(super) kind: crate::view::rows::SyntaxPairKind,
+    pub(super) spans: Vec<DiffTextPairSpan>,
+}
+
+impl DiffTextPairMatch {
+    /// The spans falling on one row, in ascending order.
+    pub(super) fn ranges_on_row(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> smallvec::SmallVec<[Range<usize>; 2]> {
+        let mut out: smallvec::SmallVec<[Range<usize>; 2]> = smallvec::SmallVec::new();
+        for span in &self.spans {
+            if span.source_visible_ix == source_visible_ix
+                && span.region == region
+                && span.range.start < span.range.end
+            {
+                out.push(span.range.clone());
+            }
+        }
+        out.sort_by_key(|range| range.start);
+        out
+    }
+}
+
 pub(super) struct DiffTextHitbox {
     pub(super) bounds: Bounds<Pixels>,
     pub(super) layout_key: u64,
@@ -4502,6 +4572,10 @@ pub(super) enum PopoverKind {
         repo_id: RepoId,
     },
     CherryPickCommitConfirm {
+        repo_id: RepoId,
+        commit_id: CommitId,
+    },
+    MergeCommitConfirm {
         repo_id: RepoId,
         commit_id: CommitId,
     },

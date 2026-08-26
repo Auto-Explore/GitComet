@@ -1185,6 +1185,13 @@ pub(in crate::view) struct DiffPaintRecord {
     pub(in crate::view) text: SharedString,
     pub(in crate::view) highlights: Vec<(Range<usize>, Option<gpui::Hsla>, Option<gpui::Hsla>)>,
     pub(in crate::view) row_bg: Option<gpui::Rgba>,
+    /// Local offset ranges the matching-pair quad was painted for. Recorded as
+    /// ranges rather than x coordinates: `#[gpui::test]` shapes on a
+    /// `NoopTextSystem`, so a painted x proves nothing about which character
+    /// it covered.
+    pub(in crate::view) pair_quads: Vec<Range<usize>>,
+    /// Local offset ranges the occurrence quads were painted for.
+    pub(in crate::view) occurrence_quads: Vec<Range<usize>>,
 }
 
 #[cfg(test)]
@@ -1199,6 +1206,8 @@ fn record_diff_paint_for_tests(
     text: &SharedString,
     highlights: &[(Range<usize>, HighlightStyle)],
     row_bg: Option<gpui::Rgba>,
+    pair_quads: &[Range<usize>],
+    occurrence_quads: &[Range<usize>],
 ) {
     DIFF_PAINT_LOG.with(|log| {
         log.borrow_mut().push(DiffPaintRecord {
@@ -1210,6 +1219,8 @@ fn record_diff_paint_for_tests(
                 .map(|(range, style)| (range.clone(), style.color, style.background_color))
                 .collect(),
             row_bg,
+            pair_quads: pair_quads.to_vec(),
+            occurrence_quads: occurrence_quads.to_vec(),
         });
     });
 }
@@ -3610,9 +3621,13 @@ fn paint_selectable_diff_text(
     let (source_visible_ix, visual_text_range) = view
         .read(cx)
         .diff_text_visual_source_range_for_region(visible_ix, region);
+    // Resolved once and shared by all three row queries below: the selection,
+    // the delimiter pair and the name's other uses each need it, and its
+    // non-wrapped arm re-fetches the row model to measure the row.
+    let resolved_row = (source_visible_ix, visual_text_range.clone());
     let selection = view
         .read(cx)
-        .diff_text_local_selection_range(visible_ix, region);
+        .diff_text_local_selection_range_in(region, resolved_row.clone());
 
     let mut streamed_styled = None;
     let mut streamed_slice_range = None;
@@ -3704,13 +3719,31 @@ fn paint_selectable_diff_text(
         .map(|styled| styled.highlights.as_ref())
         .unwrap_or_else(|| highlights.as_ref());
 
+    let pair_ranges = view
+        .read(cx)
+        .diff_text_local_pair_ranges_in(region, resolved_row.clone());
+    let occurrence_ranges = view
+        .read(cx)
+        .diff_text_local_occurrence_ranges_in(region, resolved_row);
+
     #[cfg(test)]
-    record_diff_paint_for_tests(visible_ix, region, paint_text, paint_highlights, row_bg);
+    record_diff_paint_for_tests(
+        visible_ix,
+        region,
+        paint_text,
+        paint_highlights,
+        row_bg,
+        &pair_ranges,
+        &occurrence_ranges,
+    );
     #[cfg(not(test))]
     let _ = row_bg;
 
-    if let Some(r) = selection {
-        let (x0, x1) = if let Some(cell_width) = hitbox_cell_width {
+    // Shared by the selection and matching-pair quads: three coordinate regimes
+    // (streamed monospace, tab-expanded via the offset map, and plain shaped
+    // text) that both must agree on, so neither gets its own copy.
+    let x_range_for_local = |r: &Range<usize>| -> (Pixels, Pixels) {
+        if let Some(cell_width) = hitbox_cell_width {
             let (start, end) = if streamed_slice_is_wrap {
                 (r.start.min(total_text_len), r.end.min(total_text_len))
             } else {
@@ -3736,10 +3769,10 @@ fn paint_selectable_diff_text(
                 layout.x_for_index(r.start.min(total_text_len)),
                 layout.x_for_index(r.end.min(total_text_len)),
             )
-        };
-
+        }
+    };
+    let paint_row_quad = |x0: Pixels, x1: Pixels, color: gpui::Rgba, window: &mut Window| {
         if x1 > x0 {
-            let color = view.read(cx).diff_text_selection_color();
             window.paint_quad(fill(
                 Bounds::from_corners(
                     point(bounds.left() + x0, bounds.top()),
@@ -3748,6 +3781,32 @@ fn paint_selectable_diff_text(
                 color,
             ));
         }
+    };
+
+    // Occurrences go down first, then the pair, then the selection. One click
+    // produces both a pair and a set of occurrences, and the clicked name is in
+    // both: painting the pair second means the delimiters stay legible where
+    // the two overlap.
+    if !occurrence_ranges.is_empty() {
+        let color = view.read(cx).diff_text_occurrence_color();
+        for range in &occurrence_ranges {
+            let (x0, x1) = x_range_for_local(range);
+            paint_row_quad(x0, x1, color, window);
+        }
+    }
+
+    if !pair_ranges.is_empty() {
+        let color = view.read(cx).diff_text_pair_match_color();
+        for range in &pair_ranges {
+            let (x0, x1) = x_range_for_local(range);
+            paint_row_quad(x0, x1, color, window);
+        }
+    }
+
+    if let Some(r) = selection {
+        let (x0, x1) = x_range_for_local(&r);
+        let color = view.read(cx).diff_text_selection_color();
+        paint_row_quad(x0, x1, color, window);
     }
 
     let hitbox = DiffTextHitbox {

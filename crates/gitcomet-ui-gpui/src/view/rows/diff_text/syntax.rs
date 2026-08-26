@@ -37,8 +37,44 @@ const C_INJECTIONS_QUERY: &str = include_str!("queries/c_injections.scm");
 const CSHARP_HIGHLIGHTS_QUERY: &str = include_str!("queries/csharp_highlights.scm");
 const CPP_HIGHLIGHTS_QUERY: &str = include_str!("queries/cpp_highlights.scm");
 const GITCOMMIT_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitcommit_highlights.scm");
+const ASM_HIGHLIGHTS_QUERY: &str = include_str!("queries/asm_highlights.scm");
+const CMAKE_SUPPLEMENT_QUERY: &str = include_str!("queries/cmake_supplement.scm");
+const CADDYFILE_HIGHLIGHTS_QUERY: &str = include_str!("queries/caddyfile_highlights.scm");
+const CSV_HIGHLIGHTS_QUERY: &str = include_str!("queries/csv_highlights.scm");
+const KDL_HIGHLIGHTS_QUERY: &str = include_str!("queries/kdl_highlights.scm");
+const RON_HIGHLIGHTS_QUERY: &str = include_str!("queries/ron_highlights.scm");
+const CUE_HIGHLIGHTS_QUERY: &str = include_str!("queries/cue_highlights.scm");
+const EBNF_HIGHLIGHTS_QUERY: &str = include_str!("queries/ebnf_highlights.scm");
+const DHALL_HIGHLIGHTS_QUERY: &str = include_str!("queries/dhall_highlights.scm");
+const COFFEE_HIGHLIGHTS_QUERY: &str = include_str!("queries/coffee_highlights.scm");
+const CIL_HIGHLIGHTS_QUERY: &str = include_str!("queries/cil_highlights.scm");
+const CRONTAB_HIGHLIGHTS_QUERY: &str = include_str!("queries/crontab_highlights.scm");
+const CRONTAB_INJECTIONS_QUERY: &str = include_str!("queries/crontab_injections.scm");
+const GITIGNORE_HIGHLIGHTS_QUERY: &str = include_str!("queries/gitignore_highlights.scm");
+const JUST_HIGHLIGHTS_QUERY: &str = include_str!("queries/just_highlights.scm");
+const JUST_INJECTIONS_QUERY: &str = include_str!("queries/just_injections.scm");
+const SPIRV_HIGHLIGHTS_QUERY: &str = include_str!("queries/spirv_highlights.scm");
+const V_HIGHLIGHTS_QUERY: &str = include_str!("queries/v_highlights.scm");
+const WAT_HIGHLIGHTS_QUERY: &str = include_str!("queries/wat_highlights.scm");
 const GOMOD_HIGHLIGHTS_QUERY: &str = include_str!("queries/gomod_highlights.scm");
 const GOWORK_HIGHLIGHTS_QUERY: &str = include_str!("queries/gowork_highlights.scm");
+const GROOVY_SUPPLEMENT_QUERY: &str = include_str!("queries/groovy_supplement.scm");
+const HASKELL_HIGHLIGHTS_QUERY: &str = include_str!("queries/haskell_highlights.scm");
+const HCL_HIGHLIGHTS_QUERY: &str = include_str!("queries/hcl_highlights.scm");
+const HCL_INJECTIONS_QUERY: &str = include_str!("queries/hcl_injections.scm");
+const JAVA_SUPPLEMENT_QUERY: &str = include_str!("queries/java_supplement.scm");
+const MAKEFILE_INJECTIONS_QUERY: &str = include_str!("queries/makefile_injections.scm");
+const MAKEFILE_SUPPLEMENT_QUERY: &str = include_str!("queries/makefile_supplement.scm");
+const OBJC_SUPPLEMENT_QUERY: &str = include_str!("queries/objc_supplement.scm");
+const PASCAL_HIGHLIGHTS_QUERY: &str = include_str!("queries/pascal_highlights.scm");
+const PROTO_HIGHLIGHTS_QUERY: &str = include_str!("queries/proto_highlights.scm");
+const PERL_HIGHLIGHTS_QUERY: &str = include_str!("queries/perl_highlights.scm");
+const PHP_INJECTIONS_QUERY: &str = include_str!("queries/php_injections.scm");
+const PHP_SUPPLEMENT_QUERY: &str = include_str!("queries/php_supplement.scm");
+const POWERSHELL_SUPPLEMENT_QUERY: &str = include_str!("queries/powershell_supplement.scm");
+const SQL_SUPPLEMENT_QUERY: &str = include_str!("queries/sql_supplement.scm");
+const ZIG_HIGHLIGHTS_QUERY: &str = include_str!("queries/zig_highlights.scm");
+const XML_SUPPLEMENT_QUERY: &str = include_str!("queries/xml_supplement.scm");
 const HTML_HIGHLIGHTS_QUERY: &str = include_str!("queries/html_highlights.scm");
 const HTML_INJECTIONS_QUERY: &str = include_str!("queries/html_injections.scm");
 const JINJA_HIGHLIGHTS_QUERY: &str = include_str!("queries/jinja_highlights.scm");
@@ -64,17 +100,24 @@ const TSX_HIGHLIGHTS_QUERY: &str = include_str!("queries/tsx_highlights.scm");
 const TSX_INJECTIONS_QUERY: &str = include_str!("queries/tsx_injections.scm");
 const NIX_HIGHLIGHTS_QUERY: &str = include_str!("queries/nix_highlights.scm");
 const NIX_INJECTIONS_QUERY: &str = include_str!("queries/nix_injections.scm");
+const RUBY_HIGHLIGHTS_QUERY: &str = include_str!("queries/ruby_highlights.scm");
 const RUST_HIGHLIGHTS_QUERY: &str = include_str!("queries/rust_highlights.scm");
 const RUST_INJECTIONS_QUERY: &str = include_str!("queries/rust_injections.scm");
 const YAML_HIGHLIGHTS_QUERY: &str = include_str!("queries/yaml_highlights.scm");
 const YAML_INJECTIONS_QUERY: &str = include_str!("queries/yaml_injections.scm");
 const XML_HIGHLIGHTS_QUERY: &str = tree_sitter_xml::XML_HIGHLIGHT_QUERY;
 const CPP_INJECTIONS_QUERY: &str = include_str!("queries/cpp_injections.scm");
+const CLOJURE_HIGHLIGHTS_QUERY: &str = include_str!("queries/clojure_highlights.scm");
+const JULIA_HIGHLIGHTS_QUERY: &str = include_str!("queries/julia_highlights.scm");
+const OCAML_HIGHLIGHTS_QUERY: &str = include_str!("queries/ocaml_highlights.scm");
+const SOLIDITY_HIGHLIGHTS_QUERY: &str = include_str!("queries/solidity_highlights.scm");
+const SVELTE_HIGHLIGHTS_QUERY: &str = include_str!("queries/svelte_highlights.scm");
+const SVELTE_INJECTIONS_QUERY: &str = include_str!("queries/svelte_injections.scm");
 
 /// Maximum injection nesting depth. Root document = 0, first injection = 1.
-/// This prevents infinite recursion if an injected language's highlight spec
-/// itself contains an injection query.
-const TS_MAX_INJECTION_DEPTH: usize = 1;
+/// Two layers cover real nested cases such as PHP -> HTML -> JavaScript while
+/// still bounding recursive language cycles.
+const TS_MAX_INJECTION_DEPTH: usize = 2;
 const TS_INJECTION_CACHE_MAX_ENTRIES: usize = 32;
 
 /// Ceilings for one `(#set! injection.combined)` layer in the *prepared* path.
@@ -109,14 +152,39 @@ const TS_COMBINED_INJECTION_MAX_BYTES: usize = 128 * 1024;
 /// realistic multi-line tag and still bounds the parse at window + 8KB.
 const TS_COMBINED_INJECTION_CONTEXT_MARGIN_BYTES: usize = 4 * 1024;
 
+/// Route tree-sitter's C allocations to mimalloc before it makes any.
+///
+/// Called from the lazy initialisers below and from `init_highlight_spec`, which
+/// between them front every `Parser`, `QueryCursor` and `Query` the app builds.
+/// Doing it here rather than in a `main` is what makes the ordering rule on
+/// [`gitcomet_tree_sitter_alloc::install_mimalloc_allocator`] hold by
+/// construction: the switch cannot land after tree-sitter has already allocated
+/// through libc, on any thread or in any binary, because there is no way to
+/// reach tree-sitter without passing through one of these first.
+///
+/// It is a backstop, not the primary guarantee: `gitcomet-tree-sitter-alloc`
+/// installs from a `#[ctor]` before `main`, which covers routes these funnels
+/// cannot see -- a test building a `Query` straight off a `LANGUAGE`, say. This
+/// stays because a `#[ctor]` rides a linker section, and `--gc-sections` under
+/// some LTO settings is entitled to drop one.
+fn ensure_tree_sitter_allocator() {
+    gitcomet_tree_sitter_alloc::install_mimalloc_allocator();
+}
+
 thread_local! {
-    static TS_PARSER: RefCell<tree_sitter::Parser> = RefCell::new(tree_sitter::Parser::new());
+    static TS_PARSER: RefCell<tree_sitter::Parser> = {
+        ensure_tree_sitter_allocator();
+        RefCell::new(tree_sitter::Parser::new())
+    };
     static TS_PARSER_REQUIRES_LANGUAGE_RESET: Cell<bool> = const { Cell::new(false) };
-    static TS_CURSOR: RefCell<tree_sitter::QueryCursor> = RefCell::new(tree_sitter::QueryCursor::new());
+    static TS_CURSOR: RefCell<tree_sitter::QueryCursor> = {
+        ensure_tree_sitter_allocator();
+        RefCell::new(tree_sitter::QueryCursor::new())
+    };
     static TS_INPUT: RefCell<String> = const { RefCell::new(String::new()) };
     static TS_DOCUMENT_CACHE: RefCell<TreesitterDocumentCache> = RefCell::new(TreesitterDocumentCache::new());
     static TS_LINE_TOKEN_CACHE: RefCell<SingleLineSyntaxTokenCache> = RefCell::new(SingleLineSyntaxTokenCache::new());
-    static TS_INJECTION_CACHE: RefCell<FxHashMap<TreesitterInjectionMatch, CachedInjectionTokens>> = RefCell::new(FxHashMap::default());
+    static TS_INJECTION_CACHE: RefCell<FxHashMap<TreesitterInjectionMatch, CachedInjection>> = RefCell::new(FxHashMap::default());
     static TS_PENDING_PARSE_REQUESTS: RefCell<Vec<PendingParseRequest>> = const { RefCell::new(Vec::new()) };
     static TS_INJECTION_ACCESS_COUNTER: Cell<u64> = const { Cell::new(0) };
     static TS_INJECTION_DEPTH: Cell<usize> = const { Cell::new(0) };
@@ -204,6 +272,7 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     MarkdownInline,
     Html,
     Vue,
+    Svelte,
     /// Nunjucks, Jinja2, Twig and Django templates. One grammar parses the union
     /// of all four dialects; the HTML around the tags arrives as a combined
     /// injection (see queries/jinja_injections.scm).
@@ -217,9 +286,110 @@ pub(in crate::view) enum DiffSyntaxLanguage {
     Bicep,
     Lua,
     Makefile,
+    /// `CMakeLists.txt` and `.cmake`.
+    Cmake,
+    /// `Dockerfile`, `Containerfile`. The crate is `tree-sitter-containerfile`,
+    /// named for the OCI-neutral spelling; the grammar is the Docker one and
+    /// parses both.
+    Dockerfile,
+    /// INI, and the config formats that are INI without saying so: systemd units,
+    /// `.editorconfig`, `.desktop` entries, and git's own config files.
+    ///
+    /// The grammar is a strict reading of INI, so it produces a few ERROR nodes on
+    /// each of those dialects' idioms -- a `\`-continued `ExecStart=`, an
+    /// `.editorconfig` glob section like `[[a-c]*.txt]`. Error recovery keeps
+    /// those local, and the alternative is [`DiffSyntaxLanguage::Conf`]'s
+    /// heuristic, which knows less about all of them.
+    Ini,
+    /// `.conf`, with no grammar on purpose.
+    ///
+    /// One extension serves Apache, nginx, systemd and a hundred unrelated tools,
+    /// and no grammar is right for more than one of them: `tree-sitter-nginx`
+    /// exists but ships no highlights query, and nothing covers Apache at all.
+    /// The heuristic reads what they do share -- `#`/`;` comments, quoted strings,
+    /// numbers, and a directive name at the head of a line -- and is never
+    /// actively wrong about any of them.
+    Conf,
+    /// `.env`. Deliberately not Bash, and deliberately grammarless.
+    ///
+    /// A dotenv value is opaque text, not shell: `KEY=it's fine` is a normal value
+    /// to most `.env` loaders and an unterminated quote to a shell, and mapping
+    /// `.env` to Bash meant that one line killed the colouring of every line after
+    /// it. The dedicated grammars have the same problem -- `pnx/tree-sitter-dotenv`
+    /// errors on the same line -- so the heuristic, whose damage is bounded to the
+    /// line it is on, is the more robust answer for a format this simple.
+    Dotenv,
+    /// `justfile`. The grammar is vendored because the published crate pins
+    /// `tree-sitter = ~0.25.5` and `links` makes that unresolvable here.
+    Just,
+    /// `Caddyfile`.
+    Caddyfile,
+    /// `.gitignore`, and the `.dockerignore`/`.npmignore` family that share its
+    /// syntax exactly.
+    Gitignore,
+    /// `.properties` -- Java/Spring configuration. INI-adjacent but its own
+    /// format: `!` is also a comment, and a key may be `\`-continued.
+    JavaProperties,
+    /// `.jsonnet`, `.libsonnet` -- JSON with functions.
+    Jsonnet,
+    /// `.proto` -- Protocol Buffers schemas.
+    Proto,
+    /// `crontab`. The grammar is written in-tree, not vendored: the only one on
+    /// GitHub carries no licence at all.
+    Crontab,
     Nix,
     Kotlin,
     Zig,
+    Groovy,
+    Clojure,
+    Elixir,
+    Erlang,
+    Haskell,
+    Julia,
+    /// `.ml`. Parsed by `LANGUAGE_OCAML`; see [`DiffSyntaxLanguage::OCamlInterface`]
+    /// for the other half of the pair.
+    OCaml,
+    /// `.mli`. A separate grammar rather than a mode of the one above: an
+    /// interface file is a different language shape (`val f : int -> int` has no
+    /// implementation counterpart), and upstream ships it as its own
+    /// `LANGUAGE_OCAML_INTERFACE`. Both share queries/ocaml_highlights.scm.
+    OCamlInterface,
+    Solidity,
+    /// Generic assembly -- GAS and Intel-flavoured alike. The grammar is
+    /// dialect-agnostic, so it labels mnemonics and operands without knowing the
+    /// target architecture.
+    Assembly,
+    /// LLVM IR (`.ll`). Textual, not bitcode -- `.bc` is binary and never reaches
+    /// a highlighter.
+    Llvm,
+    /// WebAssembly text format (`.wat`, `.wast`). The binary `.wasm` is not text
+    /// and never reaches a highlighter.
+    Wat,
+    /// SPIR-V assembly (`.spvasm`). Like `.wat`, the assembled `.spv` is binary.
+    Spirv,
+    Gleam,
+    /// `.dhall` -- a total configuration language.
+    Dhall,
+    /// `.coffee` -- CoffeeScript.
+    CoffeeScript,
+    /// `.csv`. Upstream is a three-grammar repository; only the CSV half is
+    /// vendored, so `.tsv` is still unhighlighted.
+    Csv,
+    /// `.kdl` -- the KDL document language.
+    Kdl,
+    /// `.ron` -- Rusty Object Notation.
+    Ron,
+    /// `.cue` -- the CUE configuration language.
+    Cue,
+    /// `.ebnf` -- ISO/IEC 14977 grammar notation.
+    Ebnf,
+    /// `.v`. Deliberately V and not Verilog or Coq, which claim the same
+    /// extension: neither of those is wired, and V is what the corpus covers.
+    V,
+    /// `.pas`, `.dpr` -- Object Pascal / Delphi.
+    Pascal,
+    /// CIL / MSIL (`.il`). The grammar is written in-tree: there is none anywhere.
+    Cil,
     Rust,
     Python,
     JavaScript,
@@ -352,13 +522,20 @@ pub(super) enum PrepareTreesitterDocumentResult {
     Unsupported,
 }
 
+#[cfg(test)]
+mod corpus;
 mod heuristic;
 mod language;
 mod live;
+mod occurrences;
+mod pairs;
 mod prepared;
 
 use heuristic::*;
 use language::*;
+pub(in crate::view) use occurrences::OCCURRENCE_MAX_TEXT_BYTES;
+use occurrences::*;
+use pairs::*;
 use prepared::*;
 
 pub(super) use heuristic::syntax_tokens_for_line_heuristic_into;
@@ -372,6 +549,11 @@ pub(in crate::view) use live::{
     LiveSyntaxDocument, LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, live_syntax_document_supported,
     live_syntax_reparse,
 };
+pub(in crate::view) use pairs::SyntaxPair;
+// Only assertions name a pair kind -- every kind is painted alike; see
+// `DiffTextPairMatch::kind`.
+#[cfg(test)]
+pub(in crate::view) use pairs::SyntaxPairKind;
 #[cfg(any(test, feature = "benchmarks"))]
 pub(super) use prepared::has_pending_prepared_syntax_chunk_builds_for_document;
 #[cfg(test)]
@@ -382,8 +564,12 @@ pub(super) use prepared::{
     has_pending_prepared_syntax_chunk_builds, inject_prepared_document_data,
     prepare_treesitter_document_in_background_text_with_reparse_seed,
     prepare_treesitter_document_with_budget_reuse_text, prepared_document_reparse_seed,
-    request_syntax_tokens_for_prepared_document_line,
+    prepared_syntax_document_is_available, request_syntax_tokens_for_prepared_document_line,
     request_syntax_tokens_for_prepared_document_line_range_into,
+};
+pub(in crate::view) use prepared::{
+    PreparedSyntaxPairHit, PreparedSyntaxPairSpan, prepared_document_occurrences_at_display_offset,
+    prepared_document_syntax_pair_at_display_offset,
 };
 #[cfg(feature = "benchmarks")]
 pub(super) use prepared::{
@@ -565,6 +751,69 @@ mod tests {
         result
     }
 
+    /// Incremental reparsing must leave the injection cache one document deep.
+    ///
+    /// Prefix injections used to be *copied* under the new document hash while
+    /// the originals stayed resident, and nothing ever reclaimed a superseded
+    /// hash -- so every edit to a template-heavy document grew the cache until
+    /// `TS_INJECTION_CACHE_MAX_ENTRIES` forced the LRU to drop half of it,
+    /// including entries the next chunk build wanted.
+    #[test]
+    fn incremental_reparse_leaves_one_document_in_the_injection_cache() {
+        let make = |suffix: &str| -> String {
+            let mut text = String::new();
+            for ix in 0..12 {
+                text.push_str(&format!(
+                    "## Section {ix}\n\n```rust\nfn item{ix}() {{ let v = {ix}; }}\n```\n\n"
+                ));
+            }
+            text.push_str(suffix);
+            text
+        };
+
+        prepared::clear_injection_cache_for_tests();
+        let mut document = prepare_test_document(DiffSyntaxLanguage::Markdown, &make("tail 0\n"));
+        for line_ix in 0..80 {
+            let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+        }
+        let (baseline, by_hash) = prepared::injection_cache_occupancy_by_document_hash_for_tests();
+        assert!(
+            baseline > 1,
+            "the fixture must actually cache injections, got {baseline}"
+        );
+        assert_eq!(by_hash.len(), 1, "one document parsed, one hash");
+
+        for step in 1..=6 {
+            let text = make(&format!("tail {step}\n"));
+            match prepare_test_document_with_budget_reuse(
+                DiffSyntaxLanguage::Markdown,
+                &text,
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(500),
+                },
+                Some(document),
+            ) {
+                PrepareTreesitterDocumentResult::Ready(next) => document = next,
+                other => panic!("reparse {step} should succeed, got {other:?}"),
+            }
+            for line_ix in 0..80 {
+                let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+            }
+
+            let (total, by_hash) = prepared::injection_cache_occupancy_by_document_hash_for_tests();
+            assert_eq!(
+                by_hash.len(),
+                1,
+                "reparse {step} left {} document hashes in the cache: {by_hash:?}",
+                by_hash.len()
+            );
+            assert_eq!(
+                total, baseline,
+                "reparse {step} changed occupancy from {baseline} to {total}; the cache                  must not grow with the number of edits"
+            );
+        }
+    }
+
     fn prepare_test_document(language: DiffSyntaxLanguage, text: &str) -> PreparedSyntaxDocument {
         let input = treesitter_document_input_from_text(text);
         match prepare_treesitter_document_with_budget_reuse_text(
@@ -581,6 +830,2347 @@ mod tests {
             PrepareTreesitterDocumentResult::Ready(doc) => doc,
             other => panic!("test document should parse successfully, got {other:?}"),
         }
+    }
+
+    /// The display<->raw conversion in isolation. This is the one piece of the
+    /// feature that silently produces a plausible-but-wrong answer when it is
+    /// wrong, so it is pinned on its own rather than only through a document.
+    #[test]
+    fn display_and_raw_offsets_round_trip_across_tabs() {
+        // Two tabs then `x`: display columns 0..8 are the tabs, `x` is at 8.
+        let line = "\t\tx = 1";
+        assert_eq!(display_offset_for_raw_offset(line, 0), 0);
+        assert_eq!(
+            display_offset_for_raw_offset(line, 1),
+            4,
+            "one tab is 4 wide"
+        );
+        assert_eq!(display_offset_for_raw_offset(line, 2), 8);
+        assert_eq!(
+            display_offset_for_raw_offset(line, line.find('x').expect("x")),
+            8
+        );
+
+        assert_eq!(raw_offset_for_display_offset(line, 0), 0);
+        assert_eq!(raw_offset_for_display_offset(line, 4), 1);
+        assert_eq!(raw_offset_for_display_offset(line, 8), 2);
+        // A click landing inside an expanded tab resolves to that tab.
+        assert_eq!(raw_offset_for_display_offset(line, 2), 0);
+        assert_eq!(raw_offset_for_display_offset(line, 6), 1);
+
+        // Round trip on every real byte boundary.
+        for (raw, _) in line.char_indices() {
+            assert_eq!(
+                raw_offset_for_display_offset(line, display_offset_for_raw_offset(line, raw)),
+                raw,
+                "raw offset {raw} did not survive the round trip"
+            );
+        }
+
+        // A tab-free line is the identity, including past the end.
+        let plain = "let x = 1;";
+        for raw in 0..=plain.len() {
+            assert_eq!(display_offset_for_raw_offset(plain, raw), raw);
+            assert_eq!(raw_offset_for_display_offset(plain, raw), raw);
+        }
+        assert_eq!(raw_offset_for_display_offset(plain, 999), plain.len());
+
+        // The click variant accepts the end caret boundary: hit testing can
+        // produce it from the right half of the final glyph. The view rejects
+        // trailing blank-space clicks from their pixel position instead.
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(plain, plain.len() - 1),
+            Some(plain.len() - 1),
+            "the last character is still clickable"
+        );
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(plain, plain.len()),
+            Some(plain.len())
+        );
+        assert_eq!(clicked_raw_offset_for_display_offset(plain, 999), None);
+        // `\t\tx = 1` is 13 display columns wide, not 7 bytes.
+        assert_eq!(clicked_raw_offset_for_display_offset(line, 8), Some(2));
+        assert_eq!(clicked_raw_offset_for_display_offset(line, 12), Some(6));
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(line, 13),
+            Some(line.len())
+        );
+        assert_eq!(
+            clicked_raw_offset_for_display_offset(line, line.len()),
+            Some(1),
+            "a raw length is not a display column: 7 still lands inside the second tab"
+        );
+    }
+
+    /// A `line_starts` that no longer describes its text answers `None` rather
+    /// than panicking.
+    ///
+    /// The click path reads a source-backed diff side back from disk and pairs
+    /// it with the line index taken when the diff was built. A worktree file
+    /// that shrank in between leaves starts past the end of the text, and the
+    /// lookup used to slice with them before checking. `line_starts_describe`
+    /// keeps that pairing from reaching here at all; this is the second wall.
+    #[test]
+    fn prepared_syntax_click_survives_a_line_index_from_a_longer_text() {
+        let indexed = "fn a() {}\nfn b() {}\nfn c() {}\n";
+        let shrunk = "fn a() {}\n";
+        let stale_starts = treesitter_document_input_from_text(indexed).line_starts;
+        // No start after the final newline: unlike the diff indexer's, this
+        // index has one entry per line of text.
+        assert_eq!(stale_starts.as_ref(), &[0, 10, 20]);
+
+        let document = match prepare_treesitter_document_with_budget_reuse_text(
+            DiffSyntaxLanguage::Rust,
+            DiffSyntaxMode::Auto,
+            SharedString::from(shrunk.to_owned()),
+            Arc::clone(&stale_starts),
+            DiffSyntaxBudget {
+                foreground_parse: Duration::from_millis(200),
+            },
+            None,
+            None,
+        ) {
+            PrepareTreesitterDocumentResult::Ready(doc) => doc,
+            other => panic!("test document should parse successfully, got {other:?}"),
+        };
+
+        // Every line the index claims, at columns inside and past the text.
+        for line_ix in 0..=stale_starts.len() {
+            for display_offset in [0usize, 3, 9, 999] {
+                let _ = prepared_document_syntax_pair_at_display_offset(
+                    document,
+                    line_ix,
+                    display_offset,
+                );
+                let _ = prepared_document_occurrences_at_display_offset(
+                    document,
+                    line_ix,
+                    display_offset,
+                );
+            }
+        }
+
+        // The lines the shrunken text no longer has answer nothing at all.
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 2, 0).is_none());
+        assert!(prepared_document_occurrences_at_display_offset(document, 2, 0).is_empty());
+    }
+
+    /// A click in the blank area right of a short line names nothing.
+    ///
+    /// The row hitbox spans the full width of the pane and clamps a point past
+    /// the text to the line's last column, so without a separate "was this
+    /// inside the line" answer, clicking empty space washed every use of the
+    /// last name on the line and lit the enclosing braces with it.
+    #[test]
+    fn prepared_syntax_click_past_the_end_of_a_line_highlights_nothing() {
+        let text = "fn main() {\n    let total = 1;\n    let sum = total;\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+
+        let line = text.lines().nth(2).expect("the third line");
+        assert_eq!(line, "    let sum = total;");
+        let on_name = line.find("total").expect("the name");
+        assert!(
+            !prepared_document_occurrences_at_display_offset(document, 2, on_name).is_empty(),
+            "clicking the name itself still lights its uses"
+        );
+
+        for past in [line.len() + 1, line.len() + 200] {
+            assert!(
+                prepared_document_occurrences_at_display_offset(document, 2, past).is_empty(),
+                "column {past} is past the line's last character"
+            );
+            assert!(
+                prepared_document_syntax_pair_at_display_offset(document, 2, past).is_none(),
+                "column {past} is past the line's last character"
+            );
+        }
+
+        // The closing brace on its own line: both caret boundaries produced by
+        // its left and right halves pair, while a boundary beyond it does not.
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 0).is_some());
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 1).is_some());
+        assert!(prepared_document_syntax_pair_at_display_offset(document, 3, 2).is_none());
+    }
+
+    #[test]
+    fn prepared_syntax_end_caret_selects_a_final_closing_parenthesis() {
+        let text = "fn main() {\n    run()\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        let line = "    run()";
+
+        let pair = prepared_document_syntax_pair_at_display_offset(document, 1, line.len())
+            .expect("the right half of the final `)` should still select its pair");
+        assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+        assert_eq!(pair.open[0].display_range, 7..8);
+        assert_eq!(pair.close[0].display_range, 8..9);
+
+        let occurrences_text = "let total = 1;\ntotal";
+        let occurrences_document =
+            prepare_test_document(DiffSyntaxLanguage::Rust, occurrences_text);
+        assert_eq!(
+            prepared_document_occurrences_at_display_offset(occurrences_document, 1, "total".len(),),
+            vec![
+                PreparedSyntaxPairSpan {
+                    line_ix: 0,
+                    display_range: 4..9,
+                },
+                PreparedSyntaxPairSpan {
+                    line_ix: 1,
+                    display_range: 0..5,
+                },
+            ],
+            "the right half of a final name should still light its occurrences"
+        );
+    }
+
+    #[test]
+    fn prepared_syntax_pair_reports_display_columns_on_tab_indented_lines() {
+        // Every body line is tab-indented, so a raw-offset answer would be three
+        // columns per indent level to the left of where the row was painted.
+        let text = "fn main() {\n\tif a {\n\t\tb();\n\t}\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+
+        // Line 1 is "\tif a {": display columns 0..4 are the tab, so the `{` is
+        // painted at column 9 and its raw offset within the line is 6.
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 1, 9)
+            .expect("the `if` block braces pair");
+        assert_eq!(hit.kind, SyntaxPairKind::Bracket);
+        assert_eq!(hit.open.len(), 1);
+        assert_eq!(hit.open[0].line_ix, 1);
+        assert_eq!(
+            hit.open[0].display_range,
+            9..10,
+            "the open brace is reported where the canvas painted it, not at raw offset 6"
+        );
+        assert_eq!(hit.close.len(), 1);
+        assert_eq!(hit.close[0].line_ix, 3);
+        assert_eq!(
+            hit.close[0].display_range,
+            4..5,
+            "the closing brace sits after one expanded tab"
+        );
+    }
+
+    #[test]
+    fn prepared_syntax_pair_projects_each_end_onto_its_own_line() {
+        let text = "<div class=\"card\">\n  <span>hi</span>\n</div>\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, text);
+
+        // Caret on the inner element's text: an inner pair, both ends on line 1.
+        let inner = prepared_document_syntax_pair_at_display_offset(document, 1, 9)
+            .expect("the span element pairs");
+        assert_eq!(inner.kind, SyntaxPairKind::Tag);
+        assert_eq!(inner.open[0].line_ix, 1);
+        assert_eq!(inner.close[0].line_ix, 1);
+        // `  <span>hi</span>`: two spaces, then the tags at columns 2 and 10.
+        assert_eq!(inner.open[0].display_range, 2..8);
+        assert_eq!(inner.close[0].display_range, 10..17);
+
+        // Caret on the outer element name: ends on lines 0 and 2, whole tags.
+        let outer = prepared_document_syntax_pair_at_display_offset(document, 0, 2)
+            .expect("the div element pairs");
+        assert_eq!(outer.kind, SyntaxPairKind::Tag);
+        assert_eq!(outer.open[0].line_ix, 0);
+        assert_eq!(
+            outer.open[0].display_range,
+            0..18,
+            "the whole start tag, attributes included"
+        );
+        assert_eq!(outer.close[0].line_ix, 2);
+        assert_eq!(outer.close[0].display_range, 0..6);
+    }
+
+    /// A start tag split across lines is one delimiter but several rows, so it
+    /// reports one span per row rather than washing only its first line.
+    #[test]
+    fn prepared_syntax_pair_spans_every_line_a_tag_covers() {
+        let text = "<div\n  class=\"card\"\n  id=\"x\">\ntext\n</div>\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, text);
+
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 3, 1)
+            .expect("the caret in the element content pairs its tags");
+        assert_eq!(hit.kind, SyntaxPairKind::Tag);
+        assert_eq!(
+            hit.open
+                .iter()
+                .map(|span| (span.line_ix, span.display_range.clone()))
+                .collect::<Vec<_>>(),
+            vec![(0, 0..4), (1, 0..14), (2, 0..9)],
+            "every line of the start tag is washed, not just the first"
+        );
+        assert_eq!(hit.close.len(), 1);
+        assert_eq!(hit.close[0].line_ix, 4);
+    }
+
+    /// PowerShell spells `$(` and `@(` as opening tokens of their own, both
+    /// closing at a plain `)`.
+    ///
+    /// The pair tables are keyed by node kind, and the close side used to be
+    /// resolved by taking the table's *first* row whose close matched -- always
+    /// `(` -- so a caret anywhere inside a subexpression or an array literal
+    /// matched nothing while every other wired language paired its parens.
+    #[test]
+    fn powershell_subexpression_and_array_parens_pair() {
+        let text = "$x = @(1, 2)\n$y = $(Get-Thing)\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::PowerShell, text);
+
+        // `$x = @(1, 2)`: the opener is the two-byte `@(` at columns 5..7.
+        let array = prepared_document_syntax_pair_at_display_offset(document, 0, 7)
+            .expect("a caret inside `@(1, 2)` pairs the array literal's parens");
+        assert_eq!(array.kind, SyntaxPairKind::Bracket);
+        assert_eq!(array.open.len(), 1);
+        assert_eq!(array.open[0].display_range, 5..7, "the whole `@(` opener");
+        assert_eq!(array.close.len(), 1);
+        assert_eq!(array.close[0].display_range, 11..12);
+
+        // `$y = $(Get-Thing)`: same shape with the subexpression opener.
+        let sub = prepared_document_syntax_pair_at_display_offset(document, 1, 8)
+            .expect("a caret inside `$(Get-Thing)` pairs the subexpression's parens");
+        assert_eq!(sub.kind, SyntaxPairKind::Bracket);
+        assert_eq!(sub.open[0].display_range, 5..7, "the whole `$(` opener");
+        assert_eq!(sub.close[0].display_range, 16..17);
+
+        // And a plain paren in the same language still pairs with itself.
+        let plain = prepare_test_document(DiffSyntaxLanguage::PowerShell, "$z = (1 + 2)\n");
+        let hit = prepared_document_syntax_pair_at_display_offset(plain, 0, 6)
+            .expect("a plain grouping paren still pairs");
+        assert_eq!(hit.open[0].display_range, 5..6);
+        assert_eq!(hit.close[0].display_range, 11..12);
+    }
+
+    /// A `)` that one opener has already claimed must not also be offered to an
+    /// opener spelled differently.
+    ///
+    /// The open side counted depth on its own token kind only, while the close
+    /// side used `closes_open` -- so in the many-opens-one-close case the two
+    /// ends of the same delimiter disagreed. Recovery is what puts the openers
+    /// side by side: well-formed PowerShell keeps `$( ... )` inside its own
+    /// `sub_expression`, but a half-typed line flattens them into one ERROR
+    /// node, which is exactly the state the editor sees while you type.
+    #[test]
+    fn powershell_open_side_does_not_claim_a_paren_another_opener_closed() {
+        // Recovers as one ERROR whose children are `$(`, `(`, `)`, a name --
+        // the `)` belongs to the `(`, and `$(` is left unclosed.
+        let document = prepare_test_document(DiffSyntaxLanguage::PowerShell, "$( ( ) a\n");
+
+        let from_close = prepared_document_syntax_pair_at_display_offset(document, 0, 5)
+            .expect("the `)` pairs with the `(` that opened it");
+        assert_eq!(from_close.open[0].display_range, 3..4);
+        assert_eq!(from_close.close[0].display_range, 5..6);
+
+        assert!(
+            prepared_document_syntax_pair_at_display_offset(document, 0, 1).is_none(),
+            "the unclosed `$(` has no partner here, and must not borrow the `(`'s"
+        );
+    }
+
+    /// A wide node whose children are all named still pairs, where the grammar
+    /// spells its delimiters as named nodes.
+    ///
+    /// The caret-move path skips walking a node's children when they are all
+    /// named and the grammar has no named delimiter -- two O(1) counts instead
+    /// of stepping tens of thousands of siblings. HTML is the case that must not
+    /// take that shortcut: an element's children are `start_tag`, its content,
+    /// and `end_tag`, every one of them named, so the skip firing here would
+    /// silently stop tag matching in any element with a lot of children.
+    #[test]
+    fn wide_all_named_node_still_pairs_where_delimiters_are_named() {
+        let mut text = String::from("<div>\n");
+        for ix in 0..100 {
+            text.push_str(&format!("<p>item {ix}</p>\n"));
+            if ix == 50 {
+                text.push_str("MARKER\n");
+            }
+        }
+        text.push_str("</div>\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, &text);
+
+        let marker_line = text[..text.find("MARKER").expect("marker")]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        let hit = prepared_document_syntax_pair_at_display_offset(document, marker_line, 3)
+            .expect("text directly inside a wide element still pairs the element's tags");
+        assert_eq!(hit.kind, SyntaxPairKind::Tag);
+        assert_eq!(hit.open[0].line_ix, 0, "the `<div>` start tag");
+        assert_eq!(hit.open[0].display_range, 0..5);
+        assert_eq!(
+            hit.close[0].line_ix,
+            text.lines().count() - 1,
+            "the `</div>` end tag"
+        );
+    }
+
+    /// A generated flat array must answer from its structural boundary pair,
+    /// both when the caret is directly on the opener and when it is among the
+    /// many values. The fixture exceeds the bounded fallback scan, so either
+    /// answer proves the first/last-child path handled it.
+    #[test]
+    fn wide_flat_json_array_pairs_without_fallback_scanning() {
+        let elements = 5_000usize;
+        let text = format!(
+            "[{}]",
+            std::iter::repeat_n("0", elements)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Json, &text);
+        let expected = [(0, 0..1), (0, text.len() - 1..text.len())];
+
+        for column in [0, text.len() / 2] {
+            let hit = prepared_document_syntax_pair_at_display_offset(document, 0, column)
+                .expect("the wide array's boundary brackets should pair");
+            assert_eq!(
+                hit.open
+                    .iter()
+                    .chain(hit.close.iter())
+                    .map(|span| (span.line_ix, span.display_range.clone()))
+                    .collect::<Vec<_>>(),
+                expected,
+                "caret column {column}"
+            );
+        }
+    }
+
+    /// Named delimiters elsewhere in a grammar must not force a wide root to
+    /// scan ordinary named children. Python is the regression case because its
+    /// strings use named `string_start`/`string_end` nodes while module children
+    /// are statements.
+    #[test]
+    fn wide_python_module_without_direct_delimiters_returns_none() {
+        let statements = 5_000usize;
+        let text = (0..statements)
+            .map(|ix| format!("value_{ix} = {ix}\n"))
+            .collect::<String>();
+        let document = prepare_test_document(DiffSyntaxLanguage::Python, &text);
+        assert!(
+            prepared_document_syntax_pair_at_display_offset(document, statements - 1, 2).is_none(),
+            "ordinary module statements are not direct named delimiters"
+        );
+    }
+
+    /// A parse error *anywhere* inside a wide element must not stop its tags
+    /// from pairing.
+    ///
+    /// The boundary shortcut skips nodes with a parse error because recovery can
+    /// flatten several adjacent pairs, where first and last need not be
+    /// partners. `has_error` is the wrong question for that: it is true for the
+    /// whole subtree, so a stray `<` in one paragraph of a hundred marks the
+    /// enclosing `<div>` too, even though the div's own first and last children
+    /// are still its `start_tag` and `end_tag`. With the shortcut skipped, the
+    /// all-named bail below then answers `None` for an element whose children --
+    /// `start_tag`, content, `end_tag` -- are all named.
+    #[test]
+    fn wide_html_element_pairs_its_tags_despite_a_parse_error_inside() {
+        let mut text = String::from("<div>\n");
+        for ix in 0..100 {
+            text.push_str(&format!("<p>item {ix}</p>\n"));
+            if ix == 50 {
+                text.push_str("MARKER\n");
+            }
+            if ix == 70 {
+                // A bare `<` in prose: ordinary content, and a parse error.
+                text.push_str("< \n");
+            }
+        }
+        text.push_str("</div>\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, &text);
+
+        let marker_line = text[..text.find("MARKER").expect("marker")]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        let hit = prepared_document_syntax_pair_at_display_offset(document, marker_line, 3)
+            .expect("a parse error in a sibling must not unpair the enclosing element");
+        assert_eq!(hit.kind, SyntaxPairKind::Tag);
+        assert_eq!(hit.open[0].line_ix, 0, "the `<div>` start tag");
+        assert_eq!(hit.open[0].display_range, 0..5);
+        assert_eq!(
+            hit.close[0].line_ix,
+            text.lines().count() - 1,
+            "the `</div>` end tag"
+        );
+    }
+
+    /// One bad element must not unpair a generated array's brackets.
+    ///
+    /// Clicking the `[`: the boundary shortcut is skipped because the array's
+    /// *subtree* has an error, and the fallback is then refused outright for
+    /// being wider than the sibling cap, so the click answers nothing. The
+    /// array's own first and last children are still `[` and `]`.
+    #[test]
+    fn wide_malformed_json_array_pairs_from_its_opening_bracket() {
+        let text = malformed_wide_json_array(5_000);
+        let document = prepare_test_document(DiffSyntaxLanguage::Json, &text);
+
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 0, 0)
+            .expect("clicking `[` must pair the array's own brackets");
+        assert_eq!(hit.open[0].display_range, 0..1);
+        assert_eq!(hit.close[0].display_range, text.len() - 1..text.len());
+    }
+
+    /// The same array, with the caret among its values rather than on a bracket.
+    ///
+    /// This is the enclosing path rather than the delimiter path, and it fails
+    /// differently: the fallback scan runs but is cut off at the sibling cap, so
+    /// it walks thousands of children and still never reaches the `]`.
+    #[test]
+    fn wide_malformed_json_array_pairs_from_inside() {
+        let text = malformed_wide_json_array(5_000);
+        let document = prepare_test_document(DiffSyntaxLanguage::Json, &text);
+
+        let column = text.len() / 4;
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 0, column)
+            .expect("a caret among the values must pair the enclosing array");
+        assert_eq!(hit.open[0].display_range, 0..1);
+        assert_eq!(hit.close[0].display_range, text.len() - 1..text.len());
+    }
+
+    /// A flat array of `elements` values with a single unparseable one in the
+    /// middle, so the array node carries a subtree error while its own boundary
+    /// children stay `[` and `]`.
+    fn malformed_wide_json_array(elements: usize) -> String {
+        let mut values = vec!["0"; elements];
+        values[elements / 2] = "@@";
+        format!("[{}]", values.join(","))
+    }
+
+    /// A delimiter its grammar wraps in a named node of its own must pair from
+    /// both ends.
+    ///
+    /// HCL's `[` and `]` are a `tuple_start` and a `tuple_end`, and only those
+    /// wrappers are siblings; the bare tokens are one level deeper. Clicking the
+    /// `[` reached the pair through the enclosing walk, but clicking the `]`
+    /// searched from the token, found no sibling `tuple_start`, and fell through
+    /// to whatever delimiter sat one column to its left -- in
+    /// `[for p in ports : tostring(p)]`, the `)` of the call.
+    #[test]
+    fn wrapped_delimiters_pair_from_the_closing_end_too() {
+        let text = "locals {\n  upper = [for p in var.ports : tostring(p)]\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+        let line = text.lines().nth(1).expect("the tuple line");
+        let open_col = line.find('[').expect("the opening bracket");
+        let close_col = line.find(']').expect("the closing bracket");
+
+        let from_open = prepared_document_syntax_pair_at_display_offset(document, 1, open_col)
+            .expect("clicking `[` pairs the tuple");
+        assert_eq!(from_open.open[0].display_range, open_col..open_col + 1);
+        assert_eq!(from_open.close[0].display_range, close_col..close_col + 1);
+
+        let from_close = prepared_document_syntax_pair_at_display_offset(document, 1, close_col)
+            .expect("clicking `]` must pair the same tuple, not the call's `)`");
+        assert_eq!(
+            (from_close.open, from_close.close),
+            (from_open.open, from_open.close),
+            "a pair must name the same two ends whichever end is clicked"
+        );
+    }
+
+    fn occurrences_in(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        offset: usize,
+    ) -> Option<SyntaxOccurrences> {
+        let input = treesitter_document_input_from_text(text);
+        let spec = tree_sitter_highlight_spec(language)?;
+        let tree = with_ts_parser_parse_result(&spec.ts_language, |parser| {
+            parse_treesitter_tree(parser, input.text.as_bytes(), None, None)
+        })?;
+        syntax_occurrences_in_tree(&tree, text, offset)
+    }
+
+    /// The clicked name lights everywhere the grammar also tokenised it.
+    #[test]
+    fn occurrences_find_every_use_of_the_clicked_name() {
+        let text = "fn main() {\n    let values = vec![1];\n    for v in values {}\n}\n";
+        let click = text.find("values").expect("declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+
+        assert_eq!(found.token, click..click + "values".len());
+        assert_eq!(
+            found
+                .ranges
+                .iter()
+                .map(|range| &text[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["values", "values"],
+        );
+        assert_eq!(found.ranges[1].start, text.rfind("values").expect("use"));
+    }
+
+    /// A name inside a comment or a string is content, not a use of the symbol.
+    #[test]
+    fn occurrences_skip_comments_and_string_bodies() {
+        let text = concat!(
+            "fn main() {\n",
+            "    let total = 1;\n",
+            "    // total is not a use\n",
+            "    let label = \"total\";\n",
+            "    let sum = total + 1;\n",
+            "}\n",
+        );
+        let click = text.find("total").expect("declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+
+        assert_eq!(found.ranges.len(), 2, "declaration and the later use only");
+        for range in &found.ranges {
+            assert_eq!(&text[range.clone()], "total");
+            assert!(
+                !text[..range.start].ends_with("// ") && !text[..range.start].ends_with('"'),
+                "matched inside a comment or string: {range:?}"
+            );
+        }
+        assert_eq!(found.ranges[1].start, text.rfind("total").expect("use"));
+    }
+
+    /// A longer word that merely contains the name is not a use of it.
+    #[test]
+    fn occurrences_respect_word_boundaries() {
+        let text = "fn main() {\n    let sum = 1;\n    let summary = 2;\n    let x = sum;\n}\n";
+        let click = text.find("sum").expect("declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+
+        assert_eq!(found.ranges.len(), 2, "`summary` must not match `sum`");
+        assert!(
+            found
+                .ranges
+                .iter()
+                .all(|range| &text[range.clone()] == "sum"),
+        );
+    }
+
+    /// A name whose first character is multi-byte must still light up.
+    ///
+    /// The scan used to step one byte past each hit, which lands inside the
+    /// leading character of such a name; the slice then failed and the `?` threw
+    /// away every match found so far, including the clicked one, so the whole
+    /// highlight silently vanished.
+    #[test]
+    fn occurrences_handle_non_ascii_names() {
+        let text = "x = 1\ncafé = 2\ny = café\n";
+        let click = text.find("café").expect("name");
+        let found = occurrences_in(DiffSyntaxLanguage::Python, text, click).expect("a name");
+        assert_eq!(
+            found
+                .ranges
+                .iter()
+                .map(|range| &text[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["café", "café"],
+        );
+        assert_eq!(found.ranges[1].start, text.rfind("café").expect("use"));
+
+        // And a name that is entirely multi-byte.
+        let cjk = "日本語 = 1\nz = 日本語\n";
+        let at = cjk.find("日本語").expect("name");
+        let found = occurrences_in(DiffSyntaxLanguage::Python, cjk, at).expect("a name");
+        assert_eq!(found.ranges.len(), 2, "got {:?}", found.ranges);
+    }
+
+    /// The candidate budget bounds tree descents, so hits the cheap
+    /// word-boundary test throws away must not spend it.
+    ///
+    /// `uuid` contains `id`. Counting every raw substring hit exhausted the
+    /// 4096-candidate budget on thousands of `uuid`s without a single descent,
+    /// and the real uses of `id` further down the file were never reached --
+    /// while `MAX_OCCURRENCES`, the cap the budget protects, was nowhere near.
+    #[test]
+    fn occurrence_candidates_are_counted_after_the_word_boundary_test() {
+        use std::fmt::Write as _;
+
+        let mut text = String::from("fn main() {\n");
+        for ix in 0..4_200 {
+            writeln!(text, "    let uuid{ix} = {ix};").expect("write");
+        }
+        text.push_str("    let id = 1;\n    let n = id;\n}\n");
+
+        let click = text.find("let id = 1").expect("the declaration") + "let ".len();
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, &text, click).expect("a name");
+        assert_eq!(
+            found
+                .ranges
+                .iter()
+                .map(|range| &text[range.clone()])
+                .collect::<Vec<_>>(),
+            vec!["id", "id"],
+            "both real uses, found past 4200 word-internal `id`s inside `uuid`",
+        );
+    }
+
+    /// Clicking punctuation, whitespace or a literal is not clicking a name.
+    #[test]
+    fn occurrences_are_none_off_a_name() {
+        let text = "fn main() {\n    let n = 1234;\n}\n";
+        for probe in ["{", " 1234", ";"] {
+            let at = text.find(probe).expect("probe");
+            assert_eq!(
+                occurrences_in(DiffSyntaxLanguage::Rust, text, at + 1).map(|found| found.token),
+                None,
+                "clicking {probe:?} should not name anything",
+            );
+        }
+    }
+
+    /// Some grammars make literals and prose named leaves, so `is_named` and a
+    /// word-shaped body alone do not make them symbol occurrences.
+    #[test]
+    fn occurrences_reject_named_literal_and_prose_leaves() {
+        let rust = "fn main() { let a = true; let b = true; let c = false; let d = false; }\n";
+        for literal in ["true", "false"] {
+            let click = rust.find(literal).expect("boolean literal");
+            assert!(
+                occurrences_in(DiffSyntaxLanguage::Rust, rust, click).is_none(),
+                "Rust {literal:?} is a boolean literal, not a name"
+            );
+        }
+
+        for (language, text) in [
+            (DiffSyntaxLanguage::Html, "<p>plain</p><p>plain</p>"),
+            (
+                DiffSyntaxLanguage::Xml,
+                "<root><item>plain</item><item>plain</item></root>",
+            ),
+        ] {
+            let click = text.find("plain").expect("prose leaf");
+            assert!(
+                occurrences_in(language, text, click).is_none(),
+                "{language:?} prose is content, not a name"
+            );
+        }
+    }
+
+    /// Fields and calls are names too, which is the point of asking the tree
+    /// rather than scanning for words.
+    #[test]
+    fn occurrences_cover_calls_and_fields() {
+        let text = concat!(
+            "fn main() {\n",
+            "    let item = Item { width: 1 };\n",
+            "    let w = item.width;\n",
+            "    resize(item.width);\n",
+            "}\n",
+        );
+        let click = text.find("width").expect("field declaration");
+        let found = occurrences_in(DiffSyntaxLanguage::Rust, text, click).expect("a name");
+        assert_eq!(
+            found.ranges.len(),
+            3,
+            "the shorthand field and both reads, got {:?}",
+            found
+                .ranges
+                .iter()
+                .map(|r| &text[r.clone()])
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Every wired language, a snippet of it, and the kinds it must colour.
+    ///
+    /// The bar is what a reader looks for rather than what a grammar happens to
+    /// offer: comments must not read as code, literals must not read as names,
+    /// and brackets must not be flat. Data formats are held to what they have --
+    /// no functions in JSON -- but a programming language that cannot colour a
+    /// call or a bracket has a gap worth fixing, not a style to accept.
+    ///
+    /// Adding a grammar without adding a row here leaves it unguarded, which is
+    /// how Objective-C shipped with no comment colour at all.
+    const LANGUAGE_BASELINES: &[(DiffSyntaxLanguage, &str, &[SyntaxTokenKind])] = {
+        use SyntaxTokenKind as K;
+        &[
+            (
+                DiffSyntaxLanguage::Rust,
+                "// c\nfn main() {\n    let x = \"s\";\n    let n = 1;\n    f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Python,
+                "# c\ndef main():\n    x = \"s\"\n    n = 1\n    f(x)\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::JavaScript,
+                "// c\nfunction main() {\n  const x = \"s\";\n  const n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::TypeScript,
+                "// c\nfunction main(): void {\n  const x: string = \"s\";\n  const n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Tsx,
+                "// c\nconst a = <div id=\"x\">{f(1)}</div>;\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Tag,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Go,
+                "// c\nfunc main() {\n\tx := \"s\"\n\tn := 1\n\tf(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::C,
+                "// c\nint main(void) {\n  const char *x = \"s\";\n  int n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Cpp,
+                "// c\nclass A {};\nint main() {\n  std::string x = \"s\";\n  return 1;\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::ObjectiveC,
+                "// c\n@implementation Foo\n- (void)bar {\n  NSString *s = @\"hi\";\n  int n = 42;\n}\n@end\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::CSharp,
+                "// c\nclass Foo {\n  void Bar() {\n    var x = \"s\";\n    int n = 1;\n  }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Java,
+                "// c\nclass Foo {\n  int count = 1;\n  void bar() {\n    f(\"s\");\n  }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                    K::Type,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Kotlin,
+                "// c\nfun main() {\n  val x = \"s\"\n  val n = 1\n  f(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Scala,
+                "// c\nobject Foo {\n  def bar(): Unit = {\n    val x = \"s\"\n    val n = 1\n  }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Groovy,
+                "// c\nclass Foo {\n  int count = 1\n  def bar() { f(\"s\") }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Php,
+                "<?php\n// c\nclass Foo {\n  public $count = 1;\n  function bar() { return f(\"s\"); }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Ruby,
+                "# c\nclass Foo\n  def bar\n    x = \"s\"\n    n = 1\n    f(x)\n  end\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Swift,
+                "// c\nfunc main() {\n  let x = \"s\"\n  let n = 1\n  f(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Dart,
+                "// c\nvoid main() {\n  var x = \"s\";\n  var n = 1;\n  f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Lua,
+                "-- c\nlocal function main()\n  local x = \"s\"\n  local n = 1\n  f(x)\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Bash,
+                "# c\nmain() {\n  x=\"s\"\n  n=1\n  f \"$x\"\n}\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::PowerShell,
+                "# c\nfunction Get-Thing {\n  $x = \"s\"\n  $n = 1\n  Write-Host $x\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Zig,
+                "// c\npub fn main() void {\n    const x = \"s\";\n    const n = 1;\n    f(x);\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Nix,
+                "# c\n{\n  x = \"s\";\n  n = 1;\n}\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Hcl,
+                "# c\nresource \"a\" \"b\" {\n  n = 1\n  s = \"x\"\n  v = f(\"y\")\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Bicep,
+                "// c\nparam name string = 's'\nvar n = 1\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Sql,
+                "-- c\nSELECT id, name FROM t WHERE n = 1 AND s = 'x';\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::R,
+                "# c\nmain <- function() {\n  x <- \"s\"\n  n <- 1\n  f(x)\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Julia,
+                "# c\nfunction main()\n    x = \"s\"\n    n = 1\n    f(x)\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Haskell,
+                "-- c\nmain :: IO ()\nmain = do\n  let x = \"s\"\n  let n = 1\n  f x\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Elixir,
+                "# c\ndefmodule Foo do\n  def bar do\n    x = \"s\"\n    n = 1\n    f(x)\n  end\nend\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Erlang,
+                "% c\n-module(foo).\nbar() ->\n    X = \"s\",\n    N = 1,\n    f(X).\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::OCaml,
+                "(* c *)\nlet main () =\n  let x = \"s\" in\n  let n = 1 in\n  f x\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::FSharp,
+                "// c\nlet main () =\n  let x = \"s\"\n  let n = 1\n  f x\n",
+                &[K::Comment, K::String, K::Number, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Clojure,
+                ";; c\n(defn main []\n  (let [x \"s\" n 1]\n    (f x)))\n",
+                &[K::Comment, K::String, K::Number, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Solidity,
+                "// c\ncontract Foo {\n  uint n = 1;\n  function bar() public { f(\"s\"); }\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Number,
+                    K::Keyword,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Assembly,
+                "; c\n.section .text\nmain:\n    mov $1, %eax\n    ret\n",
+                // Instructions are `@function` and labels `@label` in this
+                // grammar; there is no separate keyword class to ask for.
+                &[K::Comment, K::Number, K::Function, K::Label],
+            ),
+            (
+                DiffSyntaxLanguage::Makefile,
+                "# c\nOUT := a\nall: build\n\techo \"s\"\n",
+                // `Function` is asserted twice over: the target name `all`, which
+                // upstream's query captures only for the ~25 conventional target
+                // names (see queries/makefile_supplement.scm), and `echo` inside
+                // the recipe, which reaches bash through
+                // queries/makefile_injections.scm. A recipe line used to be opaque
+                // shell text that nothing coloured at all.
+                &[
+                    K::Comment,
+                    K::Constant,
+                    K::Function,
+                    K::PunctuationDelimiter,
+                    K::String,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Cmake,
+                "# c\nset(NAME \"demo\")\nif(NAME)\n  add_library(y STATIC a.c)\nendif()\n",
+                &[K::Comment, K::String, K::Function, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Dockerfile,
+                "# c\nFROM alpine:3.20 AS build\nENV A=1\nCMD [\"app\", \"--serve\"]\n",
+                // Exec form, not `RUN echo "s"`: the grammar hands a shell-form
+                // command over as one opaque `shell_command`, so the quotes in it
+                // are not the grammar's strings. The JSON-ish exec form is.
+                &[K::Comment, K::String, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Ini,
+                "; c\n[section]\nkey = value\nnumber = 42\n",
+                &[K::Comment, K::Property],
+            ),
+            (
+                DiffSyntaxLanguage::Llvm,
+                "; c\ndefine i32 @main() {\n  ret i32 0\n}\n",
+                // `Constant`, not `Number`: upstream's query captures integer
+                // literals as `@constant`, which in LLVM IR is what they are --
+                // `i32 0` is a constant operand, not a numeric literal in an
+                // expression. Left as upstream has it rather than supplemented.
+                &[K::Comment, K::Constant, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Just,
+                "# c\nname := \"demo\"\n\nbuild:\n    echo \"hi\"\n",
+                // `Function` comes from bash inside the recipe, via
+                // queries/just_injections.scm -- a justfile is mostly recipes,
+                // and without the injection they are plain text.
+                &[K::Comment, K::String, K::Function],
+            ),
+            (
+                DiffSyntaxLanguage::Caddyfile,
+                "# c\nexample.com {\n\troot * /srv\n\tfile_server\n}\n",
+                &[K::Comment, K::Keyword, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Gitignore,
+                "# c\n*.log\n!keep.log\nbuild/\n",
+                // The literal path text is deliberately uncoloured; what is
+                // captured is what makes a line more than a path. See
+                // queries/gitignore_highlights.scm. `KeywordControl` is the
+                // leading `!`, which inverts the rule and is deliberately not the
+                // punctuation grey `@operator` resolves to.
+                &[K::Comment, K::StringRegex, K::KeywordControl],
+            ),
+            (
+                DiffSyntaxLanguage::Crontab,
+                "# c\nMAILTO=ops@example.com\n*/5 9-17 * * MON echo hi\n",
+                &[K::Comment, K::Property, K::Number, K::PunctuationSpecial],
+            ),
+            (
+                DiffSyntaxLanguage::Wat,
+                ";; c\n(module\n  (func $add (param $a i32) (result i32)\n    local.get $a))\n",
+                &[
+                    K::Comment,
+                    K::Keyword,
+                    K::TypeBuiltin,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Spirv,
+                "; c\n%1 = OpTypeVoid\n%2 = OpConstant %int 42\n",
+                &[K::Comment, K::Type, K::Operator],
+            ),
+            (
+                DiffSyntaxLanguage::Cil,
+                "// c\n.method public static void Main() cil managed\n{\n  IL_0000:  ldstr \"hi\"\n}\n",
+                &[K::Comment, K::Preproc, K::Label, K::String, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Dhall,
+                "-- c\nlet name = \"demo\"\nin  { greeting = name }\n",
+                &[K::Comment, K::String, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::CoffeeScript,
+                "# c\nsquare = (x) -> x * x\nnames = ['a', 'b']\n",
+                &[K::Comment, K::String],
+            ),
+            (
+                DiffSyntaxLanguage::Perl,
+                "# c\nsub greet {\n    my ($name) = @_;\n    print \"hi $name\";\n}\n",
+                &[
+                    K::Comment,
+                    K::String,
+                    K::Keyword,
+                    K::Function,
+                    K::PunctuationBracket,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Csv,
+                "name,count\nada,1\nbob,2\n",
+                // A CSV has no comments, keywords or strings -- only fields and
+                // the delimiters between them.
+                &[K::PunctuationDelimiter],
+            ),
+            (
+                DiffSyntaxLanguage::Kdl,
+                "// c\nnode \"arg\" key=1 {\n  child\n}\n",
+                &[K::Comment, K::String, K::Number],
+            ),
+            (
+                DiffSyntaxLanguage::Ron,
+                "// c\nConfig(\n  name: \"demo\",\n  count: 1,\n)\n",
+                &[K::Comment, K::String, K::Number],
+            ),
+            (
+                DiffSyntaxLanguage::Cue,
+                "// c\npackage config\n\nname: string\ncount: 1\n",
+                &[K::Comment, K::Keyword, K::Number],
+            ),
+            (
+                DiffSyntaxLanguage::Ebnf,
+                "(* c *)\ndigit = \"0\" | \"1\" ;\n",
+                &[K::Comment, K::String],
+            ),
+            (
+                DiffSyntaxLanguage::Gleam,
+                "// c\npub fn add(a: Int) -> Int {\n  a + 1\n}\n",
+                &[K::Comment, K::Keyword, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::V,
+                "// c\nfn add(a int) int {\n\treturn a + 1\n}\n",
+                &[K::Comment, K::Keyword, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Jsonnet,
+                "// c\n{\n  name: 'demo',\n  n: 1,\n}\n",
+                &[K::Comment, K::String, K::Number],
+            ),
+            (
+                DiffSyntaxLanguage::JavaProperties,
+                "# c\napp.name = demo\napp.port = 8080\n",
+                &[K::Comment, K::Property],
+            ),
+            (
+                DiffSyntaxLanguage::Proto,
+                "// c\nsyntax = \"proto3\";\nmessage User {\n  string name = 1;\n}\n",
+                &[K::Comment, K::String, K::Keyword, K::Type],
+            ),
+            (
+                DiffSyntaxLanguage::Pascal,
+                "unit Demo;\ninterface\n// c\nfunction Add(A: Integer): Integer;\nimplementation\nend.\n",
+                &[K::Comment, K::Keyword, K::Function],
+            ),
+            (
+                DiffSyntaxLanguage::Css,
+                "/* c */\n.a { color: red; width: 1px; }\n",
+                &[K::Comment, K::Number, K::Property, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Html,
+                "<!-- c -->\n<div id=\"x\">t</div>\n",
+                &[K::Comment, K::String, K::Tag, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Xml,
+                "<!-- c -->\n<root a=\"x\">t</root>\n",
+                &[K::Comment, K::String, K::Tag, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Vue,
+                "<template>\n  <div id=\"x\">t</div>\n</template>\n",
+                &[K::String, K::Tag, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Svelte,
+                "<script>\n  let n = 1;\n</script>\n<div id=\"x\">t</div>\n",
+                &[K::Tag, K::String, K::PunctuationBracket],
+            ),
+            (
+                DiffSyntaxLanguage::Json,
+                "{\n  \"a\": \"s\",\n  \"n\": 1,\n  \"b\": true\n}\n",
+                &[
+                    K::String,
+                    K::Number,
+                    K::Property,
+                    K::PunctuationBracket,
+                    K::Boolean,
+                ],
+            ),
+            (
+                DiffSyntaxLanguage::Yaml,
+                "# c\na: \"s\"\nn: 1\nb: true\n",
+                &[K::Comment, K::String, K::Number, K::Property],
+            ),
+            (
+                DiffSyntaxLanguage::Toml,
+                "# c\n[t]\na = \"s\"\nn = 1\n",
+                &[K::Comment, K::String, K::Number, K::Property],
+            ),
+            (
+                DiffSyntaxLanguage::GoMod,
+                "// c\nmodule example.com/m\n\ngo 1.22\n",
+                &[K::Comment, K::Keyword],
+            ),
+            (
+                DiffSyntaxLanguage::Markdown,
+                "# Title\n\nSome *text* and [a link](http://x).\n",
+                &[K::MarkupHeading],
+            ),
+        ]
+    };
+
+    /// Every token kind a sample comes out coloured with.
+    ///
+    /// The one definition of "what this language emits", so the per-language
+    /// tests below and the baseline sweep cannot disagree about what counts.
+    fn token_kinds_in_sample(language: DiffSyntaxLanguage, text: &str) -> Vec<SyntaxTokenKind> {
+        let document = prepare_test_document(language, text);
+        let mut seen: Vec<SyntaxTokenKind> = Vec::new();
+        for ix in 0..text.lines().count() {
+            if let Some(chunk) = syntax_tokens_for_prepared_document_line(document, ix) {
+                seen.extend(chunk.iter().map(|token| token.kind));
+            }
+        }
+        seen
+    }
+
+    /// The kinds a language must be able to colour before it counts as wired.
+    ///
+    /// Not a style preference: each of these is something a reader looks for. A
+    /// grammar whose query cannot emit `Comment` leaves comments the same colour
+    /// as code; one with no `PunctuationBracket` leaves every brace flat.
+    fn assert_language_colours(
+        language: DiffSyntaxLanguage,
+        text: &str,
+        required: &[SyntaxTokenKind],
+    ) {
+        let seen = token_kinds_in_sample(language, text);
+        for kind in required {
+            assert!(
+                seen.contains(kind),
+                "{language:?} never produced {kind:?}; it emitted {seen:?}"
+            );
+        }
+    }
+
+    /// Every language in [`LANGUAGE_BASELINES`] colours what it must.
+    ///
+    /// Reports every gap in one run rather than stopping at the first, so a
+    /// grammar batch can be assessed in one go.
+    #[test]
+    fn every_wired_language_meets_its_highlight_baseline() {
+        let mut gaps: Vec<String> = Vec::new();
+        for (language, sample, required) in LANGUAGE_BASELINES {
+            let mut seen = token_kinds_in_sample(*language, sample);
+            let missing: Vec<_> = required
+                .iter()
+                .filter(|kind| !seen.contains(kind))
+                .collect();
+            if !missing.is_empty() {
+                seen.sort_by_key(|kind| format!("{kind:?}"));
+                seen.dedup();
+                gaps.push(format!("{language:?} missing {missing:?} (has {seen:?})"));
+            }
+        }
+        assert!(gaps.is_empty(), "highlight gaps:\n  {}", gaps.join("\n  "));
+    }
+
+    /// Objective-C's own query captures neither comments, strings nor numbers,
+    /// so a `.m` file used to render those as plain code.
+    #[test]
+    fn objective_c_colours_comments_strings_and_numbers() {
+        assert_language_colours(
+            DiffSyntaxLanguage::ObjectiveC,
+            "// a comment\n@implementation Foo\n- (void)bar {\n  NSString *s = @\"hi\";\n  int n = 42;\n}\n@end\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::String,
+                SyntaxTokenKind::Number,
+                SyntaxTokenKind::Type,
+                SyntaxTokenKind::PunctuationBracket,
+            ],
+        );
+    }
+
+    /// Java, PHP and Groovy all use queries that capture no punctuation at all.
+    #[test]
+    fn jvm_and_php_family_colour_their_brackets() {
+        assert_language_colours(
+            DiffSyntaxLanguage::Java,
+            "// c\nclass Foo {\n  int count = 1;\n  void bar() {\n    this.count = other.value;\n  }\n}\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::PunctuationBracket,
+                SyntaxTokenKind::PunctuationDelimiter,
+                SyntaxTokenKind::Property,
+            ],
+        );
+        assert_language_colours(
+            DiffSyntaxLanguage::Php,
+            "<?php\n// c\nclass Foo {\n  public $count = 1;\n  function bar() { return $this->count; }\n}\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::PunctuationBracket,
+                SyntaxTokenKind::PunctuationDelimiter,
+                SyntaxTokenKind::Property,
+            ],
+        );
+        assert_language_colours(
+            DiffSyntaxLanguage::Groovy,
+            "// c\nclass Foo {\n  int count = 1\n  def bar() { return this.count }\n}\n",
+            &[
+                SyntaxTokenKind::Comment,
+                SyntaxTokenKind::PunctuationBracket,
+                SyntaxTokenKind::Keyword,
+            ],
+        );
+    }
+
+    /// PowerShell's query tags `(array_expression)` `@array`, which spans the
+    /// whole `@(1, 2)` -- parens, commas and the spaces between. Mapping that to
+    /// a type made an array literal read as one long type name.
+    #[test]
+    fn powershell_array_literals_are_not_one_long_type() {
+        let text = "# c\nfunction Get-Thing {\n  $x = @(1, 2)\n  return $x.Count\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::PowerShell, text);
+        let line = text.lines().nth(2).expect("array line");
+        let tokens = syntax_tokens_for_prepared_document_line(document, 2)
+            .map(|chunk| chunk.to_vec())
+            .unwrap_or_default();
+        let rendered: Vec<(&str, SyntaxTokenKind)> = tokens
+            .iter()
+            .map(|token| (&line[token.range.clone()], token.kind))
+            .collect();
+        assert!(
+            !rendered
+                .iter()
+                .any(|(_, kind)| *kind == SyntaxTokenKind::Type),
+            "nothing on an array literal line is a type, got {rendered:?}"
+        );
+        assert!(
+            rendered.contains(&("@(", SyntaxTokenKind::PunctuationBracket))
+                && rendered.contains(&(")", SyntaxTokenKind::PunctuationBracket)),
+            "the array's own brackets should be brackets, got {rendered:?}"
+        );
+        assert!(
+            rendered.contains(&("1", SyntaxTokenKind::Number)),
+            "its elements keep their own colours, got {rendered:?}"
+        );
+    }
+
+    /// Terraform gets real syntax, and with it the tree that delimiter matching
+    /// and name highlighting need.
+    ///
+    /// `tree-sitter-hcl` ships no highlights query, so `.tf` was heuristic-only
+    /// and had no document tree at all: no bracket pairs, no occurrences.
+    /// `queries/hcl_highlights.scm` is authored in-tree for exactly that.
+    #[test]
+    fn terraform_files_get_tree_sitter_tokens() {
+        let text = concat!(
+            "# managed by terraform\n",
+            "resource \"aws_instance\" \"web\" {\n",
+            "  ami           = var.ami_id\n",
+            "  count         = 2\n",
+            "  enabled       = true\n",
+            "  name          = \"web-${var.env}\"\n",
+            "  user_data     = file(\"init.sh\")\n",
+            "}\n",
+        );
+        assert_eq!(
+            diff_syntax_language_for_path(std::path::Path::new("main.tf")),
+            Some(DiffSyntaxLanguage::Hcl)
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+        let kinds = |ix: usize| -> Vec<(String, SyntaxTokenKind)> {
+            let line = text.lines().nth(ix).expect("line");
+            syntax_tokens_for_prepared_document_line(document, ix)
+                .map(|chunk| {
+                    chunk
+                        .iter()
+                        .map(|t| (line[t.range.clone()].to_string(), t.kind))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        assert_eq!(
+            kinds(0),
+            vec![("# managed by terraform".into(), SyntaxTokenKind::Comment)]
+        );
+        let header = kinds(1);
+        assert!(
+            header.contains(&("resource".into(), SyntaxTokenKind::Keyword))
+                && header.contains(&("\"aws_instance\"".into(), SyntaxTokenKind::String)),
+            "block header should name its type and labels, got {header:?}"
+        );
+        assert!(
+            kinds(3).contains(&("2".into(), SyntaxTokenKind::Number)),
+            "numbers should be numbers, got {:?}",
+            kinds(3)
+        );
+        assert!(
+            kinds(4).contains(&("true".into(), SyntaxTokenKind::Boolean)),
+            "booleans should be booleans, got {:?}",
+            kinds(4)
+        );
+        // An interpolated string keeps its literal halves coloured around `${}`.
+        let interpolated = kinds(5);
+        assert!(
+            interpolated.contains(&("\"web-".into(), SyntaxTokenKind::String))
+                && interpolated.contains(&("${".into(), SyntaxTokenKind::PunctuationSpecial))
+                && interpolated.contains(&("var".into(), SyntaxTokenKind::Variable)),
+            "interpolation should split string from code, got {interpolated:?}"
+        );
+        assert!(
+            kinds(6).contains(&("file".into(), SyntaxTokenKind::Function)),
+            "calls should be functions, got {:?}",
+            kinds(6)
+        );
+    }
+
+    /// And with a tree in hand, both click features work in Terraform.
+    #[test]
+    fn terraform_supports_pairs_and_occurrences() {
+        let text = concat!(
+            "resource \"aws_instance\" \"web\" {\n",
+            "  ami   = var.ami_id\n",
+            "  other = var.ami_id\n",
+            "}\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+
+        // The block braces pair across the whole resource.
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 1, 4)
+            .expect("the resource block braces should pair");
+        assert_eq!(hit.kind, SyntaxPairKind::Bracket);
+        assert_eq!(hit.open[0].line_ix, 0);
+        assert_eq!(hit.close[0].line_ix, 3);
+
+        // And `ami_id` is a name with two uses.
+        let column = text
+            .lines()
+            .nth(1)
+            .expect("line")
+            .find("ami_id")
+            .expect("name");
+        let spans = prepared_document_occurrences_at_display_offset(document, 1, column);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    /// The Z80 shadow-register apostrophe does not open a string, on either path.
+    ///
+    /// `AF'`, `BC'`, `DE'`, `HL'` end in an apostrophe in a language that also
+    /// spells character literals with one, so `EX AF, AF'` used to open a string
+    /// that ran to the next quote fifty lines later. The grammar half is
+    /// `shadow_reg` in vendor/tree-sitter-asm; this covers the heuristic, which is
+    /// what the app renders whenever the parse budget blows -- so a fix to only
+    /// one of the two is invisible in whichever regime you happen to test.
+    #[test]
+    fn assembly_shadow_register_apostrophe_does_not_open_a_string() {
+        let heuristic = |line: &str| {
+            syntax_tokens_for_line(
+                line,
+                DiffSyntaxLanguage::Assembly,
+                DiffSyntaxMode::HeuristicOnly,
+            )
+            .to_vec()
+        };
+
+        let shadow = heuristic("        EX   AF, AF'");
+        assert!(
+            shadow.iter().all(|t| t.kind != SyntaxTokenKind::String),
+            "a shadow register is not a string: {shadow:?}"
+        );
+
+        // ...but a real character literal still is, and the two differ only by
+        // what precedes the quote.
+        let literal = heuristic("CHAR    EQU 'A'");
+        assert!(
+            literal.iter().any(|t| t.kind == SyntaxTokenKind::String),
+            "`'A'` in value position is still a char literal: {literal:?}"
+        );
+
+        // And the tree-sitter path agrees, which is the point of testing both.
+        let text = concat!(
+            "        EX   AF, AF'\n",
+            "        LD   A, 'X'\n",
+            "        HALT\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Assembly, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+        assert!(
+            !kinds(0).contains(&SyntaxTokenKind::String),
+            "grammar: `AF'` is a register, got {:?}",
+            kinds(0)
+        );
+        assert!(
+            kinds(1).contains(&SyntaxTokenKind::String),
+            "grammar: `'X'` is a char literal, got {:?}",
+            kinds(1)
+        );
+        assert_eq!(
+            kinds(2),
+            vec![SyntaxTokenKind::Function],
+            "the line after must not have been swallowed by a string"
+        );
+    }
+
+    /// A GAS local label reference is a label, not a register.
+    ///
+    /// `1f`/`2b` are the jump targets in hand-written x86 assembly, and the
+    /// grammar files them as `reg` like every other bare operand -- so `je 2f`
+    /// painted its target the same colour as `%r13`. The register assertions are
+    /// the other half: matching by shape rather than by branch mnemonic is what
+    /// keeps ARM's `bic` and x86's `bswap` from having their operands relabelled.
+    #[test]
+    fn assembly_local_label_references_are_labels_not_registers() {
+        let text = concat!(
+            "1:      cmpq    $0, %r13\n",
+            "        je      2f\n",
+            "        jmp     1b\n",
+            "        bswap   %eax\n",
+            "2:\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Assembly, text);
+        let kind_of = |line_ix: usize, needle: &str| -> Option<SyntaxTokenKind> {
+            let line = text.lines().nth(line_ix)?;
+            let at = line.find(needle)?;
+            syntax_tokens_for_prepared_document_line(document, line_ix)?
+                .iter()
+                .find(|token| token.range.start == at)
+                .map(|token| token.kind)
+        };
+
+        assert_eq!(kind_of(1, "2f"), Some(SyntaxTokenKind::Label));
+        assert_eq!(kind_of(2, "1b"), Some(SyntaxTokenKind::Label));
+        // The definitions they point at.
+        assert_eq!(kind_of(0, "1:"), Some(SyntaxTokenKind::Label));
+        assert_eq!(kind_of(4, "2:"), Some(SyntaxTokenKind::Label));
+        // And nothing else moved: registers are still registers, including on a
+        // mnemonic that starts with `b` but is not a branch.
+        assert_eq!(
+            kind_of(0, "%r13"),
+            Some(SyntaxTokenKind::VariableBuiltin),
+            "a `%` register is not a label"
+        );
+        assert_eq!(
+            kind_of(3, "%eax"),
+            Some(SyntaxTokenKind::VariableBuiltin),
+            "`bswap` is not a branch, and its operand is a register"
+        );
+    }
+
+    /// Clicking an assembler directive or a dotted mnemonic finds the others.
+    ///
+    /// Both were dead before: `is_name` in syntax/occurrences.rs required a
+    /// name's first character to be a letter or `_` and every character after it
+    /// to be alphanumeric, so `.section` and `.p2align` never got past it, and
+    /// `b.eq` was not one node to click in the first place (see
+    /// vendor/tree-sitter-asm). An assembly file is mostly these two things, so
+    /// between them the feature did nothing at all on `.s`.
+    #[test]
+    fn assembly_directives_and_dotted_mnemonics_answer_a_click() {
+        let text = concat!(
+            ".section .text\n",
+            "    .p2align 4\n",
+            "main:\n",
+            "    b.eq main\n",
+            "    b.ne main\n",
+            "    b.eq main\n",
+            ".section .data\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Assembly, text);
+
+        // A leading `.` is the whole point: the directive is the name.
+        let spans = prepared_document_occurrences_at_display_offset(document, 0, 3);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 6],
+            "clicking `.section` should find both of them"
+        );
+
+        // And the dot is interior here, in a token the vendored grammar keeps
+        // whole. `b.ne` on line 4 must not match.
+        let spans = prepared_document_occurrences_at_display_offset(document, 3, 6);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![3, 5],
+            "clicking `b.eq` should find the other `b.eq` and not `b.ne`"
+        );
+    }
+
+    /// Perl has a tree, so brackets pair and names answer a click.
+    ///
+    /// It was heuristic-only before, and the report was that "the bracket and word
+    /// highlight is broken" -- they were not broken, they were absent. Both read
+    /// the tree, not the tokens, so a language with no grammar has neither however
+    /// well the heuristic colours it.
+    #[test]
+    fn perl_brackets_and_names_answer_a_click() {
+        let text = "my %hash = (one => 1);\nmy $v = $hash{one};\nmy $w = $hash{two};\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Perl, text);
+        for line_ix in 0..3 {
+            let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+        }
+
+        let line = text.lines().nth(1).expect("line");
+        let brace = line.find('{').expect("subscript brace");
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 1, brace)
+            .expect("a hash subscript's braces should pair");
+        assert_eq!(hit.kind, SyntaxPairKind::Bracket);
+        assert_eq!(
+            hit.close.first().map(|span| span.display_range.start),
+            Some(line.find('}').expect("closing brace"))
+        );
+
+        // ...and `hash` is a name the grammar tokenised, so a click finds its uses.
+        let at = line.find("hash").expect("name");
+        let spans = prepared_document_occurrences_at_display_offset(document, 1, at + 1);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![1, 2],
+            "clicking `$hash` should find the other `$hash`"
+        );
+        // ...and not the `%hash` on line 0. Perl writes the same hash with a
+        // different sigil depending on what is taken from it, and the sigil is
+        // part of the token, so those are different text. Connecting them would
+        // need to know the language.
+    }
+
+    /// A CSS custom property takes any balanced tokens, and does not derail the
+    /// rest of the block.
+    ///
+    /// `--json: {...}` used to parse as a nested *rule set* -- CSS nesting makes
+    /// `name: {` a selector with a pseudo-class colon -- and the ERROR took every
+    /// later declaration with it. See vendor/tree-sitter-css.
+    #[test]
+    fn css_custom_property_does_not_derail_the_block() {
+        let text = concat!(
+            ":root {\n",
+            "  --brand: #3366ff;\n",
+            "  --json: {\"key\": \"value\"};\n",
+            "  color: red;\n",
+            "}\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Css, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+
+        // An ordinary custom property is untouched: the scanner declines unless
+        // the value has a brace, so this keeps the tree it always had.
+        assert!(
+            kinds(1).contains(&SyntaxTokenKind::Variable),
+            "`--brand` is a custom property, got {:?}",
+            kinds(1)
+        );
+        // ...and the declaration after the braced one still reads as a property,
+        // which is the whole point -- it used to be swallowed by the ERROR.
+        assert!(
+            kinds(3).contains(&SyntaxTokenKind::Property),
+            "`color` after a braced custom property, got {:?}",
+            kinds(3)
+        );
+        assert!(
+            kinds(3).contains(&SyntaxTokenKind::ConstantBuiltin),
+            "`red` should still be a value, got {:?}",
+            kinds(3)
+        );
+    }
+
+    /// A Ruby `=begin` block ends only at an `=end` in column 0.
+    ///
+    /// Upstream matched the body a character at a time and stopped at any `=end`,
+    /// so a block comment that *mentions* `=end` -- prose about Ruby's own
+    /// comment syntax, which is where it appears -- ended early and the rest
+    /// parsed as code. See vendor/tree-sitter-ruby.
+    #[test]
+    fn ruby_block_comment_ends_only_at_column_zero() {
+        let text = concat!(
+            "=begin\n",
+            "both =begin and =end must start at column 0\n",
+            "  def never_defined\n",
+            "    \"an unterminated string is fine in here: 'nope\n",
+            "=end\n",
+            "real_code = 1\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Ruby, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+
+        for line_ix in 0..=4 {
+            assert_eq!(
+                kinds(line_ix),
+                vec![SyntaxTokenKind::Comment],
+                "line {line_ix} is inside the block comment"
+            );
+        }
+        assert!(
+            kinds(5).contains(&SyntaxTokenKind::Variable),
+            "code resumes after `=end`, got {:?}",
+            kinds(5)
+        );
+    }
+
+    /// `</script` inside a string or comment does not end the element.
+    ///
+    /// The spec closes a script only when the tag name is followed by whitespace,
+    /// `/` or `>`. Upstream's scanner broke on the characters alone, so a script
+    /// that *mentions* `</script` -- a bundler note, a regex, code about HTML --
+    /// ended there and the rest of it rendered as markup. See
+    /// vendor/tree-sitter-html.
+    #[test]
+    fn html_script_survives_a_close_tag_inside_a_string() {
+        let text = concat!(
+            "<script>\n",
+            "  // the characters \"</script\" do not end this\n",
+            "  const re = /<\\/script>/;\n",
+            "  const done = 1;\n",
+            "</script>\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+
+        assert!(
+            kinds(1).contains(&SyntaxTokenKind::Comment),
+            "the line mentioning `</script` is still a JS comment, got {:?}",
+            kinds(1)
+        );
+        assert!(
+            kinds(3).contains(&SyntaxTokenKind::Keyword),
+            "JavaScript continues after it, got {:?}",
+            kinds(3)
+        );
+    }
+
+    /// A `<script>` is JavaScript only when its type says so.
+    ///
+    /// `type="text/template"` holds raw text a framework reads later, and
+    /// injecting JavaScript into it coloured English prose as variables and
+    /// operators. `application/json` is JSON and now reads as JSON.
+    #[test]
+    fn html_script_injection_follows_the_type_attribute() {
+        let text = concat!(
+            "<script>const a = 1;</script>\n",
+            "<script type=\"text/template\" id=\"tpl\">raw text here</script>\n",
+            "<script type=\"application/json\">{\"key\": 1}</script>\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+
+        assert!(
+            kinds(0).contains(&SyntaxTokenKind::Keyword),
+            "an untyped script is still JavaScript, got {:?}",
+            kinds(0)
+        );
+        assert!(
+            !kinds(1).contains(&SyntaxTokenKind::Keyword)
+                && !kinds(1).contains(&SyntaxTokenKind::Variable),
+            "a template script's body is raw text, got {:?}",
+            kinds(1)
+        );
+        assert!(
+            kinds(2).contains(&SyntaxTokenKind::Property),
+            "`\"key\"` should be a JSON key, got {:?}",
+            kinds(2)
+        );
+    }
+
+    /// A broad capture whose only predicate is one the engine ignores.
+    ///
+    /// `#is-not? local` (Ruby) and the unscoped `(variable) @type` (Haskell) are
+    /// the same failure as `#lua-match?`: the rule does not filter, it sits below
+    /// the general rule it was meant to refine, and last-wins makes it the answer
+    /// for the whole file. Ruby rendered every local variable in the method
+    /// colour; Haskell rendered every lower-case identifier as a type.
+    ///
+    /// The JavaScript query keeps its own `#is-not? local` on purpose -- see
+    /// queries/ruby_highlights.scm's header for why that one is harmless.
+    #[test]
+    fn unevaluated_predicates_do_not_swallow_whole_files() {
+        let ruby = "plain = 1\nputs plain\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Ruby, ruby);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+        assert!(
+            kinds(0).contains(&SyntaxTokenKind::Variable),
+            "a local binding is a variable, got {:?}",
+            kinds(0)
+        );
+        assert!(
+            kinds(1).contains(&SyntaxTokenKind::FunctionMethod),
+            "`puts` is still a method call, got {:?}",
+            kinds(1)
+        );
+
+        let haskell = "add :: Int -> Int -> Int\nadd a b = a + b\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Haskell, haskell);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+        assert!(
+            kinds(0).contains(&SyntaxTokenKind::Type),
+            "`Int` is a type, got {:?}",
+            kinds(0)
+        );
+        assert!(
+            !kinds(1).contains(&SyntaxTokenKind::Type),
+            "`a` and `b` are values, not types: {:?}",
+            kinds(1)
+        );
+    }
+
+    /// A click in an injected region is answered by the injected grammar.
+    ///
+    /// `prepared_document_syntax_pair_at_display_offset` had only the host tree,
+    /// so in an injected region there was no structure to pair against at all --
+    /// to PHP, a file's whole inline HTML is one `text` node. That is what made a
+    /// bracket click appear to do nothing there while a click a column away
+    /// appeared to work: the column away fell through to the enclosing host
+    /// construct, which did answer.
+    ///
+    /// The row has to be drawn first, exactly as in the app: drawing is what
+    /// parses the injection and puts its tree in the cache.
+    #[test]
+    fn a_click_in_an_injected_region_uses_the_injected_grammar() {
+        let text = concat!("<?php f($t); ?>\n", "<html lang=\"en\">\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Php, text);
+        let _ = syntax_tokens_for_prepared_document_line(document, 1);
+
+        let line = text.lines().nth(1).expect("line");
+        let quote = line.find('"').expect("attribute quote");
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 1, quote)
+            .expect("the attribute's quotes are HTML's to pair, not PHP's");
+        assert_eq!(hit.kind, SyntaxPairKind::Quote);
+        assert_eq!(hit.open.first().map(|span| span.line_ix), Some(1));
+        assert_eq!(hit.close.first().map(|span| span.line_ix), Some(1));
+
+        // ...and the host grammar still answers where it owns the bytes.
+        let _ = syntax_tokens_for_prepared_document_line(document, 0);
+        let php = text.lines().next().expect("line");
+        let paren = php.find('(').expect("php call");
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 0, paren)
+            .expect("the call's parens are PHP's");
+        assert_eq!(hit.kind, SyntaxPairKind::Bracket);
+        assert_eq!(
+            hit.close.first().map(|span| span.display_range.start),
+            Some(php.find(')').expect("closing paren")),
+            "the host pair should be the call's own parens"
+        );
+    }
+
+    #[test]
+    fn review_nested_injected_pair_uses_inner_grammar() {
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+        let text = "<script>const x = (1);</script>\n<?php f(); ?>\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Php, text);
+        let _ = syntax_tokens_for_prepared_document_line(document, 0);
+        let line = text.lines().next().unwrap();
+        let open = line.find('(').unwrap();
+        let close = line.find(')').unwrap();
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 0, open)
+            .expect("nested JavaScript's parens should pair");
+        assert_eq!(hit.kind, SyntaxPairKind::Bracket, "got {hit:?}");
+        assert_eq!(hit.open[0].display_range, open..open + 1, "got {hit:?}");
+        assert_eq!(hit.close[0].display_range, close..close + 1, "got {hit:?}");
+    }
+
+    /// The HTML around a PHP file's `<?php ?>` islands is HTML.
+    ///
+    /// A PHP file is two languages interleaved and the grammar hands the inline
+    /// half over as one structureless `text` node, so without
+    /// queries/php_injections.scm every such region rendered as plain body text.
+    /// It is not a rare shape: a `?>` inside a `//` comment really does end PHP
+    /// mode, which is what puts most of the corpus's comments.php into HTML.
+    #[test]
+    fn php_inline_html_is_highlighted_as_html() {
+        let text = concat!(
+            "<?php $title = 'hi'; ?>\n",
+            "<html lang=\"en\">\n",
+            "<h1><?= $title ?></h1>\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Php, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+
+        assert!(
+            kinds(1).contains(&SyntaxTokenKind::Tag),
+            "`<html>` should be a tag, got {:?}",
+            kinds(1)
+        );
+        assert!(
+            kinds(1).contains(&SyntaxTokenKind::Attribute),
+            "`lang=` should be an attribute, got {:?}",
+            kinds(1)
+        );
+        // ...and the PHP island inside the HTML keeps its own colours.
+        assert!(
+            kinds(2).contains(&SyntaxTokenKind::Variable),
+            "`$title` should still be PHP, got {:?}",
+            kinds(2)
+        );
+    }
+
+    /// `.json5` resolves to JavaScript, not JSON.
+    ///
+    /// Everything JSON5 adds over JSON -- comments, unquoted keys, single quotes,
+    /// trailing commas -- is ordinary ECMAScript object-literal syntax.
+    /// tree-sitter-json produces 72 error nodes in the 58-line corpus sample;
+    /// tree-sitter-javascript produces none.
+    #[test]
+    fn json5_resolves_to_javascript() {
+        assert_eq!(
+            diff_syntax_language_for_path("config/data.json5"),
+            Some(DiffSyntaxLanguage::JavaScript)
+        );
+        let text = "{\n  // a comment\n  unquoted: 'single quotes',\n}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::JavaScript, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+        assert!(kinds(1).contains(&SyntaxTokenKind::Comment));
+        assert!(kinds(2).contains(&SyntaxTokenKind::String));
+    }
+
+    /// A Terraform heredoc body highlights as what is inside it.
+    ///
+    /// HCL has no syntax for declaring a heredoc's language, so `user_data` and
+    /// `policy` -- the two densest things in a real Terraform file -- rendered as
+    /// one flat `@string` for however many lines they ran. The language comes from
+    /// the attribute name; see queries/hcl_injections.scm for why not from the
+    /// content.
+    #[test]
+    fn hcl_heredoc_bodies_are_injected_by_attribute_name() {
+        let text = concat!(
+            "resource \"aws_instance\" \"web\" {\n",
+            "  user_data = <<-EOT\n",
+            "    set -euo pipefail\n",
+            "    echo \"hi ${count.index}\"\n",
+            "  EOT\n",
+            "\n",
+            "  policy = <<EOT\n",
+            "{\"Version\": \"2012-10-17\"}\n",
+            "EOT\n",
+            "\n",
+            "  description = <<EOT\n",
+            "just prose, no language to guess\n",
+            "EOT\n",
+            "}\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Hcl, text);
+        let kinds = |line_ix: usize| -> Vec<SyntaxTokenKind> {
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| tokens.iter().map(|token| token.kind).collect())
+                .unwrap_or_default()
+        };
+
+        // Shell, because the attribute is `user_data`.
+        assert!(
+            kinds(3).contains(&SyntaxTokenKind::Function),
+            "`echo` should be a command, got {:?}",
+            kinds(3)
+        );
+        // ...and the HCL interpolation inside it keeps the HCL colours, because it
+        // is not part of the injected range.
+        assert!(
+            kinds(3).contains(&SyntaxTokenKind::Property),
+            "`${{count.index}}` should still read as Terraform, got {:?}",
+            kinds(3)
+        );
+
+        // JSON, because the attribute is `policy`.
+        assert!(
+            kinds(7).contains(&SyntaxTokenKind::Property),
+            "`\"Version\"` should be a JSON key, got {:?}",
+            kinds(7)
+        );
+
+        // And an attribute the convention says nothing about is left alone rather
+        // than guessed at.
+        assert_eq!(
+            kinds(11),
+            vec![SyntaxTokenKind::String],
+            "an unrecognised attribute's heredoc stays a string"
+        );
+    }
+
+    /// Clicking an `ARG`/`ENV` name in a Dockerfile finds its other uses.
+    ///
+    /// Same root cause as the YAML case below: `tree-sitter-containerfile` calls
+    /// the bare word on both sides of an `ARG`/`ENV` pair `unquoted_string`, and
+    /// `is_name_token_kind` rejects any kind containing "string". Tracing an
+    /// `ARG` through the stages that re-declare it is most of what reading a
+    /// Dockerfile is, and none of it answered a click.
+    #[test]
+    fn dockerfile_arg_names_answer_a_click() {
+        let text = concat!(
+            "ARG BASE_TAG=bookworm\n",
+            "FROM debian:${BASE_TAG} AS builder\n",
+            "ARG BASE_TAG\n",
+            "ENV OTHER=1\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Dockerfile, text);
+
+        let spans = prepared_document_occurrences_at_display_offset(document, 0, 6);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 1, 2],
+            "the declaration, the `${{...}}` use, and the re-declaration after FROM"
+        );
+
+        // The expansion form resolves to the same set from the other end.
+        let line = text.lines().nth(1).expect("line");
+        let column = line.find("BASE_TAG").expect("needle");
+        let spans = prepared_document_occurrences_at_display_offset(document, 1, column + 2);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 1, 2]
+        );
+    }
+
+    /// The `!` that re-includes a path is the accent colour, not punctuation grey.
+    ///
+    /// It is the one character in a `.gitignore` that reverses a line's meaning,
+    /// and `@operator` resolves to `foreground.secondary` -- the same muted grey
+    /// as the comments around it.
+    #[test]
+    fn gitignore_negation_is_prominent() {
+        let text = "*.log\n!important.log\nbuild/\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Gitignore, text);
+        let tokens = syntax_tokens_for_prepared_document_line(document, 1)
+            .map(|tokens| tokens.to_vec())
+            .unwrap_or_default();
+        assert_eq!(
+            tokens.first().map(|token| token.kind),
+            Some(SyntaxTokenKind::KeywordControl),
+            "the leading `!` should read as an inversion, got {tokens:?}"
+        );
+    }
+
+    /// Clicking a YAML mapping key finds the key's other uses.
+    ///
+    /// `is_name_token_kind` rejects any node kind containing "string", which is
+    /// right for string *contents* and wrong for exactly one grammar:
+    /// tree-sitter-yaml calls the unquoted plain scalar `string_scalar`, so every
+    /// key in every playbook read as string content. An Ansible file is nothing
+    /// but keys, which is where this was reported.
+    #[test]
+    fn yaml_plain_mapping_keys_answer_a_click() {
+        let text = concat!(
+            "- hosts: web\n",
+            "  become: true\n",
+            "  tasks:\n",
+            "    - name: install\n",
+            "      ansible.builtin.copy:\n",
+            "        src: a\n",
+            "- hosts: db\n",
+            "  become: false\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Yaml, text);
+
+        let spans = prepared_document_occurrences_at_display_offset(document, 0, 4);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![0, 6],
+            "clicking the `hosts` key should find both plays"
+        );
+
+        // A dotted module name is one plain scalar, so it is one name.
+        let spans = prepared_document_occurrences_at_display_offset(document, 4, 10);
+        assert_eq!(
+            spans.iter().map(|span| span.line_ix).collect::<Vec<_>>(),
+            vec![4],
+            "clicking `ansible.builtin.copy` should resolve to the whole key"
+        );
+    }
+
+    /// A prose-only `/** ... */` must still read as a comment.
+    ///
+    /// The jsdoc injection subtracts the host's `(comment) @comment` from the
+    /// document before painting its own captures, so a doc comment with no
+    /// `@tag` in it used to come out with no colour at all -- plain foreground
+    /// text in the middle of a file. The base capture in `jsdoc_highlights.scm`
+    /// is what puts the comment colour back.
+    #[test]
+    fn jsdoc_comments_keep_their_comment_colour() {
+        let text = concat!(
+            "/**\n",
+            " * Where to go after signing in.\n",
+            " *\n",
+            " * Same-origin paths only, so no open redirect.\n",
+            " */\n",
+            "export function f() {}\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Tsx, text);
+        for (ix, line) in text.lines().enumerate().take(5) {
+            let tokens = syntax_tokens_for_prepared_document_line(document, ix)
+                .map(|chunk| chunk.to_vec())
+                .unwrap_or_default();
+            assert!(
+                !tokens.is_empty(),
+                "line {ix} ({line:?}) of a doc comment has no tokens at all"
+            );
+            assert!(
+                tokens
+                    .iter()
+                    .all(|token| token.kind == SyntaxTokenKind::Comment),
+                "line {ix} ({line:?}) should be all comment, got {tokens:?}"
+            );
+        }
+    }
+
+    /// ...and a tagged one still gets its tag, type and name picked out of it.
+    #[test]
+    fn jsdoc_tags_still_win_over_the_comment_base() {
+        let text = "/**\n * @param {string} search - the query.\n */\nlet a = 1;\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Tsx, text);
+        let line = text.lines().nth(1).expect("tag line");
+        let tokens = syntax_tokens_for_prepared_document_line(document, 1)
+            .map(|chunk| chunk.to_vec())
+            .unwrap_or_default();
+        let kinds: Vec<(&str, SyntaxTokenKind)> = tokens
+            .iter()
+            .map(|token| (&line[token.range.clone()], token.kind))
+            .collect();
+        assert!(
+            kinds.contains(&("@param", SyntaxTokenKind::Keyword)),
+            "expected the tag to stay a keyword, got {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&("string", SyntaxTokenKind::Type)),
+            "expected the type to stay a type, got {kinds:?}"
+        );
+        assert!(
+            kinds
+                .iter()
+                .any(|(text, kind)| *kind == SyntaxTokenKind::Comment && text.contains("query")),
+            "the prose around the tag should still be comment, got {kinds:?}"
+        );
+    }
+
+    /// A JSX expression comment spans several rows, and every one of them is
+    /// comment -- backticks and quotes inside it are prose, not code.
+    #[test]
+    fn jsx_expression_comments_stay_comments_on_every_line() {
+        let text = concat!(
+            "const a = (\n",
+            "  <div>\n",
+            "    {/* `exact` matters: `/app/device` is a prefix of\n",
+            "    `/app/devices`, so a user clicking \"Devices\" would land\n",
+            "    on the wrong page. */}\n",
+            "  </div>\n",
+            ");\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Tsx, text);
+        for ix in 2..=4 {
+            let line = text.lines().nth(ix).expect("comment line");
+            let tokens = syntax_tokens_for_prepared_document_line(document, ix)
+                .map(|chunk| chunk.to_vec())
+                .unwrap_or_default();
+            let non_comment: Vec<_> = tokens
+                .iter()
+                .filter(|token| token.kind != SyntaxTokenKind::Comment)
+                .map(|token| (&line[token.range.clone()], token.kind))
+                .collect();
+            // Only the braces holding the expression may be anything else.
+            assert!(
+                non_comment
+                    .iter()
+                    .all(|(text, _)| *text == "{" || *text == "}"),
+                "line {ix} ({line:?}) coloured non-comment spans: {non_comment:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn prepared_syntax_pair_is_none_outside_the_document() {
+        let text = "fn main() {}\n";
+        let document = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        assert_eq!(
+            prepared_document_syntax_pair_at_display_offset(document, 99, 0),
+            None,
+            "a line past the end has no answer"
+        );
+        assert_eq!(
+            prepared_document_syntax_pair_at_display_offset(document, 0, 0),
+            None,
+            "the caret before `fn` is inside nothing"
+        );
     }
 
     fn prepare_test_document_from_shared_text(
@@ -1472,6 +4062,36 @@ mod tests {
             .collect()
     }
 
+    /// The keyword and keyword-control spans a line yields on the heuristic path.
+    ///
+    /// Shared rather than redefined per test: the three copies this replaced drifted
+    /// apart on whether `KeywordControl` counted.
+    fn heuristic_keywords(text: &str, language: DiffSyntaxLanguage) -> Vec<&str> {
+        syntax_tokens_for_line(text, language, DiffSyntaxMode::HeuristicOnly)
+            .iter()
+            .filter(|token| {
+                matches!(
+                    token.kind,
+                    SyntaxTokenKind::Keyword | SyntaxTokenKind::KeywordControl
+                )
+            })
+            .map(|token| &text[token.range.clone()])
+            .collect()
+    }
+
+    /// A query's rule lines, with blanks and `;` comments dropped.
+    ///
+    /// Used by the three `..._embeds_the_..._base_verbatim` tripwires. They compare
+    /// vendored copies against their upstream, so all three have to strip comments
+    /// the same way or the comparison means different things in each.
+    fn query_rule_lines(query: &str) -> Vec<&str> {
+        query
+            .lines()
+            .map(str::trim_end)
+            .filter(|line| !line.is_empty() && !line.trim_start().starts_with(';'))
+            .collect()
+    }
+
     /// Treating `'` as a quote painted the rest of the line as a string from the
     /// tick in `foldl'` onward. HeuristicOnly is a production path for large diffs,
     /// not just a fallback.
@@ -1542,21 +4162,8 @@ mod tests {
     /// Jinja test goes through `prepare_test_document`, i.e. tree-sitter.
     #[test]
     fn nix_and_jinja_heuristic_keyword_tables_are_covered() {
-        fn keywords(text: &str, language: DiffSyntaxLanguage) -> Vec<&str> {
-            syntax_tokens_for_line(text, language, DiffSyntaxMode::HeuristicOnly)
-                .iter()
-                .filter(|token| {
-                    matches!(
-                        token.kind,
-                        SyntaxTokenKind::Keyword | SyntaxTokenKind::KeywordControl
-                    )
-                })
-                .map(|token| &text[token.range.clone()])
-                .collect()
-        }
-
         let line = "  x = with pkgs; let y = 1; in rec { inherit y; }";
-        let found = keywords(line, DiffSyntaxLanguage::Nix);
+        let found = heuristic_keywords(line, DiffSyntaxLanguage::Nix);
         for expected in ["with", "let", "in", "rec", "inherit"] {
             assert!(
                 found.contains(&expected),
@@ -1564,13 +4171,15 @@ mod tests {
             );
         }
         assert!(
-            keywords("  buildInputs = [ pkgs.hello ];", DiffSyntaxLanguage::Nix).is_empty(),
+            heuristic_keywords("  buildInputs = [ pkgs.hello ];", DiffSyntaxLanguage::Nix)
+                .is_empty(),
             "an ordinary Nix attribute name must not colour as a keyword"
         );
 
         // The Jinja table omits any identifier that could also be an HTML attribute
         // name or an English word: the heuristic sees the whole line.
-        let found = keywords("{% endif %}{% extends 'base' %}", DiffSyntaxLanguage::Jinja);
+        let found =
+            heuristic_keywords("{% endif %}{% extends 'base' %}", DiffSyntaxLanguage::Jinja);
         for expected in ["endif", "extends"] {
             assert!(
                 found.contains(&expected),
@@ -1582,17 +4191,17 @@ mod tests {
             "  <p>Do it with care, and set it aside.</p>",
         ] {
             assert!(
-                keywords(prose, DiffSyntaxLanguage::Jinja).is_empty(),
+                heuristic_keywords(prose, DiffSyntaxLanguage::Jinja).is_empty(),
                 "an HTML attribute or English word coloured as a Jinja keyword in \
                  {prose:?}: {:?}",
-                keywords(prose, DiffSyntaxLanguage::Jinja)
+                heuristic_keywords(prose, DiffSyntaxLanguage::Jinja)
             );
         }
 
         // The text-bodied reading shares the table.
         assert_eq!(
-            keywords("{% endif %}", DiffSyntaxLanguage::JinjaText),
-            keywords("{% endif %}", DiffSyntaxLanguage::Jinja),
+            heuristic_keywords("{% endif %}", DiffSyntaxLanguage::JinjaText),
+            heuristic_keywords("{% endif %}", DiffSyntaxLanguage::Jinja),
             "both Jinja readings must share one keyword table"
         );
     }
@@ -2898,6 +5507,34 @@ mod tests {
     }
 
     #[test]
+    fn prepared_handle_rehydrates_after_thread_local_tree_eviction() {
+        let _lock = lock_global_counter_tests();
+        reset_prepared_syntax_cache();
+
+        let text = "fn target() { let value = [1, 2]; }\n";
+        let target = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        for nonce in 0..TS_DOCUMENT_CACHE_MAX_ENTRIES {
+            let source = format!("fn evict_{nonce}() {{ let value = [{nonce}]; }}\n");
+            prepare_test_document(DiffSyntaxLanguage::Rust, &source);
+        }
+        assert!(
+            TS_DOCUMENT_CACHE.with(|cache| !cache.borrow().contains_key(target.cache_key)),
+            "the fixture must evict the target from this thread's small tree cache"
+        );
+
+        assert!(
+            prepared_syntax_document_is_available(target),
+            "a retained shared seed should rehydrate an otherwise stale handle"
+        );
+        let open = text.find('[').expect("opening bracket");
+        let pair = prepared_document_syntax_pair_at_display_offset(target, 0, open)
+            .expect("the rehydrated handle should support pair lookup");
+        assert_eq!(pair.open[0].display_range, open..open + 1);
+        let close = text.find(']').expect("closing bracket");
+        assert_eq!(pair.close[0].display_range, close..close + 1);
+    }
+
+    #[test]
     fn warm_shared_text_prepare_reuses_source_identity_without_rehashing() {
         let _lock = lock_global_counter_tests();
         reset_prepared_syntax_cache();
@@ -3538,6 +6175,7 @@ mod tests {
             &request.input.line_starts,
             0,
             request.input.line_starts.len(),
+            treesitter_text_hash(&request.input.text),
         );
         let incremental_tokens = (0..edited.len())
             .map(|line_ix| {
@@ -4317,6 +6955,79 @@ mod tests {
         );
     }
 
+    /// Subtracting a batch of ranges in one sweep must land exactly where
+    /// subtracting them one at a time did.
+    ///
+    /// The batched form exists because the one-at-a-time loop rebuilt the whole
+    /// line's token vector per intersecting cut, which is quadratic in the
+    /// injected tokens on a line -- but it is only worth having if it is the
+    /// same function. Cross-checked here against the single-range form on
+    /// shapes that stress the differences: cuts given out of order, cuts that
+    /// overlap each other, empty cuts, cuts that fall entirely outside the
+    /// line, and cuts that swallow a token whole.
+    #[test]
+    fn batched_line_token_subtraction_matches_one_cut_at_a_time() {
+        use super::prepared::{
+            subtract_relative_range_from_line_tokens, subtract_relative_ranges_from_line_tokens,
+        };
+
+        let kinds = [
+            SyntaxTokenKind::Comment,
+            SyntaxTokenKind::Keyword,
+            SyntaxTokenKind::String,
+        ];
+        // A deterministic spread of shapes rather than a handful of literals:
+        // the failure mode here is an off-by-one at a boundary, and boundaries
+        // are what vary.
+        let mut seed = 0x9E3779B9u32;
+        let mut next = move || {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            seed as usize
+        };
+
+        for case in 0..400 {
+            let token_count = 1 + next() % 6;
+            let mut line_tokens: Vec<SyntaxToken> = Vec::new();
+            let mut at = 0usize;
+            for _ in 0..token_count {
+                let gap = next() % 3;
+                let width = 1 + next() % 9;
+                let start = at + gap;
+                line_tokens.push(SyntaxToken {
+                    range: start..start + width,
+                    kind: kinds[next() % kinds.len()],
+                });
+                at = start + width;
+            }
+            let cut_count = next() % 8;
+            let cuts: Vec<std::ops::Range<usize>> = (0..cut_count)
+                .map(|_| {
+                    let start = next() % (at + 4);
+                    // Deliberately includes zero-width cuts, which both forms
+                    // must ignore rather than split on.
+                    let width = next() % 6;
+                    start..start + width
+                })
+                .collect();
+
+            let mut one_at_a_time = line_tokens.clone();
+            for cut in &cuts {
+                subtract_relative_range_from_line_tokens(&mut one_at_a_time, cut.clone());
+            }
+
+            let mut batched = line_tokens.clone();
+            let mut batch = cuts.clone();
+            subtract_relative_ranges_from_line_tokens(&mut batched, &mut batch);
+
+            assert_eq!(
+                batched, one_at_a_time,
+                "case {case}: tokens {line_tokens:?} minus {cuts:?}"
+            );
+        }
+    }
+
     #[test]
     fn vendored_rust_query_compiles() {
         let lang: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
@@ -4378,6 +7089,305 @@ mod tests {
     // the test above checks. Asserting `vue.abi >= html.abi` would instead turn
     // any routine `cargo update` that bumps an unrelated grammar into a red CI
     // while Vue still parses perfectly.
+
+    /// Every grammar in `vendor/` loads with the workspace's tree-sitter.
+    ///
+    /// The vendored crates depend on `tree-sitter-language`, not on
+    /// `tree-sitter`, so nothing in cargo's resolution notices when a grammar's
+    /// generated ABI drifts out of range -- it fails at `set_language`, at run
+    /// time, on whichever file the user happened to open.
+    #[test]
+    fn vendored_grammars_are_abi_compatible_with_workspace_tree_sitter() {
+        // (label, vendor directory, language) -- the directory is what the
+        // failure message tells the reader to regenerate, and two crates hold
+        // more than one grammar.
+        let vendored: &[(&str, &str, tree_sitter::Language)] = &[
+            ("asm", "tree-sitter-asm", tree_sitter_asm::LANGUAGE.into()),
+            (
+                "c-sharp",
+                "tree-sitter-c-sharp",
+                tree_sitter_c_sharp::LANGUAGE.into(),
+            ),
+            (
+                "caddyfile",
+                "tree-sitter-caddyfile",
+                tree_sitter_caddyfile::LANGUAGE.into(),
+            ),
+            ("cil", "tree-sitter-cil", tree_sitter_cil::LANGUAGE.into()),
+            (
+                "coffee",
+                "tree-sitter-coffee",
+                tree_sitter_coffee::LANGUAGE.into(),
+            ),
+            ("cpp", "tree-sitter-cpp", tree_sitter_cpp::LANGUAGE.into()),
+            (
+                "crontab",
+                "tree-sitter-crontab",
+                tree_sitter_crontab::LANGUAGE.into(),
+            ),
+            ("css", "tree-sitter-css", tree_sitter_css::LANGUAGE.into()),
+            ("csv", "tree-sitter-csv", tree_sitter_csv::LANGUAGE.into()),
+            ("cue", "tree-sitter-cue", tree_sitter_cue::LANGUAGE.into()),
+            (
+                "dhall",
+                "tree-sitter-dhall",
+                tree_sitter_dhall::LANGUAGE.into(),
+            ),
+            (
+                "ebnf",
+                "tree-sitter-ebnf",
+                tree_sitter_ebnf::LANGUAGE.into(),
+            ),
+            (
+                "fsharp",
+                "tree-sitter-fsharp",
+                tree_sitter_fsharp::LANGUAGE_FSHARP.into(),
+            ),
+            (
+                "gitignore",
+                "tree-sitter-gitignore",
+                tree_sitter_gitignore::LANGUAGE.into(),
+            ),
+            (
+                "haskell",
+                "tree-sitter-haskell",
+                tree_sitter_haskell::LANGUAGE.into(),
+            ),
+            (
+                "html",
+                "tree-sitter-html",
+                tree_sitter_html::LANGUAGE.into(),
+            ),
+            (
+                "julia",
+                "tree-sitter-julia",
+                tree_sitter_julia::LANGUAGE.into(),
+            ),
+            (
+                "just",
+                "tree-sitter-just",
+                tree_sitter_just::LANGUAGE.into(),
+            ),
+            ("kdl", "tree-sitter-kdl", tree_sitter_kdl::LANGUAGE.into()),
+            (
+                "kotlin-sg",
+                "tree-sitter-kotlin-sg",
+                tree_sitter_kotlin_sg::LANGUAGE.into(),
+            ),
+            (
+                "objc",
+                "tree-sitter-objc",
+                tree_sitter_objc::LANGUAGE.into(),
+            ),
+            (
+                "ocaml",
+                "tree-sitter-ocaml",
+                tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            ),
+            (
+                "ocaml (interface)",
+                "tree-sitter-ocaml",
+                tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into(),
+            ),
+            (
+                "php",
+                "tree-sitter-php",
+                tree_sitter_php::LANGUAGE_PHP.into(),
+            ),
+            (
+                "powershell",
+                "tree-sitter-powershell",
+                tree_sitter_powershell::LANGUAGE.into(),
+            ),
+            ("ron", "tree-sitter-ron", tree_sitter_ron::LANGUAGE.into()),
+            (
+                "ruby",
+                "tree-sitter-ruby",
+                tree_sitter_ruby::LANGUAGE.into(),
+            ),
+            (
+                "rust",
+                "tree-sitter-rust",
+                tree_sitter_rust::LANGUAGE.into(),
+            ),
+            (
+                "scala",
+                "tree-sitter-scala",
+                tree_sitter_scala::LANGUAGE.into(),
+            ),
+            (
+                "sequel",
+                "tree-sitter-sequel",
+                tree_sitter_sequel::LANGUAGE.into(),
+            ),
+            (
+                "spirv",
+                "tree-sitter-spirv",
+                tree_sitter_spirv::LANGUAGE.into(),
+            ),
+            (
+                "swift",
+                "tree-sitter-swift",
+                tree_sitter_swift::LANGUAGE.into(),
+            ),
+            (
+                "typescript",
+                "tree-sitter-typescript",
+                tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into(),
+            ),
+            (
+                "typescript (tsx)",
+                "tree-sitter-typescript",
+                tree_sitter_typescript::LANGUAGE_TSX.into(),
+            ),
+            ("vue", "tree-sitter-vue", tree_sitter_vue::LANGUAGE.into()),
+            ("wat", "tree-sitter-wat", tree_sitter_wat::LANGUAGE.into()),
+        ];
+        for (name, dir, language) in vendored {
+            let abi = language.abi_version();
+            assert!(
+                (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                    .contains(&abi),
+                "vendored {name} grammar ABI {abi} is outside the range this tree-sitter \
+                 supports ({}..={}); regenerate vendor/{dir} with a newer \
+                 tree-sitter-cli",
+                tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+                tree_sitter::LANGUAGE_VERSION,
+            );
+            let mut parser = tree_sitter::Parser::new();
+            parser
+                .set_language(language)
+                .unwrap_or_else(|err| panic!("vendored {name} grammar should load: {err}"));
+        }
+    }
+
+    /// The grammars vendored for the small-state retune stay retuned.
+    ///
+    /// `LARGE_STATE_COUNT` is how many parse states got a dense `ts_parse_table`
+    /// row -- `SYMBOL_COUNT` * 2 bytes each -- instead of a compact
+    /// `ts_small_parse_table` entry. It is the one number in a generated parser
+    /// that says whether the retune survived, and regenerating with a stock
+    /// tree-sitter-cli silently multiplies it: F# goes from 2,542 back to 9,268,
+    /// and the release binary grows by about 21 MB with no other symptom. Nothing
+    /// else in the build would notice, because the parse trees are identical
+    /// either way -- that is the whole point of the transformation.
+    ///
+    /// vendor/README.md has the patched-CLI recipe. If a bound here is exceeded
+    /// because the grammar itself was updated, re-measure and move the number;
+    /// if it is exceeded because the CLI was not patched, regenerate.
+    #[test]
+    fn vendored_grammars_keep_the_small_state_retune() {
+        // (grammar directory under vendor/, LARGE_STATE_COUNT as regenerated at
+        // TS_SMALL_STATE_THRESHOLD=128)
+        const RETUNED: &[(&str, usize)] = &[
+            ("tree-sitter-c-sharp", 1981),
+            ("tree-sitter-coffee", 42),
+            ("tree-sitter-cpp", 845),
+            ("tree-sitter-fsharp/fsharp", 2542),
+            ("tree-sitter-fsharp/fsharp_signature", 2),
+            ("tree-sitter-haskell", 117),
+            ("tree-sitter-julia", 4076),
+            ("tree-sitter-kotlin-sg", 1431),
+            ("tree-sitter-objc", 2356),
+            ("tree-sitter-ocaml/grammars/interface", 44),
+            ("tree-sitter-ocaml/grammars/ocaml", 59),
+            ("tree-sitter-ocaml/grammars/type", 46),
+            ("tree-sitter-php/php", 204),
+            ("tree-sitter-php/php_only", 185),
+            ("tree-sitter-powershell", 83),
+            ("tree-sitter-ruby", 741),
+            ("tree-sitter-rust", 67),
+            ("tree-sitter-scala", 504),
+            ("tree-sitter-sequel", 2),
+            ("tree-sitter-swift", 802),
+            ("tree-sitter-typescript/tsx", 176),
+            ("tree-sitter-typescript/typescript", 166),
+        ];
+
+        let vendor = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join("vendor");
+        for (grammar, expected_large_states) in RETUNED {
+            let parser = vendor.join(grammar).join("src").join("parser.c");
+            // The #defines are in the first few lines; these files run to tens of
+            // megabytes, so read a prefix rather than the whole thing.
+            let mut head = String::new();
+            {
+                use std::io::Read as _;
+                let file = std::fs::File::open(&parser)
+                    .unwrap_or_else(|err| panic!("{} should exist: {err}", parser.display()));
+                std::io::BufReader::new(file)
+                    .take(4096)
+                    .read_to_string(&mut head)
+                    .unwrap_or_else(|err| panic!("{} should be readable: {err}", parser.display()));
+            }
+
+            let large_states = head
+                .lines()
+                .find_map(|line| line.strip_prefix("#define LARGE_STATE_COUNT "))
+                .and_then(|count| count.trim().parse::<usize>().ok())
+                .unwrap_or_else(|| panic!("{} should define LARGE_STATE_COUNT", parser.display()));
+
+            assert!(
+                large_states <= *expected_large_states,
+                "vendor/{grammar} has LARGE_STATE_COUNT {large_states}, above the {expected_large_states} \
+                 it was vendored with -- it looks regenerated with a stock tree-sitter-cli. \
+                 See vendor/README.md; the fix is to regenerate with \
+                 TS_SMALL_STATE_THRESHOLD=128 against a patched tree-sitter-generate."
+            );
+        }
+    }
+
+    #[test]
+    fn vendored_asm_grammar_is_abi_compatible_with_workspace_tree_sitter() {
+        let asm: tree_sitter::Language = tree_sitter_asm::LANGUAGE.into();
+        let abi = asm.abi_version();
+        assert!(
+            (tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION..=tree_sitter::LANGUAGE_VERSION)
+                .contains(&abi),
+            "vendored asm grammar ABI {abi} is outside the range this tree-sitter supports \
+             ({}..={}); regenerate vendor/tree-sitter-asm with a newer tree-sitter-cli",
+            tree_sitter::MIN_COMPATIBLE_LANGUAGE_VERSION,
+            tree_sitter::LANGUAGE_VERSION,
+        );
+    }
+
+    /// The two reasons vendor/tree-sitter-asm exists rather than the crates.io
+    /// crate, asserted from this side of the boundary.
+    ///
+    /// `tree-sitter test` in that directory covers the same ground against the
+    /// grammar's own corpus; this covers it against the grammar GitComet
+    /// actually links, so a `cargo update` or a botched regeneration that
+    /// reverted either edit fails here rather than silently in a diff view.
+    #[test]
+    fn vendored_asm_grammar_parses_dotted_mnemonics_and_directives() {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_asm::LANGUAGE.into())
+            .expect("the vendored asm grammar should load");
+        let source = concat!(
+            ".section .text\n",
+            ".LBB0_1:\n",
+            "    .p2align 4\n",
+            "    b.eq .LBB0_1\n",
+            "main:\n",
+            "    ret\n",
+        );
+        let tree = parser.parse(source, None).expect("asm should parse");
+        assert!(
+            !tree.root_node().has_error(),
+            "upstream's `word` cannot span the dot in `b.eq`, and its `meta_ident` \
+             is lowercase-only, so both of those lines error without the vendored \
+             grammar's edits: {}",
+            tree.root_node().to_sexp(),
+        );
+        assert!(
+            tree.root_node().to_sexp().contains("mnemonic"),
+            "the `mnemonic` token is what makes `b.eq` one node: {}",
+            tree.root_node().to_sexp(),
+        );
+    }
 
     #[test]
     fn vendored_vue_grammar_parses_with_workspace_tree_sitter() {
@@ -4682,16 +7692,8 @@ mod tests {
     /// per-line containment check would pass on a reordered copy.
     #[test]
     fn vue_highlights_query_embeds_the_html_base_verbatim() {
-        fn rules(query: &str) -> Vec<&str> {
-            query
-                .lines()
-                .map(str::trim_end)
-                .filter(|line| !line.is_empty() && !line.trim_start().starts_with(';'))
-                .collect()
-        }
-
-        let html_rules = rules(HTML_HIGHLIGHTS_QUERY);
-        let vue_rules = rules(VUE_HIGHLIGHTS_QUERY);
+        let html_rules = query_rule_lines(HTML_HIGHLIGHTS_QUERY);
+        let vue_rules = query_rule_lines(VUE_HIGHLIGHTS_QUERY);
         assert!(
             !html_rules.is_empty(),
             "html_highlights.scm should not be comment-only"
@@ -4999,7 +8001,12 @@ mod tests {
     }
 
     fn capture_name_is_intentionally_ignored(name: &str) -> bool {
-        name == "none"
+        // PowerShell tags `(array_expression)` `@array`, which spans the whole
+        // `@(1, 2)` including the parens and the spaces between elements. There
+        // is no kind that span should take -- colouring it at all swallows the
+        // elements' own colours -- so it is left unmapped on purpose.
+        name == "array"
+            || name == "none"
             || name == "clean"
             || name == "assignvalue"
             || name == "embedded"
@@ -5083,7 +8090,7 @@ mod tests {
         );
         assert_capture_names_are_supported(
             tree_sitter_ruby::LANGUAGE.into(),
-            tree_sitter_ruby::HIGHLIGHTS_QUERY,
+            RUBY_HIGHLIGHTS_QUERY,
         );
         assert_capture_names_are_supported(
             tree_sitter_toml_ng::LANGUAGE.into(),
@@ -5101,9 +8108,43 @@ mod tests {
             tree_sitter_kotlin_sg::LANGUAGE.into(),
             tree_sitter_kotlin_sg::HIGHLIGHTS_QUERY,
         );
+        assert_capture_names_are_supported(tree_sitter_zig::LANGUAGE.into(), ZIG_HIGHLIGHTS_QUERY);
         assert_capture_names_are_supported(
-            tree_sitter_zig::LANGUAGE.into(),
-            tree_sitter_zig::HIGHLIGHTS_QUERY,
+            dekobon_tree_sitter_groovy::LANGUAGE.into(),
+            dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_clojure_orchard::LANGUAGE.into(),
+            CLOJURE_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_elixir::LANGUAGE.into(),
+            tree_sitter_elixir::HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_erlang::LANGUAGE.into(),
+            tree_sitter_erlang::HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_haskell::LANGUAGE.into(),
+            HASKELL_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_julia::LANGUAGE.into(),
+            JULIA_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_ocaml::LANGUAGE_OCAML.into(),
+            OCAML_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(
+            tree_sitter_solidity::LANGUAGE.into(),
+            SOLIDITY_HIGHLIGHTS_QUERY,
+        );
+        assert_capture_names_are_supported(tree_sitter_asm::LANGUAGE.into(), ASM_HIGHLIGHTS_QUERY);
+        assert_capture_names_are_supported(
+            tree_sitter_svelte_ng::LANGUAGE.into(),
+            SVELTE_HIGHLIGHTS_QUERY,
         );
         assert_capture_names_are_supported(
             tree_sitter_bicep::LANGUAGE.into(),
@@ -6139,6 +9180,61 @@ mod tests {
                 "select name from users",
                 SyntaxTokenKind::Keyword,
             ),
+            (
+                DiffSyntaxLanguage::Groovy,
+                "class Example { def run() { return 42 } }",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Clojure,
+                "(defn run [] 42)",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Elixir,
+                "defmodule Example do end",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Erlang,
+                "run(X) -> X + 1.",
+                SyntaxTokenKind::Function,
+            ),
+            (
+                DiffSyntaxLanguage::Haskell,
+                "run :: Int -> Int",
+                SyntaxTokenKind::Type,
+            ),
+            (
+                DiffSyntaxLanguage::Julia,
+                "function run(x) x + 1 end",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::OCaml,
+                "let run x = x + 1",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::OCamlInterface,
+                "val run : int -> int",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Solidity,
+                "contract Example { uint256 value; }",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                DiffSyntaxLanguage::Assembly,
+                "  mov eax, 1",
+                SyntaxTokenKind::Number,
+            ),
+            (
+                DiffSyntaxLanguage::Svelte,
+                "<button class=\"go\">go</button>",
+                SyntaxTokenKind::Tag,
+            ),
         ];
 
         for (language, text, expected_kind) in cases {
@@ -6773,6 +9869,7 @@ mod tests {
             DiffSyntaxLanguage::MarkdownInline,
             DiffSyntaxLanguage::Html,
             DiffSyntaxLanguage::Vue,
+            DiffSyntaxLanguage::Svelte,
             DiffSyntaxLanguage::Jinja,
             DiffSyntaxLanguage::Css,
             DiffSyntaxLanguage::Hcl,
@@ -6782,6 +9879,16 @@ mod tests {
             DiffSyntaxLanguage::Nix,
             DiffSyntaxLanguage::Kotlin,
             DiffSyntaxLanguage::Zig,
+            DiffSyntaxLanguage::Groovy,
+            DiffSyntaxLanguage::Clojure,
+            DiffSyntaxLanguage::Elixir,
+            DiffSyntaxLanguage::Erlang,
+            DiffSyntaxLanguage::Haskell,
+            DiffSyntaxLanguage::Julia,
+            DiffSyntaxLanguage::OCaml,
+            DiffSyntaxLanguage::OCamlInterface,
+            DiffSyntaxLanguage::Solidity,
+            DiffSyntaxLanguage::Assembly,
             DiffSyntaxLanguage::Rust,
             DiffSyntaxLanguage::Python,
             DiffSyntaxLanguage::JavaScript,
@@ -6815,6 +9922,32 @@ mod tests {
             DiffSyntaxLanguage::GitCommit,
             DiffSyntaxLanguage::Bash,
             DiffSyntaxLanguage::Xml,
+            DiffSyntaxLanguage::Cmake,
+            DiffSyntaxLanguage::Dockerfile,
+            DiffSyntaxLanguage::Ini,
+            DiffSyntaxLanguage::Llvm,
+            DiffSyntaxLanguage::Conf,
+            DiffSyntaxLanguage::Just,
+            DiffSyntaxLanguage::Caddyfile,
+            DiffSyntaxLanguage::Gitignore,
+            DiffSyntaxLanguage::Wat,
+            DiffSyntaxLanguage::Spirv,
+            DiffSyntaxLanguage::Crontab,
+            DiffSyntaxLanguage::Cil,
+            DiffSyntaxLanguage::JavaProperties,
+            DiffSyntaxLanguage::Jsonnet,
+            DiffSyntaxLanguage::Proto,
+            DiffSyntaxLanguage::Gleam,
+            DiffSyntaxLanguage::V,
+            DiffSyntaxLanguage::Pascal,
+            DiffSyntaxLanguage::Csv,
+            DiffSyntaxLanguage::Kdl,
+            DiffSyntaxLanguage::Ron,
+            DiffSyntaxLanguage::Cue,
+            DiffSyntaxLanguage::Ebnf,
+            DiffSyntaxLanguage::Dhall,
+            DiffSyntaxLanguage::CoffeeScript,
+            DiffSyntaxLanguage::Dotenv,
         ])
     }
 
@@ -6828,6 +9961,1642 @@ mod tests {
                 "tree_sitter_grammar and tree_sitter_highlight_spec disagree for {lang:?}: \
                  grammar={has_grammar}, spec={has_spec}"
             );
+        }
+    }
+
+    /// Every path the config and assembly batch claims, and the collisions it
+    /// had to avoid.
+    ///
+    /// Path resolution is the only thing between a wired grammar and a file that
+    /// still renders as plain text, and most of these resolve on the *file-name*
+    /// pass rather than the extension one -- `Dockerfile` and `CMakeLists.txt`
+    /// have no useful extension, and `Path::extension()` returns `None` for a
+    /// leading-dot name like `.editorconfig` -- so nothing else exercises them.
+    #[test]
+    fn config_language_paths_resolve() {
+        let cases: &[(&str, DiffSyntaxLanguage)] = &[
+            ("CMakeLists.txt", DiffSyntaxLanguage::Cmake),
+            ("cmake/FindFoo.cmake", DiffSyntaxLanguage::Cmake),
+            ("Dockerfile", DiffSyntaxLanguage::Dockerfile),
+            ("Containerfile", DiffSyntaxLanguage::Dockerfile),
+            ("docker/build.dockerfile", DiffSyntaxLanguage::Dockerfile),
+            (".editorconfig", DiffSyntaxLanguage::Ini),
+            ("gitconfig", DiffSyntaxLanguage::Ini),
+            (".gitconfig", DiffSyntaxLanguage::Ini),
+            ("etc/systemd/system/app.service", DiffSyntaxLanguage::Ini),
+            ("app.timer", DiffSyntaxLanguage::Ini),
+            ("app.socket", DiffSyntaxLanguage::Ini),
+            ("multi-user.target", DiffSyntaxLanguage::Ini),
+            ("share/applications/app.desktop", DiffSyntaxLanguage::Ini),
+            ("setup.cfg", DiffSyntaxLanguage::Ini),
+            ("etc/httpd/httpd.conf", DiffSyntaxLanguage::Conf),
+            ("etc/nginx/nginx.conf", DiffSyntaxLanguage::Conf),
+            ("my.cnf", DiffSyntaxLanguage::Conf),
+            ("build/hello.ll", DiffSyntaxLanguage::Llvm),
+            ("justfile", DiffSyntaxLanguage::Just),
+            (".justfile", DiffSyntaxLanguage::Just),
+            ("tasks.just", DiffSyntaxLanguage::Just),
+            ("Caddyfile", DiffSyntaxLanguage::Caddyfile),
+            (".gitignore", DiffSyntaxLanguage::Gitignore),
+            (".dockerignore", DiffSyntaxLanguage::Gitignore),
+            (".npmignore", DiffSyntaxLanguage::Gitignore),
+            ("crontab", DiffSyntaxLanguage::Crontab),
+            ("build/module.wat", DiffSyntaxLanguage::Wat),
+            ("build/module.wast", DiffSyntaxLanguage::Wat),
+            ("shaders/frag.spvasm", DiffSyntaxLanguage::Spirv),
+            ("bin/hello.il", DiffSyntaxLanguage::Cil),
+            ("src/app.gleam", DiffSyntaxLanguage::Gleam),
+            ("src/main.v", DiffSyntaxLanguage::V),
+            ("config.jsonnet", DiffSyntaxLanguage::Jsonnet),
+            ("lib/util.libsonnet", DiffSyntaxLanguage::Jsonnet),
+            ("application.properties", DiffSyntaxLanguage::JavaProperties),
+            ("api/schema.proto", DiffSyntaxLanguage::Proto),
+            ("src/unit.pas", DiffSyntaxLanguage::Pascal),
+            ("Project.dpr", DiffSyntaxLanguage::Pascal),
+            ("data/config.json5", DiffSyntaxLanguage::JavaScript),
+            ("deploy/example.env", DiffSyntaxLanguage::Dotenv),
+            (".env", DiffSyntaxLanguage::Dotenv),
+            ("data/records.csv", DiffSyntaxLanguage::Csv),
+            ("document.kdl", DiffSyntaxLanguage::Kdl),
+            ("config.ron", DiffSyntaxLanguage::Ron),
+            ("schema.cue", DiffSyntaxLanguage::Cue),
+            ("grammars/expression.ebnf", DiffSyntaxLanguage::Ebnf),
+            ("lib/Demo.pm", DiffSyntaxLanguage::Perl),
+            ("bin/script.pl", DiffSyntaxLanguage::Perl),
+            ("config.dhall", DiffSyntaxLanguage::Dhall),
+            ("src/app.coffee", DiffSyntaxLanguage::CoffeeScript),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(*expected),
+                "{path} should resolve to {expected:?}"
+            );
+        }
+
+        // Collisions this batch had to step around. `.targets` and `.props` are
+        // MSBuild XML and predate `.target`; `.md` is not a systemd `.mount`.
+        let unchanged: &[(&str, DiffSyntaxLanguage)] = &[
+            ("Directory.Build.targets", DiffSyntaxLanguage::Xml),
+            ("Directory.Build.props", DiffSyntaxLanguage::Xml),
+            ("Makefile", DiffSyntaxLanguage::Makefile),
+            ("main.s", DiffSyntaxLanguage::Assembly),
+        ];
+        for (path, expected) in unchanged {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(*expected),
+                "{path} should still resolve to {expected:?}"
+            );
+        }
+    }
+
+    /// The three `#lua-match?` patterns in tree-sitter-zig's own query, which the
+    /// engine never evaluates, so each applied to everything it was meant to
+    /// filter.
+    ///
+    /// Every assertion here failed before queries/zig_highlights.scm was vendored
+    /// in place of `tree_sitter_zig::HIGHLIGHTS_QUERY`. The identifier pair is why
+    /// a supplement was not enough: both rules captured *all* identifiers, and
+    /// `@constant` came second, so every name in every Zig file was a constant.
+    #[test]
+    fn zig_identifier_and_comment_predicates_are_actually_evaluated() {
+        let text = concat!(
+            "// an ordinary note\n",
+            "/// a doc comment\n",
+            "const lowercase_name = 1;\n",
+            "const MAX_RETRIES = 3;\n",
+            "const StructName = struct {};\n",
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Zig, text);
+        let kinds = |line_ix: usize, needle: &str| -> Vec<SyntaxTokenKind> {
+            let line = text.lines().nth(line_ix).expect("line");
+            let at = line.find(needle).expect("needle");
+            syntax_tokens_for_prepared_document_line(document, line_ix)
+                .map(|tokens| {
+                    tokens
+                        .iter()
+                        .filter(|token| token.range.start <= at && at < token.range.end)
+                        .map(|token| token.kind)
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+
+        assert_eq!(
+            kinds(2, "lowercase_name"),
+            vec![SyntaxTokenKind::Variable],
+            "a lower-case binding is a variable, not a constant"
+        );
+        assert_eq!(
+            kinds(3, "MAX_RETRIES"),
+            vec![SyntaxTokenKind::Constant],
+            "SCREAMING_CASE is what the constant rule is actually for"
+        );
+        assert_eq!(
+            kinds(4, "StructName"),
+            vec![SyntaxTokenKind::Type],
+            "CamelCase is what the type rule is actually for"
+        );
+        assert_eq!(
+            kinds(0, "an ordinary"),
+            vec![SyntaxTokenKind::Comment],
+            "a `//` comment is not documentation"
+        );
+        assert_eq!(
+            kinds(1, "a doc"),
+            vec![SyntaxTokenKind::CommentDoc],
+            "a `///` comment is, which upstream's `^//!` missed even when evaluated"
+        );
+    }
+
+    /// `.conf` has no grammar, so this is the whole of what it can say.
+    ///
+    /// Each assertion here is a bug that was in the first cut: `;` read as a
+    /// comment and greyed the tail of every nginx statement, and `stream` in the
+    /// keyword list matched inside `application/octet-stream`.
+    #[test]
+    fn conf_heuristic_reads_directives_without_breaking_nginx() {
+        let tokens = |line: &str| {
+            syntax_tokens_for_line(line, DiffSyntaxLanguage::Conf, DiffSyntaxMode::Auto).to_vec()
+        };
+
+        let statement = tokens("    worker_connections  1024;");
+        assert!(
+            statement
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Property && t.range == (4..22)),
+            "the first word of a line names the setting: {statement:?}"
+        );
+        assert!(
+            statement.iter().all(|t| t.kind != SyntaxTokenKind::Comment),
+            "a `;` ending an nginx statement is not a comment: {statement:?}"
+        );
+
+        let leading = tokens("; an INI-dialect comment");
+        assert!(
+            leading
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Comment && t.range.start == 0),
+            "a `;` that opens the line is: {leading:?}"
+        );
+
+        let mime = tokens("    default_type  application/octet-stream;");
+        assert!(
+            mime.iter().all(|t| t.kind != SyntaxTokenKind::Keyword),
+            "`stream` inside a MIME type is not a keyword: {mime:?}"
+        );
+
+        let section = tokens("</VirtualHost>");
+        assert!(
+            section
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Tag && t.range == (0..14)),
+            "an Apache closing tag is the whole line, and nothing else colours it: {section:?}"
+        );
+    }
+
+    // ---- Batch: Groovy, Clojure, Elixir, Erlang, Haskell, Julia, OCaml, ------
+    // ---- Solidity, Assembly, Svelte ------------------------------------------
+
+    /// Every extension and fence alias the batch claims, plus the collisions the
+    /// mapping had to avoid. Path resolution is the only thing standing between a
+    /// wired-up grammar and a file that still renders as plain text, and nothing
+    /// else in the suite exercises these arms.
+    #[test]
+    fn batch_language_paths_and_fences_resolve() {
+        let cases: &[(&str, DiffSyntaxLanguage)] = &[
+            ("src/Demo.groovy", DiffSyntaxLanguage::Groovy),
+            ("build.gradle", DiffSyntaxLanguage::Groovy),
+            ("Jenkinsfile", DiffSyntaxLanguage::Groovy),
+            ("src/demo/core.clj", DiffSyntaxLanguage::Clojure),
+            ("src/demo/core.cljs", DiffSyntaxLanguage::Clojure),
+            ("deps.edn", DiffSyntaxLanguage::Clojure),
+            ("lib/demo/worker.ex", DiffSyntaxLanguage::Elixir),
+            ("test/demo_test.exs", DiffSyntaxLanguage::Elixir),
+            ("src/demo.erl", DiffSyntaxLanguage::Erlang),
+            ("include/demo.hrl", DiffSyntaxLanguage::Erlang),
+            ("rebar.config", DiffSyntaxLanguage::Erlang),
+            ("src/Demo/Worker.hs", DiffSyntaxLanguage::Haskell),
+            ("src/demo.jl", DiffSyntaxLanguage::Julia),
+            ("lib/demo.ml", DiffSyntaxLanguage::OCaml),
+            ("lib/demo.mli", DiffSyntaxLanguage::OCamlInterface),
+            ("contracts/Demo.sol", DiffSyntaxLanguage::Solidity),
+            ("src/boot.asm", DiffSyntaxLanguage::Assembly),
+            ("src/memcpy.s", DiffSyntaxLanguage::Assembly),
+            // `.S` is preprocessed assembly; the lowercasing in
+            // `diff_syntax_language_for_path` is what makes it land here.
+            ("src/entry.S", DiffSyntaxLanguage::Assembly),
+            ("src/App.svelte", DiffSyntaxLanguage::Svelte),
+        ];
+        for (path, expected) in cases {
+            assert_eq!(
+                diff_syntax_language_for_path(path),
+                Some(*expected),
+                "{path} should resolve to {expected:?}"
+            );
+        }
+
+        for (fence, expected) in [
+            ("groovy", DiffSyntaxLanguage::Groovy),
+            ("clojure", DiffSyntaxLanguage::Clojure),
+            ("elixir", DiffSyntaxLanguage::Elixir),
+            ("erlang", DiffSyntaxLanguage::Erlang),
+            ("haskell", DiffSyntaxLanguage::Haskell),
+            ("julia", DiffSyntaxLanguage::Julia),
+            ("ocaml", DiffSyntaxLanguage::OCaml),
+            ("solidity", DiffSyntaxLanguage::Solidity),
+            ("asm", DiffSyntaxLanguage::Assembly),
+            ("svelte", DiffSyntaxLanguage::Svelte),
+        ] {
+            assert_eq!(
+                diff_syntax_language_for_code_fence_info(fence),
+                Some(expected),
+                "```{fence} should resolve to {expected:?}"
+            );
+        }
+    }
+
+    /// The three collisions the batch had to route around. Each one is a silent
+    /// regression if the identifier table is ever reordered: the file still
+    /// highlights, just as the wrong language.
+    #[test]
+    fn batch_language_extensions_do_not_steal_existing_ones() {
+        // `.gradle.kts` is Kotlin. The extension pass sees `kts` and never reaches
+        // the `gradle` arm.
+        assert_eq!(
+            diff_syntax_language_for_path("build.gradle.kts"),
+            Some(DiffSyntaxLanguage::Kotlin),
+        );
+
+        // `.m` stays Objective-C: the new `.ml` arm is one character away from it,
+        // and an extension table is edited by hand.
+        assert_eq!(
+            diff_syntax_language_for_path("src/Demo.m"),
+            Some(DiffSyntaxLanguage::ObjectiveC),
+        );
+
+        // `.ml` is OCaml, and must not be confused with the `.m` above.
+        assert_eq!(
+            diff_syntax_language_for_path("lib/demo.ml"),
+            Some(DiffSyntaxLanguage::OCaml),
+        );
+    }
+
+    // ---- Elixir ---------------------------------------------------------------
+
+    const ELIXIR_FIXTURE: &[&str] = &[
+        /*  0 */ "defmodule Demo.Worker do",
+        /*  1 */ "  @moduledoc \"Runs jobs.\"",
+        /*  2 */ "",
+        /*  3 */ "  def run(%{id: id} = job) when is_integer(id) do",
+        /*  4 */ "    :ok",
+        /*  5 */ "  end",
+        /*  6 */ "end",
+    ];
+
+    #[test]
+    fn prepared_elixir_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Elixir, &ELIXIR_FIXTURE.join("\n"));
+
+        for (line_ix, fragment, expected) in [
+            (0usize, "defmodule", SyntaxTokenKind::Keyword),
+            (0, "Demo.Worker", SyntaxTokenKind::Namespace),
+            (3, "when", SyntaxTokenKind::Keyword),
+            (5, "end", SyntaxTokenKind::Keyword),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, ELIXIR_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+
+        // Atoms are the shape that separates Elixir from a curly-brace language.
+        let atom = token_kinds_for_line_fragment(doc, 4, ELIXIR_FIXTURE[4], ":ok");
+        assert!(
+            atom.contains(&SyntaxTokenKind::StringSpecial),
+            "`:ok` is an atom, not an identifier: {atom:?}"
+        );
+    }
+
+    // ---- Erlang ---------------------------------------------------------------
+
+    const ERLANG_FIXTURE: &[&str] = &[
+        /*  0 */ "-module(demo).",
+        /*  1 */ "-export([run/1]).",
+        /*  2 */ "",
+        /*  3 */ "%% Adds one.",
+        /*  4 */ "run(X) when is_integer(X) ->",
+        /*  5 */ "    Y = X + 1,",
+        /*  6 */ "    {ok, Y}.",
+    ];
+
+    #[test]
+    fn prepared_erlang_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Erlang, &ERLANG_FIXTURE.join("\n"));
+
+        let directive = token_kinds_for_line_fragment(doc, 0, ERLANG_FIXTURE[0], "module");
+        assert!(
+            directive.contains(&SyntaxTokenKind::Keyword),
+            "`-module` is a directive: {directive:?}"
+        );
+
+        // `%` is Erlang's line comment and nothing else in the tree uses it.
+        let comment = token_kinds_for_line_fragment(doc, 3, ERLANG_FIXTURE[3], "Adds one");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "`%%` starts an Erlang comment: {comment:?}"
+        );
+
+        let guard = token_kinds_for_line_fragment(doc, 4, ERLANG_FIXTURE[4], "when");
+        assert!(
+            guard.contains(&SyntaxTokenKind::Keyword),
+            "`when` introduces a guard: {guard:?}"
+        );
+
+        let number = token_kinds_for_line_fragment(doc, 5, ERLANG_FIXTURE[5], "1");
+        assert!(
+            number.contains(&SyntaxTokenKind::Number),
+            "`1` is a number: {number:?}"
+        );
+    }
+
+    // ---- Haskell --------------------------------------------------------------
+
+    const HASKELL_FIXTURE: &[&str] = &[
+        /*  0 */ "module Demo.Worker (run) where",
+        /*  1 */ "",
+        /*  2 */ "import Data.List (foldl')",
+        /*  3 */ "",
+        /*  4 */ "-- | Adds one.",
+        /*  5 */ "run :: Int -> Int",
+        /*  6 */ "run x = foldl' (+) 0 [x, 1]",
+    ];
+
+    #[test]
+    fn prepared_haskell_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Haskell, &HASKELL_FIXTURE.join("\n"));
+
+        for (line_ix, fragment, expected) in [
+            (0usize, "module", SyntaxTokenKind::Keyword),
+            (0, "where", SyntaxTokenKind::Keyword),
+            (2, "import", SyntaxTokenKind::Keyword),
+            (5, "Int", SyntaxTokenKind::Type),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, HASKELL_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+
+        // Haddock's `-- |` is a documentation comment, not a plain one.
+        let haddock = token_kinds_for_line_fragment(doc, 4, HASKELL_FIXTURE[4], "Adds one");
+        assert!(
+            haddock.contains(&SyntaxTokenKind::CommentDoc),
+            "`-- |` opens a Haddock comment: {haddock:?}"
+        );
+    }
+
+    // ---- Julia ----------------------------------------------------------------
+
+    const JULIA_FIXTURE: &[&str] = &[
+        /*  0 */ "module Demo",
+        /*  1 */ "",
+        /*  2 */ "# Adds one.",
+        /*  3 */ "function run(x::Int)::Int",
+        /*  4 */ "    y = x + 1",
+        /*  5 */ "    return y",
+        /*  6 */ "end",
+        /*  7 */ "",
+        /*  8 */ "end",
+    ];
+
+    #[test]
+    fn prepared_julia_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Julia, &JULIA_FIXTURE.join("\n"));
+
+        let comment = token_kinds_for_line_fragment(doc, 2, JULIA_FIXTURE[2], "Adds one");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "`#` is Julia's line comment: {comment:?}"
+        );
+
+        for (line_ix, fragment, expected) in [
+            (3usize, "function", SyntaxTokenKind::Keyword),
+            (3, "Int", SyntaxTokenKind::TypeBuiltin),
+            (5, "return", SyntaxTokenKind::Keyword),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, JULIA_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+    }
+
+    // ---- OCaml ----------------------------------------------------------------
+
+    const OCAML_FIXTURE: &[&str] = &[
+        /*  0 */ "(* Adds one. *)",
+        /*  1 */ "let run (x : int) : int =",
+        /*  2 */ "  let y = x + 1 in",
+        /*  3 */ "  y",
+    ];
+
+    const OCAML_INTERFACE_FIXTURE: &[&str] = &[
+        /*  0 */ "(* Adds one. *)",
+        /*  1 */ "val run : int -> int",
+        /*  2 */ "",
+        /*  3 */ "type t = { id : int }",
+    ];
+
+    /// Both halves of the `.ml`/`.mli` pair, because they are separate grammars
+    /// sharing one query file. A change that compiles against the implementation
+    /// grammar can still fail against the interface one -- that is exactly why
+    /// `(shebang)` had to come out of the vendored copy.
+    #[test]
+    fn prepared_ocaml_documents_highlight_both_halves_of_the_pair() {
+        let ml = prepare_test_document(DiffSyntaxLanguage::OCaml, &OCAML_FIXTURE.join("\n"));
+
+        let comment = token_kinds_for_line_fragment(ml, 0, OCAML_FIXTURE[0], "Adds one");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "`(* *)` is OCaml's only comment form: {comment:?}"
+        );
+        for (line_ix, fragment, expected) in [
+            (1usize, "let", SyntaxTokenKind::Keyword),
+            (1, "int", SyntaxTokenKind::TypeBuiltin),
+            (2, "in", SyntaxTokenKind::Keyword),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(ml, line_ix, OCAML_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?} in a .ml: {kinds:?}"
+            );
+        }
+
+        let mli = prepare_test_document(
+            DiffSyntaxLanguage::OCamlInterface,
+            &OCAML_INTERFACE_FIXTURE.join("\n"),
+        );
+        for (line_ix, fragment, expected) in [
+            (1usize, "val", SyntaxTokenKind::Keyword),
+            (3, "type", SyntaxTokenKind::Keyword),
+            (3, "id", SyntaxTokenKind::Property),
+            (3, "int", SyntaxTokenKind::TypeBuiltin),
+        ] {
+            let kinds = token_kinds_for_line_fragment(
+                mli,
+                line_ix,
+                OCAML_INTERFACE_FIXTURE[line_ix],
+                fragment,
+            );
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?} in a .mli: {kinds:?}"
+            );
+        }
+    }
+
+    /// The reason queries/ocaml_highlights.scm exists rather than a reference to
+    /// `tree_sitter_ocaml::HIGHLIGHTS_QUERY`: upstream names `(shebang)`, which the
+    /// interface grammar has no rule for, and one unknown node type fails the whole
+    /// query rather than the pattern that names it.
+    #[test]
+    fn ocaml_query_serves_both_grammars_and_upstream_does_not() {
+        for language in [
+            tree_sitter_ocaml::LANGUAGE_OCAML,
+            tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE,
+        ] {
+            tree_sitter::Query::new(&language.into(), OCAML_HIGHLIGHTS_QUERY)
+                .expect("the vendored query should compile against both OCaml grammars");
+        }
+
+        assert!(
+            tree_sitter::Query::new(
+                &tree_sitter_ocaml::LANGUAGE_OCAML_INTERFACE.into(),
+                tree_sitter_ocaml::HIGHLIGHTS_QUERY,
+            )
+            .is_err(),
+            "upstream's query now compiles against the interface grammar -- drop the \
+             vendored copy and use `tree_sitter_ocaml::HIGHLIGHTS_QUERY` for both."
+        );
+    }
+
+    // ---- Groovy ---------------------------------------------------------------
+
+    const GROOVY_FIXTURE: &[&str] = &[
+        /*  0 */ "// Build config.",
+        /*  1 */ "plugins {",
+        /*  2 */ "    id 'java'",
+        /*  3 */ "}",
+        /*  4 */ "",
+        /*  5 */ "class Demo {",
+        /*  6 */ "    static int run(int x) {",
+        /*  7 */ "        return x + 1",
+        /*  8 */ "    }",
+        /*  9 */ "}",
+    ];
+
+    #[test]
+    fn prepared_groovy_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Groovy, &GROOVY_FIXTURE.join("\n"));
+
+        let comment = token_kinds_for_line_fragment(doc, 0, GROOVY_FIXTURE[0], "Build config");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "`//` is a Groovy line comment: {comment:?}"
+        );
+
+        // Single quotes are a plain string in Groovy, unlike the Haskell/OCaml/
+        // Clojure arms added alongside it.
+        let string = token_kinds_for_line_fragment(doc, 2, GROOVY_FIXTURE[2], "'java'");
+        assert!(
+            string.contains(&SyntaxTokenKind::String),
+            "`'java'` is a string: {string:?}"
+        );
+
+        for (line_ix, fragment, expected) in [
+            (5usize, "class", SyntaxTokenKind::Keyword),
+            (6, "static", SyntaxTokenKind::Keyword),
+            (6, "int", SyntaxTokenKind::TypeBuiltin),
+            (7, "return", SyntaxTokenKind::KeywordControl),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, GROOVY_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+    }
+
+    // ---- Clojure --------------------------------------------------------------
+
+    const CLOJURE_FIXTURE: &[&str] = &[
+        /*  0 */ "(ns demo.worker)",
+        /*  1 */ "",
+        /*  2 */ ";; Adds one.",
+        /*  3 */ "(defn run [x]",
+        /*  4 */ "  (let [y (+ x 1)]",
+        /*  5 */ "    {:id y :name \"demo\"}))",
+    ];
+
+    #[test]
+    fn prepared_clojure_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Clojure, &CLOJURE_FIXTURE.join("\n"));
+
+        let comment = token_kinds_for_line_fragment(doc, 2, CLOJURE_FIXTURE[2], "Adds one");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "`;;` is Clojure's line comment: {comment:?}"
+        );
+
+        // The head-position rules in queries/clojure_highlights.scm. Upstream's
+        // six-pattern query has none of this: without them a Clojure file is
+        // literals and nothing else.
+        for (line_ix, fragment, expected) in [
+            (0usize, "ns", SyntaxTokenKind::Keyword),
+            (3, "defn", SyntaxTokenKind::Keyword),
+            (3, "run", SyntaxTokenKind::Function),
+            (4, "let", SyntaxTokenKind::Keyword),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, CLOJURE_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+
+        let keyword_literal = token_kinds_for_line_fragment(doc, 5, CLOJURE_FIXTURE[5], ":id");
+        assert!(
+            keyword_literal.contains(&SyntaxTokenKind::Constant),
+            "`:id` is a keyword literal: {keyword_literal:?}"
+        );
+        let string = token_kinds_for_line_fragment(doc, 5, CLOJURE_FIXTURE[5], "\"demo\"");
+        assert!(
+            string.contains(&SyntaxTokenKind::String),
+            "`\"demo\"` is a string: {string:?}"
+        );
+    }
+
+    /// The quoting literals span the whole quoted form, so capturing the *node*
+    /// paints `'(alpha beta)` end to end. Upstream captures the one-character
+    /// marker instead. Capturing the node is cheap to reintroduce and invisible
+    /// without a test.
+    #[test]
+    fn clojure_quoted_form_paints_only_its_marker() {
+        let line = "(def syms '(alpha beta))";
+        let doc = prepare_test_document(DiffSyntaxLanguage::Clojure, line);
+
+        let marker = token_kinds_for_line_fragment(doc, 0, line, "'");
+        assert!(
+            marker.contains(&SyntaxTokenKind::Operator),
+            "the quote marker should be an operator: {marker:?}"
+        );
+
+        let quoted = token_kinds_for_line_fragment(doc, 0, line, "alpha");
+        assert!(
+            !quoted.contains(&SyntaxTokenKind::Operator)
+                && !quoted.contains(&SyntaxTokenKind::PunctuationSpecial),
+            "the quoted form itself should not take the marker's colour: {quoted:?}"
+        );
+    }
+
+    /// queries/clojure_highlights.scm opens with a verbatim copy of the upstream
+    /// query and adds to it. A grammar bump that changes upstream leaves the copy
+    /// stale and silently diverging, which is the one failure mode a compile check
+    /// cannot see.
+    #[test]
+    fn clojure_highlights_query_embeds_the_upstream_base_verbatim() {
+        let upstream = query_rule_lines(tree_sitter_clojure_orchard::HIGHLIGHTS_QUERY);
+        let vendored = query_rule_lines(CLOJURE_HIGHLIGHTS_QUERY);
+        assert!(
+            !upstream.is_empty(),
+            "the upstream Clojure query should not be comment-only"
+        );
+        assert!(
+            vendored
+                .windows(upstream.len())
+                .any(|window| window == upstream.as_slice()),
+            "clojure_highlights.scm must contain tree_sitter_clojure_orchard::HIGHLIGHTS_QUERY \
+             as a contiguous, in-order block. Mirror the upstream change into the \
+             `--- upstream ---` section.\nexpected block:\n{upstream:#?}\nvendored:\n{vendored:#?}"
+        );
+    }
+
+    // ---- Solidity -------------------------------------------------------------
+
+    const SOLIDITY_FIXTURE: &[&str] = &[
+        /*  0 */ "// SPDX-License-Identifier: MIT",
+        /*  1 */ "pragma solidity ^0.8.0;",
+        /*  2 */ "",
+        /*  3 */ "contract Demo {",
+        /*  4 */ "    uint256 public total;",
+        /*  5 */ "",
+        /*  6 */ "    function add(uint256 x) public returns (uint256) {",
+        /*  7 */ "        total += x;",
+        /*  8 */ "        return total;",
+        /*  9 */ "    }",
+        /* 10 */ "}",
+    ];
+
+    #[test]
+    fn prepared_solidity_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Solidity, &SOLIDITY_FIXTURE.join("\n"));
+
+        let comment = token_kinds_for_line_fragment(doc, 0, SOLIDITY_FIXTURE[0], "SPDX");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "the SPDX header is a comment: {comment:?}"
+        );
+
+        for (line_ix, fragment, expected) in [
+            (1usize, "pragma", SyntaxTokenKind::Keyword),
+            (3, "contract", SyntaxTokenKind::Keyword),
+            (4, "uint256", SyntaxTokenKind::Type),
+            (6, "function", SyntaxTokenKind::Keyword),
+            (6, "returns", SyntaxTokenKind::Keyword),
+            (8, "return", SyntaxTokenKind::Keyword),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, SOLIDITY_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+    }
+
+    /// If a grammar bump ships a query that compiles as-is, the vendored copy and
+    /// this test can both go.
+    #[test]
+    fn solidity_upstream_query_still_needs_the_vendored_fix() {
+        assert!(
+            tree_sitter::Query::new(
+                &tree_sitter_solidity::LANGUAGE.into(),
+                tree_sitter_solidity::HIGHLIGHT_QUERY,
+            )
+            .is_err(),
+            "tree_sitter_solidity::HIGHLIGHT_QUERY now compiles -- drop \
+             queries/solidity_highlights.scm and use the crate constant."
+        );
+    }
+
+    // ---- Assembly -------------------------------------------------------------
+
+    const ASSEMBLY_FIXTURE: &[&str] = &[
+        /*  0 */ "section .text",
+        /*  1 */ "global run",
+        /*  2 */ "run:",
+        /*  3 */ "    mov eax, 1 ; seed",
+        /*  4 */ "    add eax, edi",
+        /*  5 */ "    ret",
+    ];
+
+    #[test]
+    fn prepared_assembly_document_highlights_core_syntax() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Assembly, &ASSEMBLY_FIXTURE.join("\n"));
+
+        for (line_ix, fragment, expected) in [
+            (2usize, "run", SyntaxTokenKind::Label),
+            (3, "mov", SyntaxTokenKind::Function),
+            (3, "eax", SyntaxTokenKind::VariableBuiltin),
+            (3, "1", SyntaxTokenKind::Number),
+            (5, "ret", SyntaxTokenKind::Function),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, ASSEMBLY_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+
+        // Trailing comments are the only comment position this grammar accepts;
+        // see `assembly_standalone_comment_lines_fall_back_to_the_heuristic`.
+        let comment = token_kinds_for_line_fragment(doc, 3, ASSEMBLY_FIXTURE[3], "; seed");
+        assert!(
+            comment.contains(&SyntaxTokenKind::Comment),
+            "a trailing `;` comment should be greyed out: {comment:?}"
+        );
+    }
+
+    /// A documented limitation, not a bug in the wiring: tree-sitter-asm only
+    /// admits a comment after an instruction, so a comment on its own line -- which
+    /// is most comments in real assembly -- puts the tree into error recovery.
+    ///
+    /// Recovery is survivable (the instructions around it still highlight) and the
+    /// heuristic path, which this repo also runs for short lines and oversized
+    /// diffs, gets it right. The test pins both halves so a grammar bump that fixes
+    /// the parse shows up here rather than going unnoticed.
+    #[test]
+    fn assembly_standalone_comment_lines_fall_back_to_the_heuristic() {
+        let source = "; set the return value\n    mov eax, 1\n    ret\n";
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_asm::LANGUAGE.into())
+            .expect("asm grammar should load");
+        let tree = parser.parse(source, None).expect("asm should parse");
+        assert!(
+            tree.root_node().has_error(),
+            "tree-sitter-asm now parses a standalone comment line -- update this test and \
+             the note on the Assembly arm of heuristic_comment_config"
+        );
+
+        // The instructions after the bad line still highlight.
+        let doc = prepare_test_document(DiffSyntaxLanguage::Assembly, source);
+        let kinds = token_kinds_for_line_fragment(doc, 1, "    mov eax, 1", "mov");
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Function),
+            "error recovery should leave the following instructions intact: {kinds:?}"
+        );
+
+        // And the heuristic, which does not care what the grammar thinks, greys the
+        // whole comment line.
+        let heuristic = heuristic_tokens("; set the return value", DiffSyntaxLanguage::Assembly);
+        assert!(
+            heuristic
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "`;` is the heuristic's assembly line comment: {heuristic:?}"
+        );
+    }
+
+    /// The identifier scanner starts on `_` or a letter, never `.`, so a GAS
+    /// directive reaches `is_keyword` as its bare tail, so a table spelling its
+    /// entries `".text"` and `".globl"` looks complete and matches nothing.
+    /// Nothing else in the suite would notice.
+    #[test]
+    fn assembly_gas_dot_directives_reach_the_keyword_table() {
+        for (line, expected) in [
+            ("    .text", "text"),
+            ("    .data", "data"),
+            ("    .bss", "bss"),
+            ("    .globl main", "globl"),
+            ("    .global main", "global"),
+            ("    .align 4", "align"),
+            ("    .long 1", "long"),
+            ("    .quad 2", "quad"),
+            ("    .short 3", "short"),
+            ("    .byte 1", "byte"),
+            ("    .word 1", "word"),
+            ("    .ascii \"hi\"", "ascii"),
+            ("    .section .rodata", "section"),
+            // The NASM/MASM spellings, which carry no dot to begin with.
+            ("section .text", "section"),
+            ("global main", "global"),
+            ("extern printf", "extern"),
+        ] {
+            let found = heuristic_keywords(line, DiffSyntaxLanguage::Assembly);
+            assert!(
+                found.contains(&expected),
+                "{line:?} should yield the `{expected}` directive keyword: {found:?}"
+            );
+        }
+    }
+
+    /// `#` is an ARM immediate (`mov r0, #1`), not a comment. Giving the Assembly
+    /// arm `hash_comment: true` would grey out the operand of every such
+    /// instruction, which is why it shares nothing with the Python/Ruby arm.
+    #[test]
+    fn assembly_hash_immediate_is_not_a_comment() {
+        let line = "    mov r0, #1";
+        let tokens = heuristic_tokens(line, DiffSyntaxLanguage::Assembly);
+        assert!(
+            !tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "an ARM immediate was greyed out as a comment: {tokens:?}"
+        );
+    }
+
+    // ---- Svelte ---------------------------------------------------------------
+
+    const SVELTE_FIXTURE: &[&str] = &[
+        /*  0 */ "<script lang=\"ts\">",
+        /*  1 */ "  let count: number = 0;",
+        /*  2 */ "</script>",
+        /*  3 */ "",
+        /*  4 */ "{#if count > 0}",
+        /*  5 */ "  <button class=\"btn\">{count}</button>",
+        /*  6 */ "{:else}",
+        /*  7 */ "  <p>none</p>",
+        /*  8 */ "{/if}",
+        /*  9 */ "",
+        /* 10 */ "<style>",
+        /* 11 */ "  .btn { color: red; }",
+        /* 12 */ "</style>",
+    ];
+
+    #[test]
+    fn prepared_svelte_document_highlights_markup_and_block_tags() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, &SVELTE_FIXTURE.join("\n"));
+
+        // The html base embedded in queries/svelte_highlights.scm. Without it the
+        // upstream query colours the block markers and leaves the markup plain.
+        for (line_ix, fragment, expected) in [
+            (0usize, "script", SyntaxTokenKind::Tag),
+            (0, "lang", SyntaxTokenKind::Attribute),
+            (5, "button", SyntaxTokenKind::Tag),
+            (5, "class", SyntaxTokenKind::Attribute),
+            (5, "btn", SyntaxTokenKind::String),
+        ] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, SVELTE_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&expected),
+                "`{fragment}` should be {expected:?}: {kinds:?}"
+            );
+        }
+
+        // The svelte half: `{#if}` / `{:else}` / `{/if}`.
+        for (line_ix, fragment) in [(4usize, "if"), (6, "else"), (8, "if")] {
+            let kinds =
+                token_kinds_for_line_fragment(doc, line_ix, SVELTE_FIXTURE[line_ix], fragment);
+            assert!(
+                kinds.contains(&SyntaxTokenKind::Keyword),
+                "the `{{{fragment}}}` block marker should be a keyword: {kinds:?}"
+            );
+        }
+    }
+
+    /// The script and style bodies are the bulk of a `.svelte` file and neither is
+    /// reachable from the highlights query -- they arrive as injections or not at
+    /// all. The `lang="ts"` veto is what keeps the default javascript rule from
+    /// firing over the same `raw_text`; see the note in svelte_injections.scm.
+    #[test]
+    fn svelte_script_and_style_blocks_inject_their_languages() {
+        let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, &SVELTE_FIXTURE.join("\n"));
+
+        let script = token_kinds_for_line_fragment(doc, 1, SVELTE_FIXTURE[1], "let");
+        assert!(
+            script.contains(&SyntaxTokenKind::Keyword),
+            "`<script lang=\"ts\">` should inject TypeScript: {script:?}"
+        );
+
+        let style = token_kinds_for_line_fragment(doc, 11, SVELTE_FIXTURE[11], "color");
+        assert!(
+            style.contains(&SyntaxTokenKind::Property),
+            "`<style>` should inject CSS: {style:?}"
+        );
+    }
+
+    /// The `lang` veto in svelte_injections.scm, which is the whole reason the two
+    /// default rules carry a `#not-match?`. Without it a `<script lang="ts">` body
+    /// matches the default javascript rule *and* the typescript one over the same
+    /// `raw_text`; live.rs keeps both layers and interleaves their captures at the
+    /// same depth, so the block comes out coloured by whichever wrote last.
+    #[test]
+    fn svelte_script_with_lang_injects_exactly_one_language() {
+        let text = "<script lang=\"ts\">\nconst x: number = 1;\n</script>\n";
+
+        let lang: tree_sitter::Language = tree_sitter_svelte_ng::LANGUAGE.into();
+        let query = tree_sitter::Query::new(&lang, SVELTE_INJECTIONS_QUERY)
+            .expect("vendored Svelte injections.scm should compile");
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&lang)
+            .expect("Svelte grammar should load");
+        let tree = parser.parse(text, None).expect("script should parse");
+
+        let mut cursor = tree_sitter::QueryCursor::new();
+        cursor.set_match_limit(TS_QUERY_MATCH_LIMIT);
+        let mut patterns = Vec::new();
+        {
+            let mut matches = cursor.matches(&query, tree.root_node(), text.as_bytes());
+            tree_sitter::StreamingIterator::advance(&mut matches);
+            while let Some(m) = matches.get() {
+                patterns.push(m.pattern_index);
+                tree_sitter::StreamingIterator::advance(&mut matches);
+            }
+        }
+        assert_eq!(
+            patterns.len(),
+            1,
+            "a `<script lang=\"ts\">` must match exactly one injection pattern, \
+             matched {patterns:?}"
+        );
+
+        // ...and it must be the TypeScript one, so the annotation is typed.
+        let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, text);
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+            .expect("script body should have prepared tokens");
+        assert!(
+            tokens
+                .iter()
+                .any(|t| t.kind == SyntaxTokenKind::Type || t.kind == SyntaxTokenKind::TypeBuiltin),
+            "`lang=\"ts\"` should inject TypeScript, so `: number` should be typed: {tokens:?}"
+        );
+    }
+
+    /// The trap vue_injections.scm documents: the default rule is vetoed by
+    /// `#not-match? "\\slang\\s*="` whenever *any* `lang` is present, so
+    /// enumerating the servable values with `#any-of?` means every unlisted one --
+    /// `lang="js"`, `lang="css"`, and the unquoted `lang=ts` -- falls into a gap
+    /// and the whole block renders with no highlighting at all.
+    ///
+    /// Forwarding the value as `@injection.language` is what closes it. Asserting
+    /// `is_some()` would be vacuous here: the broken version returned
+    /// `Some(vec![])`, not `None`.
+    #[test]
+    fn svelte_lang_values_outside_the_default_still_inject() {
+        for (open_tag, body, expected) in [
+            // `js` and `css` name grammars we have but are not the default value
+            // for their element -- the exact pair the enumerated version dropped.
+            (
+                "<script lang=\"js\">",
+                "const x = 1;",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                "<style lang=\"css\">",
+                "  .b { color: red; }",
+                SyntaxTokenKind::Property,
+            ),
+            // Resolved through the alias table rather than by name.
+            (
+                "<script lang=\"mts\">",
+                "const x = 1;",
+                SyntaxTokenKind::Keyword,
+            ),
+            (
+                "<style lang=\"pcss\">",
+                "  .b { color: red; }",
+                SyntaxTokenKind::Property,
+            ),
+            // The unquoted form the grammar permits.
+            ("<script lang=ts>", "const x = 1;", SyntaxTokenKind::Keyword),
+        ] {
+            let close = if open_tag.starts_with("<script") {
+                "</script>"
+            } else {
+                "</style>"
+            };
+            let text = format!("{open_tag}\n{body}\n{close}\n");
+            let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, &text);
+            let tokens = syntax_tokens_for_prepared_document_line(doc, 1)
+                .expect("the block body should have prepared tokens");
+            assert!(
+                tokens.iter().any(|token| token.kind == expected),
+                "`{open_tag}` should still inject: expected {expected:?}, got {tokens:?}"
+            );
+        }
+    }
+
+    /// The other half of the same trade-off: a `lang` no grammar here can serve
+    /// injects nothing, and that must not disturb the host grammar. Same contract
+    /// as `vue_unknown_lang_attribute_does_not_silently_disable_highlighting`.
+    #[test]
+    fn svelte_unservable_lang_leaves_the_markup_alone() {
+        let text = "<script lang=\"coffee\">\nx = 1\n</script>\n";
+        let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, text);
+        let tokens = syntax_tokens_for_prepared_document_line(doc, 0)
+            .expect("the opening tag should have prepared tokens");
+        assert!(
+            tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Tag),
+            "an unservable lang must not disturb the host grammar: {tokens:?}"
+        );
+    }
+
+    /// The bug in `tree_sitter_svelte_ng::INJECTIONS_QUERY` that svelte_injections.scm
+    /// exists to avoid: its bare `(raw_text)` catch-all matches the body of `<style>`
+    /// too, so a stylesheet gets parsed as JavaScript.
+    #[test]
+    fn svelte_style_block_injects_css_not_javascript() {
+        let text = "<style>\n  .btn { color: red; }\n</style>\n";
+        let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, text);
+        let kinds = token_kinds_for_line_fragment(doc, 1, "  .btn { color: red; }", "color");
+        assert!(
+            kinds.contains(&SyntaxTokenKind::Property),
+            "`color` is a CSS property, which the JavaScript grammar would never \
+             produce: {kinds:?}"
+        );
+    }
+
+    /// The counterpart to `vue_static_inline_styles_do_not_flood_the_injection_cache`.
+    /// A `.svelte` template injects per *expression*, not per file, so an ordinary
+    /// list render emits one layer per row. Without the bare-identifier guard in
+    /// svelte_injections.scm a 30-row list produced 30 cache entries against a cap
+    /// of 32, evicting everything else on its own.
+    #[test]
+    fn svelte_bare_identifier_expressions_do_not_flood_the_injection_cache() {
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = vec!["<ul>".to_string()];
+        for ix in 0..30 {
+            lines.push(format!("  <li>{{row{ix}}}</li>"));
+        }
+        lines.push("</ul>".to_string());
+        let line_count = lines.len();
+
+        let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, &lines.join("\n"));
+        for line_ix in 0..line_count {
+            let _ = syntax_tokens_for_prepared_document_line(doc, line_ix);
+        }
+
+        let cached = TS_INJECTION_CACHE.with(|cache| cache.borrow().len());
+        assert_eq!(
+            cached, 0,
+            "a bare identifier gains nothing from a JavaScript parse, but {cached} cache \
+             entries were created from {line_count} lines (cap is \
+             {TS_INJECTION_CACHE_MAX_ENTRIES})"
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// ...and the guard must not be so broad that real expressions stop injecting.
+    #[test]
+    fn svelte_non_trivial_expressions_still_inject() {
+        let line = "  <p>{count > 0 ? \"many\" : \"none\"}</p>";
+        let doc = prepare_test_document(DiffSyntaxLanguage::Svelte, line);
+
+        let kinds = token_kinds_for_line_fragment(doc, 0, line, "\"many\"");
+        assert!(
+            kinds.contains(&SyntaxTokenKind::String),
+            "a real expression should still be parsed as JavaScript, so the string \
+             literal inside it is a string: {kinds:?}"
+        );
+    }
+
+    /// The same tripwire vue_highlights.scm carries, for the same reason: the
+    /// Svelte grammar is html-shaped, the base rules have to be present in the
+    /// file, and rule order decides which capture wins.
+    #[test]
+    fn svelte_highlights_query_embeds_the_html_base_verbatim() {
+        let html_rules = query_rule_lines(HTML_HIGHLIGHTS_QUERY);
+        let svelte_rules = query_rule_lines(SVELTE_HIGHLIGHTS_QUERY);
+        assert!(
+            !html_rules.is_empty(),
+            "html_highlights.scm should not be comment-only"
+        );
+        assert!(
+            svelte_rules
+                .windows(html_rules.len())
+                .any(|window| window == html_rules.as_slice()),
+            "svelte_highlights.scm must contain queries/html_highlights.scm as a contiguous, \
+             in-order block. Mirror the change into the `--- html base ---` section.\n\
+             expected block:\n{html_rules:#?}\nsvelte rules:\n{svelte_rules:#?}"
+        );
+    }
+
+    // ---- Heuristic fallback for the batch --------------------------------------
+
+    /// Three of the new languages spell something other than a string with `'`:
+    /// Haskell primes identifiers, OCaml opens type variables, Clojure quotes
+    /// forms. Left as `HeuristicSingleQuote::String` each one runs a string from
+    /// the tick to the end of the line -- the Nix bug, three more times.
+    #[test]
+    fn batch_apostrophes_do_not_open_a_string() {
+        for (line, language) in [
+            ("run xs = foldl' (+) 0 xs", DiffSyntaxLanguage::Haskell),
+            ("let ids : 'a list = []", DiffSyntaxLanguage::OCaml),
+            (
+                "val map : ('a -> 'b) -> 'a list -> 'b list",
+                DiffSyntaxLanguage::OCamlInterface,
+            ),
+            ("(def syms '(alpha beta))", DiffSyntaxLanguage::Clojure),
+        ] {
+            assert!(
+                heuristic_string_spans(line, language).is_empty(),
+                "an apostrophe opened a string in {language:?} line {line:?}: {:?}",
+                heuristic_tokens(line, language)
+            );
+        }
+
+        // Double quotes still work everywhere.
+        assert_eq!(
+            heuristic_string_spans("  name = \"demo\"", DiffSyntaxLanguage::Haskell),
+            vec!["\"demo\""]
+        );
+    }
+
+    /// Julia is the one language in the batch where `'` is both: `A'` is the
+    /// adjoint operator and `'c'` is a character literal. ValuePositionOnly tells
+    /// them apart by what precedes the tick.
+    #[test]
+    fn julia_adjoint_is_not_a_string_but_a_char_literal_is() {
+        assert!(
+            heuristic_string_spans("    b = A' * x", DiffSyntaxLanguage::Julia).is_empty(),
+            "the adjoint operator opened a string: {:?}",
+            heuristic_tokens("    b = A' * x", DiffSyntaxLanguage::Julia)
+        );
+        assert_eq!(
+            heuristic_string_spans("    c = 'x'", DiffSyntaxLanguage::Julia),
+            vec!["'x'"],
+            "a character literal in value position is still a string"
+        );
+    }
+
+    /// Every comment form the batch introduced. The heuristic runs in production
+    /// for lines past MAX_TREESITTER_LINE_BYTES and in HeuristicOnly mode, and
+    /// these arms are reached by nothing else.
+    #[test]
+    fn batch_heuristic_comment_forms_are_covered() {
+        for (line, language) in [
+            ("-- | Adds one.", DiffSyntaxLanguage::Haskell),
+            ("{- block -}", DiffSyntaxLanguage::Haskell),
+            ("%% Adds one.", DiffSyntaxLanguage::Erlang),
+            (";; Adds one.", DiffSyntaxLanguage::Clojure),
+            ("(* Adds one. *)", DiffSyntaxLanguage::OCaml),
+            ("(* Adds one. *)", DiffSyntaxLanguage::OCamlInterface),
+            ("# Adds one.", DiffSyntaxLanguage::Elixir),
+            ("# Adds one.", DiffSyntaxLanguage::Julia),
+            ("// Adds one.", DiffSyntaxLanguage::Groovy),
+            ("/* Adds one. */", DiffSyntaxLanguage::Solidity),
+            ("    ret ; done", DiffSyntaxLanguage::Assembly),
+            ("<!-- Adds one. -->", DiffSyntaxLanguage::Svelte),
+        ] {
+            let tokens = heuristic_tokens(line, language);
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::Comment),
+                "{language:?} should treat {line:?} as a comment: {tokens:?}"
+            );
+        }
+
+        // Haskell's `--` must not swallow an operator section: `x -- y` is a
+        // comment, but the heuristic has no way to know that `--` in
+        // `f -->> g` is not one either. Pin the ordinary case only.
+        let subtraction = heuristic_tokens("    y = x - 1", DiffSyntaxLanguage::Haskell);
+        assert!(
+            !subtraction
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "a single `-` is not a Haskell comment: {subtraction:?}"
+        );
+    }
+
+    /// Per the Haskell report a run of dashes is a comment only when it is *not*
+    /// followed by a symbol character; otherwise the whole run is an operator.
+    /// `line_comment: Some("--")` cannot express that, so it greyed `a --> b` from
+    /// the dashes to the end of the line -- the worst failure mode this path has,
+    /// because it hides code rather than mis-colouring it.
+    #[test]
+    fn haskell_operator_sections_starting_with_dashes_are_not_comments() {
+        for line in [
+            "  step = a --> b",
+            "  merged = xs --| ys",
+            "  shifted = a --< b",
+            "  chained = f --. g",
+        ] {
+            let tokens = heuristic_tokens(line, DiffSyntaxLanguage::Haskell);
+            assert!(
+                !tokens
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::Comment),
+                "an operator section was greyed out as a comment in {line:?}: {tokens:?}"
+            );
+        }
+
+        // ...while every genuine comment still is one, including the `---` run that
+        // the naive "any symbol after `--`" rule would have broken.
+        for line in [
+            "-- plain",
+            "--- ruled off",
+            "  x = 1 -- trailing",
+            "-- | haddock",
+        ] {
+            let tokens = heuristic_tokens(line, DiffSyntaxLanguage::Haskell);
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::Comment),
+                "{line:?} is a Haskell comment: {tokens:?}"
+            );
+        }
+    }
+
+    /// Neighbouring entries in four of the keyword tables, each gap visible as two
+    /// adjacent lines highlighting differently.
+    #[test]
+    fn batch_keyword_tables_cover_their_neighbours() {
+        for (line, language, expected) in [
+            // `let ... in` is one form; highlighting half of it looked like a bug.
+            ("  let x = 1 in x + 1", DiffSyntaxLanguage::Haskell, "in"),
+            // Erlang's word-spelled operators are reserved words.
+            ("  Y = X div 2,", DiffSyntaxLanguage::Erlang, "div"),
+            ("  Z = X band 255,", DiffSyntaxLanguage::Erlang, "band"),
+            ("  ok = not Flag,", DiffSyntaxLanguage::Erlang, "not"),
+            // Groovy had `boolean` but none of the other primitives.
+            ("    int x = 1", DiffSyntaxLanguage::Groovy, "int"),
+            ("    double d = 1.0", DiffSyntaxLanguage::Groovy, "double"),
+            ("    char c = 'x'", DiffSyntaxLanguage::Groovy, "char"),
+            // Solidity's two block forms.
+            (
+                "        assembly { let p := 1 }",
+                DiffSyntaxLanguage::Solidity,
+                "assembly",
+            ),
+            (
+                "        unchecked { x += 1; }",
+                DiffSyntaxLanguage::Solidity,
+                "unchecked",
+            ),
+        ] {
+            let found = heuristic_keywords(line, language);
+            assert!(
+                found.contains(&expected),
+                "{language:?} should treat `{expected}` in {line:?} as a keyword: {found:?}"
+            );
+        }
+    }
+
+    /// The other half of the Solidity fix: sized types are *uniformly* absent now.
+    /// Listing `uint256` alone meant `uint256 total;` highlighted and `uint8 flags;`
+    /// two lines below it did not.
+    #[test]
+    fn solidity_sized_types_are_uniformly_absent_from_the_keyword_table() {
+        for line in [
+            "    uint8 a;",
+            "    uint256 b;",
+            "    int128 c;",
+            "    bytes32 d;",
+        ] {
+            let found = heuristic_keywords(line, DiffSyntaxLanguage::Solidity);
+            assert!(
+                found.is_empty(),
+                "sized types should all behave alike on the heuristic path, but {line:?} \
+                 yielded {found:?}"
+            );
+        }
+
+        // The base names still resolve, so the arm is not simply dead.
+        assert!(heuristic_keywords("    uint x;", DiffSyntaxLanguage::Solidity).contains(&"uint"));
+        assert!(
+            heuristic_keywords("    address owner;", DiffSyntaxLanguage::Solidity)
+                .contains(&"address")
+        );
+    }
+
+    /// The eleven keyword tables the batch added to `is_keyword`, none of which any
+    /// other test reaches: every other test in this section goes through
+    /// `prepare_test_document`, i.e. tree-sitter.
+    #[test]
+    fn batch_heuristic_keyword_tables_are_covered() {
+        for (line, language, expected) in [
+            (
+                "class Demo extends Base {",
+                DiffSyntaxLanguage::Groovy,
+                "class",
+            ),
+            ("(defn run [x] x)", DiffSyntaxLanguage::Clojure, "defn"),
+            ("defmodule Demo do", DiffSyntaxLanguage::Elixir, "defmodule"),
+            (
+                "run(X) when is_integer(X) ->",
+                DiffSyntaxLanguage::Erlang,
+                "when",
+            ),
+            (
+                "newtype Wrapper = Wrapper Int",
+                DiffSyntaxLanguage::Haskell,
+                "newtype",
+            ),
+            ("mutable struct Point", DiffSyntaxLanguage::Julia, "struct"),
+            ("let rec loop n =", DiffSyntaxLanguage::OCaml, "rec"),
+            (
+                "val run : int -> int",
+                DiffSyntaxLanguage::OCamlInterface,
+                "val",
+            ),
+            (
+                "contract Demo is Base {",
+                DiffSyntaxLanguage::Solidity,
+                "contract",
+            ),
+            ("section .text", DiffSyntaxLanguage::Assembly, "section"),
+            ("{#each items as item}", DiffSyntaxLanguage::Svelte, "each"),
+        ] {
+            let found = heuristic_keywords(line, language);
+            assert!(
+                found.contains(&expected),
+                "{language:?} should treat `{expected}` in {line:?} as a keyword: {found:?}"
+            );
+        }
+    }
+
+    // ---- Regression net for the batch ------------------------------------------
+
+    /// Every language the batch added, with a snippet that exercises its comment
+    /// form, its string form and one keyword.
+    ///
+    /// Shared by the invariant sweeps below so a new language is added in one place
+    /// and picked up by all of them.
+    fn batch_language_samples() -> Vec<(DiffSyntaxLanguage, &'static str)> {
+        Vec::from([
+            (
+                DiffSyntaxLanguage::Groovy,
+                "class D { def s = 'x' } // note",
+            ),
+            (DiffSyntaxLanguage::Clojure, "(defn f [x] \"s\") ;; note"),
+            (DiffSyntaxLanguage::Elixir, "def f(x), do: \"s\" # note"),
+            (DiffSyntaxLanguage::Erlang, "f(X) -> \"s\". % note"),
+            (DiffSyntaxLanguage::Haskell, "f x = \"s\" -- note"),
+            (DiffSyntaxLanguage::Julia, "f(x) = \"s\" # note"),
+            (DiffSyntaxLanguage::OCaml, "let f x = \"s\" (* note *)"),
+            (
+                DiffSyntaxLanguage::OCamlInterface,
+                "val f : int -> int (* note *)",
+            ),
+            (
+                DiffSyntaxLanguage::Solidity,
+                "function f() { s = \"x\"; } // note",
+            ),
+            (DiffSyntaxLanguage::Assembly, "    mov eax, 1 ; note"),
+            (
+                DiffSyntaxLanguage::Svelte,
+                "<p class=\"c\">x</p> <!-- note -->",
+            ),
+        ])
+    }
+
+    /// The `potential_open_state_lead` fast-skip decides which bytes are even worth
+    /// examining, and a language whose comment lead is missing from it has its
+    /// comments run past entirely on the streamed path. Haskell's `-` had to be
+    /// added there when `line_comment` became None for it.
+    ///
+    /// The long body is not padding. Below the checkpoint threshold the streamed
+    /// entry point hands the visible region straight to the per-line tokenizer, so a
+    /// short-line version of this test exercises the scanner not at all and passes
+    /// with the fast-skip entry deleted.
+    ///
+    /// Each case puts the comment opener *before* the slice, so the token can only
+    /// be right if the scanner resumed in the comment state.
+    #[test]
+    fn streamed_slices_resume_inside_batch_line_comments() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+
+        for (language, opener) in [
+            (DiffSyntaxLanguage::Haskell, "-- "),
+            (DiffSyntaxLanguage::Erlang, "% "),
+            (DiffSyntaxLanguage::Clojure, "; "),
+            (DiffSyntaxLanguage::Assembly, "    ret ; "),
+            (DiffSyntaxLanguage::Groovy, "// "),
+            (DiffSyntaxLanguage::Elixir, "# "),
+        ] {
+            reset_streamed_heuristic_line_cache();
+
+            let body = "note ".repeat(CHECKPOINT_SPACING / 5 + 64);
+            let text = format!("{opener}{body}");
+            let slice_start = opener.len() + CHECKPOINT_SPACING;
+            let slice_end = slice_start + 128;
+            let raw_text =
+                gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text.clone()));
+            let (slice_text, resolved) = raw_text
+                .slice_text_resolved(slice_start..slice_end)
+                .expect("ASCII slice should resolve");
+
+            let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+                &raw_text,
+                language,
+                slice_start..slice_end,
+                resolved,
+            )
+            .expect("streamed slice should be supported");
+            assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::Comment),
+                "{language:?}: a slice {CHECKPOINT_SPACING} bytes into a `{opener}` comment \
+                 must still be a comment, got {tokens:?}"
+            );
+        }
+    }
+
+    /// The two block-comment kinds the batch touched: Haskell's `{- -}` is a new
+    /// `HeuristicBlockCommentKind`, and OCaml reuses the F# `(* *)` spec. Both are
+    /// resumed from a checkpoint here, which is the only place the start/end byte
+    /// tables are consulted rather than the per-line `starts_with`.
+    #[test]
+    fn streamed_slices_resume_inside_haskell_and_ocaml_block_comments() {
+        const CHECKPOINT_SPACING: usize = 32 * 1024;
+
+        for (language, open, close) in [
+            (DiffSyntaxLanguage::Haskell, "{-", "-}"),
+            (DiffSyntaxLanguage::OCaml, "(*", "*)"),
+            (DiffSyntaxLanguage::OCamlInterface, "(*", "*)"),
+        ] {
+            reset_streamed_heuristic_line_cache();
+
+            let body = "b".repeat(CHECKPOINT_SPACING + 192);
+            let text = format!("{open}{body}{close} let x = 1");
+            let slice_start = open.len() + CHECKPOINT_SPACING;
+            let slice_end = slice_start + 96;
+            let raw_text =
+                gitcomet_core::file_diff::FileDiffLineText::shared(Arc::from(text.clone()));
+            let (slice_text, resolved) = raw_text
+                .slice_text_resolved(slice_start..slice_end)
+                .expect("ASCII slice should resolve");
+
+            let tokens = syntax_tokens_for_streamed_line_slice_heuristic(
+                &raw_text,
+                language,
+                slice_start..slice_end,
+                resolved,
+            )
+            .expect("streamed slice should be supported");
+            assert_token_ranges_are_utf8_safe(slice_text.as_ref(), &tokens);
+
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::Comment),
+                "{language:?}: a slice inside a `{open} {close}` block must still be a \
+                 comment, got {tokens:?}"
+            );
+
+            // …and the block has to *end*. Asserting only the line above passes even
+            // with `heuristic_block_comment_end_bytes` corrupted: an unterminated
+            // comment swallows the rest of the line, so the slice above stays inside
+            // it either way.
+            let tail_start = text.find(close).expect("close should be present") + close.len();
+            let (tail_text, tail_resolved) = raw_text
+                .slice_text_resolved(tail_start..text.len())
+                .expect("tail slice should resolve");
+            let tail = syntax_tokens_for_streamed_line_slice_heuristic(
+                &raw_text,
+                language,
+                tail_start..text.len(),
+                tail_resolved,
+            )
+            .expect("streamed tail slice should be supported");
+            assert_token_ranges_are_utf8_safe(tail_text.as_ref(), &tail);
+            assert!(
+                !tail
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::Comment),
+                "{language:?}: `{close}` must close the block, but the code after it is \
+                 still a comment: {tail:?}"
+            );
+        }
+    }
+
+    /// Token ranges are used to slice the line for rendering, so an out-of-bounds or
+    /// mid-codepoint range panics rather than mis-colouring. The batch added eleven
+    /// languages to a hand-written scanner; these are the inputs that break scanners.
+    #[test]
+    fn batch_languages_emit_well_formed_tokens_on_hostile_input() {
+        let hostile = [
+            "",
+            " ",
+            "\t",
+            // Unterminated everything.
+            "\"unterminated",
+            "'unterminated",
+            "`unterminated",
+            "/* unterminated",
+            "{- unterminated",
+            "(* unterminated",
+            "<!-- unterminated",
+            // Bare openers at end of line, where a lookahead can run past the end.
+            "-",
+            "--",
+            "/",
+            "//",
+            "{",
+            "(",
+            "#",
+            ";",
+            "%",
+            "\\",
+            "\"",
+            "'",
+            // Multi-byte, including a comment opener immediately before one.
+            "-- ✨ é 日本語",
+            "x = \"日本語\" -- ✨",
+            "'é'",
+            "«»‹›",
+            // Adjacent delimiters.
+            "\"\"''``",
+            "/*/*/*",
+            "{-{-{-",
+            "(*(*(*",
+            "-->--|--<",
+            "REM",
+            "rem\tx",
+        ];
+
+        for (language, _) in batch_language_samples() {
+            for line in hostile {
+                let tokens = syntax_tokens_for_line(line, language, DiffSyntaxMode::HeuristicOnly);
+                assert_token_ranges_are_utf8_safe(line, &tokens);
+
+                // Ranges must also be ordered and non-overlapping: the renderer walks
+                // them with a single forward cursor.
+                let mut previous_end = 0usize;
+                for token in tokens.iter() {
+                    assert!(
+                        token.range.start >= previous_end,
+                        "{language:?} emitted overlapping or unsorted tokens for {line:?}: \
+                         {tokens:?}"
+                    );
+                    previous_end = token.range.end;
+                }
+            }
+        }
+    }
+
+    /// `heuristic_comment_range` now delegates to `line_comment_start_len`, which
+    /// tests `is_ascii_whitespace()` where the old copy compared against a literal
+    /// `"rem "`. Visual Basic is the only caller that notices, and it is not a
+    /// language the batch touched -- exactly the kind of bystander a refactor
+    /// breaks quietly.
+    #[test]
+    fn visual_basic_rem_comment_survives_the_shared_comment_decision() {
+        for line in ["REM note", "rem note", "Rem note", "REM\tnote"] {
+            let tokens = heuristic_tokens(line, DiffSyntaxLanguage::VisualBasic);
+            assert!(
+                tokens
+                    .iter()
+                    .any(|token| token.kind == SyntaxTokenKind::Comment),
+                "{line:?} is a Visual Basic REM comment: {tokens:?}"
+            );
+        }
+
+        // `REM` still needs a delimiter: `REMARK` is an identifier.
+        let tokens = heuristic_tokens("REMARK = 1", DiffSyntaxLanguage::VisualBasic);
+        assert!(
+            !tokens
+                .iter()
+                .any(|token| token.kind == SyntaxTokenKind::Comment),
+            "`REMARK` is not a REM comment: {tokens:?}"
+        );
+    }
+
+    /// A completeness sweep rather than a behaviour check: every language that
+    /// claims a grammar must actually produce tokens for a line of itself. A
+    /// mis-wired grammar, a query that compiles but matches nothing, or an enum
+    /// variant wired to the wrong `LANGUAGE` constant all show up here as silence.
+    #[test]
+    fn every_batch_language_produces_treesitter_tokens() {
+        for (language, sample) in batch_language_samples() {
+            assert!(
+                tree_sitter_grammar(language).is_some(),
+                "{language:?} should have a grammar"
+            );
+
+            let doc = prepare_test_document(language, sample);
+            let tokens = syntax_tokens_for_prepared_document_line(doc, 0)
+                .unwrap_or_else(|| panic!("{language:?} should produce prepared tokens"));
+            assert!(
+                !tokens.is_empty(),
+                "{language:?} produced no tokens for {sample:?} -- the grammar is wired but \
+                 its query matches nothing"
+            );
+            assert_token_ranges_are_utf8_safe(sample, &tokens);
         }
     }
 
@@ -7458,9 +12227,9 @@ mod tests {
     ///
     /// Combined injections change how a grammar's whole document is assembled, so
     /// a grammar bump that quietly introduces the directive must not slip through
-    /// review. F#'s `xml_doc` rule is the only one in the tree today; it arrived
-    /// with the upstream `tree_sitter_fsharp::INJECTIONS_QUERY` rather than being
-    /// written here.
+    /// review. F#'s `xml_doc` rule arrived with the upstream
+    /// `tree_sitter_fsharp::INJECTIONS_QUERY` rather than being written here; the
+    /// rest are ours, and each one is a deliberate decision recorded beside it.
     #[test]
     fn combined_injection_declarations_are_exactly_the_known_set() {
         let mut declared = Vec::new();
@@ -7484,6 +12253,13 @@ mod tests {
             vec![
                 // queries/jinja_injections.scm -- the HTML around the template tags.
                 (DiffSyntaxLanguage::Jinja, 0),
+                // queries/hcl_injections.scm -- shell in `user_data`, JSON in
+                // `policy`. Combined for the same reason as Nix: a `${...}`
+                // interpolation splits one heredoc into several `template_literal`
+                // nodes, and those are one script. The third pattern there, for
+                // bodies nested inside a `%{ if }`, is deliberately *not* combined.
+                (DiffSyntaxLanguage::Hcl, 0),
+                (DiffSyntaxLanguage::Hcl, 1),
                 // queries/nix_injections.scm -- bash in script/hook attributes.
                 (DiffSyntaxLanguage::Nix, 0),
                 (DiffSyntaxLanguage::Nix, 1),
@@ -7601,6 +12377,7 @@ mod tests {
             line_starts,
             0,
             line_count,
+            treesitter_text_hash(text),
         );
         let window_end = line_region_end_byte(line_starts, bytes.len(), line_count - 1);
         for gap in combined_injection_gaps(0..window_end, &ranges) {
@@ -7741,6 +12518,7 @@ mod tests {
             line_starts,
             start_line_ix,
             end_line_ix,
+            treesitter_text_hash(&text),
         );
         let group = matches.combined.first().expect("one combined html group");
         assert_eq!(
@@ -7762,6 +12540,7 @@ mod tests {
                 line_starts,
                 start_line_ix,
                 end_line_ix,
+                treesitter_text_hash(&text),
             );
             for gap in combined_injection_gaps(window_start..window_end, ranges) {
                 subtract_absolute_range_from_document_tokens(
@@ -8219,6 +12998,360 @@ mod tests {
         assert!(tokens.iter().any(|t| t.kind == SyntaxTokenKind::Number));
     }
 
+    /// A parsed-but-empty tree, for the LRU tests that build cache entries by
+    /// hand and care only about the eviction order.
+    fn empty_injection_tree() -> tree_sitter::Tree {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_javascript::LANGUAGE.into())
+            .expect("javascript should load");
+        parser.parse("", None).expect("empty source should parse")
+    }
+
+    /// The `#[ctor]` really did beat the harness.
+    ///
+    /// Everything else in this binary depends on it: if the install slipped to
+    /// after the first test body, tests that build a `Query` straight off a
+    /// `LANGUAGE` would allocate through libc and free through `mi_free`, which
+    /// with `MI_DEBUG` off corrupts the heap silently rather than aborting. That
+    /// failure would surface as unrelated flakiness somewhere else entirely, so
+    /// assert the precondition here where the message can say what broke.
+    #[test]
+    fn tree_sitter_allocator_is_installed_before_any_test_runs() {
+        assert!(
+            gitcomet_tree_sitter_alloc::is_installed(),
+            "gitcomet-tree-sitter-alloc's `install_before_main` #[ctor] should have \
+             run before libtest's main; without it this binary switches \
+             allocators while tests are already holding tree-sitter allocations",
+        );
+    }
+
+    /// Two documents whose injections agree on everything but the grammar must
+    /// not be able to answer for each other.
+    ///
+    /// `TS_INJECTION_CACHE` is a thread-local shared by every document, so in a
+    /// diff both sides of a file land in it together. Changing a fence from
+    /// ```` ```html ```` to ```` ```bash ```` is a same-length edit: the fenced
+    /// bytes keep their offsets *and* their content, so range and `content_hash`
+    /// both match across the two revisions and only `language` moves. Without
+    /// `document_hash` in the key both entries pass every filter in
+    /// `injected_syntax_pair_at` and the tie-break on width cannot separate them
+    /// either -- whichever the hash map yielded first won, so a click in the
+    /// bash block could be answered by the html grammar.
+    #[test]
+    fn injection_cache_separates_same_bytes_under_different_grammars() {
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let body = "<p>a</p>\n";
+        let html_doc = format!("# t\n\n```html\n{body}```\n");
+        let bash_doc = format!("# t\n\n```bash\n{body}```\n");
+        // The premise: only the four info-string bytes differ, so every injected
+        // byte keeps its offset and its value.
+        assert_eq!(html_doc.len(), bash_doc.len());
+        assert_eq!(
+            html_doc.replace("html", "____"),
+            bash_doc.replace("bash", "____"),
+        );
+
+        let tokenize_all = |text: &str| {
+            let document = prepare_test_document(DiffSyntaxLanguage::Markdown, text);
+            for line_ix in 0..text.lines().count() {
+                let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+            }
+            document
+        };
+
+        tokenize_all(&html_doc);
+        let bash_document = tokenize_all(&bash_doc);
+
+        let keys: Vec<TreesitterInjectionMatch> =
+            TS_INJECTION_CACHE.with(|cache| cache.borrow().keys().copied().collect());
+
+        // Both grammars cached the identical span, which is the collision this
+        // key exists to survive. If markdown ever stops injecting fences by
+        // their info string this stops testing anything, so assert it directly.
+        let mut collided = keys.iter().filter(|key| {
+            keys.iter().any(|other| {
+                other.language != key.language
+                    && other.byte_start == key.byte_start
+                    && other.byte_end == key.byte_end
+                    && other.content_hash == key.content_hash
+            })
+        });
+        let one = collided
+            .next()
+            .expect("both fences should cache the same span under different grammars");
+        let two = collided
+            .next()
+            .expect("the collision needs both halves to be present");
+        assert_ne!(
+            one.document_hash, two.document_hash,
+            "identical injected bytes under different grammars must still be \
+             distinguishable, or the pair lookup picks by hash-map order: {one:?} vs {two:?}",
+        );
+
+        // And the click that motivated all this resolves against its own
+        // document rather than the sibling revision still sitting in the cache.
+        let fence_line_ix = 3;
+        let open_angle = body.find('<').expect("the tag opens the injected line");
+        let pair = prepared_document_syntax_pair_at_display_offset(
+            bash_document,
+            fence_line_ix,
+            open_angle,
+        );
+        assert!(
+            pair.is_none(),
+            "bash owns these bytes and has no tag pair in them, but the html \
+             revision's tree answered: {pair:?}",
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    #[test]
+    fn injection_cache_identity_includes_the_host_language() {
+        reset_prepared_syntax_cache();
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let text = "<script lang=\"tsx\">\n<Widget></Widget>\n</script>\n";
+        let html = prepare_test_document(DiffSyntaxLanguage::Html, text);
+        let vue = prepare_test_document(DiffSyntaxLanguage::Vue, text);
+        for document in [html, vue] {
+            for line_ix in 0..text.lines().count() {
+                let _ = syntax_tokens_for_prepared_document_line(document, line_ix);
+            }
+        }
+
+        let keys = TS_INJECTION_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .keys()
+                .filter(|key| {
+                    matches!(
+                        key.language,
+                        DiffSyntaxLanguage::JavaScript | DiffSyntaxLanguage::Tsx
+                    )
+                })
+                .copied()
+                .collect::<Vec<_>>()
+        });
+        let javascript = keys
+            .iter()
+            .find(|key| key.language == DiffSyntaxLanguage::JavaScript)
+            .expect("HTML should inject the script body as JavaScript");
+        let tsx = keys
+            .iter()
+            .find(|key| key.language == DiffSyntaxLanguage::Tsx)
+            .expect("Vue should honor lang=tsx");
+        assert_eq!(javascript.byte_start, tsx.byte_start);
+        assert_eq!(javascript.byte_end, tsx.byte_end);
+        assert_eq!(javascript.content_hash, tsx.content_hash);
+        assert_ne!(
+            javascript.document_hash, tsx.document_hash,
+            "identical source bytes parsed under different host grammars need distinct identities"
+        );
+
+        let html_pair = prepared_document_syntax_pair_at_display_offset(html, 1, 0)
+            .expect("HTML's JavaScript injection should retain its JSX tag tree");
+        assert_eq!(html_pair.kind, SyntaxPairKind::Tag);
+        let vue_pair = prepared_document_syntax_pair_at_display_offset(vue, 1, 0)
+            .expect("Vue's TSX injection should pair the component tags");
+        assert_eq!(vue_pair.kind, SyntaxPairKind::Tag);
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    #[test]
+    fn reused_prefix_chunks_carry_injection_trees_to_the_new_revision() {
+        reset_prepared_syntax_cache();
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let line_count = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 3;
+        let mut lines = vec!["plain markdown".to_owned(); line_count];
+        lines[0] = "```html".to_owned();
+        lines[1] = "<div>unchanged</div>".to_owned();
+        lines[2] = "```".to_owned();
+        let base_text = lines.join("\n");
+        let base_document = prepare_test_document(DiffSyntaxLanguage::Markdown, &base_text);
+        let _ = syntax_tokens_for_prepared_document_line(base_document, 1)
+            .expect("the injected prefix should materialize");
+
+        let base_hash = base_document.cache_key.doc_hash;
+        assert!(TS_INJECTION_CACHE.with(|cache| {
+            cache.borrow().keys().any(|key| {
+                key.document_hash == base_hash && key.language == DiffSyntaxLanguage::Html
+            })
+        }));
+
+        let edited_line = TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS * 2;
+        lines[edited_line].push_str(" edited");
+        let edited_text = lines.join("\n");
+        let PrepareTreesitterDocumentResult::Ready(reparsed_document) =
+            prepare_test_document_with_budget_reuse(
+                DiffSyntaxLanguage::Markdown,
+                &edited_text,
+                DiffSyntaxBudget {
+                    foreground_parse: Duration::from_millis(200),
+                },
+                Some(base_document),
+            )
+        else {
+            panic!("later edit should reparse successfully");
+        };
+        assert_ne!(base_document.cache_key, reparsed_document.cache_key);
+        assert_eq!(
+            prepared_syntax_loaded_chunk_count(reparsed_document),
+            1,
+            "the already-materialized prefix chunk should be reused"
+        );
+
+        let reparsed_hash = reparsed_document.cache_key.doc_hash;
+        assert!(
+            TS_INJECTION_CACHE.with(|cache| cache.borrow().keys().any(|key| {
+                key.document_hash == reparsed_hash && key.language == DiffSyntaxLanguage::Html
+            })),
+            "the reused prefix's injection tree should be re-keyed to the new revision"
+        );
+        let pair = prepared_document_syntax_pair_at_display_offset(reparsed_document, 1, 0)
+            .expect("pair lookup should retain the unchanged injected prefix tree");
+        assert_eq!(pair.kind, SyntaxPairKind::Tag);
+        assert_eq!(pair.open[0].display_range, 0..5);
+        assert_eq!(pair.close[0].display_range, 14..20);
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// Prepared token chunks outlive the small injection-tree LRU. Returning to
+    /// an early fence must rebuild its tree for pair lookup even though asking
+    /// for that line's already-cached tokens does no work.
+    #[test]
+    fn prepared_pair_lookup_rebuilds_an_evicted_injection_tree() {
+        reset_prepared_syntax_cache();
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = Vec::new();
+        let mut body_line_indices = Vec::new();
+        let mut bodies = Vec::new();
+        for ix in 0..=TS_INJECTION_CACHE_MAX_ENTRIES {
+            lines.push("```html".to_owned());
+            body_line_indices.push(lines.len());
+            let body = format!(r#"<div data-index="{ix}">value</div>"#);
+            lines.push(body.clone());
+            bodies.push(body);
+            lines.push("```".to_owned());
+            lines.push(String::new());
+        }
+        let text = lines.join("\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Markdown, &text);
+
+        // Materialize every chunk so more distinct fence injections are parsed
+        // than the LRU can retain. The first region is then necessarily among
+        // the least-recently-used half evicted on overflow.
+        for &line_ix in &body_line_indices {
+            let _ = syntax_tokens_for_prepared_document_line(document, line_ix)
+                .expect("every fenced body line should have prepared tokens");
+        }
+        let first_body_offset = text.find(&bodies[0]).expect("first fenced body");
+        assert!(
+            TS_INJECTION_CACHE.with(|cache| !cache.borrow().keys().any(|key| {
+                key.document_hash == document.cache_key.doc_hash
+                    && first_body_offset >= key.byte_start
+                    && first_body_offset < key.byte_end
+            })),
+            "the test must evict the first fence's injection tree before lookup"
+        );
+
+        let pair =
+            prepared_document_syntax_pair_at_display_offset(document, body_line_indices[0], 0)
+                .expect("pair lookup should rebuild the evicted HTML injection tree");
+        let first_body = &bodies[0];
+        assert_eq!(pair.kind, SyntaxPairKind::Tag);
+        assert_eq!(
+            pair.open[0].display_range,
+            0..first_body.find('>').expect("opening tag end") + 1
+        );
+        let close_start = first_body.rfind("</div>").expect("closing tag");
+        assert_eq!(
+            pair.close[0].display_range,
+            close_start..close_start + "</div>".len()
+        );
+        assert!(
+            TS_INJECTION_CACHE.with(|cache| cache.borrow().keys().any(|key| {
+                key.document_hash == document.cache_key.doc_hash
+                    && first_body_offset >= key.byte_start
+                    && first_body_offset < key.byte_end
+            })),
+            "the rebuilt injection should be retained for the next lookup"
+        );
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
+    /// The surviving cache entry at a click can be only the outer layer. Pair
+    /// lookup must still inspect it and recreate an evicted nested layer rather
+    /// than accepting the outer grammar's answer.
+    #[test]
+    fn prepared_pair_lookup_rebuilds_an_evicted_nested_injection_tree() {
+        reset_prepared_syntax_cache();
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        let mut lines = vec!["```html".to_owned()];
+        let mut script_line_indices = Vec::new();
+        let mut script_bodies = Vec::new();
+        for ix in 0..=TS_INJECTION_CACHE_MAX_ENTRIES {
+            lines.push("<script>".to_owned());
+            script_line_indices.push(lines.len());
+            let body = format!("const value{ix} = ({ix});");
+            lines.push(body.clone());
+            script_bodies.push(body);
+            lines.push("</script>".to_owned());
+        }
+        lines.push("```".to_owned());
+        let text = lines.join("\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Markdown, &text);
+        for &line_ix in &script_line_indices {
+            let _ = syntax_tokens_for_prepared_document_line(document, line_ix)
+                .expect("every nested script line should have prepared tokens");
+        }
+
+        let first_body_offset = text
+            .find(&script_bodies[0])
+            .expect("first nested script body");
+        TS_INJECTION_CACHE.with(|cache| {
+            let cache = cache.borrow();
+            assert!(
+                cache.keys().any(|key| {
+                    key.document_hash == document.cache_key.doc_hash
+                        && key.language == DiffSyntaxLanguage::Html
+                        && first_body_offset >= key.byte_start
+                        && first_body_offset < key.byte_end
+                }),
+                "the outer HTML injection must survive for this nested-cache regression"
+            );
+            assert!(
+                !cache.keys().any(|key| {
+                    key.document_hash == document.cache_key.doc_hash
+                        && key.language == DiffSyntaxLanguage::JavaScript
+                        && first_body_offset >= key.byte_start
+                        && first_body_offset < key.byte_end
+                }),
+                "the first nested JavaScript tree must be evicted before lookup"
+            );
+        });
+
+        let first_body = &script_bodies[0];
+        let open = first_body.find('(').expect("opening parenthesis");
+        let close = first_body.rfind(')').expect("closing parenthesis");
+        let pair =
+            prepared_document_syntax_pair_at_display_offset(document, script_line_indices[0], open)
+                .expect("pair lookup should rebuild the evicted nested JavaScript tree");
+        assert_eq!(pair.kind, SyntaxPairKind::Bracket);
+        assert_eq!(pair.open[0].display_range, open..open + 1);
+        assert_eq!(pair.close[0].display_range, close..close + 1);
+
+        TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
+    }
+
     #[test]
     fn injection_cache_lru_eviction_preserves_recent_entries() {
         TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
@@ -8227,6 +13360,7 @@ mod tests {
         // global counter so access values are monotonically ordered.
         for i in 0..TS_INJECTION_CACHE_MAX_ENTRIES {
             let key = TreesitterInjectionMatch {
+                document_hash: 0,
                 language: DiffSyntaxLanguage::JavaScript,
                 byte_start: i * 100,
                 byte_end: i * 100 + 50,
@@ -8236,10 +13370,11 @@ mod tests {
             TS_INJECTION_CACHE.with(|cache| {
                 cache.borrow_mut().insert(
                     key,
-                    CachedInjectionTokens {
+                    CachedInjection {
                         all_line_tokens: vec![],
                         injection_line_starts: vec![],
                         injection_start_line_ix: 0,
+                        tree: empty_injection_tree(),
                         last_access: access,
                     },
                 );
@@ -8248,6 +13383,7 @@ mod tests {
 
         // Access the first entry to make it "recent" (higher counter than all others).
         let first_key = TreesitterInjectionMatch {
+            document_hash: 0,
             language: DiffSyntaxLanguage::JavaScript,
             byte_start: 0,
             byte_end: 50,
@@ -8261,6 +13397,7 @@ mod tests {
 
         // Now insert one more to trigger eviction.
         let overflow_key = TreesitterInjectionMatch {
+            document_hash: 0,
             language: DiffSyntaxLanguage::JavaScript,
             byte_start: 99900,
             byte_end: 99950,
@@ -8279,10 +13416,11 @@ mod tests {
             }
             cache.insert(
                 overflow_key,
-                CachedInjectionTokens {
+                CachedInjection {
                     all_line_tokens: vec![],
                     injection_line_starts: vec![],
                     injection_start_line_ix: 0,
+                    tree: empty_injection_tree(),
                     last_access: access,
                 },
             );

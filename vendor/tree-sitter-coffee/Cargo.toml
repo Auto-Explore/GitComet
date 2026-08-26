@@ -1,0 +1,35 @@
+# Vendored from https://github.com/svkozak/tree-sitter-coffeescript
+# at rev 3bb4dbd68ca926c76b3baadb529da4de3726ea37 (MIT, see LICENSE).
+#
+# Vendored because there is no crates.io release at all: nothing there provides a
+# CoffeeScript grammar, and this is the only maintained one on GitHub with a licence.
+#
+# `src/` is regenerated (tree-sitter-cli 0.26.13) from the `grammar.js` beside
+# it; the `tree_sitter/` headers come from vendor/tree-sitter-headers -- see the
+# README there.
+#
+# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
+# GitComet keeps its own query in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+[package]
+name = "tree-sitter-coffee"
+description = "CoffeeScript grammar for the tree-sitter parsing library"
+version = "0.1.0"
+repository = "https://github.com/svkozak/tree-sitter-coffeescript"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.26.13"

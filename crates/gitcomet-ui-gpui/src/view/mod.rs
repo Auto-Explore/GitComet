@@ -218,8 +218,8 @@ use patch_split::build_patch_split_rows;
 use poller::Poller;
 pub(in crate::view) use terminal_preferences::{
     ActionBarTerminalTarget, ExternalTerminalLaunchContext, ExternalTerminalMode,
-    TerminalPreferences, launch_external_terminal_from_preferences, parse_terminal_args_multiline,
-    resolve_embedded_shell_program,
+    TerminalPreferences, parse_terminal_args_multiline, resolve_embedded_shell_program,
+    resolve_external_terminal_launch_spec,
 };
 use word_diff::{capped_word_diff_ranges, capped_word_diff_ranges_for_file_diff_texts};
 
@@ -3377,27 +3377,76 @@ impl GitCometView {
             return;
         }
 
-        if let Err(err) = crate::external_editor::launch_configured_editor(&path) {
-            self.push_toast(
-                components::ToastKind::Error,
-                format!("Failed to open in code editor: {err}"),
-                cx,
-            );
-        }
+        let command = match crate::external_editor::launch_command_for_configured_editor(&path) {
+            Ok(command) => command,
+            Err(err) => {
+                self.push_toast(
+                    components::ToastKind::Error,
+                    format!("Failed to open in code editor: {err}"),
+                    cx,
+                );
+                return;
+            }
+        };
+
+        platform_open::spawn_launch(
+            cx,
+            move || crate::external_editor::spawn_launch_command(command),
+            |this, result, cx| {
+                if let Err(err) = result {
+                    this.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open in code editor: {err}"),
+                        cx,
+                    );
+                }
+            },
+        );
     }
 
-    fn report_startup_crash_report(&self) -> Result<(), std::io::Error> {
-        self.report_startup_crash_report_with(platform_open::open_url)
+    pub(in crate::view) fn startup_crash_report_issue_url(&self) -> Option<String> {
+        self.startup_crash_report
+            .as_ref()
+            .map(|report| report.issue_url.clone())
+    }
+
+    /// The "Report Issue" button's whole body, so the button stays a one-liner
+    /// and tests can drive the real sequence through
+    /// [`Self::report_startup_crash_report_with`].
+    fn report_startup_crash_report(&mut self, cx: &mut gpui::Context<Self>) {
+        self.report_startup_crash_report_with(cx, |url| platform_open::open_url_blocking(&url));
     }
 
     fn report_startup_crash_report_with(
-        &self,
-        open_url: impl FnOnce(&str) -> Result<(), std::io::Error>,
-    ) -> Result<(), std::io::Error> {
-        let Some(report) = self.startup_crash_report.as_ref() else {
-            return Ok(());
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+        open_url: impl FnOnce(String) -> Result<(), std::io::Error> + Send + 'static,
+    ) {
+        let Some(url) = self.startup_crash_report_issue_url() else {
+            return;
         };
-        open_url(&report.issue_url)
+        platform_open::spawn_launch(
+            cx,
+            move || open_url(url),
+            |this, result, cx| {
+                match result {
+                    Ok(()) => this.push_toast(
+                        components::ToastKind::Success,
+                        "Opened crash report page in your browser.".to_string(),
+                        cx,
+                    ),
+                    Err(err) => this.push_toast(
+                        components::ToastKind::Error,
+                        format!("Failed to open browser: {err}"),
+                        cx,
+                    ),
+                }
+                // `push_toast` sends an Error straight to `show_error_banner`,
+                // which never touches `cx`, so without this the error path would
+                // depend entirely on a store round-trip to repaint.
+                cx.notify();
+            },
+        );
     }
 
     fn ignore_startup_crash_report(&mut self) -> Result<(), std::io::Error> {
@@ -3731,21 +3780,7 @@ impl Render for GitCometView {
                 components::Button::new("startup_crash_report_open", "Report Issue")
                     .style(components::ButtonStyle::Filled)
                     .on_click(theme, cx, |this, _e, _w, cx| {
-                        match this.report_startup_crash_report() {
-                            Ok(()) => this.push_toast(
-                                components::ToastKind::Success,
-                                "Opened crash report page in your browser.".to_string(),
-                                cx,
-                            ),
-                            Err(err) => {
-                                this.push_toast(
-                                    components::ToastKind::Error,
-                                    format!("Failed to open browser: {err}"),
-                                    cx,
-                                );
-                            }
-                        }
-                        cx.notify();
+                        this.report_startup_crash_report(cx);
                     });
 
             let ignore_button =

@@ -1,0 +1,41 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "spirv",
+      "camelcase": "Spirv",
+      "title": "SPIR-V",
+      "scope": "source.spirv",
+      "path": ".",
+      "file-types": [
+        "spvasm"
+      ],
+      "injection-regex": "^spir-?v$"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "SPIR-V assembly (spvasm) grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Tim Besard",
+        "email": "tim@juliahub.com"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/JuliaGPU/tree-sitter-spirv"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": false,
+    "java": false,
+    "kotlin": false,
+    "node": true,
+    "python": false,
+    "rust": true,
+    "swift": false,
+    "zig": false
+  }
+}

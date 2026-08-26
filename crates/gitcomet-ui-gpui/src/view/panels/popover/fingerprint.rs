@@ -169,6 +169,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::PushSetUpstreamPrompt { repo_id, .. }
         | PopoverKind::ForcePushConfirm { repo_id }
         | PopoverKind::CherryPickCommitConfirm { repo_id, .. }
+        | PopoverKind::MergeCommitConfirm { repo_id, .. }
         | PopoverKind::MergeAbortConfirm { repo_id }
         | PopoverKind::ForceDeleteBranchConfirm { repo_id, .. }
         | PopoverKind::ForceRemoveWorktreeConfirm { repo_id, .. }
@@ -364,6 +365,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
         | PopoverKind::RebaseReword { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
+        | PopoverKind::MergeCommitConfirm { .. }
         | PopoverKind::MergeAbortConfirm { .. }
         | PopoverKind::ResetPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. }
@@ -552,6 +554,11 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
         }
         PopoverKind::CherryPickCommitConfirm { repo_id, commit_id } => {
             76u8.hash(hasher);
+            repo_id.hash(hasher);
+            commit_id.hash(hasher);
+        }
+        PopoverKind::MergeCommitConfirm { repo_id, commit_id } => {
+            83u8.hash(hasher);
             repo_id.hash(hasher);
             commit_id.hash(hasher);
         }

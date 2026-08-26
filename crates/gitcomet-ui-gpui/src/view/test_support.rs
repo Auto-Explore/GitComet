@@ -15,6 +15,7 @@ pub(crate) fn sync_store_snapshot(view: &GitCometView, cx: &mut impl gpui::AppCo
     push_test_state(view, view.store.snapshot(), cx);
 }
 
+#[cfg(target_os = "macos")]
 pub(crate) fn apply_state_snapshot_for_test(
     view: &mut GitCometView,
     state: Arc<AppState>,
