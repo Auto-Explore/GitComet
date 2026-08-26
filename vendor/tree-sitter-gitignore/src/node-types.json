@@ -1,0 +1,322 @@
+[
+  {
+    "type": "bracket_char_class",
+    "named": true,
+    "fields": {
+      "name": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "alnum",
+            "named": false
+          },
+          {
+            "type": "alpha",
+            "named": false
+          },
+          {
+            "type": "blank",
+            "named": false
+          },
+          {
+            "type": "cntrl",
+            "named": false
+          },
+          {
+            "type": "digit",
+            "named": false
+          },
+          {
+            "type": "graph",
+            "named": false
+          },
+          {
+            "type": "lower",
+            "named": false
+          },
+          {
+            "type": "print",
+            "named": false
+          },
+          {
+            "type": "punct",
+            "named": false
+          },
+          {
+            "type": "space",
+            "named": false
+          },
+          {
+            "type": "upper",
+            "named": false
+          },
+          {
+            "type": "xdigit",
+            "named": false
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "bracket_char_escaped",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "bracket_expr",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "bracket_char",
+          "named": true
+        },
+        {
+          "type": "bracket_char_class",
+          "named": true
+        },
+        {
+          "type": "bracket_char_escaped",
+          "named": true
+        },
+        {
+          "type": "bracket_negation",
+          "named": true
+        },
+        {
+          "type": "bracket_range",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "bracket_range",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "bracket_char",
+          "named": true
+        },
+        {
+          "type": "bracket_char_escaped",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "document",
+    "named": true,
+    "root": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "comment",
+          "named": true
+        },
+        {
+          "type": "pattern",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "pattern",
+    "named": true,
+    "fields": {
+      "directory_flag": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "directory_separator",
+            "named": true
+          },
+          {
+            "type": "directory_separator_escaped",
+            "named": true
+          }
+        ]
+      },
+      "relative_flag": {
+        "multiple": true,
+        "required": false,
+        "types": [
+          {
+            "type": "directory_separator",
+            "named": true
+          },
+          {
+            "type": "directory_separator_escaped",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "bracket_expr",
+          "named": true
+        },
+        {
+          "type": "negation",
+          "named": true
+        },
+        {
+          "type": "pattern_char",
+          "named": true
+        },
+        {
+          "type": "pattern_char_escaped",
+          "named": true
+        },
+        {
+          "type": "wildcard_char_single",
+          "named": true
+        },
+        {
+          "type": "wildcard_chars",
+          "named": true
+        },
+        {
+          "type": "wildcard_chars_allow_slash",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "pattern_char_escaped",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "-",
+    "named": false
+  },
+  {
+    "type": ":]",
+    "named": false
+  },
+  {
+    "type": "[",
+    "named": false
+  },
+  {
+    "type": "[:",
+    "named": false
+  },
+  {
+    "type": "\\",
+    "named": false
+  },
+  {
+    "type": "]",
+    "named": false
+  },
+  {
+    "type": "alnum",
+    "named": false
+  },
+  {
+    "type": "alpha",
+    "named": false
+  },
+  {
+    "type": "blank",
+    "named": false
+  },
+  {
+    "type": "bracket_char",
+    "named": true
+  },
+  {
+    "type": "bracket_negation",
+    "named": true
+  },
+  {
+    "type": "cntrl",
+    "named": false
+  },
+  {
+    "type": "comment",
+    "named": true
+  },
+  {
+    "type": "digit",
+    "named": false
+  },
+  {
+    "type": "directory_separator",
+    "named": true
+  },
+  {
+    "type": "directory_separator_escaped",
+    "named": true
+  },
+  {
+    "type": "graph",
+    "named": false
+  },
+  {
+    "type": "lower",
+    "named": false
+  },
+  {
+    "type": "negation",
+    "named": true
+  },
+  {
+    "type": "pattern_char",
+    "named": true
+  },
+  {
+    "type": "print",
+    "named": false
+  },
+  {
+    "type": "punct",
+    "named": false
+  },
+  {
+    "type": "space",
+    "named": false
+  },
+  {
+    "type": "upper",
+    "named": false
+  },
+  {
+    "type": "wildcard_char_single",
+    "named": true
+  },
+  {
+    "type": "wildcard_chars",
+    "named": true
+  },
+  {
+    "type": "wildcard_chars_allow_slash",
+    "named": true
+  },
+  {
+    "type": "xdigit",
+    "named": false
+  }
+]

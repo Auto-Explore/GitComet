@@ -1,7 +1,7 @@
 use super::*;
 
 const MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE: usize = 64;
-const DIFF_TEXT_TAB_WIDTH: usize = 4;
+pub(in crate::view) const DIFF_TEXT_TAB_WIDTH: usize = 4;
 
 pub(in crate::view) fn multiline_text_copy_capacity_hint(line_count: usize) -> usize {
     line_count.saturating_mul(MULTILINE_TEXT_COPY_BYTES_PER_LINE_ESTIMATE)

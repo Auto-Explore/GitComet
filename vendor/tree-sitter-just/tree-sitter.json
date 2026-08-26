@@ -1,0 +1,51 @@
+{
+  "grammars": [
+    {
+      "name": "just",
+      "camelcase": "Just",
+      "scope": "source.just",
+      "path": ".",
+      "file-types": [
+        "just",
+        ".just",
+        "justfile",
+        "JUSTFILE",
+        "Justfile",
+        ".justfile",
+        ".JUSTFILE",
+        ".Justfile"
+      ],
+      "highlights": "queries-src/highlights.scm",
+      "injections": "queries-src/injections.scm",
+      "locals": "queries-src/locals.scm",
+      "injection-regex": "^(?i)just(file)?$",
+      "first-line-regex": "#!\\S*bin\\S*[/ ]just"
+    }
+  ],
+  "metadata": {
+    "version": "0.2.0",
+    "license": "MIT",
+    "description": "Justfiles grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Anshuman Medhi",
+        "email": "amedhi@connect.ust.uk"
+      },
+      {
+        "name": "Trevor Gross",
+        "email": "tmgross@umich.edu"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/casey/tree-sitter-just"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}

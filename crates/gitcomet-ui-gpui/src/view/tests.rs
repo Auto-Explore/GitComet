@@ -266,15 +266,31 @@ fn reporting_startup_crash_keeps_report_and_notification(cx: &mut gpui::TestAppC
         GitCometView::new_with_config(store, events, config, window, cx)
     });
 
+    // Drive the button's real handler with a stub launcher standing in for the
+    // browser, so the assertions below describe a report page that was actually
+    // opened rather than a getter that was read.
+    let opened = Arc::new(std::sync::Mutex::new(None::<String>));
+    let opened_in_launch = Arc::clone(&opened);
     cx.update(|_window, app| {
-        view.update(app, |this, _cx| {
-            this.report_startup_crash_report_with(|url| {
-                assert_eq!(url, "https://example.invalid/crash-report");
+        view.update(app, |this, cx| {
+            this.report_startup_crash_report_with(cx, move |url| {
+                *opened_in_launch
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(url);
                 Ok(())
-            })
-            .expect("open report URL");
+            });
         });
     });
+    cx.run_until_parked();
+
+    assert_eq!(
+        opened
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .as_deref(),
+        Some("https://example.invalid/crash-report"),
+        "the button must open the URL recorded for the crash"
+    );
 
     assert!(
         crash_log_path.exists(),

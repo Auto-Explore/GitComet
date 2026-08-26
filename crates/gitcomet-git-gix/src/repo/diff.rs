@@ -1195,18 +1195,63 @@ fn persist_worktree_git_cache_file(
     if let Some(parent) = cache_path.parent() {
         std::fs::create_dir_all(parent).map_err(io_err_to_error)?;
     }
-    match tmp_file.persist(cache_path) {
+    match tmp_file.persist_noclobber(cache_path) {
         Ok(_) => Ok(()),
         Err(err) if err.error.kind() == std::io::ErrorKind::AlreadyExists => {
             let tmp_file = err.file;
+            if worktree_git_cache_files_match(&tmp_file, cache_path)? {
+                // The path is content-addressed. Keeping an identical winner is
+                // both cheaper and semantically important: replacing it changes
+                // filesystem metadata that open diff rows use as a freshness
+                // guard, despite the normalized bytes being unchanged.
+                return Ok(());
+            }
+
+            // A corrupt file or the exceptionally unlikely hash collision must
+            // not make the cache return bytes that do not match its identity.
             std::fs::remove_file(cache_path).map_err(io_err_to_error)?;
             tmp_file
-                .persist(cache_path)
+                .persist_noclobber(cache_path)
                 .map(|_| ())
                 .map_err(|err| io_err_to_error(err.error))
         }
         Err(err) => Err(io_err_to_error(err.error)),
     }
+}
+
+fn worktree_git_cache_files_match(
+    tmp_file: &tempfile::NamedTempFile,
+    cache_path: &Path,
+) -> Result<bool> {
+    let expected_len = tmp_file
+        .as_file()
+        .metadata()
+        .map_err(io_err_to_error)?
+        .len();
+    let cached_file = std::fs::File::open(cache_path).map_err(io_err_to_error)?;
+    if cached_file.metadata().map_err(io_err_to_error)?.len() != expected_len {
+        return Ok(false);
+    }
+
+    let mut expected = BufReader::new(tmp_file.reopen().map_err(io_err_to_error)?);
+    let mut cached = BufReader::new(cached_file);
+    let mut expected_chunk = [0u8; 64 * 1024];
+    let mut cached_chunk = [0u8; 64 * 1024];
+    let mut remaining = expected_len;
+    while remaining > 0 {
+        let chunk_len = remaining.min(expected_chunk.len() as u64) as usize;
+        expected
+            .read_exact(&mut expected_chunk[..chunk_len])
+            .map_err(io_err_to_error)?;
+        cached
+            .read_exact(&mut cached_chunk[..chunk_len])
+            .map_err(io_err_to_error)?;
+        if expected_chunk[..chunk_len] != cached_chunk[..chunk_len] {
+            return Ok(false);
+        }
+        remaining -= chunk_len as u64;
+    }
+    Ok(true)
 }
 
 fn hash_worktree_source_identity(
@@ -1488,6 +1533,101 @@ mod tests {
             std::fs::read(&cache_path).expect("read replaced cache"),
             b"new normalized content"
         );
+    }
+
+    #[test]
+    fn persist_worktree_git_cache_file_preserves_identical_existing_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cache_path = tmp.path().join("gitcomet-diff-worktree-identical.txt");
+        let content = b"unchanged normalized content";
+        std::fs::write(&cache_path, content).expect("write existing cache");
+        let mut permissions = std::fs::metadata(&cache_path)
+            .expect("existing cache metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&cache_path, permissions).expect("make existing cache read-only");
+        let identity_before = FileDiffTextSource::new(cache_path.clone()).identity;
+
+        let mut duplicate = tempfile::NamedTempFile::new_in(tmp.path()).expect("temp file");
+        duplicate
+            .write_all(content)
+            .expect("write identical cache candidate");
+        duplicate.flush().expect("flush identical cache candidate");
+
+        persist_worktree_git_cache_file(duplicate, &cache_path)
+            .expect("keep identical normalized cache file");
+
+        let metadata = std::fs::metadata(&cache_path).expect("preserved cache metadata");
+        assert!(
+            metadata.permissions().readonly(),
+            "an identical refresh must retain the existing cache file, not replace it"
+        );
+        assert_eq!(
+            FileDiffTextSource::new(cache_path.clone()).identity,
+            identity_before,
+            "an identical refresh must preserve the source freshness identity"
+        );
+        assert_eq!(std::fs::read(&cache_path).expect("read cache"), content);
+
+        #[cfg(windows)]
+        {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&cache_path, permissions)
+                .expect("restore writable cache for cleanup");
+        }
+    }
+
+    #[test]
+    fn repeated_worktree_source_load_preserves_content_addressed_cache_file() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        init_test_repo(tmp.path());
+        let logical_path = Path::new("src/lib.rs");
+        std::fs::create_dir_all(tmp.path().join("src")).expect("create source directory");
+        std::fs::write(tmp.path().join(logical_path), b"fn unchanged() {}\n")
+            .expect("write worktree source");
+        let repo = open_repo(tmp.path());
+        let thread_local_repo = repo._repo.to_thread_local();
+
+        let first = repo
+            .cached_git_normalized_worktree_file_source(&thread_local_repo, logical_path)
+            .expect("load first normalized source")
+            .expect("worktree source");
+        let mut permissions = std::fs::metadata(&first.path)
+            .expect("first cache metadata")
+            .permissions();
+        permissions.set_readonly(true);
+        std::fs::set_permissions(&first.path, permissions).expect("make cache read-only");
+        let freshness_before = FileDiffTextSource::new(first.path.clone()).identity;
+
+        let second = repo
+            .cached_git_normalized_worktree_file_source(&thread_local_repo, logical_path)
+            .expect("reload identical normalized source")
+            .expect("reloaded worktree source");
+
+        assert_eq!(
+            second, first,
+            "normalized content identity should be stable"
+        );
+        let metadata = std::fs::metadata(&second.path).expect("reloaded cache metadata");
+        assert!(
+            metadata.permissions().readonly(),
+            "a no-op source reload must retain the existing cache file"
+        );
+        assert_eq!(
+            FileDiffTextSource::new(second.path.clone()).identity,
+            freshness_before,
+            "a no-op source reload must preserve the UI freshness identity"
+        );
+
+        #[cfg(windows)]
+        {
+            let mut permissions = metadata.permissions();
+            permissions.set_readonly(false);
+            std::fs::set_permissions(&second.path, permissions)
+                .expect("restore writable cache for cleanup");
+        }
+        std::fs::remove_file(&second.path).expect("remove content-addressed test cache");
     }
 
     #[test]

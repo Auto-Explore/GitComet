@@ -62,18 +62,25 @@ pub(in crate::view) use prepared::{
     has_pending_prepared_diff_syntax_chunk_builds, inject_background_prepared_diff_syntax_document,
     prepare_diff_syntax_document_in_background_text_with_reuse,
     prepare_diff_syntax_document_with_budget_reuse_text,
-    prepared_diff_syntax_line_for_inline_diff_row, prepared_diff_syntax_line_for_one_based_line,
-    prepared_diff_syntax_reparse_seed, request_syntax_highlights_for_prepared_document_byte_range,
+    prepared_diff_syntax_document_is_available, prepared_diff_syntax_line_for_inline_diff_row,
+    prepared_diff_syntax_line_for_one_based_line,
+    prepared_diff_syntax_occurrences_at_display_offset,
+    prepared_diff_syntax_pair_at_display_offset, prepared_diff_syntax_reparse_seed,
+    request_syntax_highlights_for_prepared_document_byte_range,
 };
 #[cfg(test)]
 pub(in crate::view) use prepared::{
     prepared_diff_syntax_parse_mode, prepared_diff_syntax_source_version,
     syntax_highlights_for_prepared_document_byte_range,
 };
+#[cfg(test)]
+pub(in crate::view) use syntax::OCCURRENCE_MAX_TEXT_BYTES;
+#[cfg(test)]
+pub(in crate::view) use syntax::SyntaxPairKind;
 pub(in crate::view) use syntax::{
     DiffSyntaxBudget, DiffSyntaxEdit, DiffSyntaxLanguage, DiffSyntaxMode, LiveSyntaxDocument,
     LiveSyntaxSnapshot, LiveSyntaxSyncOutcome, PREPARED_DIFF_SYNTAX_DOCUMENT_MAX_TEXT_BYTES,
-    diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
+    SyntaxPair, diff_syntax_language_for_code_fence_info, diff_syntax_language_for_path,
 };
 pub(in crate::view) use syntax::{live_syntax_document_supported, live_syntax_reparse};
 

@@ -1,0 +1,37 @@
+{
+  "grammars": [
+    {
+      "name": "kotlin",
+      "camelcase": "Kotlin",
+      "scope": "source.kotlin",
+      "path": ".",
+      "file-types": [
+        "kt",
+        "kts"
+      ],
+      "highlights": "queries/highlights.scm",
+      "tags": "queries/tags.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.4.0",
+    "license": "MIT",
+    "description": "Tree-sitter grammar for Kotlin",
+    "authors": [
+      {
+        "name": "fwcd"
+      }
+    ],
+    "links": {
+      "repository": "git+https://github.com/fwcd/tree-sitter-kotlin.git"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}

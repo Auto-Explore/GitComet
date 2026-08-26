@@ -1690,6 +1690,9 @@ impl MainPaneView {
             diff_suppress_clicks_remaining: 0,
             diff_text_hitboxes: FxHashMap::default(),
             diff_search_horizontal_reveal: None,
+            diff_text_pair_match: None,
+            diff_text_occurrences: FxHashMap::default(),
+            diff_text_pending_syntax_click: None,
             conflict_text_hitboxes: FxHashMap::default(),
             diff_text_layout_cache_epoch: 0,
             diff_text_layout_cache: FxHashMap::default(),
@@ -1717,6 +1720,16 @@ impl MainPaneView {
             file_diff_row_provider: None,
             file_diff_old_text: SharedString::default(),
             file_diff_old_line_starts: Arc::default(),
+            file_diff_pair_syntax_text: FxHashMap::default(),
+            file_diff_click_syntax_inflight: FxHashMap::default(),
+            #[cfg(test)]
+            file_diff_click_syntax_after_prepare_hook: None,
+            #[cfg(test)]
+            file_diff_click_syntax_before_complete_hook: None,
+            file_diff_old_source_path: None,
+            file_diff_new_source_path: None,
+            file_diff_old_source_identity: None,
+            file_diff_new_source_identity: None,
             file_diff_old_line_to_row: Arc::default(),
             file_diff_old_line_to_inline_row: Arc::default(),
             file_diff_new_text: SharedString::default(),
@@ -1802,7 +1815,9 @@ impl MainPaneView {
             file_editor_live_syntax_building: None,
             file_editor_live_syntax_build: None,
             file_editor_live_syntax_reparse: None,
-            file_editor_bracket_match: None,
+            file_editor_syntax_pair: None,
+            file_editor_occurrences: Vec::new(),
+            file_editor_occurrences_version: None,
             file_editor_search_matches: Vec::new(),
             file_editor_search_source: None,
             file_editor_search_rev: 0,
@@ -3858,6 +3873,7 @@ impl MainPaneView {
         // the same `split_left`/`split_right` epochs, so the two key spaces
         // alias. Clear on every mode change, not just the toolbar/hotkey ones.
         self.clear_diff_text_style_caches();
+        self.clear_diff_text_projected_highlights();
         if self.diff_search_has_query() {
             self.diff_search_recompute_matches_preserving_current();
         }
@@ -4424,6 +4440,7 @@ impl MainPaneView {
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
+        self.clear_diff_text_projected_highlights();
         if clear_reveals {
             self.diff_visible_cache_projection_rev = u64::MAX;
         }
@@ -4434,6 +4451,12 @@ impl MainPaneView {
         self.collapsed_diff_hunk_visible_indices.clear();
         self.collapsed_diff_header_display_cache.clear();
         self.diff_visible_projection_rev = self.diff_visible_projection_rev.wrapping_add(1);
+        // Revealing a hunk renumbers every row below it. The click highlights are
+        // stored against the row indices they were projected onto, so leaving
+        // them would paint the pair and the name's uses over unrelated rows --
+        // and, since the spans are per-row display columns, over unrelated
+        // characters.
+        self.clear_diff_text_projected_highlights();
     }
 
     // Apply the mode inside the pane first, then sync the root preference

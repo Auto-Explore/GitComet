@@ -1,0 +1,210 @@
+==========
+Instruction -- No args
+==========
+MOVLPS
+---
+
+(program
+  (instruction
+    kind: (mnemonic)))
+
+==========
+Instruction -- One reg arg
+==========
+pushq %rbp
+---
+
+(program
+  (instruction
+    kind: (mnemonic)
+    (ident
+      (reg))))
+
+==========
+Instruction -- Two reg args
+==========
+pushq %rbp, %rbp
+---
+
+(program
+  (instruction
+    kind: (mnemonic)
+    (ident
+      (reg))
+    (ident
+      (reg))))
+
+==========
+Instruction -- Pointer offset arg, reg arg
+==========
+movzbl	-1(%rbp), %eax
+---
+
+(program
+  (instruction
+    kind: (mnemonic)
+    (ptr
+      (int)
+      (reg))
+    (ident
+      (reg))))
+
+==========
+Instruction -- Integer immediate arg, reg arg (GAS x86)
+==========
+andl	$15, %eax
+---
+
+(program
+  (instruction
+    kind: (mnemonic)
+    (int)
+    (ident
+      (reg))))
+
+==========
+Instruction -- Reg arg, Integer immediate arg (ARM A64)
+==========
+mov X10, #1
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (int)))
+
+==========
+Instruction -- Reg arg, reg arg, address pointer with register and negative integer immediate arg, followed by exclmation mark (ARM A64)
+==========
+stp w0, w1, [sp, #-16]!
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (ident
+      (reg
+        (word)))
+    (ptr
+      (reg
+        (word))
+      (int))))
+
+==========
+Instruction -- Reg arg, address pointer with register and integer immediate arg (ARM A64)
+==========
+ldr x8, [sp, #8]
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (ptr
+      (reg
+        (word))
+      (int))))
+
+==========
+Instruction -- Reg arg, address pointer with register only (ARM A64)
+==========
+ldr x8, [sp]
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (ptr
+      (reg
+        (word)))))
+
+==========
+Instruction -- Reg arg, section address arg (ARM A64)
+==========
+adr X1, helloworld
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (ident
+      (reg
+        (word)))))
+
+==========
+Instruction -- List of registers with range (ARMv7)
+==========
+PUSH { V1, V2, V3-V5, LR }
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (list
+      (reg
+        (word))
+      (reg
+        (word))
+      (reg
+        (word))
+      (reg
+        (word))
+      (reg
+        (word)))))
+
+==========
+Instruction -- Section address arg, reg arg (GAS x86)
+==========
+mov $msg, %ecx
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (address)))
+    (ident
+      (reg))))
+
+==========
+Instruction -- Dotted label arg
+==========
+jne	.L5
+---
+
+(program
+  (instruction
+    kind: (mnemonic)
+    (ident
+      (meta_ident))))
+
+==========
+Instruction -- Reg arg, address arg (ARMv7)
+==========
+LDR A1, =addr
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ident
+      (reg
+        (word)))
+    (ident
+      (reg
+        (address)))))

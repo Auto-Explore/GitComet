@@ -127,7 +127,14 @@
             "alpha": 0.22
           },
           "search_match_foreground": "#e0af68ff",
-          "bracket_match_background": "#ffffff26",
+          "bracket_match_background": {
+            "hex": "#ffc777ff",
+            "alpha": 0.32
+          },
+          "occurrence_highlight_background": {
+            "hex": "#bb9af7ff",
+            "alpha": 0.26
+          },
           "indent_guide": "#ffffff10"
         },
         "diff": {

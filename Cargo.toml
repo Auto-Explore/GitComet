@@ -9,7 +9,45 @@ members = [
   "crates/gitcomet-tree-sitter-alloc",
   "crates/gitcomet-ui-gpui",
 ]
-exclude = ["crates/win32-window-utils", "vendor/tree-sitter-vue"]
+exclude = [
+  "crates/win32-window-utils",
+  "vendor/tree-sitter-asm",
+  "vendor/tree-sitter-build",
+  "vendor/tree-sitter-c-sharp",
+  "vendor/tree-sitter-caddyfile",
+  "vendor/tree-sitter-cil",
+  "vendor/tree-sitter-coffee",
+  "vendor/tree-sitter-cpp",
+  "vendor/tree-sitter-crontab",
+  "vendor/tree-sitter-css",
+  "vendor/tree-sitter-csv",
+  "vendor/tree-sitter-cue",
+  "vendor/tree-sitter-dhall",
+  "vendor/tree-sitter-ebnf",
+  "vendor/tree-sitter-fsharp",
+  "vendor/tree-sitter-gitignore",
+  "vendor/tree-sitter-haskell",
+  "vendor/tree-sitter-html",
+  "vendor/tree-sitter-julia",
+  "vendor/tree-sitter-just",
+  "vendor/tree-sitter-kdl",
+  "vendor/tree-sitter-kotlin-sg",
+  "vendor/tree-sitter-objc",
+  "vendor/tree-sitter-ocaml",
+  "vendor/tree-sitter-php",
+  "vendor/tree-sitter-powershell",
+  "vendor/tree-sitter-ron",
+  "vendor/tree-sitter-ruby",
+  "vendor/tree-sitter-rust",
+  "vendor/tree-sitter-scala",
+  "vendor/tree-sitter-sequel",
+  "vendor/tree-sitter-spirv",
+  "vendor/tree-sitter-swift",
+  "vendor/tree-sitter-typescript",
+  "vendor/tree-sitter-v",
+  "vendor/tree-sitter-vue",
+  "vendor/tree-sitter-wat",
+]
 
 default-members = [
   "crates/gitcomet",
@@ -34,6 +72,7 @@ gitcomet-core = { path = "crates/gitcomet-core" }
 gitcomet-git = { path = "crates/gitcomet-git" }
 gitcomet-git-gix = { path = "crates/gitcomet-git-gix" }
 gitcomet-state = { path = "crates/gitcomet-state" }
+gitcomet-tree-sitter-alloc = { path = "crates/gitcomet-tree-sitter-alloc" }
 gitcomet-ui-gpui = { path = "crates/gitcomet-ui-gpui", default-features = false }
 
 # External crates
@@ -41,18 +80,42 @@ alacritty_terminal = "0.26"
 anyhow = "1"
 clap = { version = "4.6.6", features = ["derive"] }
 criterion = "0.8.2"
+# Runs the tree-sitter allocator install before `main` in every binary that
+# links gitcomet-tree-sitter-alloc, tests included, so no process ever switches
+# allocators while tree-sitter is already holding blocks. Already in the graph
+# via gpui, so this adds no new compilation.
+ctor = "1.0.13"
+# Groovy grammar: the `tree-sitter-groovy` crate name is taken by amaanq's fork,
+# which ships no highlights query. This one does.
+dekobon-tree-sitter-groovy = "0.2.2"
 fontdb = "0.24.0"
 futures = "0.3.34"
-gix = { version = "0.86.0", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
+gix = { version = "0.87.1", default-features = false, features = ["max-performance-safe", "comfort", "basic", "auto-chain-error", "status", "blame", "sha1"] }
 gpui = { git = "https://github.com/Havunen/gpui-ce.git", rev = "bd33290a612c700e008753ff9ae28f735c9cfa40" }
 gpui_platform = { git = "https://github.com/Havunen/gpui-ce.git", rev = "bd33290a612c700e008753ff9ae28f735c9cfa40", features = ["font-kit"] }
 image = "0.25.10"
 # Already in the tree via gix-date; used directly for system-timezone lookups.
 jiff = "0.2"
-log = "0.4.33"
+log = "0.4.34"
 lru = "0.18"
 memchr = "2.8.3"
 mimalloc = "0.1.52"
+# The same mimalloc `mimalloc` builds on, bound directly so tree-sitter's C can be
+# pointed at it. `#[global_allocator]` only routes Rust's allocations; C `malloc`
+# calls still reach libc unless mimalloc is built to interpose the symbol, which
+# this is not. "extended" adds `mi_calloc`/`mi_usable_size` bindings and does not
+# change how the C library is compiled.
+#
+# Both crates must resolve to one native library or `mi_free` would be handed
+# pointers from a heap it does not own. They do, and cargo enforces it rather
+# than us: libmimalloc-sys declares `links = "mimalloc"`, so two versions of it
+# in one graph is a resolve error, not a silent second heap.
+#
+# Neither enables the `v2` feature, so this builds mimalloc **v3**. That was
+# already true of the Rust side via `mimalloc`; pointing tree-sitter here puts
+# its C on the same v3 heap rather than introducing a new one, which is the
+# point of the exercise.
+libmimalloc-sys = { version = "0.1.49", features = ["extended"] }
 pulldown-cmark = { version = "0.13", default-features = false, features = ["simd"] }
 notify = "9.0.0-rc.4"
 palette = "0.7.7"
@@ -73,45 +136,132 @@ strsim = "0.11.1"
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
 tempfile = "3.27.0"
 thiserror = "2.0"
-tree-sitter = "0.26.12"
+tree-sitter = "0.26.13"
+# Fifteen of the grammars below are `path = "vendor/..."` purely to shrink the
+# release binary: they are upstream's source, regenerated with a larger
+# small-state threshold. tree-sitter's generator gives a parse state either a
+# dense `ts_parse_table` row (SYMBOL_COUNT * 2 bytes) or a compact scanned entry,
+# switching at `min(64, symbol_count / 2)` -- and that 64 is the break-even only
+# up to 128 symbols, so every large grammar pays for thousands of dense rows it
+# does not need. Regenerating at 128 took the 19 parsers that reach the binary
+# from 67.8 MB to 45.0 MB of parse tables -- the whole of the release build's
+# 22.7 MB drop -- for ~1.6-6.7% more parse time, and is representation-only: the
+# automaton and every parse tree are unchanged, which is verified per grammar
+# against upstream. vendor/README.md has the procedure, the proof, and the one
+# grammar this is *not* safe for; each crate's Cargo.toml header has its own
+# numbers.
+# Vendored, not from crates.io: the grammar needed a `mnemonic` token so an
+# arm64 `b.eq` is one node instead of an ERROR, and upstream has not changed.
+# See vendor/tree-sitter-asm/Cargo.toml for the full list of edits.
+tree-sitter-asm = { path = "vendor/tree-sitter-asm" }
 tree-sitter-bash = "0.25.1"
 tree-sitter-bicep = "1.1.0"
 tree-sitter-c = "0.24.2"
-tree-sitter-c-sharp = "0.23.5"
-tree-sitter-cpp = { git = "https://github.com/tree-sitter/tree-sitter-cpp", rev = "5cb9b693cfd7bfacab1d9ff4acac1a4150700609" }
-tree-sitter-css = "0.25.0"
+tree-sitter-c-sharp = { path = "vendor/tree-sitter-c-sharp" }
+# Clojure grammar. Not `tree-sitter-clojure`: that crate has a normal dependency
+# on `tree-sitter = 0.25.6`, and because tree-sitter declares `links`, cargo will
+# not resolve it alongside 0.26 at any version. `tree-sitter-just` is blocked the
+# same way (`~0.25.5`), so it is not in the tree either.
+tree-sitter-clojure-orchard = "0.2.8"
+# Vendored: upstream is archived and unpublished. See its Cargo.toml.
+tree-sitter-caddyfile = { path = "vendor/tree-sitter-caddyfile" }
+# Written here rather than vendored: no CIL or crontab grammar exists upstream.
+tree-sitter-cil = { path = "vendor/tree-sitter-cil" }
+tree-sitter-cmake = "0.7.4"
+# Dockerfile / Containerfile. The crate is named for the OCI-neutral spelling but
+# the grammar is the Docker one.
+tree-sitter-containerfile = "0.9.2"
+# Vendored: no crates.io release. See its Cargo.toml header.
+tree-sitter-coffee = { path = "vendor/tree-sitter-coffee" }
+tree-sitter-cpp = { path = "vendor/tree-sitter-cpp" }
+tree-sitter-crontab = { path = "vendor/tree-sitter-crontab" }
+# The five below are vendored: each pins `tree-sitter ~0.20`, which `links`
+# makes unresolvable alongside 0.26. See their Cargo.toml headers.
+tree-sitter-csv = { path = "vendor/tree-sitter-csv" }
+tree-sitter-cue = { path = "vendor/tree-sitter-cue" }
+# Vendored to give custom properties a rule: `--json: {...}` parsed as a nested
+# rule set and the ERROR took the rest of the block. See
+# vendor/tree-sitter-css/Cargo.toml.
+tree-sitter-css = { path = "vendor/tree-sitter-css" }
 tree-sitter-dart = "0.2.0"
+tree-sitter-dhall = { path = "vendor/tree-sitter-dhall" }
 tree-sitter-diff = "0.1.0"
-tree-sitter-fsharp = "0.3.11"
+tree-sitter-ebnf = { path = "vendor/tree-sitter-ebnf" }
+tree-sitter-elixir = "0.3.5"
+tree-sitter-erlang = "0.20.0"
+tree-sitter-fsharp = { path = "vendor/tree-sitter-fsharp" }
 tree-sitter-gitcommit = { git = "https://github.com/zed-industries/tree-sitter-git-commit", rev = "88309716a69dd13ab83443721ba6e0b491d37ee9" }
+tree-sitter-gleam = "1.0.0"
 tree-sitter-go = "0.25.0"
 tree-sitter-gomod = { git = "https://github.com/camdencheek/tree-sitter-go-mod", rev = "2e886870578eeba1927a2dc4bd2e2b3f598c5f9a" }
 tree-sitter-gowork = { git = "https://github.com/zed-industries/tree-sitter-go-work", rev = "acb0617bf7f4fda02c6217676cc64acb89536dc7" }
-tree-sitter-html = "0.23.2"
+tree-sitter-haskell = { path = "vendor/tree-sitter-haskell" }
+# Vendored: no crates.io release, no Rust bindings upstream.
+tree-sitter-gitignore = { path = "vendor/tree-sitter-gitignore" }
+tree-sitter-hcl = "1.1.0"
+# Vendored for a scanner fix: upstream closed a `<script>` on the characters
+# `</script` alone, where the spec requires whitespace, `/` or `>` after the
+# tag name. See vendor/tree-sitter-html/Cargo.toml.
+tree-sitter-html = { path = "vendor/tree-sitter-html" }
+# INI, and the several config formats that are INI without saying so:
+# `.editorconfig`, systemd units, and git's own config files.
+tree-sitter-ini = "1.4.0"
 tree-sitter-javascript = "0.25.0"
 tree-sitter-java = "0.23.5"
 tree-sitter-jinja-dialects = "0.1.1"
 tree-sitter-jsdoc = "0.25.0"
+tree-sitter-jsonnet = "0.0.1"
 tree-sitter-json = "0.24.8"
-tree-sitter-kotlin-sg = "0.4.1"
+# Vendored, not from crates.io: the published crate depends on
+# `tree-sitter = ~0.25.5` and `links` makes that unresolvable alongside 0.26 --
+# the same blocker as `tree-sitter-clojure`, above.
+tree-sitter-just = { path = "vendor/tree-sitter-just" }
+tree-sitter-kdl = { path = "vendor/tree-sitter-kdl" }
+tree-sitter-julia = { path = "vendor/tree-sitter-julia" }
+tree-sitter-kotlin-sg = { path = "vendor/tree-sitter-kotlin-sg" }
+tree-sitter-llvm = "1.1.0"
 tree-sitter-lua = "0.5.0"
 tree-sitter-make = "1.1.1"
 tree-sitter-md = { git = "https://github.com/tree-sitter-grammars/tree-sitter-markdown", rev = "9a23c1a96c0513d8fc6520972beedd419a973539" }
 tree-sitter-nix = "0.3.0"
-tree-sitter-objc = "3.0.2"
-tree-sitter-php = "0.24.2"
-tree-sitter-powershell = "0.26.4"
+tree-sitter-objc = { path = "vendor/tree-sitter-objc" }
+tree-sitter-ocaml = { path = "vendor/tree-sitter-ocaml" }
+# Ships a parser but no highlights query; GitComet authors one. Deliberately *not*
+# vendored for the small-state retune: tree-sitter-cli 0.26.13 builds a different
+# automaton from this grammar than the CLI upstream used (STATE_COUNT 4634 rather
+# than 4698, from grammar.js as well as grammar.json), so regenerating it changes
+# parse trees -- `pod.pl` renests a `scalar_variable` -- and would break the
+# representation-only guarantee the other grammars are held to. 1.19 MiB is not
+# worth an unverified change to Perl parsing.
+tree-sitter-perl = "1.1.2"
+tree-sitter-php = { path = "vendor/tree-sitter-php" }
+tree-sitter-powershell = { path = "vendor/tree-sitter-powershell" }
+# Pascal and Protobuf ship no highlights query; GitComet authors both.
+tree-sitter-pascal = "0.10.2"
+tree-sitter-properties = "0.3.0"
+tree-sitter-proto = "0.5.0"
 tree-sitter-python = "0.25.0"
 tree-sitter-r = "1.3.0"
 tree-sitter-regex = "0.25.0"
-tree-sitter-ruby = "0.23.1"
-tree-sitter-rust = "0.24.2"
-tree-sitter-scala = "0.26.2"
-tree-sitter-sequel = "0.3.11"
-tree-sitter-swift = "0.7.3"
+tree-sitter-ron = { path = "vendor/tree-sitter-ron" }
+# Vendored for a grammar fix: a `=begin` block comment ended at any `=end`,
+# including mid-line, where Ruby requires column 0. See
+# vendor/tree-sitter-ruby/Cargo.toml.
+tree-sitter-ruby = { path = "vendor/tree-sitter-ruby" }
+tree-sitter-rust = { path = "vendor/tree-sitter-rust" }
+tree-sitter-scala = { path = "vendor/tree-sitter-scala" }
+tree-sitter-sequel = { path = "vendor/tree-sitter-sequel" }
+tree-sitter-solidity = "1.2.13"
+# Vendored: no crates.io release, no Rust bindings upstream.
+tree-sitter-spirv = { path = "vendor/tree-sitter-spirv" }
+tree-sitter-svelte-ng = "1.0.2"
+tree-sitter-swift = { path = "vendor/tree-sitter-swift" }
 tree-sitter-toml-ng = "0.7.0"
-tree-sitter-typescript = "0.23.2"
+tree-sitter-typescript = { path = "vendor/tree-sitter-typescript" }
+tree-sitter-v = { path = "vendor/tree-sitter-v" }
 tree-sitter-vue = { path = "vendor/tree-sitter-vue" }
+# Vendored: nothing on crates.io provides a WebAssembly text grammar.
+tree-sitter-wat = { path = "vendor/tree-sitter-wat" }
 tree-sitter-xml = "0.7.0"
 tree-sitter-yaml = "0.7.2"
 tree-sitter-zig = "1.1.2"

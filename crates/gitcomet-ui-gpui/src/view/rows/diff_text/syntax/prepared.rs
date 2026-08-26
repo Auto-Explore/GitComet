@@ -587,6 +587,7 @@ fn build_line_token_chunk_for_state(
         &tree_state.line_starts,
         chunk_start,
         chunk_end,
+        tree_state.source_hash,
     );
     let chunk_build_ms = started.elapsed().as_millis().min(u128::from(u64::MAX)) as u64;
     let arc_chunk = share_recent_line_token_arcs(chunk);
@@ -795,7 +796,29 @@ impl TreesitterDocumentCache {
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
     ) -> SharedDocumentMergeResult {
-        let mut inserted = false;
+        if !self.by_cache_key.contains_key(&cache_key) {
+            let shared_document = {
+                let store = match shared_prepared_document_seed_store().lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                store.get(&cache_key).cloned()
+            };
+            let Some(shared_document) = shared_document else {
+                return SharedDocumentMergeResult::None;
+            };
+            self.evict_if_needed(SyntaxCacheDropMode::DeferredWhenLarge);
+            let document = TreesitterCachedDocument::from_chunked_line_tokens(
+                shared_document.line_count,
+                shared_document.line_token_chunks,
+                shared_document.tree_state,
+            );
+            self.index_source_identity(cache_key, &document);
+            self.by_cache_key.insert(cache_key, document);
+            self.touch_key(cache_key);
+            return SharedDocumentMergeResult::Inserted;
+        }
+
         let mut updated = false;
         let mut remove_identity = None;
         let mut insert_identity = None;
@@ -810,59 +833,47 @@ impl TreesitterDocumentCache {
             let Some(shared_document) = store.get(&cache_key) else {
                 return SharedDocumentMergeResult::None;
             };
+            let Some(document) = self.by_cache_key.get_mut(&cache_key) else {
+                return SharedDocumentMergeResult::None;
+            };
 
-            match self.by_cache_key.entry(cache_key) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    let document = TreesitterCachedDocument::from_chunked_line_tokens(
+            if document.line_count != shared_document.line_count {
+                let old_identity = document.source_identity();
+                let replaced = std::mem::replace(
+                    document,
+                    TreesitterCachedDocument::from_chunked_line_tokens(
                         shared_document.line_count,
                         shared_document.line_token_chunks.clone(),
                         shared_document.tree_state.clone(),
-                    );
-                    insert_identity = document.source_identity();
-                    entry.insert(document);
-                    inserted = true;
+                    ),
+                );
+                remove_identity = old_identity;
+                insert_identity = document.source_identity();
+                replaced_drop_payload = Some(replaced.into_drop_payload());
+                updated = true;
+            } else {
+                let old_identity = document.source_identity();
+                if document.tree_state.is_none()
+                    && let Some(tree_state) = shared_document.tree_state.clone()
+                {
+                    document.tree_state = Some(tree_state);
+                    updated = true;
                 }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    let document = entry.get_mut();
-                    if document.line_count != shared_document.line_count {
-                        let old_identity = document.source_identity();
-                        let replaced = std::mem::replace(
-                            document,
-                            TreesitterCachedDocument::from_chunked_line_tokens(
-                                shared_document.line_count,
-                                shared_document.line_token_chunks.clone(),
-                                shared_document.tree_state.clone(),
-                            ),
-                        );
-                        remove_identity = old_identity;
-                        insert_identity = document.source_identity();
-                        replaced_drop_payload = Some(replaced.into_drop_payload());
-                        updated = true;
-                    } else {
-                        let old_identity = document.source_identity();
-                        if document.tree_state.is_none()
-                            && let Some(tree_state) = shared_document.tree_state.clone()
-                        {
-                            document.tree_state = Some(tree_state);
-                            updated = true;
-                        }
 
-                        for (&chunk_ix, chunk) in &shared_document.line_token_chunks {
-                            if document.line_token_chunks.contains_key(&chunk_ix) {
-                                continue;
-                            }
-                            insert_line_token_chunk(document, chunk_ix, Some(chunk.clone()));
-                            cleared_pending_chunks.push(PreparedSyntaxChunkKey {
-                                cache_key,
-                                chunk_ix,
-                            });
-                            updated = true;
-                        }
-                        if document.source_identity() != old_identity {
-                            remove_identity = old_identity;
-                            insert_identity = document.source_identity();
-                        }
+                for (&chunk_ix, chunk) in &shared_document.line_token_chunks {
+                    if document.line_token_chunks.contains_key(&chunk_ix) {
+                        continue;
                     }
+                    insert_line_token_chunk(document, chunk_ix, Some(chunk.clone()));
+                    cleared_pending_chunks.push(PreparedSyntaxChunkKey {
+                        cache_key,
+                        chunk_ix,
+                    });
+                    updated = true;
+                }
+                if document.source_identity() != old_identity {
+                    remove_identity = old_identity;
+                    insert_identity = document.source_identity();
                 }
             }
         }
@@ -883,13 +894,11 @@ impl TreesitterDocumentCache {
             self.by_source_identity.insert(identity, cache_key);
         }
 
-        if inserted || updated {
+        if updated {
             self.touch_key(cache_key);
         }
 
-        if inserted {
-            SharedDocumentMergeResult::Inserted
-        } else if updated {
+        if updated {
             SharedDocumentMergeResult::Updated
         } else {
             SharedDocumentMergeResult::None
@@ -1230,6 +1239,24 @@ impl TreesitterDocumentCache {
         let tree_state = self.by_cache_key.get(&cache_key)?.tree_state.clone();
         self.touch_key(cache_key);
         tree_state
+    }
+
+    fn tree_state_is_available(&mut self, cache_key: PreparedSyntaxCacheKey) -> bool {
+        let mut available = self
+            .by_cache_key
+            .get(&cache_key)
+            .is_some_and(|document| document.tree_state.is_some());
+        if !available {
+            self.merge_document_from_shared_seed(cache_key);
+            available = self
+                .by_cache_key
+                .get(&cache_key)
+                .is_some_and(|document| document.tree_state.is_some());
+        }
+        if available {
+            self.touch_key(cache_key);
+        }
+        available
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -1759,7 +1786,229 @@ pub(in super::super) fn has_pending_prepared_syntax_chunk_builds_for_document(
 fn prepared_document_tree_state(
     document: PreparedSyntaxDocument,
 ) -> Option<PreparedSyntaxTreeState> {
-    TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
+    TS_DOCUMENT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(tree_state) = cache.tree_state(document.cache_key) {
+            return Some(tree_state);
+        }
+        cache.merge_document_from_shared_seed(document.cache_key);
+        cache.tree_state(document.cache_key)
+    })
+}
+
+/// Makes an opaque handle usable on this thread, if its shared parse seed is
+/// still retained.
+///
+/// View-level handle caches outlive the small thread-local tree cache. A caller
+/// must use this check before treating a handle hit as a ready document; a
+/// missing shared seed then falls through to the normal parse/worker path.
+pub(in super::super) fn prepared_syntax_document_is_available(
+    document: PreparedSyntaxDocument,
+) -> bool {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .tree_state_is_available(document.cache_key)
+    })
+}
+
+/// One end of a matched pair, in the coordinate space the row canvases speak:
+/// a document line index plus a *display* byte range within that line.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct PreparedSyntaxPairSpan {
+    pub(in crate::view) line_ix: usize,
+    pub(in crate::view) display_range: Range<usize>,
+}
+
+/// A matched pair on a prepared document, already projected into line space.
+///
+/// Each end is a *list* of spans, one per line it covers: a start tag written
+/// across several lines (`<div\n  class="card">`, ordinary in HTML and JSX) is
+/// one delimiter but several rows, and reporting only its first line would wash
+/// `<div` and leave the rest bare.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) struct PreparedSyntaxPairHit {
+    /// Which construct the pair delimits. Test-only for the same reason as
+    /// [`crate::view::DiffTextPairMatch::kind`]: every kind is painted alike, so
+    /// this exists to let an assertion say which pair was found, not to steer
+    /// anything.
+    #[cfg(test)]
+    pub(in crate::view) kind: SyntaxPairKind,
+    pub(in crate::view) open: Vec<PreparedSyntaxPairSpan>,
+    pub(in crate::view) close: Vec<PreparedSyntaxPairSpan>,
+}
+
+/// One line's byte range, without its line terminator.
+///
+/// The newline belongs to the line's bytes but never to its display columns, so
+/// it is trimmed before any offset is measured against the line.
+///
+/// Every bound goes through `text.get`, so a `line_starts` that does not
+/// describe `text` answers `None` instead of panicking. That is not
+/// hypothetical: the click path can index a side whose file was re-read after
+/// the diff was built, and a file that shrank in between leaves starts past the
+/// end of the text.
+fn prepared_line_span(text: &str, line_starts: &[usize], ix: usize) -> Option<Range<usize>> {
+    let start = *line_starts.get(ix)?;
+    let end = line_starts
+        .get(ix + 1)
+        .copied()
+        .unwrap_or(text.len())
+        .min(text.len());
+    let line = text.get(start..end)?;
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    Some(start..start + line.len())
+}
+
+/// The matching pair at a click, taking and returning the canvases' own
+/// coordinates.
+///
+/// The whole display/raw tab conversion lives here rather than at the call site
+/// because this is the only place that holds both halves of it: the tree indexes
+/// raw bytes, the canvases count tab-expanded columns, and
+/// [`PreparedSyntaxTreeState`] carries the `text` and `line_starts` that relate
+/// them. The view layer therefore never handles a document byte offset.
+///
+/// Returns `None` when the document has no retained tree (it was evicted, or the
+/// parse never finished), when `line_ix` is past the end, when the click landed
+/// at a caret boundary beyond the line, or when nothing pairs. Geometric clicks
+/// in trailing blank space are rejected by the view before reaching this API.
+///
+/// Injections *are* consulted, and first -- see [`injected_syntax_pair_at`]. The
+/// injected region's own tree is kept for exactly this, because to the host
+/// grammar an injected body is one opaque leaf: a delimiter inside it matches
+/// nothing, and the walk falls out to the enclosing element. That was the whole
+/// bug -- clicking the `<` of a `<html>` tag in a PHP file did nothing.
+/// Combined injections stay out of it, and the host tree remains the fallback.
+pub(in crate::view) fn prepared_document_syntax_pair_at_display_offset(
+    document: PreparedSyntaxDocument,
+    line_ix: usize,
+    display_offset: usize,
+) -> Option<PreparedSyntaxPairHit> {
+    let state = prepared_document_tree_state(document)?;
+    let text = state.text.as_ref();
+    let line_starts = state.line_starts.as_ref();
+
+    let line_span = |ix: usize| prepared_line_span(text, line_starts, ix);
+
+    let clicked = line_span(line_ix)?;
+    let clicked_line = text.get(clicked.clone())?;
+    let offset =
+        clicked.start + clicked_raw_offset_for_display_offset(clicked_line, display_offset)?;
+
+    let source_ranges_equal = |left: Range<usize>, right: Range<usize>| {
+        let bytes = text.as_bytes();
+        match (bytes.get(left), bytes.get(right)) {
+            (Some(left), Some(right)) => left == right,
+            _ => false,
+        }
+    };
+    ensure_injection_chain_cached_for_pair_lookup(&state, offset);
+    let pair = injected_syntax_pair_at(text, state.source_hash, offset)
+        .or_else(|| syntax_pair_in_tree(&state.tree, offset, &source_ranges_equal))?;
+
+    let project = |range: &Range<usize>| -> Vec<PreparedSyntaxPairSpan> {
+        // `partition_point` gives the count of starts at or before `range.start`,
+        // so subtracting one lands on the line containing it.
+        let Some(first) = line_starts
+            .partition_point(|start| *start <= range.start)
+            .checked_sub(1)
+        else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for ix in first..line_starts.len() {
+            let Some(span) = line_span(ix) else { break };
+            if span.start >= range.end && ix > first {
+                break;
+            }
+            let Some(line) = text.get(span.clone()) else {
+                break;
+            };
+            let start = range.start.clamp(span.start, span.end) - span.start;
+            let end = range.end.clamp(span.start, span.end) - span.start;
+            if start < end {
+                out.push(PreparedSyntaxPairSpan {
+                    line_ix: ix,
+                    display_range: display_offset_for_raw_offset(line, start)
+                        ..display_offset_for_raw_offset(line, end),
+                });
+            }
+            if span.end >= range.end {
+                break;
+            }
+        }
+        out
+    };
+
+    let (open, close) = (project(&pair.open), project(&pair.close));
+    (!open.is_empty() && !close.is_empty()).then_some(PreparedSyntaxPairHit {
+        #[cfg(test)]
+        kind: pair.kind,
+        open,
+        close,
+    })
+}
+
+/// Every place the document names the token at a click, in the canvases' own
+/// coordinates.
+///
+/// Shares the display/raw conversion and the line projection with
+/// [`prepared_document_syntax_pair_at_display_offset`], for the same reason:
+/// this is the only place holding both the tree's byte offsets and the text the
+/// rows were painted from.
+pub(in crate::view) fn prepared_document_occurrences_at_display_offset(
+    document: PreparedSyntaxDocument,
+    line_ix: usize,
+    display_offset: usize,
+) -> Vec<PreparedSyntaxPairSpan> {
+    let Some(state) = prepared_document_tree_state(document) else {
+        return Vec::new();
+    };
+    let text = state.text.as_ref();
+    if text.len() > OCCURRENCE_MAX_TEXT_BYTES {
+        return Vec::new();
+    }
+    let line_starts = state.line_starts.as_ref();
+
+    let Some(clicked) = prepared_line_span(text, line_starts, line_ix) else {
+        return Vec::new();
+    };
+    let Some(clicked_line) = text.get(clicked.clone()) else {
+        return Vec::new();
+    };
+    // A caret boundary beyond the line names nothing. The view separately
+    // rejects pixel clicks in trailing blank space, whose clamped boundary can
+    // equal the valid end boundary produced by the final glyph's right half.
+    let Some(raw_offset) = clicked_raw_offset_for_display_offset(clicked_line, display_offset)
+    else {
+        return Vec::new();
+    };
+    let offset = clicked.start + raw_offset;
+
+    let Some(found) = syntax_occurrences_in_tree(&state.tree, text, offset) else {
+        return Vec::new();
+    };
+    found
+        .ranges
+        .iter()
+        .filter_map(|range| {
+            // A name never spans a line, so one span per occurrence is exact.
+            let ix = line_starts
+                .partition_point(|start| *start <= range.start)
+                .checked_sub(1)?;
+            let span = prepared_line_span(text, line_starts, ix)?;
+            let line = text.get(span.clone())?;
+            let start = range.start.clamp(span.start, span.end) - span.start;
+            let end = range.end.clamp(span.start, span.end) - span.start;
+            (start < end).then(|| PreparedSyntaxPairSpan {
+                line_ix: ix,
+                display_range: display_offset_for_raw_offset(line, start)
+                    ..display_offset_for_raw_offset(line, end),
+            })
+        })
+        .collect()
 }
 
 pub(in super::super) fn prepared_document_reparse_seed(
@@ -1946,7 +2195,7 @@ fn parse_treesitter_document_core(
         TreesitterParseReuseMode::Full
     };
     let source_version = incremental_seed.map(|seed| seed.next_version).unwrap_or(1);
-    let reused_prefix_chunks = match (old_document, reparse_plan) {
+    let reused_prefix = match (old_document, reparse_plan) {
         (
             Some(document),
             Some(TreesitterReparsePlan::Changed {
@@ -1958,13 +2207,21 @@ fn parse_treesitter_document_core(
                 .borrow_mut()
                 .clone_prefix_line_token_chunks(document.cache_key, *reusable_prefix_chunk_count)
         }),
-        _ => FxHashMap::default(),
+        _ => ReusedPrefixLineTokenChunks::default(),
     };
+
+    if let Some(source) = reused_prefix.injection_source {
+        clone_prefix_injection_cache_entries(
+            source.document_hash,
+            request.cache_key.doc_hash,
+            source.byte_end,
+        );
+    }
 
     Some(PreparedSyntaxDocumentData {
         cache_key: request.cache_key,
         line_count: request.input.line_starts.len(),
-        line_token_chunks: reused_prefix_chunks,
+        line_token_chunks: reused_prefix.line_token_chunks,
         tree_state: Some(PreparedSyntaxTreeState {
             language: request.language,
             text: request.input.text.clone(),
@@ -2322,32 +2579,115 @@ fn reusable_prefix_chunk_count(
     first_changed_line / TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS
 }
 
+#[derive(Default)]
+struct ReusedPrefixLineTokenChunks {
+    line_token_chunks: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>>,
+    injection_source: Option<ReusedPrefixInjectionSource>,
+}
+
+#[derive(Clone, Copy)]
+struct ReusedPrefixInjectionSource {
+    document_hash: u64,
+    byte_end: usize,
+}
+
 impl TreesitterDocumentCache {
     fn clone_prefix_line_token_chunks(
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
         chunk_limit: usize,
-    ) -> FxHashMap<usize, Vec<Arc<[SyntaxToken]>>> {
+    ) -> ReusedPrefixLineTokenChunks {
         if chunk_limit == 0 {
-            return FxHashMap::default();
+            return ReusedPrefixLineTokenChunks::default();
         }
-        let reused: FxHashMap<usize, Vec<Arc<[SyntaxToken]>>> = self
+        let reused = self
             .by_cache_key
             .get(&cache_key)
             .map(|document| {
-                document
+                let line_token_chunks = document
                     .line_token_chunks
                     .iter()
                     .filter(|&(&chunk_ix, _)| chunk_ix < chunk_limit)
                     .map(|(&chunk_ix, chunk)| (chunk_ix, chunk.clone()))
-                    .collect()
+                    .collect();
+                let injection_source = document.tree_state.as_ref().map(|state| {
+                    let prefix_line_ix = chunk_limit
+                        .saturating_mul(TS_DOCUMENT_LINE_TOKEN_CHUNK_ROWS)
+                        .min(state.line_starts.len());
+                    ReusedPrefixInjectionSource {
+                        document_hash: state.source_hash,
+                        byte_end: state
+                            .line_starts
+                            .get(prefix_line_ix)
+                            .copied()
+                            .unwrap_or(state.text.len()),
+                    }
+                });
+                ReusedPrefixLineTokenChunks {
+                    line_token_chunks,
+                    injection_source,
+                }
             })
             .unwrap_or_default();
-        if !reused.is_empty() {
+        if !reused.line_token_chunks.is_empty() {
             self.touch_key(cache_key);
         }
         reused
     }
+}
+
+/// Carry injection trees alongside prefix token chunks reused by an incremental
+/// reparse. Only injections wholly contained in the reusable prefix are copied:
+/// a tree spanning the edit boundary may depend on changed suffix bytes.
+fn clone_prefix_injection_cache_entries(
+    old_document_hash: u64,
+    new_document_hash: u64,
+    prefix_byte_end: usize,
+) {
+    if old_document_hash == new_document_hash || prefix_byte_end == 0 {
+        return;
+    }
+
+    TS_INJECTION_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        // Moved under the new hash rather than copied under it. The old hash
+        // names a document that has just been replaced, so a duplicate is dead
+        // weight -- and each one holds the injection's whole `all_line_tokens`
+        // and its tree. Copying them grew the cache by the reused prefix on
+        // every incremental reparse, so a template-heavy document reached
+        // `TS_INJECTION_CACHE_MAX_ENTRIES` in a handful of edits and
+        // `evict_injection_cache_if_full` then threw away half of it, including
+        // entries the very next chunk build wanted. Nothing else reclaims a
+        // stale document hash.
+        let stale: Vec<TreesitterInjectionMatch> = cache
+            .keys()
+            .filter(|key| key.document_hash == old_document_hash && key.byte_end <= prefix_byte_end)
+            .copied()
+            .collect();
+
+        for old_key in stale {
+            let mut new_key = old_key;
+            new_key.document_hash = new_document_hash;
+            if cache.contains_key(&new_key) {
+                continue;
+            }
+            let Some(mut entry) = cache.remove(&old_key) else {
+                continue;
+            };
+            evict_injection_cache_if_full(&mut cache);
+            entry.last_access = next_injection_access();
+            cache.insert(new_key, entry);
+        }
+
+        // Whatever is left under the old hash lies past the reusable prefix, so
+        // it describes bytes the edit may have changed and the new document can
+        // never look it up -- `document_hash` is part of the key. Nothing else
+        // in this module reclaims a superseded hash, so without this the cache
+        // fills with dead entries and the LRU starts evicting live ones. A
+        // document still painting from the old hash simply re-parses that
+        // injection on demand, which is the same thing eviction already does.
+        cache.retain(|key, _| key.document_hash != old_document_hash);
+    });
 }
 
 fn treesitter_byte_edit_range_from_hint(
@@ -2604,22 +2944,54 @@ pub(super) struct TreesitterQueryPass {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub(super) struct TreesitterInjectionMatch {
+    /// Identity of the root text this injection was found in. Nested injections
+    /// retain the root document's identity and use root-relative byte ranges, so
+    /// pair lookup can consider every layer without admitting a sibling document.
+    ///
+    /// Without it the other three fields can describe two *different* documents'
+    /// injections at once, and [`injected_syntax_pair_at`] iterates a cache
+    /// shared by every document. Changing a Markdown fence from ```` ```html ````
+    /// to ```` ```bash ```` keeps the fenced bytes and their offsets identical
+    /// and moves only `language`, so both keys go live -- and in a diff both
+    /// sides are tokenized on this same thread. The lookup would then answer a
+    /// click with whichever grammar the hash map happened to yield first.
+    pub(super) document_hash: u64,
     pub(super) language: DiffSyntaxLanguage,
     pub(super) byte_start: usize,
     pub(super) byte_end: usize,
     /// Hash of the injection content bytes. This ensures the cache is not
     /// confused when different parent documents happen to produce injection
-    /// regions at the same byte offsets.
+    /// regions at the same byte offsets *with different content*. It cannot
+    /// separate same-content revisions on its own; that is `document_hash`'s job.
     pub(super) content_hash: u64,
 }
 
-pub(super) struct CachedInjectionTokens {
+#[derive(Clone)]
+pub(super) struct CachedInjection {
     /// Full tokenized lines in injection-local coordinates (all lines of the injection).
     pub(super) all_line_tokens: Vec<Vec<SyntaxToken>>,
     /// Line starts for the injection text, used for coordinate remapping.
     pub(super) injection_line_starts: Vec<usize>,
     /// First line in the parent document that this injection starts on.
     pub(super) injection_start_line_ix: usize,
+    /// The injected grammar's own tree, kept so a click can be answered by the
+    /// grammar that actually owns those bytes.
+    ///
+    /// Tokens alone were enough while this cache only ever painted. Bracket
+    /// matching reads the tree, and `prepared_document_syntax_pair_at_display_offset`
+    /// had only the *host* tree -- so in an injected region there was no
+    /// structure to pair against at all: clicking the `<` of `<html>` in a PHP
+    /// file did nothing, because to PHP that whole span is one `text` node.
+    /// Parsed during tokenization so the normal click path does not pay for a
+    /// parse. Pair lookup recreates it only when this entry was evicted while
+    /// the prepared document itself remained cached.
+    ///
+    /// Its offsets are injection-local: the injected text is parsed standalone,
+    /// not with `included_ranges`, so document offsets need shifting by
+    /// `byte_start` in both directions. The live engine differs here -- see
+    /// `LiveSyntaxSnapshot::syntax_pair_at`, whose layers are already in document
+    /// coordinates.
+    pub(super) tree: tree_sitter::Tree,
     /// Monotonic access counter for LRU eviction.
     pub(super) last_access: u64,
 }
@@ -2628,6 +3000,16 @@ pub(super) struct CachedInjectionTokens {
 pub(super) struct TreesitterQueryAsset {
     pub(super) highlights: &'static str,
     pub(super) injections: Option<&'static str>,
+    /// Extra patterns appended to `highlights` before it is compiled.
+    ///
+    /// Several grammars are used with the query their own crate ships, which
+    /// cannot be edited here and in places captures nothing for constructs that
+    /// matter -- brackets, or in Objective-C's case comments and strings. This
+    /// is how those are filled in without vendoring a whole query and taking on
+    /// the job of tracking upstream's. Appended, not prepended: overlapping
+    /// captures resolve last-wins, so a supplement can also correct a capture
+    /// upstream got wrong.
+    pub(super) supplement: Option<&'static str>,
 }
 
 impl TreesitterQueryAsset {
@@ -2635,6 +3017,7 @@ impl TreesitterQueryAsset {
         Self {
             highlights: source,
             injections: None,
+            supplement: None,
         }
     }
 
@@ -2645,6 +3028,31 @@ impl TreesitterQueryAsset {
         Self {
             highlights,
             injections: Some(injections),
+            supplement: None,
+        }
+    }
+
+    /// Appends in-tree patterns to a query this repo does not own.
+    pub(super) const fn with_supplement(
+        highlights: &'static str,
+        supplement: &'static str,
+    ) -> Self {
+        Self {
+            highlights,
+            injections: None,
+            supplement: Some(supplement),
+        }
+    }
+
+    pub(super) const fn with_injections_and_supplement(
+        highlights: &'static str,
+        injections: &'static str,
+        supplement: &'static str,
+    ) -> Self {
+        Self {
+            highlights,
+            injections: Some(injections),
+            supplement: Some(supplement),
         }
     }
 }
@@ -2653,6 +3061,10 @@ struct DocumentTokenCollectionContext<'a> {
     line_starts: &'a [usize],
     start_line_ix: usize,
     end_line_ix: usize,
+    /// Byte offset of this parsed input inside the root prepared document.
+    /// Zero for the host tree; an outer injection's absolute start for a nested
+    /// tree. Injection cache keys always use root-document coordinates.
+    document_byte_start: usize,
     per_line: &'a mut [Vec<SyntaxToken>],
 }
 
@@ -2732,7 +3144,7 @@ fn treesitter_document_cache_key(
 
     PreparedSyntaxCacheKey {
         language,
-        doc_hash: treesitter_text_hash(input),
+        doc_hash: treesitter_document_hash(language, input),
     }
 }
 
@@ -2823,6 +3235,21 @@ pub(super) fn treesitter_text_hash(input: &str) -> u64 {
     hasher.finish()
 }
 
+/// Identity used by prepared trees and every injection derived from them.
+///
+/// `PreparedSyntaxCacheKey` already stores the host language separately for
+/// cache lookup, but injection entries retain only this hash. Folding the host
+/// language in here prevents identical bytes parsed as, for example, HTML and
+/// Vue from sharing an injection identity.
+fn treesitter_document_hash(language: DiffSyntaxLanguage, input: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = FxHasher::default();
+    language.hash(&mut hasher);
+    treesitter_text_hash(input).hash(&mut hasher);
+    hasher.finish()
+}
+
 pub(super) fn collect_treesitter_document_line_tokens_for_line_window(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
@@ -2830,6 +3257,29 @@ pub(super) fn collect_treesitter_document_line_tokens_for_line_window(
     line_starts: &[usize],
     start_line_ix: usize,
     end_line_ix: usize,
+    document_hash: u64,
+) -> Vec<Vec<SyntaxToken>> {
+    collect_treesitter_document_line_tokens_for_line_window_at(
+        tree,
+        highlight,
+        input,
+        line_starts,
+        start_line_ix,
+        end_line_ix,
+        document_hash,
+        0,
+    )
+}
+
+fn collect_treesitter_document_line_tokens_for_line_window_at(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_starts: &[usize],
+    start_line_ix: usize,
+    end_line_ix: usize,
+    document_hash: u64,
+    document_byte_start: usize,
 ) -> Vec<Vec<SyntaxToken>> {
     if line_starts.is_empty() {
         return Vec::new();
@@ -2851,12 +3301,19 @@ pub(super) fn collect_treesitter_document_line_tokens_for_line_window(
             line_starts,
             start_line_ix,
             end_line_ix,
+            document_byte_start,
             per_line: &mut per_line,
         };
         for pass in &query_passes {
             collect_query_pass_tokens_for_document(tree, highlight, input, pass, &mut context);
         }
-        apply_injection_query_tokens_for_document(tree, highlight, input, &mut context);
+        apply_injection_query_tokens_for_document(
+            tree,
+            highlight,
+            input,
+            document_hash,
+            &mut context,
+        );
     }
 
     for line_tokens in &mut per_line {
@@ -3098,18 +3555,21 @@ fn apply_injection_query_tokens_for_document(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
     input: &[u8],
+    document_hash: u64,
     context: &mut DocumentTokenCollectionContext<'_>,
 ) {
     let Some(_guard) = InjectionDepthGuard::enter() else {
         return;
     };
-    let injections = collect_treesitter_injection_matches_for_line_window(
+    let injections = collect_treesitter_injection_matches_for_line_window_at(
         tree,
         highlight,
         input,
         context.line_starts,
         context.start_line_ix,
         context.end_line_ix,
+        document_hash,
+        context.document_byte_start,
     );
     for injection in &injections.singles {
         let injection = *injection;
@@ -3119,17 +3579,45 @@ fn apply_injection_query_tokens_for_document(
             context.start_line_ix,
             context.end_line_ix,
             injection,
+            context.document_byte_start,
         ) else {
             continue;
         };
 
-        subtract_absolute_range_from_document_tokens(
-            context.line_starts,
-            input,
-            context.start_line_ix,
-            context.per_line,
-            injection.byte_start..injection.byte_end,
-        );
+        // Subtract only what the injection actually paints, not its whole span.
+        //
+        // Blanking the span outright loses any host capture the injection has no
+        // opinion about: a markdown heading is `@text.title` in the block
+        // grammar, and the inline grammar that owns those bytes captures nothing
+        // for plain prose, so the heading came out uncoloured. Cutting per
+        // painted token keeps last-wins where the two overlap and leaves the
+        // host's answer standing in the gaps.
+        // Reused across lines so a document full of fenced blocks does not
+        // allocate a cut list per line.
+        let mut cuts: Vec<Range<usize>> = Vec::new();
+        for (parent_line_ix, tokens) in &injected_tokens {
+            // Same window guard as the append loop below: `saturating_sub` on a
+            // line below the window would clamp to index 0 and subtract these
+            // ranges out of the first visible row's host tokens instead.
+            if *parent_line_ix < context.start_line_ix {
+                continue;
+            }
+            // The tokens are already grouped by line and their ranges are
+            // already line-relative, so going back through the absolute form
+            // would re-derive by binary search what is known here.
+            let Some(line_tokens) = context
+                .per_line
+                .get_mut(parent_line_ix.saturating_sub(context.start_line_ix))
+            else {
+                continue;
+            };
+            // One merged sweep rather than one rebuild of `line_tokens` per
+            // injected token -- see
+            // [`subtract_relative_ranges_from_line_tokens`].
+            cuts.clear();
+            cuts.extend(tokens.iter().map(|token| token.range.clone()));
+            subtract_relative_ranges_from_line_tokens(line_tokens, &mut cuts);
+        }
 
         for (parent_line_ix, tokens) in injected_tokens {
             if tokens.is_empty() || parent_line_ix < context.start_line_ix {
@@ -3146,13 +3634,15 @@ fn apply_injection_query_tokens_for_document(
     }
 
     // Combined last, and the order matters once a grammar declares both kinds over
-    // the same bytes. Each layer subtracts its own span from `per_line` before
-    // painting, so the last one wins the overlap; running combined first let a
-    // single delete combined tokens and then repaint only the bytes its own
-    // captures cover, leaving the rest bare. No in-tree grammar mixes them yet.
+    // the same bytes. Each layer clears what it is about to paint out of
+    // `per_line` first -- per painted token for a single, over the whole span for
+    // a combined group -- so the last one wins the overlap; running combined
+    // first let a single delete combined tokens and then repaint only the bytes
+    // its own captures cover, leaving the rest bare. No in-tree grammar mixes
+    // them yet.
     if !injections.truncated {
         for group in &injections.combined {
-            apply_combined_injection_tokens(group, input, context);
+            apply_combined_injection_tokens(group, input, document_hash, context);
         }
     }
 }
@@ -3264,6 +3754,7 @@ pub(super) fn clip_injection_ranges_to_region(
 fn apply_combined_injection_tokens(
     group: &CombinedInjectionGroup,
     input: &[u8],
+    document_hash: u64,
     context: &mut DocumentTokenCollectionContext<'_>,
 ) {
     let Some(spec) = tree_sitter_highlight_spec(group.language) else {
@@ -3296,13 +3787,15 @@ fn apply_combined_injection_tokens(
         return;
     };
 
-    let mut injected = collect_treesitter_document_line_tokens_for_line_window(
+    let mut injected = collect_treesitter_document_line_tokens_for_line_window_at(
         &tree,
         spec,
         input,
         context.line_starts,
         context.start_line_ix,
         context.end_line_ix,
+        document_hash,
+        context.document_byte_start,
     );
     if injected.len() != context.per_line.len() {
         return;
@@ -3385,6 +3878,7 @@ pub(super) struct TreesitterInjectionMatches {
     pub(super) truncated: bool,
 }
 
+#[cfg(test)]
 pub(super) fn collect_treesitter_injection_matches_for_line_window(
     tree: &tree_sitter::Tree,
     highlight: &TreesitterHighlightSpec,
@@ -3392,6 +3886,29 @@ pub(super) fn collect_treesitter_injection_matches_for_line_window(
     line_starts: &[usize],
     start_line_ix: usize,
     end_line_ix: usize,
+    document_hash: u64,
+) -> TreesitterInjectionMatches {
+    collect_treesitter_injection_matches_for_line_window_at(
+        tree,
+        highlight,
+        input,
+        line_starts,
+        start_line_ix,
+        end_line_ix,
+        document_hash,
+        0,
+    )
+}
+
+fn collect_treesitter_injection_matches_for_line_window_at(
+    tree: &tree_sitter::Tree,
+    highlight: &TreesitterHighlightSpec,
+    input: &[u8],
+    line_starts: &[usize],
+    start_line_ix: usize,
+    end_line_ix: usize,
+    document_hash: u64,
+    document_byte_start: usize,
 ) -> TreesitterInjectionMatches {
     let empty = || TreesitterInjectionMatches {
         singles: Vec::new(),
@@ -3468,15 +3985,13 @@ pub(super) fn collect_treesitter_injection_matches_for_line_window(
                             continue;
                         }
                         let injection = TreesitterInjectionMatch {
+                            document_hash,
                             language,
-                            byte_start: byte_range.start,
-                            byte_end: byte_range.end,
-                            content_hash: {
-                                use std::hash::{Hash, Hasher};
-                                let mut h = FxHasher::default();
-                                input[byte_range.start..byte_range.end].hash(&mut h);
-                                h.finish()
-                            },
+                            byte_start: byte_range.start.saturating_add(document_byte_start),
+                            byte_end: byte_range.end.saturating_add(document_byte_start),
+                            content_hash: injection_content_hash(
+                                &input[byte_range.start..byte_range.end],
+                            ),
                         };
                         if seen.insert(injection) {
                             injections.push(injection);
@@ -3683,10 +4198,28 @@ pub(super) fn next_injection_access() -> u64 {
     })
 }
 
+fn evict_injection_cache_if_full(cache: &mut FxHashMap<TreesitterInjectionMatch, CachedInjection>) {
+    if cache.len() < TS_INJECTION_CACHE_MAX_ENTRIES {
+        return;
+    }
+
+    // Evict the least-recently-used half instead of clearing everything.
+    let mut entries: Vec<_> = cache
+        .iter()
+        .map(|(key, value)| (*key, value.last_access))
+        .collect();
+    entries.sort_unstable_by_key(|(_, access)| *access);
+    let evict_count = entries.len() / 2;
+    for (key, _) in entries.into_iter().take(evict_count) {
+        cache.remove(&key);
+    }
+}
+
 fn ensure_injection_cached(
     input: &[u8],
     line_starts: &[usize],
     injection: TreesitterInjectionMatch,
+    parent_document_byte_start: usize,
 ) -> bool {
     TS_INJECTION_CACHE.with(|cache| {
         if let Some(entry) = cache.borrow_mut().get_mut(&injection) {
@@ -3694,8 +4227,16 @@ fn ensure_injection_cached(
             return true;
         }
 
+        let Some(local_byte_start) = injection.byte_start.checked_sub(parent_document_byte_start)
+        else {
+            return false;
+        };
+        let Some(local_byte_end) = injection.byte_end.checked_sub(parent_document_byte_start)
+        else {
+            return false;
+        };
         let injection_byte_range =
-            injection.byte_start.min(input.len())..injection.byte_end.min(input.len());
+            local_byte_start.min(input.len())..local_byte_end.min(input.len());
         if injection_byte_range.is_empty() {
             return false;
         }
@@ -3719,39 +4260,218 @@ fn ensure_injection_cached(
         };
 
         let injection_line_count = injection_input.line_starts.len();
-        let all_line_tokens = collect_treesitter_document_line_tokens_for_line_window(
+        let all_line_tokens = collect_treesitter_document_line_tokens_for_line_window_at(
             &tree,
             highlight,
             injection_input.text.as_bytes(),
             injection_input.line_starts.as_ref(),
             0,
             injection_line_count,
+            injection.document_hash,
+            injection.byte_start,
         );
 
-        let injection_start_line_ix = line_ix_for_byte(line_starts, injection.byte_start);
+        let injection_start_line_ix = line_ix_for_byte(line_starts, local_byte_start);
         let access = next_injection_access();
 
         let mut cache = cache.borrow_mut();
-        if cache.len() >= TS_INJECTION_CACHE_MAX_ENTRIES {
-            // Evict the least-recently-used half instead of clearing everything.
-            let mut entries: Vec<_> = cache.iter().map(|(k, v)| (*k, v.last_access)).collect();
-            entries.sort_unstable_by_key(|(_, a)| *a);
-            let evict_count = entries.len() / 2;
-            for (key, _) in entries.into_iter().take(evict_count) {
-                cache.remove(&key);
-            }
-        }
+        evict_injection_cache_if_full(&mut cache);
         cache.insert(
             injection,
-            CachedInjectionTokens {
+            CachedInjection {
                 all_line_tokens,
                 injection_line_starts: injection_input.line_starts.as_ref().to_vec(),
                 injection_start_line_ix,
+                tree,
                 last_access: access,
             },
         );
         true
     })
+}
+
+/// The hash an injection's bytes are keyed by.
+///
+/// One function so the two callers cannot drift: the cache is keyed on this at
+/// insertion, and [`injected_syntax_pair_at`] re-derives it to prove an entry
+/// belongs to the document it is about to answer for. Hashing a `&[u8]` and
+/// hashing the `&str` over the same bytes give different values, which is a
+/// silent miss rather than a wrong answer -- the pair lookup just falls through
+/// to the host grammar, exactly the bug it was added to fix.
+fn injection_content_hash(content: &[u8]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = FxHasher::default();
+    content.hash(&mut hasher);
+    hasher.finish()
+}
+
+/// The pair at `offset` as the *injected* grammar sees it.
+///
+/// Tried before the host tree by [`prepared_document_syntax_pair_at_display_offset`],
+/// for the same reason `LiveSyntaxSnapshot::syntax_pair_at` tries its layers
+/// first: a bracket inside an injected region belongs to the grammar that region
+/// is written in. To PHP, the whole of a file's inline HTML is one `text` node,
+/// so without this a click on a tag there found no delimiter and fell through to
+/// whatever PHP block enclosed it -- which is why clicking a bracket appeared to
+/// do nothing while clicking a column away appeared to work.
+///
+/// `document_hash` scopes the search to the caller's own document and
+/// `content_hash` is re-checked against its text rather than trusted: the cache
+/// is a thread-local shared by every document, and two of them can easily have
+/// an injection at the same byte range -- with the same bytes in it, under
+/// different grammars. Neither check subsumes the other, so both run.
+///
+/// Combined injections are deliberately not consulted. Their ranges are stitched
+/// from several disjoint spans, so a single `byte_start` shift cannot map their
+/// offsets back, and the host grammar remains the right answer in the gaps
+/// between them.
+fn injected_syntax_pair_at(text: &str, document_hash: u64, offset: usize) -> Option<SyntaxPair> {
+    TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        // The innermost injection wins, the same rule the tree walk uses: an
+        // injection nested inside another is the more specific answer.
+        let mut best: Option<(&TreesitterInjectionMatch, &CachedInjection)> = None;
+        for (key, entry) in cache.iter() {
+            if key.document_hash != document_hash {
+                continue;
+            }
+            if offset < key.byte_start || offset >= key.byte_end {
+                continue;
+            }
+            let Some(content) = text.as_bytes().get(key.byte_start..key.byte_end) else {
+                continue;
+            };
+            if injection_content_hash(content) != key.content_hash {
+                continue;
+            }
+            let width = key.byte_end.saturating_sub(key.byte_start);
+            if best.is_none_or(|(best_key, _)| {
+                width < best_key.byte_end.saturating_sub(best_key.byte_start)
+            }) {
+                best = Some((key, entry));
+            }
+        }
+        let (key, entry) = best?;
+        let local = offset.checked_sub(key.byte_start)?;
+        let content = text.as_bytes().get(key.byte_start..key.byte_end)?;
+        let source_ranges_equal =
+            |left: Range<usize>, right: Range<usize>| match (content.get(left), content.get(right))
+            {
+                (Some(left), Some(right)) => left == right,
+                _ => false,
+            };
+        let pair = syntax_pair_in_tree(&entry.tree, local, &source_ranges_equal)?;
+        let shift = |range: Range<usize>| {
+            range.start.saturating_add(key.byte_start)..range.end.saturating_add(key.byte_start)
+        };
+        Some(SyntaxPair {
+            open: shift(pair.open),
+            close: shift(pair.close),
+            kind: pair.kind,
+        })
+    })
+}
+
+/// Recreates the injection chain containing `offset` after one of its LRU
+/// entries was evicted while the prepared document and token chunks remained
+/// cached.
+///
+/// Pair lookup normally reads the already-tokenized injection tree. A document
+/// can outlive the 32-entry injection cache, though, and requesting an old token
+/// chunk does not run its injection query again. Re-run just the clicked line's
+/// query at each permitted layer, then feed the matching regions through the
+/// same cache construction path used by token painting. Walking through cached
+/// parents matters too: a parent can survive the LRU while its narrower child
+/// was evicted.
+fn ensure_injection_chain_cached_for_pair_lookup(state: &PreparedSyntaxTreeState, offset: usize) {
+    let Some(highlight) = tree_sitter_highlight_spec(state.language) else {
+        return;
+    };
+    let line_ix = line_ix_for_byte(state.line_starts.as_ref(), offset);
+    let matches = collect_treesitter_injection_matches_for_line_window_at(
+        &state.tree,
+        highlight,
+        state.text.as_bytes(),
+        state.line_starts.as_ref(),
+        line_ix,
+        line_ix.saturating_add(1),
+        state.source_hash,
+        0,
+    );
+    let Some(injection) = matches
+        .singles
+        .into_iter()
+        .filter(|injection| offset >= injection.byte_start && offset < injection.byte_end)
+        .min_by_key(|injection| injection.byte_end.saturating_sub(injection.byte_start))
+    else {
+        return;
+    };
+    // `ensure_injection_cached` is normally called inside the host token
+    // collector's depth guard. Pair lookup enters the equivalent guards itself
+    // so rebuilding a nested entry cannot parse deeper than the configured
+    // root-to-injection limit.
+    let Some(root_depth_guard) = InjectionDepthGuard::enter() else {
+        return;
+    };
+    let mut depth_guards = vec![root_depth_guard];
+    if !ensure_injection_cached(
+        state.text.as_bytes(),
+        state.line_starts.as_ref(),
+        injection,
+        0,
+    ) {
+        return;
+    }
+
+    let mut parent = injection;
+    for _ in 1..TS_MAX_INJECTION_DEPTH {
+        let Some((tree, line_starts)) = TS_INJECTION_CACHE.with(|cache| {
+            cache
+                .borrow()
+                .get(&parent)
+                .map(|entry| (entry.tree.clone(), entry.injection_line_starts.clone()))
+        }) else {
+            break;
+        };
+        let Some(input) = state
+            .text
+            .as_bytes()
+            .get(parent.byte_start..parent.byte_end)
+        else {
+            break;
+        };
+        let Some(highlight) = tree_sitter_highlight_spec(parent.language) else {
+            break;
+        };
+        let local_offset = offset.saturating_sub(parent.byte_start);
+        let line_ix = line_ix_for_byte(&line_starts, local_offset);
+        let matches = collect_treesitter_injection_matches_for_line_window_at(
+            &tree,
+            highlight,
+            input,
+            &line_starts,
+            line_ix,
+            line_ix.saturating_add(1),
+            state.source_hash,
+            parent.byte_start,
+        );
+        let Some(child) = matches
+            .singles
+            .into_iter()
+            .filter(|child| offset >= child.byte_start && offset < child.byte_end)
+            .min_by_key(|child| child.byte_end.saturating_sub(child.byte_start))
+        else {
+            break;
+        };
+        let Some(child_depth_guard) = InjectionDepthGuard::enter() else {
+            break;
+        };
+        if !ensure_injection_cached(input, &line_starts, child, parent.byte_start) {
+            break;
+        }
+        depth_guards.push(child_depth_guard);
+        parent = child;
+    }
 }
 
 fn collect_injected_tokens_for_parent_line_window(
@@ -3760,8 +4480,9 @@ fn collect_injected_tokens_for_parent_line_window(
     start_line_ix: usize,
     end_line_ix: usize,
     injection: TreesitterInjectionMatch,
+    parent_document_byte_start: usize,
 ) -> Option<Vec<(usize, Vec<SyntaxToken>)>> {
-    if !ensure_injection_cached(input, line_starts, injection) {
+    if !ensure_injection_cached(input, line_starts, injection, parent_document_byte_start) {
         return Some(Vec::new());
     }
 
@@ -3794,7 +4515,10 @@ fn collect_injected_tokens_for_parent_line_window(
             else {
                 continue;
             };
-            let absolute_line_start = injection.byte_start.saturating_add(local_line_start);
+            let injection_start_in_parent = injection
+                .byte_start
+                .checked_sub(parent_document_byte_start)?;
+            let absolute_line_start = injection_start_in_parent.saturating_add(local_line_start);
             let offset_within_parent = absolute_line_start.saturating_sub(parent_line_start);
             let tokens = cached
                 .all_line_tokens
@@ -3906,6 +4630,73 @@ pub(super) fn subtract_relative_range_from_line_tokens(
     *line_tokens = out;
 }
 
+/// Subtract every one of `cuts` from `line_tokens` in a single sweep.
+///
+/// The same result as calling [`subtract_relative_range_from_line_tokens`] once
+/// per cut -- a token minus a sequence of ranges is the token minus their union
+/// -- at a fraction of the work. Cutting one at a time rebuilds the whole line's
+/// vector per intersecting cut *and* leaves more fragments behind for the next
+/// cut to re-scan, so an injection painting `k` tokens over one host run cost
+/// O(k^2). That is the ordinary shape of a minified inline `<script>`: measured
+/// on an 11 KB one-line script, 800 injected tokens took 27.8 ms against 5.4 ms
+/// for the same bytes spread over lines.
+pub(super) fn subtract_relative_ranges_from_line_tokens(
+    line_tokens: &mut Vec<SyntaxToken>,
+    cuts: &mut Vec<Range<usize>>,
+) {
+    cuts.retain(|cut| cut.start < cut.end);
+    if cuts.is_empty() || line_tokens.is_empty() {
+        return;
+    }
+    cuts.sort_unstable_by_key(|cut| cut.start);
+    // Merged so the sweep below can advance monotonically through them, and so
+    // overlapping captures cannot each split the same token again.
+    let mut merged: Vec<Range<usize>> = Vec::with_capacity(cuts.len());
+    for cut in cuts.iter() {
+        match merged.last_mut() {
+            Some(last) if cut.start <= last.end => last.end = last.end.max(cut.end),
+            _ => merged.push(cut.clone()),
+        }
+    }
+
+    // The same cheap miss the single-range form takes: most lines of a template
+    // are host text that no injected token touches.
+    let hull = merged[0].start..merged[merged.len() - 1].end;
+    if line_tokens
+        .iter()
+        .all(|token| token.range.end <= hull.start || token.range.start >= hull.end)
+    {
+        return;
+    }
+
+    let mut out = Vec::with_capacity(line_tokens.len().saturating_add(merged.len()));
+    for token in line_tokens.drain(..) {
+        // First cut that could reach this token. Tokens are not required to be
+        // sorted, so this is found per token rather than carried along.
+        let first = merged.partition_point(|cut| cut.end <= token.range.start);
+        let mut cursor = token.range.start;
+        for cut in &merged[first..] {
+            if cut.start >= token.range.end {
+                break;
+            }
+            if cut.start > cursor {
+                out.push(SyntaxToken {
+                    range: cursor..cut.start,
+                    kind: token.kind,
+                });
+            }
+            cursor = cursor.max(cut.end);
+        }
+        if cursor < token.range.end {
+            out.push(SyntaxToken {
+                range: cursor..token.range.end,
+                kind: token.kind,
+            });
+        }
+    }
+    *line_tokens = out;
+}
+
 pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<SyntaxToken> {
     let tokens = tokens
         .into_iter()
@@ -3925,25 +4716,58 @@ pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<
 
     // Convert overlapping captures into non-overlapping segments while preserving
     // tree-sitter's "later capture wins" semantics within each overlapped slice.
+    //
+    // Every boundary is some token's endpoint, so a segment between two adjacent
+    // boundaries is either wholly inside a token or wholly outside it -- there is
+    // no partial overlap to resolve. The winner is therefore just the last token
+    // in input order that covers the segment.
+    //
+    // Found by painting the segments *backwards* through the token list and
+    // never repainting one that is already owned, with a skip list so a token
+    // lying under later ones costs one step rather than its whole width. Asking
+    // each segment which token wins instead meant scanning every token per
+    // segment -- O(tokens^2), and tokens pile up on one line exactly where
+    // injections do: a minified inline `<script>` put 4006 of them on a single
+    // line, which took 27.8 ms per chunk build.
+    let segment_count = boundaries.len().saturating_sub(1);
+    let mut owner: Vec<Option<SyntaxTokenKind>> = vec![None; segment_count];
+    // `next_unowned[i]` is the first segment at or after `i` with no owner yet,
+    // found through path-compressed jumps. One extra slot so the last segment
+    // has somewhere to point.
+    let mut next_unowned: Vec<usize> = (0..=segment_count).collect();
+    fn find_unowned(next_unowned: &mut [usize], mut ix: usize) -> usize {
+        let mut root = ix;
+        while next_unowned[root] != root {
+            root = next_unowned[root];
+        }
+        while next_unowned[ix] != root {
+            let parent = next_unowned[ix];
+            next_unowned[ix] = root;
+            ix = parent;
+        }
+        root
+    }
+
+    for token in tokens.iter().rev() {
+        let start_ix = boundaries.partition_point(|boundary| *boundary < token.range.start);
+        let end_ix = boundaries.partition_point(|boundary| *boundary < token.range.end);
+        let mut ix = find_unowned(&mut next_unowned, start_ix.min(segment_count));
+        while ix < end_ix {
+            owner[ix] = Some(token.kind);
+            next_unowned[ix] = ix + 1;
+            ix = find_unowned(&mut next_unowned, ix + 1);
+        }
+    }
+
     let mut normalized: Vec<SyntaxToken> = Vec::with_capacity(tokens.len());
-    for window in boundaries.windows(2) {
-        let start = window[0];
-        let end = window[1];
+    for (ix, kind) in owner.into_iter().enumerate() {
+        let Some(kind) = kind else {
+            continue;
+        };
+        let (start, end) = (boundaries[ix], boundaries[ix + 1]);
         if start >= end {
             continue;
         }
-
-        let mut winner = None;
-        for token in &tokens {
-            if token.range.start <= start && end <= token.range.end {
-                winner = Some(token.kind);
-            }
-        }
-
-        let Some(kind) = winner else {
-            continue;
-        };
-
         if let Some(last) = normalized.last_mut()
             && last.kind == kind
             && last.range.end == start
@@ -3951,7 +4775,6 @@ pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<
             last.range.end = end;
             continue;
         }
-
         normalized.push(SyntaxToken {
             range: start..end,
             kind,
@@ -3959,4 +4782,25 @@ pub(super) fn normalize_non_overlapping_tokens(tokens: Vec<SyntaxToken>) -> Vec<
     }
 
     normalized
+}
+
+/// How many injection cache entries there are, grouped by the document they
+/// belong to. Used to pin that an incremental reparse leaves the cache one
+/// document deep rather than accumulating superseded ones.
+#[cfg(test)]
+pub(super) fn injection_cache_occupancy_by_document_hash_for_tests()
+-> (usize, std::collections::BTreeMap<u64, usize>) {
+    TS_INJECTION_CACHE.with(|cache| {
+        let cache = cache.borrow();
+        let mut by_hash: std::collections::BTreeMap<u64, usize> = Default::default();
+        for key in cache.keys() {
+            *by_hash.entry(key.document_hash).or_default() += 1;
+        }
+        (cache.len(), by_hash)
+    })
+}
+
+#[cfg(test)]
+pub(super) fn clear_injection_cache_for_tests() {
+    TS_INJECTION_CACHE.with(|cache| cache.borrow_mut().clear());
 }

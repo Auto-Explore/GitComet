@@ -623,12 +623,19 @@ pub(crate) fn label_for_setting(setting: Option<&ExternalCodeEditorSetting>) -> 
     }
 }
 
-pub(crate) fn launch_configured_editor(target: &Path) -> Result<(), ExternalEditorError> {
-    let setting = configured_setting().ok_or(ExternalEditorError::NotConfigured)?;
-    launch_editor(&setting, target)
-}
-
-#[cfg(test)]
+/// Resolve the command that opens `target` in the configured editor.
+///
+/// The main-thread half of launching an editor: every failure worth reporting
+/// straight away — no editor configured, an empty or unparsable custom command,
+/// no terminal launcher — surfaces here. Hand the result to
+/// [`spawn_launch_command`] off the main thread; see
+/// `crate::view::platform_open::spawn_launch` for why.
+///
+/// Note this half is not free: the `vim-terminal`/`neovim-terminal` settings
+/// probe every PATH directory for a terminal launcher on each call. That was
+/// always true, and it does not pump the Windows message queue, but a PATH
+/// entry on an unreachable share can still stall the click. Caching it (as
+/// [`configured_setting`] already caches the setting itself) is a follow-up.
 pub(crate) fn launch_command_for_configured_editor(
     target: &Path,
 ) -> Result<ExternalEditorLaunchCommand, ExternalEditorError> {
@@ -636,11 +643,13 @@ pub(crate) fn launch_command_for_configured_editor(
     launch_command_for_setting(&setting, target)
 }
 
-pub(crate) fn launch_editor(
-    setting: &ExternalCodeEditorSetting,
-    target: &Path,
+/// Spawn a command resolved by [`launch_command_for_configured_editor`].
+///
+/// Blocking, and on Windows it can pump the message queue — run it on a
+/// background thread, never inside a GPUI event handler.
+pub(crate) fn spawn_launch_command(
+    command: ExternalEditorLaunchCommand,
 ) -> Result<(), ExternalEditorError> {
-    let command = launch_command_for_setting(setting, target)?;
     let mut process = background_command(command.program.as_os_str());
     process.args(command.args);
     process.spawn()?;

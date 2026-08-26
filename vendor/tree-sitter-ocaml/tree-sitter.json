@@ -1,0 +1,69 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {
+      "name": "ocaml",
+      "camelcase": "OCaml",
+      "scope": "source.ocaml",
+      "path": "grammars/ocaml",
+      "external-files": [
+        "common/scanner.h"
+      ],
+      "file-types": [
+        "ml"
+      ],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "tags": "queries/tags.scm",
+      "injection-regex": "^(ocaml|ml)$"
+    },
+    {
+      "name": "ocaml_interface",
+      "camelcase": "OCamlInterface",
+      "scope": "source.ocaml.interface",
+      "path": "grammars/interface",
+      "external-files": [
+        "common/scanner.h"
+      ],
+      "file-types": [
+        "mli"
+      ],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "tags": "queries/tags.scm",
+      "injection-regex": "^ocaml_interface$"
+    },
+    {
+      "name": "ocaml_type",
+      "camelcase": "OCamlType",
+      "scope": "source.ocaml.type",
+      "path": "grammars/type",
+      "external-files": [
+        "common/scanner.h"
+      ],
+      "file-types": [],
+      "highlights": "queries/highlights.scm",
+      "locals": "queries/locals.scm",
+      "tags": "queries/tags.scm",
+      "injection-regex": "^ocaml_type$"
+    }
+  ],
+  "metadata": {
+    "version": "0.25.0",
+    "license": "MIT",
+    "description": "OCaml grammar for tree-sitter",
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-ocaml"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "java": false,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true,
+    "zig": false
+  }
+}

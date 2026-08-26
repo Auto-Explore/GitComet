@@ -1,0 +1,42 @@
+# Vendored from the `tree-sitter-ron 0.2.0` crates.io release
+# (https://github.com/amaanq/tree-sitter-ron, MIT -- see LICENSE, fetched from the
+# repository because the published tarball ships none).
+#
+# Vendored rather than depended on, because the published crate has a normal
+# dependency on `tree-sitter ~0.20`. `tree-sitter` declares `links`, so cargo
+# will not resolve it alongside the workspace's 0.26 at any version -- the same
+# blocker documented on `tree-sitter-clojure-orchard` in the root Cargo.toml.
+# Vendoring drops the pin: the grammar is bound to whichever tree-sitter the
+# workspace resolves through `tree-sitter-language`, which is what
+# `bindings/rust/lib.rs` is rewritten to use.
+#
+# `src/` is upstream's generated parser at ABI 14, which is inside the range this
+# tree-sitter accepts (13..=15); `grammar.js` is beside it, so `tree-sitter
+# generate` regenerates. The `tree_sitter/` headers come from
+# vendor/tree-sitter-headers -- see the README there.
+#
+# `queries/` is deliberately not vendored, matching vendor/tree-sitter-vue.
+# GitComet keeps its own query in
+# crates/gitcomet-ui-gpui/src/view/rows/diff_text/queries/.
+[package]
+name = "tree-sitter-ron"
+description = "RON grammar for the tree-sitter parsing library"
+version = "0.2.0"
+repository = "https://github.com/amaanq/tree-sitter-ron"
+edition = "2021"
+license = "MIT"
+publish = false
+
+build = "bindings/rust/build.rs"
+
+[lib]
+path = "bindings/rust/lib.rs"
+
+[dependencies]
+tree-sitter-language = "0.1"
+
+[build-dependencies]
+tree-sitter-build = { path = "../tree-sitter-build" }
+
+[dev-dependencies]
+tree-sitter = "0.26.13"
