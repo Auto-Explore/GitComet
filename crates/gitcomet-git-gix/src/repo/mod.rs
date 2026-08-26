@@ -148,12 +148,34 @@ enum LogPageSeed {
     Tips(Arc<[gix::ObjectId]>),
 }
 
+/// An exact, parsed snapshot of the repository's shallow boundary.
+///
+/// The shallow file is tiny and its object ids are the state that affects a
+/// history walk. Keeping those ids directly avoids the same-length/same-mtime
+/// collisions a stat-only stamp permits, and lets walk construction use the
+/// exact same boundary that keyed its caches.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+struct ShallowSnapshot(Arc<[gix::ObjectId]>);
+
+impl ShallowSnapshot {
+    fn from_commits(mut commits: Vec<gix::ObjectId>) -> Self {
+        commits.sort();
+        commits.dedup();
+        Self(Arc::from(commits))
+    }
+
+    fn is_shallow(&self) -> bool {
+        !self.0.is_empty()
+    }
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct LogPageCacheKey {
     mode: HistoryMode,
     seed: LogPageSeed,
-    /// Invalidates cached pages when a shallow repository is deepened.
-    shallow: RepoFileStamp,
+    /// Invalidates cached pages when a shallow repository is deepened or its
+    /// boundary is otherwise replaced without moving a ref.
+    shallow: ShallowSnapshot,
     limit: usize,
     last_seen: Option<CommitId>,
     resume_from: Option<CommitId>,
@@ -187,7 +209,7 @@ type LogPagedWalkFilter = Box<dyn FnMut(&gix::oid) -> bool + Send>;
 
 enum LogPagedWalk {
     CommitTime(gix::traverse::commit::Simple<gix::OdbHandleArc, LogPagedWalkFilter>),
-    DateOrder(gix::traverse::commit::Topo<gix::OdbHandleArc, LogPagedWalkFilter>),
+    DateOrder(gix::traverse::commit::Topo<log::CancellableLogWalkFind, LogPagedWalkFilter>),
 }
 
 impl LogPagedWalk {
@@ -213,6 +235,7 @@ impl Iterator for LogPagedWalk {
 struct LogPagedWalkState {
     pending: std::collections::VecDeque<gix::traverse::commit::Info>,
     walk: LogPagedWalk,
+    cancellation: log::LogWalkCancellation,
 }
 
 struct LogPagedWalkCacheEntry {
@@ -222,6 +245,9 @@ struct LogPagedWalkCacheEntry {
     /// ref for `AllBranches`. A walk started from different tips covers a
     /// different history, so a token minted for one must not resume the other.
     tips: Arc<[gix::ObjectId]>,
+    /// The exact shallow boundary the walk was built against. A cursor minted
+    /// before a deepen must not resume the old, truncated walk.
+    shallow: ShallowSnapshot,
     /// Author filter the walk was started with, or `None` for the unfiltered
     /// walk. The walk's *position* depends on the filter — every non-matching
     /// commit was already consumed — so resuming one walk under a different

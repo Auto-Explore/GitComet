@@ -594,6 +594,91 @@ fn log_paged_walk_handle(repo: &gix::ThreadSafeRepository) -> gix::OdbHandleArc 
         .with_write_passthrough()
 }
 
+/// The cancellation token currently associated with a resumable walk.
+///
+/// A walk can outlive several page requests, so its object lookup cannot retain
+/// the token from the request that originally built it.
+#[derive(Clone, Default)]
+pub(super) struct LogWalkCancellation(Arc<std::sync::RwLock<Option<CancellationToken>>>);
+
+impl LogWalkCancellation {
+    fn new(cancellation: Option<&CancellationToken>) -> Self {
+        Self(Arc::new(std::sync::RwLock::new(cancellation.cloned())))
+    }
+
+    fn replace(&self, cancellation: Option<&CancellationToken>) {
+        *self.0.write().expect("log walk cancellation") = cancellation.cloned();
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.0
+            .read()
+            .expect("log walk cancellation")
+            .as_ref()
+            .is_some_and(CancellationToken::is_cancelled)
+    }
+}
+
+/// Object lookup used by the expensive date-order setup pass.
+///
+/// gix's topo builder has no cancellation hook of its own. On repositories
+/// without a commit-graph it resolves an object for every reachable commit, so
+/// checking at this boundary makes that slow path promptly cancellable without
+/// changing the traversal algorithm.
+pub(super) struct CancellableLogWalkFind {
+    inner: gix::OdbHandleArc,
+    cancellation: LogWalkCancellation,
+}
+
+impl gix::objs::Find for CancellableLogWalkFind {
+    fn try_find<'a>(
+        &self,
+        id: &gix::oid,
+        buffer: &'a mut Vec<u8>,
+    ) -> std::result::Result<Option<gix::objs::Data<'a>>, gix::objs::find::Error> {
+        if self.cancellation.is_cancelled() {
+            return Err(
+                std::io::Error::new(std::io::ErrorKind::Interrupted, "log walk cancelled").into(),
+            );
+        }
+        gix::objs::Find::try_find(&self.inner, id, buffer)
+    }
+}
+
+/// Read and parse the shallow boundary once for a log request.
+///
+/// The parsed ids are both the cache fingerprint and the traversal input. This
+/// deliberately bypasses gix's shared shallow snapshot, whose refresh decision
+/// is mtime-only and can therefore retain old contents after a timestamp
+/// collision.
+fn shallow_snapshot(repo: &gix::Repository) -> Result<super::ShallowSnapshot> {
+    let path = repo.shallow_file();
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(super::ShallowSnapshot::default());
+        }
+        Err(error) => {
+            return Err(Error::new(ErrorKind::Backend(format!(
+                "read shallow boundary {}: {error}",
+                path.display()
+            ))));
+        }
+    };
+
+    let commits = bytes
+        .lines()
+        .map(gix::ObjectId::from_hex)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|error| {
+            Error::new(ErrorKind::Backend(format!(
+                "parse shallow boundary {}: {error}",
+                path.display()
+            )))
+        })?;
+    Ok(super::ShallowSnapshot::from_commits(commits))
+}
+
 /// The commit filter a paged walk over `repo` needs.
 ///
 /// On a shallow repository the boundary commits record parents that are not in
@@ -603,15 +688,13 @@ fn log_paged_walk_handle(repo: &gix::ThreadSafeRepository) -> gix::OdbHandleArc 
 /// any such borrow — hence the owned handle and the boxed closure.
 fn log_paged_walk_filter(
     repo: &gix::ThreadSafeRepository,
-) -> Result<(super::LogPagedWalkFilter, bool)> {
-    let shallow_commits = repo
-        .to_thread_local()
-        .shallow_commits()
-        .map_err(|e| Error::new(ErrorKind::Backend(format!("gix shallow commits: {e}"))))?;
-    let Some(shallow_commits) = shallow_commits else {
-        return Ok((Box::new(|_| true), false));
-    };
+    shallow: &super::ShallowSnapshot,
+) -> super::LogPagedWalkFilter {
+    if !shallow.is_shallow() {
+        return Box::new(|_| true);
+    }
 
+    let shallow_commits = Arc::clone(&shallow.0);
     let objects = log_paged_walk_handle(repo);
     let mut grafted_parents_to_skip: Vec<gix::ObjectId> = Vec::new();
     let mut buf = Vec::new();
@@ -629,7 +712,7 @@ fn log_paged_walk_filter(
         }
         true
     });
-    Ok((filter, true))
+    filter
 }
 
 fn new_commit_time_walk(
@@ -665,6 +748,9 @@ fn new_log_paged_walk(
     repo: &gix::ThreadSafeRepository,
     tips: impl IntoIterator<Item = gix::ObjectId>,
     mode: HistoryMode,
+    shallow: &super::ShallowSnapshot,
+    cancellation: Option<&CancellationToken>,
+    mut chunks: Option<&mut ChunkEmitter<'_>>,
 ) -> Result<super::LogPagedWalkState> {
     let parents = if mode == HistoryMode::FirstParent {
         gix::traverse::commit::Parents::First
@@ -674,19 +760,33 @@ fn new_log_paged_walk(
     // Collected because the commit-date queue is also the fallback below, and a
     // fallback cannot re-consume an iterator the topo builder already drained.
     let tips: Vec<gix::ObjectId> = tips.into_iter().collect();
-    let (filter, is_shallow) = log_paged_walk_filter(repo)?;
+    let filter = log_paged_walk_filter(repo, shallow);
+    let walk_cancellation = LogWalkCancellation::new(cancellation);
 
     // The topo walk reports all parents in first-parent mode and cannot cross a
     // shallow boundary whose missing parents are resolved during its setup.
-    let walk = if mode == HistoryMode::FirstParent || is_shallow {
+    let walk = if mode == HistoryMode::FirstParent || shallow.is_shallow() {
         new_commit_time_walk(repo, &tips, parents, filter)?
     } else {
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
+        if let Some(chunks) = chunks.as_mut() {
+            chunks.ordering_started();
+        }
+        if let Some(cancellation) = cancellation {
+            cancellation.check_cancelled()?;
+        }
         let commit_graph = repo
             .to_thread_local()
             .commit_graph_if_enabled()
             .ok()
             .flatten();
-        match gix::traverse::commit::topo::Builder::new(log_paged_walk_handle(repo))
+        let find = CancellableLogWalkFind {
+            inner: log_paged_walk_handle(repo),
+            cancellation: walk_cancellation.clone(),
+        };
+        match gix::traverse::commit::topo::Builder::new(find)
             .with_predicate(filter)
             .with_tips(tips.iter().copied())
             .sorting(gix::traverse::commit::topo::Sorting::DateOrder)
@@ -694,18 +794,44 @@ fn new_log_paged_walk(
             .with_commit_graph(commit_graph)
             .build()
         {
-            Ok(walk) => super::LogPagedWalk::DateOrder(walk),
+            Ok(walk) => {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check_cancelled()?;
+                }
+                super::LogPagedWalk::DateOrder(walk)
+            }
             // Fall back lazily when a missing ancestor prevents the in-degree pass.
-            Err(_) => {
-                let (filter, _) = log_paged_walk_filter(repo)?;
+            Err(error) if topo_build_error_is_missing_object(&error) => {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check_cancelled()?;
+                }
+                let filter = log_paged_walk_filter(repo, shallow);
                 new_commit_time_walk(repo, &tips, parents, filter)?
+            }
+            Err(error) => {
+                if let Some(cancellation) = cancellation {
+                    cancellation.check_cancelled()?;
+                }
+                return Err(Error::new(ErrorKind::Backend(format!(
+                    "gix date-order walk: {error}"
+                ))));
             }
         }
     };
     Ok(super::LogPagedWalkState {
         pending: std::collections::VecDeque::new(),
         walk,
+        cancellation: walk_cancellation,
     })
+}
+
+fn topo_build_error_is_missing_object(error: &gix::traverse::commit::topo::Error) -> bool {
+    matches!(
+        error,
+        gix::traverse::commit::topo::Error::Find(
+            gix::objs::find::existing_iter::Error::NotFound { .. }
+        )
+    )
 }
 
 fn apply_first_parent_resume_hint(page: &mut LogPage) {
@@ -783,6 +909,7 @@ fn paginate_commits(
 pub(super) struct ChunkEmitter<'a> {
     on_chunk: &'a mut dyn FnMut(LogChunk),
     next_emit_at: std::time::Instant,
+    interval: std::time::Duration,
     scanned: u64,
 }
 
@@ -790,11 +917,27 @@ const CHUNK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(120
 
 impl<'a> ChunkEmitter<'a> {
     pub(super) fn new(on_chunk: &'a mut dyn FnMut(LogChunk)) -> Self {
+        Self::with_interval(on_chunk, CHUNK_INTERVAL)
+    }
+
+    fn with_interval(on_chunk: &'a mut dyn FnMut(LogChunk), interval: std::time::Duration) -> Self {
         Self {
             on_chunk,
-            next_emit_at: std::time::Instant::now() + CHUNK_INTERVAL,
+            next_emit_at: std::time::Instant::now() + interval,
+            interval,
             scanned: 0,
         }
+    }
+
+    /// Make the expensive ordering phase visible before gix begins its
+    /// in-degree pass. That pass cannot yield page rows yet, so an empty prefix
+    /// with a zero count is the only truthful chunk available at this point.
+    fn ordering_started(&mut self) {
+        self.next_emit_at = std::time::Instant::now() + self.interval;
+        (self.on_chunk)(LogChunk {
+            commits: Vec::new(),
+            scanned: self.scanned,
+        });
     }
 
     /// Counts `count` more visited commits and reports the page so far once the
@@ -805,7 +948,7 @@ impl<'a> ChunkEmitter<'a> {
         if std::time::Instant::now() < self.next_emit_at {
             return;
         }
-        self.next_emit_at = std::time::Instant::now() + CHUNK_INTERVAL;
+        self.next_emit_at = std::time::Instant::now() + self.interval;
         (self.on_chunk)(LogChunk {
             commits: commits.to_vec(),
             scanned: self.scanned,
@@ -827,6 +970,11 @@ fn mode_includes(mode: HistoryMode, parent_count: usize) -> bool {
 }
 
 const DECODE_BATCH: usize = 2_048;
+/// Check the progress clock after this many visited candidates. Keeping the
+/// clock read out of the per-commit hot path matters on million-commit walks,
+/// while this still updates promptly when cursor or mode filtering rejects an
+/// entire decode batch's worth of commits.
+const CHUNK_VISIT_STRIDE: u64 = 256;
 /// Commit-decode threads in flight across the whole process. Object inflation is
 /// what a filtered walk spends its time on and it parallelizes cleanly, but the
 /// budget is shared: several repositories loading at once must not multiply into
@@ -992,6 +1140,7 @@ fn log_page_from_paged_walk_state(
     let mut batch: Vec<gix::traverse::commit::Info> = Vec::with_capacity(DECODE_BATCH);
     let mut decoded: Vec<Option<Commit>> = Vec::with_capacity(DECODE_BATCH);
     let mut walk_done = false;
+    let mut visited_since_emit = 0u64;
 
     while !walk_done {
         // An unfiltered page gathers only what it can use plus one commit to
@@ -1014,32 +1163,50 @@ fn log_page_from_paged_walk_state(
                 if let Some(cancellation) = cancellation {
                     cancellation.check_cancelled()?;
                 }
-                match walk_state.walk.next() {
+                let info = match walk_state.walk.next() {
                     None => {
                         walk_done = true;
                         break;
                     }
-                    Some(result) => {
-                        let info = result.map_err(|e| {
-                            Error::new(ErrorKind::Backend(format!("gix walk: {e}")))
-                        })?;
-                        if let Some(cursor_gate) = cursor_gate.as_deref_mut()
-                            && cursor_gate.should_skip_oid(info.id.as_ref())
-                        {
-                            continue;
+                    Some(Ok(info)) => info,
+                    Some(Err(error)) => {
+                        // The cancellable object lookup surfaces through gix's
+                        // iterator error. Preserve cancellation as its public
+                        // error kind instead of misreporting it as a backend
+                        // failure.
+                        if let Some(cancellation) = cancellation {
+                            cancellation.check_cancelled()?;
                         }
-                        if !include(&info) {
-                            continue;
-                        }
-                        batch.push(info);
-                        continue;
+                        return Err(Error::new(ErrorKind::Backend(format!("gix walk: {error}"))));
                     }
+                };
+
+                visited_since_emit = visited_since_emit.saturating_add(1);
+                if visited_since_emit >= CHUNK_VISIT_STRIDE {
+                    if let Some(chunks) = chunks.as_deref_mut() {
+                        chunks.visited(visited_since_emit, &commits);
+                    }
+                    visited_since_emit = 0;
                 }
+
+                if let Some(cursor_gate) = cursor_gate.as_deref_mut()
+                    && cursor_gate.should_skip_oid(info.id.as_ref())
+                {
+                    continue;
+                }
+                if !include(&info) {
+                    continue;
+                }
+                batch.push(info);
+                continue;
             };
             batch.push(info);
         }
 
         if batch.is_empty() {
+            if let Some(chunks) = chunks.as_deref_mut() {
+                chunks.visited(visited_since_emit, &commits);
+            }
             break;
         }
 
@@ -1048,7 +1215,6 @@ fn log_page_from_paged_walk_state(
             Some(_) => batch.len(),
             None => batch.len().min(limit.saturating_sub(commits.len())),
         };
-        let scanned = decode_len as u64;
         for info in batch.drain(decode_len..).rev() {
             walk_state.pending.push_front(info);
         }
@@ -1069,6 +1235,9 @@ fn log_page_from_paged_walk_state(
                 for info in batch.drain(index..).rev() {
                     walk_state.pending.push_front(info);
                 }
+                if let Some(chunks) = chunks.as_deref_mut() {
+                    chunks.visited(visited_since_emit, &commits);
+                }
                 return Ok((commits, true));
             }
             commits.push(commit);
@@ -1077,11 +1246,21 @@ fn log_page_from_paged_walk_state(
         // Reported after the batch lands, so a chunk always carries everything
         // found so far rather than trailing a batch behind.
         if let Some(chunks) = chunks.as_deref_mut() {
-            chunks.visited(scanned, &commits);
+            chunks.visited(visited_since_emit, &commits);
         }
+        visited_since_emit = 0;
 
         if commits.len() >= limit {
-            return Ok((commits, !walk_state.pending.is_empty()));
+            if !walk_state.pending.is_empty() {
+                return Ok((commits, true));
+            }
+            if walk_done {
+                return Ok((commits, false));
+            }
+            // A filtered page can fill exactly at the end of a decode batch.
+            // Only another matching commit or actual EOF can answer whether a
+            // successor exists, so keep walking instead of guessing from the
+            // empty pending queue.
         }
     }
 
@@ -1093,6 +1272,7 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         seed: super::LogPageSeed,
+        shallow: &super::ShallowSnapshot,
         limit: usize,
         cursor: Option<&LogCursor>,
         author: Option<&AuthorFilter>,
@@ -1100,18 +1280,12 @@ impl GixRepo {
         super::LogPageCacheKey {
             mode,
             seed,
-            shallow: self.shallow_stamp(),
+            shallow: shallow.clone(),
             limit,
             last_seen: cursor.map(|cursor| cursor.last_seen.clone()),
             resume_from: cursor.and_then(|cursor| cursor.resume_from.clone()),
             author: author.cloned(),
         }
-    }
-
-    /// Stamp of the shallow boundary file, for [`Self::log_page_cache_key`].
-    /// Read through gix so a `core.shallowFile` override is honoured.
-    fn shallow_stamp(&self) -> super::RepoFileStamp {
-        super::repo_file_stamp(&self._repo.to_thread_local().shallow_file())
     }
 
     /// Serves a cached page and refreshes its successor's LRU position.
@@ -1120,16 +1294,22 @@ impl GixRepo {
         let index = cache.iter().position(|entry| &entry.key == key)?;
         let entry = cache.remove(index);
         let page = entry.page.clone();
-        let successor_starts_at = page.commits.last().map(|commit| commit.id.clone());
+        let successor_key = page
+            .next_cursor
+            .as_ref()
+            .map(|cursor| super::LogPageCacheKey {
+                mode: key.mode,
+                seed: key.seed.clone(),
+                shallow: key.shallow.clone(),
+                limit: key.limit,
+                last_seen: Some(cursor.last_seen.clone()),
+                resume_from: cursor.resume_from.clone(),
+                author: key.author.clone(),
+            });
         cache.push(entry);
 
-        if let Some(last_seen) = successor_starts_at
-            && let Some(successor) = cache.iter().position(|entry| {
-                entry.key.last_seen.as_ref() == Some(&last_seen)
-                    && entry.key.mode == key.mode
-                    && entry.key.seed == key.seed
-                    && entry.key.author == key.author
-            })
+        if let Some(successor_key) = successor_key
+            && let Some(successor) = cache.iter().position(|entry| entry.key == successor_key)
         {
             let successor = cache.remove(successor);
             cache.push(successor);
@@ -1212,6 +1392,7 @@ impl GixRepo {
         token: &str,
         mode: HistoryMode,
         tips: &[gix::ObjectId],
+        shallow: &super::ShallowSnapshot,
         author: Option<&AuthorFilter>,
     ) -> Option<super::LogPagedWalkState> {
         let mut cache = self
@@ -1222,6 +1403,7 @@ impl GixRepo {
             entry.token.as_ref() == token
                 && entry.mode == mode
                 && entry.tips.as_ref() == tips
+                && &entry.shallow == shallow
                 && entry.author.as_ref() == author
         })?;
         Some(cache.entries.remove(index).state)
@@ -1231,6 +1413,7 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         tips: &Arc<[gix::ObjectId]>,
+        shallow: &super::ShallowSnapshot,
         author: Option<&AuthorFilter>,
         state: super::LogPagedWalkState,
     ) -> Arc<str> {
@@ -1266,6 +1449,7 @@ impl GixRepo {
             token: Arc::clone(&token),
             mode,
             tips: Arc::clone(tips),
+            shallow: shallow.clone(),
             author: author.cloned(),
             state,
         });
@@ -1521,11 +1705,12 @@ impl GixRepo {
         &self,
         mode: HistoryMode,
         tips: Arc<[gix::ObjectId]>,
+        shallow: &super::ShallowSnapshot,
         limit: usize,
         cursor: Option<&LogCursor>,
         cancellation: Option<&CancellationToken>,
         author: Option<&AuthorFilter>,
-        chunks: Option<&mut ChunkEmitter<'_>>,
+        mut chunks: Option<&mut ChunkEmitter<'_>>,
     ) -> Result<LogPage> {
         if tips.is_empty() {
             return Ok(empty_log_page());
@@ -1533,7 +1718,7 @@ impl GixRepo {
 
         let cached_walk_state = cursor
             .and_then(|cursor| cursor.resume_token.as_deref())
-            .and_then(|token| self.take_log_paged_walk(token, mode, &tips, author));
+            .and_then(|token| self.take_log_paged_walk(token, mode, &tips, shallow, author));
 
         // Tokens go stale on cache eviction or a change of tips, and then the
         // walk has to be rebuilt. A first-parent cursor carries `resume_from`,
@@ -1548,14 +1733,33 @@ impl GixRepo {
             .and_then(object_id_from_commit_id);
         let (mut walk_state, mut cursor_gate) = match (cached_walk_state, resume_tip) {
             (Some(walk_state), _) => (walk_state, None),
-            (None, Some(resume_tip)) => {
-                (new_log_paged_walk(&self._repo, [resume_tip], mode)?, None)
-            }
+            (None, Some(resume_tip)) => (
+                new_log_paged_walk(
+                    &self._repo,
+                    [resume_tip],
+                    mode,
+                    shallow,
+                    cancellation,
+                    chunks.as_deref_mut(),
+                )?,
+                None,
+            ),
             (None, None) => (
-                new_log_paged_walk(&self._repo, tips.iter().copied(), mode)?,
+                new_log_paged_walk(
+                    &self._repo,
+                    tips.iter().copied(),
+                    mode,
+                    shallow,
+                    cancellation,
+                    chunks.as_deref_mut(),
+                )?,
                 cursor.map(|cursor| CursorGate::new(Some(cursor))),
             ),
         };
+        // A parked walk outlives the request that created it. Rebind the lookup
+        // hook before resuming so an old token cannot poison this page, and so
+        // this page's cancellation reaches work performed inside gix.
+        walk_state.cancellation.replace(cancellation);
 
         let (commits, has_more) = log_page_from_paged_walk_state(
             &self._repo,
@@ -1574,7 +1778,9 @@ impl GixRepo {
             .map(|commit| LogCursor {
                 last_seen: commit.id.clone(),
                 resume_from: None,
-                resume_token: Some(self.store_log_paged_walk(mode, &tips, author, walk_state)),
+                resume_token: Some(
+                    self.store_log_paged_walk(mode, &tips, shallow, author, walk_state),
+                ),
             });
         let mut page = LogPage {
             commits,
@@ -1619,10 +1825,12 @@ impl GixRepo {
         }
 
         let repo = self._repo.to_thread_local();
+        let shallow = shallow_snapshot(&repo)?;
         let head_id = gix_head_id_or_none(&repo)?;
         let cache_key = self.log_page_cache_key(
             mode,
             super::LogPageSeed::Head(head_id),
+            &shallow,
             limit,
             cursor,
             author,
@@ -1635,6 +1843,7 @@ impl GixRepo {
             Some(head_id) => self.log_paged_page(
                 mode,
                 Arc::from(vec![head_id]),
+                &shallow,
                 limit,
                 cursor,
                 cancellation,
@@ -1666,9 +1875,9 @@ impl GixRepo {
 
     fn all_branches_tips(
         &self,
+        repo: &gix::Repository,
         cancellation: Option<&CancellationToken>,
     ) -> Result<Arc<[gix::ObjectId]>> {
-        let repo = self._repo.to_thread_local();
         let refs = repo
             .references()
             .map_err(|e| Error::new(ErrorKind::Backend(format!("gix references: {e}"))))?;
@@ -1676,7 +1885,7 @@ impl GixRepo {
         // Include custom ref namespaces while leaving tags out of the graph.
         let mut tips = Vec::new();
         let mut seen = FxHashSet::default();
-        if let Some(head_id) = gix_head_id_or_none(&repo)? {
+        if let Some(head_id) = gix_head_id_or_none(repo)? {
             tips.push(head_id);
             seen.insert(head_id);
         }
@@ -1705,7 +1914,7 @@ impl GixRepo {
         }
 
         // Older stash entries are reflog-only and need explicit tips.
-        for id in stash_reflog_tips(&repo, 50).unwrap_or_default() {
+        for id in stash_reflog_tips(repo, 50).unwrap_or_default() {
             if seen.insert(id) {
                 tips.push(id);
             }
@@ -1742,11 +1951,14 @@ impl GixRepo {
             return Ok(empty_log_page());
         }
 
-        let tips = self.all_branches_tips(cancellation)?;
+        let repo = self._repo.to_thread_local();
+        let shallow = shallow_snapshot(&repo)?;
+        let tips = self.all_branches_tips(&repo, cancellation)?;
 
         let cache_key = self.log_page_cache_key(
             HistoryMode::AllBranches,
             super::LogPageSeed::Tips(Arc::clone(&tips)),
+            &shallow,
             limit,
             cursor,
             author,
@@ -1758,6 +1970,7 @@ impl GixRepo {
         let page = self.log_paged_page(
             HistoryMode::AllBranches,
             tips,
+            &shallow,
             limit,
             cursor,
             cancellation,
@@ -2136,6 +2349,54 @@ mod tests {
     #[test]
     fn object_id_from_commit_id_rejects_invalid_hex() {
         assert!(object_id_from_commit_id(&CommitId("not-a-sha".into())).is_none());
+    }
+
+    #[test]
+    fn shallow_snapshot_uses_contents_even_when_stat_metadata_collides() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        let repo = open_repo(workdir);
+        let local_repo = repo._repo.to_thread_local();
+        let shallow_file = local_repo.shallow_file();
+
+        fs::write(&shallow_file, b"1111111111111111111111111111111111111111\n")
+            .expect("write first shallow boundary");
+        let first_metadata = fs::metadata(&shallow_file).expect("first shallow metadata");
+        let first_modified = first_metadata.modified().expect("first shallow mtime");
+        let first = shallow_snapshot(&local_repo).expect("first shallow snapshot");
+
+        fs::write(&shallow_file, b"2222222222222222222222222222222222222222\n")
+            .expect("replace shallow boundary with the same length");
+        fs::OpenOptions::new()
+            .write(true)
+            .open(&shallow_file)
+            .expect("open shallow boundary")
+            .set_times(fs::FileTimes::new().set_modified(first_modified))
+            .expect("restore shallow mtime");
+
+        let second_metadata = fs::metadata(&shallow_file).expect("second shallow metadata");
+        assert_eq!(second_metadata.len(), first_metadata.len());
+        assert_eq!(second_metadata.modified().ok(), Some(first_modified));
+        let second = shallow_snapshot(&local_repo).expect("second shallow snapshot");
+        assert_ne!(
+            first, second,
+            "cache identity must come from the object ids"
+        );
+    }
+
+    #[test]
+    fn only_a_missing_object_allows_the_date_order_fallback() {
+        let oid = gix::ObjectId::from_hex(b"1111111111111111111111111111111111111111")
+            .expect("valid oid");
+        let missing = gix::traverse::commit::topo::Error::Find(
+            gix::objs::find::existing_iter::Error::NotFound { oid },
+        );
+
+        assert!(topo_build_error_is_missing_object(&missing));
+        assert!(!topo_build_error_is_missing_object(
+            &gix::traverse::commit::topo::Error::MissingStateUnexpected
+        ));
     }
 
     #[test]
@@ -2652,10 +2913,12 @@ mod tests {
         init_test_repo(workdir);
         commit_file(workdir, "a.txt", "one\n", "first");
         let repo = open_repo(workdir);
+        let shallow = shallow_snapshot(&repo._repo.to_thread_local()).expect("shallow snapshot");
 
         let key = repo.log_page_cache_key(
             HistoryMode::AllBranches,
             super::super::LogPageSeed::Tips(std::sync::Arc::from(Vec::new())),
+            &shallow,
             10,
             None,
             None,
@@ -2706,10 +2969,13 @@ mod tests {
         repo.log_history_mode_page_impl(mode, 4, Some(&cursor))
             .expect("second page");
 
-        let head = gix_head_id_or_none(&repo._repo.to_thread_local()).expect("head");
+        let local_repo = repo._repo.to_thread_local();
+        let head = gix_head_id_or_none(&local_repo).expect("head");
+        let shallow = shallow_snapshot(&local_repo).expect("shallow snapshot");
         let second_key = repo.log_page_cache_key(
             mode,
             super::super::LogPageSeed::Head(head),
+            &shallow,
             4,
             Some(&cursor),
             None,
@@ -2730,20 +2996,167 @@ mod tests {
     }
 
     #[test]
-    fn chunk_emitter_reports_progress_for_the_smallest_batch_a_page_can_ask_for() {
-        let mut seen: Vec<u64> = Vec::new();
-        let mut on_chunk = |chunk: LogChunk| seen.push(chunk.scanned);
-        let mut emitter = ChunkEmitter::new(&mut on_chunk);
-
-        std::thread::sleep(CHUNK_INTERVAL + std::time::Duration::from_millis(20));
-        for _ in 0..3 {
-            emitter.visited(200, &[]);
+    fn a_page_chunk_counts_lookahead_and_rejected_commits_as_visited() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        for index in 0..3 {
+            commit_file(
+                workdir,
+                "a.txt",
+                &format!("v{index}\n"),
+                &format!("c{index}"),
+            );
         }
+        let repo = open_repo(workdir);
+        let local_repo = repo._repo.to_thread_local();
+        let shallow = shallow_snapshot(&local_repo).expect("shallow snapshot");
+        let head = gix_head_id_or_none(&local_repo)
+            .expect("read head")
+            .expect("head commit");
 
-        assert!(
-            !seen.is_empty(),
-            "a batched caller must reach the clock: three 200-commit batches past \
-             the interval reported nothing"
+        let mut walk = new_log_paged_walk(
+            &repo._repo,
+            [head],
+            HistoryMode::FullReachable,
+            &shallow,
+            None,
+            None,
+        )
+        .expect("build page walk");
+        let mut scanned = Vec::new();
+        let (commits, has_more) = {
+            let mut on_chunk = |chunk: LogChunk| scanned.push(chunk.scanned);
+            let mut emitter = ChunkEmitter::with_interval(&mut on_chunk, std::time::Duration::ZERO);
+            log_page_from_paged_walk_state(
+                &repo._repo,
+                &mut walk,
+                2,
+                None,
+                None,
+                None,
+                Some(&mut emitter),
+                |_| true,
+            )
+            .expect("build page")
+        };
+        assert_eq!(commits.len(), 2);
+        assert!(has_more);
+        assert_eq!(
+            scanned.last(),
+            Some(&3),
+            "the lookahead row was visited even though it was not decoded"
         );
+
+        let mut rejected_walk = new_log_paged_walk(
+            &repo._repo,
+            [head],
+            HistoryMode::FullReachable,
+            &shallow,
+            None,
+            None,
+        )
+        .expect("build rejected-row walk");
+        let mut rejected_scanned = Vec::new();
+        let (commits, has_more) = {
+            let mut on_chunk = |chunk: LogChunk| rejected_scanned.push(chunk.scanned);
+            let mut emitter = ChunkEmitter::with_interval(&mut on_chunk, std::time::Duration::ZERO);
+            log_page_from_paged_walk_state(
+                &repo._repo,
+                &mut rejected_walk,
+                1,
+                None,
+                None,
+                None,
+                Some(&mut emitter),
+                |_| false,
+            )
+            .expect("build page with rejected rows")
+        };
+        assert!(commits.is_empty());
+        assert!(!has_more);
+        assert_eq!(
+            rejected_scanned.last(),
+            Some(&3),
+            "mode-rejected candidates still count as visited"
+        );
+    }
+
+    #[test]
+    fn topo_setup_emits_a_chunk_and_honours_cancellation() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        commit_file(workdir, "a.txt", "one\n", "one");
+        let repo = open_repo(workdir);
+        let cancellation = CancellationToken::new();
+        let cancel_from_chunk = cancellation.clone();
+        let mut chunks = Vec::new();
+        let error = {
+            let mut on_chunk = |chunk: LogChunk| {
+                chunks.push(chunk);
+                cancel_from_chunk.cancel();
+            };
+
+            repo.log_history_mode_page_streaming_impl(
+                HistoryMode::FullReachable,
+                None,
+                10,
+                None,
+                &cancellation,
+                &mut on_chunk,
+            )
+            .expect_err("cancellation during topo setup must stop the request")
+        };
+
+        assert!(matches!(error.kind(), ErrorKind::Cancelled));
+        assert_eq!(
+            chunks,
+            vec![LogChunk::default()],
+            "the ordering phase must become visible before it starts"
+        );
+    }
+
+    #[test]
+    fn a_resumed_topo_walk_uses_the_new_pages_cancellation_token() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let workdir = tmp.path();
+        init_test_repo(workdir);
+        for index in 0..3 {
+            commit_file(
+                workdir,
+                "a.txt",
+                &format!("v{index}\n"),
+                &format!("c{index}"),
+            );
+        }
+        let repo = open_repo(workdir);
+        let first_cancellation = CancellationToken::new();
+        let first = repo
+            .log_history_mode_page_streaming_impl(
+                HistoryMode::FullReachable,
+                None,
+                1,
+                None,
+                &first_cancellation,
+                &mut |_| {},
+            )
+            .expect("first page");
+        first_cancellation.cancel();
+
+        let second_cancellation = CancellationToken::new();
+        let second = repo
+            .log_history_mode_page_streaming_impl(
+                HistoryMode::FullReachable,
+                None,
+                1,
+                first.next_cursor.as_ref(),
+                &second_cancellation,
+                &mut |_| {},
+            )
+            .expect("the old page token must not cancel the resumed walk");
+
+        assert_eq!(second.commits.len(), 1);
+        assert!(second.next_cursor.is_some());
     }
 }

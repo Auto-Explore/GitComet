@@ -127,14 +127,23 @@ fn run_git_at(repo: &Path, args: &[&str], unix_seconds: i64) {
 }
 
 fn fast_import_linear_history(repo: &Path, count: usize) {
+    fast_import_linear_history_with_authors(repo, count, |_| "You <you@example.com>");
+}
+
+fn fast_import_linear_history_with_authors(
+    repo: &Path,
+    count: usize,
+    mut author_at: impl FnMut(usize) -> &'static str,
+) {
     let mut stream = String::new();
     for index in 0..count {
         let message = format!("c{index}");
+        let timestamp = 1_600_000_000 + index as i64;
         stream.push_str("commit refs/heads/master\n");
         stream.push_str(&format!("mark :{}\n", index + 1));
+        stream.push_str(&format!("author {} {timestamp} +0000\n", author_at(index)));
         stream.push_str(&format!(
-            "committer You <you@example.com> {} +0000\n",
-            1_600_000_000 + index as i64
+            "committer You <you@example.com> {timestamp} +0000\n"
         ));
         stream.push_str(&format!("data {}\n{message}\n", message.len()));
         if index > 0 {
@@ -1043,10 +1052,11 @@ fn the_all_branches_page_cache_is_invalidated_by_every_kind_of_ref_move() {
         vec!["two", "one"],
         "a tag on a commit that is already reachable changes nothing"
     );
-    let unreachable = git_stdout(repo, &["rev-parse", "master"]);
+    let reachable = git_stdout(repo, &["rev-parse", "master"]);
     let _ = commit("four");
+    let unreachable = git_stdout(repo, &["rev-parse", "master"]);
     run_git(repo, &["tag", "orphan", unreachable.as_str()]);
-    run_git(repo, &["update-ref", "refs/heads/master", &unreachable]);
+    run_git(repo, &["update-ref", "refs/heads/master", &reachable]);
     run_git(repo, &["reset", "-q", "--hard", "master"]);
     assert_eq!(
         summaries(),
@@ -1112,6 +1122,18 @@ fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
         2,
         "a depth-2 clone starts with two rows"
     );
+    let first = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 1, None)
+        .unwrap();
+    assert_eq!(
+        first
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["tip"]
+    );
+    let shallow_cursor = first.next_cursor.clone().expect("one shallow row remains");
 
     run_git(&shallow, &["fetch", "--unshallow"]);
     assert_eq!(
@@ -1133,6 +1155,20 @@ fn deepening_a_shallow_clone_invalidates_the_all_branches_page_cache() {
         5,
         "the deepened history must not be served from the page cached before the deepen"
     );
+
+    let continued = opened
+        .log_history_mode_page(HistoryMode::FullReachable, 10, Some(&shallow_cursor))
+        .unwrap();
+    assert_eq!(
+        continued
+            .commits
+            .iter()
+            .map(|commit| commit.summary.as_ref())
+            .collect::<Vec<_>>(),
+        vec!["three", "two", "one", "base"],
+        "a cursor issued before deepening must rebuild from the new shallow boundary"
+    );
+    assert!(continued.next_cursor.is_none());
 }
 
 #[test]
@@ -2159,6 +2195,47 @@ fn author_filter_pages_without_repeating_or_skipping() {
             .all(|c| first.commits.iter().all(|f| f.id != c.id)),
         "pages must not repeat commits"
     );
+}
+
+#[test]
+fn author_filter_page_filled_at_a_decode_boundary_still_has_a_successor() {
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    run_git(repo, &["init", "-b", "master"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+
+    // The walk's first 2,048 commits contain exactly 200 matches. There are
+    // another 102 matches beyond that decode boundary, separated from the
+    // first group by non-matching commits.
+    fast_import_linear_history_with_authors(repo, 2_150, |index| {
+        if !(102..1_950).contains(&index) {
+            "Match <match@example.com>"
+        } else {
+            "Other <other@example.com>"
+        }
+    });
+
+    let opened = GixBackend.open(repo).unwrap();
+    let first = opened
+        .log_history_mode_page_filtered(HistoryMode::FullReachable, Some("Match"), 200, None)
+        .unwrap();
+    assert_eq!(first.commits.len(), 200);
+    let cursor = first
+        .next_cursor
+        .as_ref()
+        .expect("matches beyond the decode boundary must remain reachable");
+
+    let second = opened
+        .log_history_mode_page_filtered(
+            HistoryMode::FullReachable,
+            Some("Match"),
+            200,
+            Some(cursor),
+        )
+        .unwrap();
+    assert_eq!(second.commits.len(), 102);
+    assert!(second.next_cursor.is_none());
 }
 
 /// A walk resumed under a different filter would silently skip everything the
