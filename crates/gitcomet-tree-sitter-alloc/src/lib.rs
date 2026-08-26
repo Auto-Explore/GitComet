@@ -7,23 +7,25 @@
 //! allocators, with every subtree, parse stack and lexer buffer on libc's while
 //! the Rust side is on mimalloc.
 //!
-//! `ts_set_allocator` is the supported way to fix that, so both entry points here
-//! route to `mi_*`: [`install_mimalloc_allocator`] for normal runs, and
-//! [`install_tracking_allocator`] for benchmarks, which adds counters on the same
-//! underlying allocator. Sharing the allocator is what makes the two safe to mix:
-//! whichever was installed when a block was allocated, the other can still free it.
-//! It also keeps benchmark numbers representative of a real run.
+//! `ts_set_allocator` is the supported way to fix that. The hooks installed before
+//! `main` always route to `mi_*` through the same wrappers; benchmarks atomically
+//! enable the wrappers' counters only while measuring. The function-pointer globals
+//! are therefore written once, before parser threads exist, rather than being
+//! swapped underneath concurrent C reads.
 
 use std::ffi::c_void;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::{Mutex, Once};
 
 use libmimalloc_sys::{mi_calloc, mi_free, mi_malloc, mi_realloc, mi_usable_size};
 
-static INSTALLED: Mutex<Installed> = Mutex::new(Installed::None);
+static INSTALL: Once = Once::new();
+static INSTALLED: AtomicBool = AtomicBool::new(false);
 static MEASUREMENT_LOCK: Mutex<()> = Mutex::new(());
 static MEASUREMENT_ENABLED: AtomicBool = AtomicBool::new(false);
 static COUNTERS: AllocCounters = AllocCounters::new();
+#[cfg(test)]
+static HOOK_INSTALL_COUNT: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct AllocMetrics {
@@ -83,29 +85,26 @@ impl AllocMetrics {
 /// so a mimalloc bump is covered by every test that parses anything instead of
 /// only by the ones in this crate.
 ///
-/// Nothing here can allocate or fail: it stores four `mi_*` function pointers
-/// into tree-sitter's globals behind a `const`-constructed, uncontended mutex
-/// and never calls them, so mimalloc is not initialised at this point either.
+/// Nothing here can allocate or fail: it stores four function pointers into
+/// tree-sitter's globals through an uncontended [`Once`] and never calls them,
+/// so mimalloc is not initialised at this point either.
 #[ctor::ctor(unsafe)]
 fn install_before_main() {
     install_mimalloc_allocator();
 }
 
-/// Point tree-sitter's C at mimalloc, with no accounting.
+/// Point tree-sitter's C at mimalloc.
 ///
-/// Idempotent, and safe to combine with [`install_tracking_allocator`] in either
-/// order -- both wrap the same `mi_*` functions, so a block allocated under one
-/// is freed correctly under the other. Tracking outranks this: once it is
-/// installed this call leaves it in place, so a benchmark that also runs the
-/// normal startup path keeps its counters instead of silently losing them to
-/// whichever installer happened to run last.
+/// The installed wrappers contain the optional accounting, but its single atomic
+/// branch is inactive outside [`measure_allocations`]. This function and
+/// [`install_tracking_allocator`] share one [`Once`], so neither can rewrite
+/// tree-sitter's non-atomic function-pointer globals after startup.
 ///
 /// # The one ordering rule
 ///
-/// The *first* installer to run switches tree-sitter from libc to mimalloc, and
+/// The installer switches tree-sitter from libc to mimalloc, and
 /// a block allocated before that switch would later be freed through `mi_free`
-/// -- a foreign pointer, which corrupts the heap. Every later switch is
-/// mimalloc-to-mimalloc and harmless.
+/// -- a foreign pointer, which corrupts the heap.
 ///
 /// That rule is not left to callers to remember. [`install_before_main`] runs it
 /// from a `#[ctor]`, so in any binary linking this crate the switch happens
@@ -118,45 +117,29 @@ fn install_before_main() {
 /// Do not replace either with a call in a `main`: that covers one entry point
 /// and silently leaves every other binary and every test on libc.
 pub fn install_mimalloc_allocator() {
-    let mut installed = lock_installed();
-    if *installed != Installed::None {
-        return;
-    }
-    unsafe {
-        tree_sitter::set_allocator(
-            Some(mi_malloc),
-            Some(mi_calloc),
-            Some(mi_realloc),
-            Some(mi_free),
-        );
-    }
-    *installed = Installed::Plain;
+    INSTALL.call_once(|| {
+        unsafe {
+            tree_sitter::set_allocator(
+                Some(tree_sitter_malloc),
+                Some(tree_sitter_calloc),
+                Some(tree_sitter_realloc),
+                Some(tree_sitter_free),
+            );
+        }
+        #[cfg(test)]
+        HOOK_INSTALL_COUNT.fetch_add(1, Ordering::SeqCst);
+        INSTALLED.store(true, Ordering::Release);
+    });
 }
 
-/// Point tree-sitter's C at mimalloc *and* count what it allocates.
+/// Ensure tree-sitter uses the wrappers that can count what it allocates.
 ///
-/// The counters cost an atomic load per allocation, so this is for benchmarks;
-/// [`install_mimalloc_allocator`] is what a normal run wants. It upgrades the
-/// plain hooks if those are already in place, and nothing downgrades it back.
-///
-/// A benchmark reaches this long after startup, which is safe *because* it is an
-/// upgrade: the plain hooks are already in, so the blocks it inherits are
-/// mimalloc's. See [`install_mimalloc_allocator`] for why the libc-to-mimalloc
-/// switch it would otherwise be performing can no longer happen here.
+/// Kept as the benchmark-facing entry point, but it deliberately installs no
+/// different function pointers. [`measure_allocations`] toggles accounting with
+/// an atomic flag, so calling this after worker threads start is idempotent and
+/// cannot race a parser reading tree-sitter's allocator globals.
 pub fn install_tracking_allocator() {
-    let mut installed = lock_installed();
-    if *installed == Installed::Tracking {
-        return;
-    }
-    unsafe {
-        tree_sitter::set_allocator(
-            Some(tree_sitter_malloc),
-            Some(tree_sitter_calloc),
-            Some(tree_sitter_realloc),
-            Some(tree_sitter_free),
-        );
-    }
-    *installed = Installed::Tracking;
+    install_mimalloc_allocator();
 }
 
 /// Whether tree-sitter's allocator has been pointed away from libc yet.
@@ -165,24 +148,7 @@ pub fn install_tracking_allocator() {
 /// assert it instead of assuming it -- see the `#[ctor]` in `gitcomet-ui-gpui`,
 /// whose whole job is to make this true before the test harness starts.
 pub fn is_installed() -> bool {
-    *lock_installed() != Installed::None
-}
-
-/// Which hooks `ts_set_allocator` currently holds. `ts_set_allocator` is global
-/// and last-writer-wins, so the installers rank themselves rather than each
-/// guarding its own `Once` -- two independent `Once`s let the plain installer
-/// overwrite the tracking one whenever it happened to run second.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum Installed {
-    None,
-    Plain,
-    Tracking,
-}
-
-fn lock_installed() -> std::sync::MutexGuard<'static, Installed> {
-    INSTALLED
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+    INSTALLED.load(Ordering::Acquire)
 }
 
 pub fn measure_allocations<T>(f: impl FnOnce() -> T) -> (T, AllocMetrics) {
@@ -399,46 +365,42 @@ mod tests {
             .expect("json should parse")
     }
 
-    /// The invariant both installers rest on: they wrap the same `mi_*`
-    /// functions, so a tree allocated while one is installed can be freed after
-    /// the other has replaced it.
-    ///
-    /// If either installer is ever pointed at a different allocator, this frees
-    /// a mimalloc block through the wrong `free` and the test aborts rather than
-    /// failing -- which is the point. Plain-then-tracking is the switch that can
-    /// happen at runtime: `ts_set_allocator` is global and a benchmark binary
-    /// installs tracking after startup has already installed the plain hooks.
+    /// Runtime installer calls must never rewrite tree-sitter's global hook
+    /// pointers while parsers on sibling threads are reading them.
     #[test]
-    fn trees_survive_switching_between_the_two_installers() {
-        install_mimalloc_allocator();
-        let allocated_plain = parse_json();
-
-        install_tracking_allocator();
-        let allocated_tracked = parse_json();
-
-        // Freed under the tracking hooks, though allocated under the plain ones.
-        drop(allocated_plain);
-        drop(allocated_tracked);
-
-        let after = parse_json();
-        assert_eq!(after.root_node().kind(), "document");
-    }
-
-    /// The plain installer must not take the hooks back off the tracking one.
-    ///
-    /// Each installer used to guard its own `Once`, which made the winner
-    /// whichever ran last: a benchmark binary running the normal startup path,
-    /// or the sibling test above installing the plain hooks from another thread,
-    /// would leave every measurement reading zero.
-    #[test]
-    fn plain_installer_does_not_downgrade_tracking() {
-        install_tracking_allocator();
-        install_mimalloc_allocator();
-
-        let (_tree, metrics) = measure_allocations(parse_json);
+    fn concurrent_installer_calls_do_not_swap_hooks_while_parsing() {
         assert!(
-            metrics.alloc_ops > 0,
-            "the plain installer dropped the tracking hooks, got {metrics:?}"
+            is_installed(),
+            "the constructor should install before tests"
+        );
+        let start = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let threads = (0..8)
+            .map(|thread_ix| {
+                let start = std::sync::Arc::clone(&start);
+                std::thread::spawn(move || {
+                    start.wait();
+                    for iteration in 0..128 {
+                        if thread_ix % 2 == 0 {
+                            if iteration % 2 == 0 {
+                                install_mimalloc_allocator();
+                            } else {
+                                install_tracking_allocator();
+                            }
+                        } else {
+                            let tree = parse_json();
+                            assert_eq!(tree.root_node().kind(), "document");
+                        }
+                    }
+                })
+            })
+            .collect::<Vec<_>>();
+        for thread in threads {
+            thread.join().expect("allocator stress thread");
+        }
+        assert_eq!(
+            HOOK_INSTALL_COUNT.load(Ordering::SeqCst),
+            1,
+            "all runtime installer calls must resolve through the constructor's one hook write"
         );
     }
 
@@ -447,6 +409,7 @@ mod tests {
     #[test]
     fn measurement_sees_tree_sitter_allocations() {
         install_tracking_allocator();
+        install_mimalloc_allocator();
         let (tree, metrics) = measure_allocations(parse_json);
         assert_eq!(tree.root_node().kind(), "document");
         assert!(

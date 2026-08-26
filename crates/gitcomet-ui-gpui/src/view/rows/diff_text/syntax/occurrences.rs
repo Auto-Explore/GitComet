@@ -140,6 +140,25 @@ const NAME_TOKEN_KINDS_WITH_ANONYMOUS_PARTS: &[&str] =
 
 const NAME_TOKEN_KINDS_DESPITE_SUBSTRING: &[&str] = &["string_scalar", "unquoted_string"];
 
+/// Named leaves that contain readable words but never denote names.
+///
+/// Most content kinds are caught by the descriptive substrings below. These are
+/// the short or grammar-specific spellings that are not: HTML prose is `text`,
+/// XML prose is `CharData`, and several data grammars name their null/boolean
+/// leaves directly rather than appending `_literal`.
+const NON_NAME_TOKEN_KINDS: &[&str] = &[
+    "CharData",
+    "boolean",
+    "false",
+    "nil",
+    "none",
+    "null",
+    "raw_text",
+    "text",
+    "true",
+    "undefined",
+];
+
 /// The half of [`is_name_token`] that needs no text, so a caller can ask it
 /// before deciding whether the text is worth materializing.
 fn is_name_token_kind(node: &tree_sitter::Node<'_>) -> bool {
@@ -156,7 +175,11 @@ fn is_name_token_kind(node: &tree_sitter::Node<'_>) -> bool {
     if NAME_TOKEN_KINDS_DESPITE_SUBSTRING.contains(&kind) {
         return true;
     }
-    !(kind.contains("comment") || kind.contains("string") || kind.contains("char"))
+    !NON_NAME_TOKEN_KINDS.contains(&kind)
+        && !(kind.contains("comment")
+            || kind.contains("string")
+            || kind.contains("char")
+            || kind.contains("literal"))
 }
 
 /// The name token at `offset`, read through `token_text` so a caller whose text

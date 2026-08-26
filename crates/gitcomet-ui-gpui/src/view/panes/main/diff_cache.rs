@@ -1417,7 +1417,8 @@ impl MainPaneView {
         &self,
         key: &PreparedSyntaxDocumentKey,
     ) -> Option<rows::PreparedDiffSyntaxDocument> {
-        self.prepared_syntax_documents.get(key).copied()
+        let document = self.prepared_syntax_documents.get(key).copied()?;
+        rows::prepared_diff_syntax_document_is_available(document).then_some(document)
     }
 
     fn prepared_syntax_reparse_seed_document(
@@ -1488,6 +1489,21 @@ impl MainPaneView {
             let old_key = prepared_syntax_document_key(repo_id, old_rev, &path, view_mode);
             let new_key = prepared_syntax_document_key(repo_id, new_rev, &path, view_mode);
             self.rekey_prepared_syntax_document(old_key, new_key);
+        }
+    }
+
+    fn remove_file_diff_prepared_syntax_documents_for_rev(
+        &mut self,
+        repo_id: RepoId,
+        rev: u64,
+        path: &std::path::Path,
+    ) {
+        for view_mode in [
+            PreparedSyntaxViewMode::FileDiffSplitLeft,
+            PreparedSyntaxViewMode::FileDiffSplitRight,
+        ] {
+            let key = prepared_syntax_document_key(repo_id, rev, path, view_mode);
+            self.prepared_syntax_documents.remove(&key);
         }
     }
 
@@ -1737,9 +1753,12 @@ impl MainPaneView {
             cx.notify();
             return;
         }
-        if !self.file_diff_click_syntax_inflight.insert(side) {
+        let syntax_generation = self.file_diff_syntax_generation;
+        if self.file_diff_click_syntax_inflight.contains_key(&side) {
             return;
         }
+        self.file_diff_click_syntax_inflight
+            .insert(side, syntax_generation);
 
         let Some(language) = self.file_diff_cache_language else {
             self.file_diff_click_syntax_inflight.remove(&side);
@@ -1791,7 +1810,6 @@ impl MainPaneView {
             self.clear_pending_diff_text_syntax_click_for(side);
             return;
         };
-        let syntax_generation = self.file_diff_syntax_generation;
         let repo_id = self.file_diff_cache_repo_id;
         let diff_file_rev = self.file_diff_cache_rev;
         let diff_target = self.file_diff_cache_target.clone();
@@ -1804,6 +1822,8 @@ impl MainPaneView {
         };
         #[cfg(test)]
         let after_prepare_hook = self.file_diff_click_syntax_after_prepare_hook.clone();
+        #[cfg(test)]
+        let before_complete_hook = self.file_diff_click_syntax_before_complete_hook.clone();
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
@@ -1856,14 +1876,17 @@ impl MainPaneView {
                 }
 
                 let _ = view.update(cx, |this, cx| {
-                    // Before the guard below, so the marker's lifetime is this
-                    // task's and nothing else's. A keep-rows rebuild bumps
-                    // `file_diff_syntax_generation` at its *start* without
-                    // clearing this set, so a worker superseded mid-flight used
-                    // to return still marked -- and `request_...` drops every
-                    // later click on that side at its `insert` guard, leaving a
-                    // pending click with nothing in flight to complete it.
-                    this.file_diff_click_syntax_inflight.remove(&side);
+                    #[cfg(test)]
+                    if let Some(hook) = before_complete_hook {
+                        hook(this);
+                    }
+                    // Before the guard below, so a superseded worker releases
+                    // its own marker. A rebuild can clear and reacquire the side
+                    // for a newer generation while this task is still parsing;
+                    // in that case the newer worker remains the owner.
+                    if this.file_diff_click_syntax_inflight.get(&side) == Some(&syntax_generation) {
+                        this.file_diff_click_syntax_inflight.remove(&side);
+                    }
                     if this.file_diff_syntax_generation != syntax_generation
                         || this.file_diff_cache_repo_id != repo_id
                         || this.file_diff_cache_rev != diff_file_rev
@@ -2603,14 +2626,12 @@ impl MainPaneView {
         self.file_diff_cache_content_signature = None;
         self.file_diff_cache_inflight = None;
         self.file_diff_cache_error = None;
-        self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
+        self.advance_file_diff_syntax_generation();
         self.file_diff_style_cache_epochs.bump_both();
         self.file_diff_cache_path = None;
         self.file_diff_cache_language = None;
         self.file_diff_cache_rows.clear();
         self.file_diff_row_provider = None;
-        self.file_diff_pair_syntax_text.clear();
-        self.file_diff_click_syntax_inflight.clear();
         self.file_diff_old_source_path = None;
         self.file_diff_new_source_path = None;
         self.file_diff_old_source_identity = None;
@@ -2627,6 +2648,18 @@ impl MainPaneView {
         self.file_diff_inline_row_provider = None;
         self.file_diff_inline_text = SharedString::default();
         self.reset_file_diff_word_highlight_caches();
+    }
+
+    /// Invalidates syntax work tied to the currently displayed file-diff rows.
+    ///
+    /// Advance this only when those rows are cleared or atomically replaced. A
+    /// same-target rebuild deliberately leaves the old rows interactive while
+    /// it runs, so advancing at rebuild start would let a worker read the old
+    /// sources while claiming to belong to the replacement generation.
+    fn advance_file_diff_syntax_generation(&mut self) {
+        self.file_diff_syntax_generation = self.file_diff_syntax_generation.wrapping_add(1);
+        self.file_diff_pair_syntax_text.clear();
+        self.file_diff_click_syntax_inflight.clear();
     }
 
     /// Drop the memoized intra-line word-diff ranges. They are keyed by bare row
@@ -2792,7 +2825,6 @@ impl MainPaneView {
         self.file_diff_cache_seq = self.file_diff_cache_seq.wrapping_add(1);
         let seq = self.file_diff_cache_seq;
         self.file_diff_cache_inflight = Some(seq);
-        self.file_diff_syntax_generation = seq;
         let whitespace_mode = self.diff_whitespace_mode;
 
         cx.spawn(
@@ -2840,11 +2872,19 @@ impl MainPaneView {
                         }
                     };
                     this.file_diff_cache_error = None;
-                    // A click may have retained a source-backed side's body.
-                    // It belongs to the generation being replaced even when
-                    // the source path itself is unchanged.
-                    this.file_diff_pair_syntax_text.clear();
-                    this.file_diff_click_syntax_inflight.clear();
+                    // The old rows remained interactive during a same-target
+                    // rebuild. Invalidate their workers and retained source only
+                    // now that every replacement field is ready to be swapped.
+                    this.advance_file_diff_syntax_generation();
+                    // A worker that finished before this swap could legitimately
+                    // serve the still-visible old rows, but the cache rev already
+                    // names this incoming payload. Drop any documents it put
+                    // under that rev before preparing the replacement sources.
+                    this.remove_file_diff_prepared_syntax_documents_for_rev(
+                        repo_id,
+                        diff_file_rev,
+                        &expected_abs_path,
+                    );
                     this.file_diff_cache_path = rebuild.file_path;
                     this.file_diff_cache_language = rebuild.language;
                     this.file_diff_row_provider = Some(rebuild.row_provider);

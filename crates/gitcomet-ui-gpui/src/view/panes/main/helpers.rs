@@ -3203,12 +3203,19 @@ pub(crate) struct MainPaneView {
     pub(in crate::view) file_diff_pair_syntax_text: FxHashMap<DiffTextRegion, SharedString>,
     /// Source sides currently being read and parsed for an interactive click.
     /// Prevents repeated clicks from launching duplicate full-document work.
-    pub(in crate::view) file_diff_click_syntax_inflight: FxHashSet<DiffTextRegion>,
+    /// The value identifies the syntax generation that owns the marker, so a
+    /// superseded worker cannot remove a newer generation's marker.
+    pub(in crate::view) file_diff_click_syntax_inflight: FxHashMap<DiffTextRegion, u64>,
     /// Test-only mutation point after a click worker has parsed but before its
     /// result is returned to the UI thread.
     #[cfg(test)]
     pub(in crate::view) file_diff_click_syntax_after_prepare_hook:
         Option<Arc<dyn Fn() + Send + Sync>>,
+    /// Test-only observation point immediately before a click worker updates
+    /// its in-flight marker and installs or rejects its prepared document.
+    #[cfg(test)]
+    pub(in crate::view) file_diff_click_syntax_before_complete_hook:
+        Option<Arc<dyn Fn(&MainPaneView) + Send + Sync>>,
     /// Where each side's content lives when it is a file rather than text in
     /// memory. A source-backed side keeps its text off the heap so a huge diff
     /// can render from per-line slices; the click path reads it back from here
@@ -3241,6 +3248,9 @@ pub(crate) struct MainPaneView {
         rows::LruCache<usize, FileDiffSplitWordHighlights>,
     pub(in crate::view) file_diff_cache_seq: u64,
     pub(in crate::view) file_diff_cache_inflight: Option<u64>,
+    /// Identity of the row/source generation currently visible to clicks.
+    /// Kept stable while a same-target replacement builds, then advanced at the
+    /// atomic row swap.
     pub(in crate::view) file_diff_syntax_generation: u64,
     pub(in crate::view) file_diff_style_cache_epochs: FileDiffStyleCacheEpochs,
     pub(in crate::view) syntax_chunk_poll_task: Option<gpui::Task<()>>,

@@ -185,9 +185,29 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
         cx,
         &view,
         "the file diff rows to be built",
-        |pane| pane.file_diff_cache_content_signature.is_some() && pane.diff_visible_len() > 0,
-        |pane| format!("visible_len={}", pane.diff_visible_len()),
+        |pane| {
+            pane.file_diff_cache_content_signature.is_some()
+                && pane.diff_visible_len() > 0
+                && pane
+                    .file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                    .is_some()
+        },
+        |pane| {
+            format!(
+                "visible_len={} right_doc={:?}",
+                pane.diff_visible_len(),
+                pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+            )
+        },
     );
+    let (syntax_generation_before, old_rows_document) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.file_diff_syntax_generation,
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                .expect("old rows should have a prepared right document"),
+        )
+    });
 
     // Staging a line reloads the same file with different content. The rebuild
     // must not blank the pane: the previous rows stay up until the new ones land.
@@ -214,11 +234,12 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
 
     // Draw without draining, so the rebuild is still in flight.
     crate::view::test_support::redraw(cx);
-    let (inflight, has_rows) = cx.update(|_window, app| {
+    let (inflight, has_rows, syntax_generation_during) = cx.update(|_window, app| {
         let pane = view.read(app).main_pane.read(app);
         (
             pane.file_diff_cache_inflight.is_some(),
             pane.file_diff_cache_content_signature.is_some(),
+            pane.file_diff_syntax_generation,
         )
     });
     assert!(inflight, "expected the same-file rebuild to be in flight");
@@ -226,16 +247,43 @@ fn same_file_refresh_keeps_rows_instead_of_flashing_processing(cx: &mut gpui::Te
         has_rows,
         "the previous rows must survive the rebuild, or the pane flashes a placeholder"
     );
+    assert_eq!(
+        syntax_generation_during, syntax_generation_before,
+        "the visible rows must keep their generation until the replacement row swap"
+    );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                let replacement_key = pane
+                    .file_diff_prepared_syntax_key(PreparedSyntaxViewMode::FileDiffSplitRight)
+                    .expect("in-flight replacement key");
+                pane.prepared_syntax_documents
+                    .insert(replacement_key, old_rows_document);
+            });
+        });
+    });
 
     draw_and_drain_test_window(cx);
+    let (has_content, syntax_generation_after, replacement_document) = cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        (
+            pane.file_diff_cache_content_signature.is_some(),
+            pane.file_diff_syntax_generation,
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight),
+        )
+    });
     assert!(
-        cx.update(|_window, app| view
-            .read(app)
-            .main_pane
-            .read(app)
-            .file_diff_cache_content_signature
-            .is_some()),
+        has_content,
         "the rebuilt rows must be in place once the refresh lands"
+    );
+    assert_ne!(
+        syntax_generation_after, syntax_generation_before,
+        "installing replacement rows must advance their syntax generation"
+    );
+    assert_ne!(
+        replacement_document,
+        Some(old_rows_document),
+        "a document prepared from kept rows under the incoming rev must be discarded at the row swap"
     );
 }
 

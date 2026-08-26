@@ -1721,9 +1721,11 @@ impl MainPaneView {
             file_diff_old_text: SharedString::default(),
             file_diff_old_line_starts: Arc::default(),
             file_diff_pair_syntax_text: FxHashMap::default(),
-            file_diff_click_syntax_inflight: FxHashSet::default(),
+            file_diff_click_syntax_inflight: FxHashMap::default(),
             #[cfg(test)]
             file_diff_click_syntax_after_prepare_hook: None,
+            #[cfg(test)]
+            file_diff_click_syntax_before_complete_hook: None,
             file_diff_old_source_path: None,
             file_diff_new_source_path: None,
             file_diff_old_source_identity: None,

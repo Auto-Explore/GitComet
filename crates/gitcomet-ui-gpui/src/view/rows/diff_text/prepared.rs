@@ -129,6 +129,12 @@ pub(in crate::view) fn prepared_diff_syntax_reparse_seed(
         .map(|inner| PreparedDiffSyntaxReparseSeed { inner })
 }
 
+pub(in crate::view) fn prepared_diff_syntax_document_is_available(
+    document: PreparedDiffSyntaxDocument,
+) -> bool {
+    syntax::prepared_syntax_document_is_available(document.inner)
+}
+
 pub(in crate::view) fn prepare_diff_syntax_document_in_background_text_with_reuse(
     language: DiffSyntaxLanguage,
     syntax_mode: DiffSyntaxMode,

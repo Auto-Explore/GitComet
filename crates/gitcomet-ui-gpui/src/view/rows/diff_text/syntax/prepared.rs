@@ -796,7 +796,29 @@ impl TreesitterDocumentCache {
         &mut self,
         cache_key: PreparedSyntaxCacheKey,
     ) -> SharedDocumentMergeResult {
-        let mut inserted = false;
+        if !self.by_cache_key.contains_key(&cache_key) {
+            let shared_document = {
+                let store = match shared_prepared_document_seed_store().lock() {
+                    Ok(guard) => guard,
+                    Err(poisoned) => poisoned.into_inner(),
+                };
+                store.get(&cache_key).cloned()
+            };
+            let Some(shared_document) = shared_document else {
+                return SharedDocumentMergeResult::None;
+            };
+            self.evict_if_needed(SyntaxCacheDropMode::DeferredWhenLarge);
+            let document = TreesitterCachedDocument::from_chunked_line_tokens(
+                shared_document.line_count,
+                shared_document.line_token_chunks,
+                shared_document.tree_state,
+            );
+            self.index_source_identity(cache_key, &document);
+            self.by_cache_key.insert(cache_key, document);
+            self.touch_key(cache_key);
+            return SharedDocumentMergeResult::Inserted;
+        }
+
         let mut updated = false;
         let mut remove_identity = None;
         let mut insert_identity = None;
@@ -811,59 +833,47 @@ impl TreesitterDocumentCache {
             let Some(shared_document) = store.get(&cache_key) else {
                 return SharedDocumentMergeResult::None;
             };
+            let Some(document) = self.by_cache_key.get_mut(&cache_key) else {
+                return SharedDocumentMergeResult::None;
+            };
 
-            match self.by_cache_key.entry(cache_key) {
-                std::collections::hash_map::Entry::Vacant(entry) => {
-                    let document = TreesitterCachedDocument::from_chunked_line_tokens(
+            if document.line_count != shared_document.line_count {
+                let old_identity = document.source_identity();
+                let replaced = std::mem::replace(
+                    document,
+                    TreesitterCachedDocument::from_chunked_line_tokens(
                         shared_document.line_count,
                         shared_document.line_token_chunks.clone(),
                         shared_document.tree_state.clone(),
-                    );
-                    insert_identity = document.source_identity();
-                    entry.insert(document);
-                    inserted = true;
+                    ),
+                );
+                remove_identity = old_identity;
+                insert_identity = document.source_identity();
+                replaced_drop_payload = Some(replaced.into_drop_payload());
+                updated = true;
+            } else {
+                let old_identity = document.source_identity();
+                if document.tree_state.is_none()
+                    && let Some(tree_state) = shared_document.tree_state.clone()
+                {
+                    document.tree_state = Some(tree_state);
+                    updated = true;
                 }
-                std::collections::hash_map::Entry::Occupied(mut entry) => {
-                    let document = entry.get_mut();
-                    if document.line_count != shared_document.line_count {
-                        let old_identity = document.source_identity();
-                        let replaced = std::mem::replace(
-                            document,
-                            TreesitterCachedDocument::from_chunked_line_tokens(
-                                shared_document.line_count,
-                                shared_document.line_token_chunks.clone(),
-                                shared_document.tree_state.clone(),
-                            ),
-                        );
-                        remove_identity = old_identity;
-                        insert_identity = document.source_identity();
-                        replaced_drop_payload = Some(replaced.into_drop_payload());
-                        updated = true;
-                    } else {
-                        let old_identity = document.source_identity();
-                        if document.tree_state.is_none()
-                            && let Some(tree_state) = shared_document.tree_state.clone()
-                        {
-                            document.tree_state = Some(tree_state);
-                            updated = true;
-                        }
 
-                        for (&chunk_ix, chunk) in &shared_document.line_token_chunks {
-                            if document.line_token_chunks.contains_key(&chunk_ix) {
-                                continue;
-                            }
-                            insert_line_token_chunk(document, chunk_ix, Some(chunk.clone()));
-                            cleared_pending_chunks.push(PreparedSyntaxChunkKey {
-                                cache_key,
-                                chunk_ix,
-                            });
-                            updated = true;
-                        }
-                        if document.source_identity() != old_identity {
-                            remove_identity = old_identity;
-                            insert_identity = document.source_identity();
-                        }
+                for (&chunk_ix, chunk) in &shared_document.line_token_chunks {
+                    if document.line_token_chunks.contains_key(&chunk_ix) {
+                        continue;
                     }
+                    insert_line_token_chunk(document, chunk_ix, Some(chunk.clone()));
+                    cleared_pending_chunks.push(PreparedSyntaxChunkKey {
+                        cache_key,
+                        chunk_ix,
+                    });
+                    updated = true;
+                }
+                if document.source_identity() != old_identity {
+                    remove_identity = old_identity;
+                    insert_identity = document.source_identity();
                 }
             }
         }
@@ -884,13 +894,11 @@ impl TreesitterDocumentCache {
             self.by_source_identity.insert(identity, cache_key);
         }
 
-        if inserted || updated {
+        if updated {
             self.touch_key(cache_key);
         }
 
-        if inserted {
-            SharedDocumentMergeResult::Inserted
-        } else if updated {
+        if updated {
             SharedDocumentMergeResult::Updated
         } else {
             SharedDocumentMergeResult::None
@@ -1231,6 +1239,24 @@ impl TreesitterDocumentCache {
         let tree_state = self.by_cache_key.get(&cache_key)?.tree_state.clone();
         self.touch_key(cache_key);
         tree_state
+    }
+
+    fn tree_state_is_available(&mut self, cache_key: PreparedSyntaxCacheKey) -> bool {
+        let mut available = self
+            .by_cache_key
+            .get(&cache_key)
+            .is_some_and(|document| document.tree_state.is_some());
+        if !available {
+            self.merge_document_from_shared_seed(cache_key);
+            available = self
+                .by_cache_key
+                .get(&cache_key)
+                .is_some_and(|document| document.tree_state.is_some());
+        }
+        if available {
+            self.touch_key(cache_key);
+        }
+        available
     }
 
     #[cfg(any(test, feature = "benchmarks"))]
@@ -1760,7 +1786,30 @@ pub(in super::super) fn has_pending_prepared_syntax_chunk_builds_for_document(
 fn prepared_document_tree_state(
     document: PreparedSyntaxDocument,
 ) -> Option<PreparedSyntaxTreeState> {
-    TS_DOCUMENT_CACHE.with(|cache| cache.borrow_mut().tree_state(document.cache_key))
+    TS_DOCUMENT_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        if let Some(tree_state) = cache.tree_state(document.cache_key) {
+            return Some(tree_state);
+        }
+        cache.merge_document_from_shared_seed(document.cache_key);
+        cache.tree_state(document.cache_key)
+    })
+}
+
+/// Makes an opaque handle usable on this thread, if its shared parse seed is
+/// still retained.
+///
+/// View-level handle caches outlive the small thread-local tree cache. A caller
+/// must use this check before treating a handle hit as a ready document; a
+/// missing shared seed then falls through to the normal parse/worker path.
+pub(in super::super) fn prepared_syntax_document_is_available(
+    document: PreparedSyntaxDocument,
+) -> bool {
+    TS_DOCUMENT_CACHE.with(|cache| {
+        cache
+            .borrow_mut()
+            .tree_state_is_available(document.cache_key)
+    })
 }
 
 /// One end of a matched pair, in the coordinate space the row canvases speak:

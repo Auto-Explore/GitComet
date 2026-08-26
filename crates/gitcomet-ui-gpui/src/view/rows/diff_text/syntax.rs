@@ -564,7 +564,7 @@ pub(super) use prepared::{
     has_pending_prepared_syntax_chunk_builds, inject_prepared_document_data,
     prepare_treesitter_document_in_background_text_with_reparse_seed,
     prepare_treesitter_document_with_budget_reuse_text, prepared_document_reparse_seed,
-    request_syntax_tokens_for_prepared_document_line,
+    prepared_syntax_document_is_available, request_syntax_tokens_for_prepared_document_line,
     request_syntax_tokens_for_prepared_document_line_range_into,
 };
 pub(in crate::view) use prepared::{
@@ -1507,6 +1507,34 @@ mod tests {
                 occurrences_in(DiffSyntaxLanguage::Rust, text, at + 1).map(|found| found.token),
                 None,
                 "clicking {probe:?} should not name anything",
+            );
+        }
+    }
+
+    /// Some grammars make literals and prose named leaves, so `is_named` and a
+    /// word-shaped body alone do not make them symbol occurrences.
+    #[test]
+    fn occurrences_reject_named_literal_and_prose_leaves() {
+        let rust = "fn main() { let a = true; let b = true; let c = false; let d = false; }\n";
+        for literal in ["true", "false"] {
+            let click = rust.find(literal).expect("boolean literal");
+            assert!(
+                occurrences_in(DiffSyntaxLanguage::Rust, rust, click).is_none(),
+                "Rust {literal:?} is a boolean literal, not a name"
+            );
+        }
+
+        for (language, text) in [
+            (DiffSyntaxLanguage::Html, "<p>plain</p><p>plain</p>"),
+            (
+                DiffSyntaxLanguage::Xml,
+                "<root><item>plain</item><item>plain</item></root>",
+            ),
+        ] {
+            let click = text.find("plain").expect("prose leaf");
+            assert!(
+                occurrences_in(language, text, click).is_none(),
+                "{language:?} prose is content, not a name"
             );
         }
     }
@@ -5476,6 +5504,34 @@ mod tests {
                 "touched key should survive eviction on trial {trial}"
             );
         }
+    }
+
+    #[test]
+    fn prepared_handle_rehydrates_after_thread_local_tree_eviction() {
+        let _lock = lock_global_counter_tests();
+        reset_prepared_syntax_cache();
+
+        let text = "fn target() { let value = [1, 2]; }\n";
+        let target = prepare_test_document(DiffSyntaxLanguage::Rust, text);
+        for nonce in 0..TS_DOCUMENT_CACHE_MAX_ENTRIES {
+            let source = format!("fn evict_{nonce}() {{ let value = [{nonce}]; }}\n");
+            prepare_test_document(DiffSyntaxLanguage::Rust, &source);
+        }
+        assert!(
+            TS_DOCUMENT_CACHE.with(|cache| !cache.borrow().contains_key(target.cache_key)),
+            "the fixture must evict the target from this thread's small tree cache"
+        );
+
+        assert!(
+            prepared_syntax_document_is_available(target),
+            "a retained shared seed should rehydrate an otherwise stale handle"
+        );
+        let open = text.find('[').expect("opening bracket");
+        let pair = prepared_document_syntax_pair_at_display_offset(target, 0, open)
+            .expect("the rehydrated handle should support pair lookup");
+        assert_eq!(pair.open[0].display_range, open..open + 1);
+        let close = text.find(']').expect("closing bracket");
+        assert_eq!(pair.close[0].display_range, close..close + 1);
     }
 
     #[test]

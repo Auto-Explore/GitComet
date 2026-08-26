@@ -3104,12 +3104,11 @@ fn file_diff_background_left_syntax_upgrade_preserves_right_cached_rows(
 /// A click-syntax worker must leave its side unmarked however it ends.
 ///
 /// The marker exists to stop two workers racing for one side, so it has to be
-/// released whenever the task is over -- including the superseded case. It used
-/// to be removed *after* the generation guard, and a keep-rows rebuild bumps
-/// `file_diff_syntax_generation` at its start without clearing the set. A click
-/// racing that rebuild therefore left the side marked, and
+/// released whenever the task is over -- including when a rev-only refresh
+/// supersedes it without replacing the visible row generation. It used to be
+/// removed *after* the result guards, so that worker left the side marked and
 /// `request_file_diff_click_syntax_document` drops every later click on a marked
-/// side, so clicking a bracket did nothing until the rebuild finished.
+/// side.
 #[gpui::test]
 fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
@@ -3224,14 +3223,13 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
                 pane.begin_diff_text_selection(0, DiffTextRegion::SplitRight, click, cx);
                 assert!(
                     pane.file_diff_click_syntax_inflight
-                        .contains(&DiffTextRegion::SplitRight),
+                        .contains_key(&DiffTextRegion::SplitRight),
                     "a cold click on a source-backed side should take the marker"
                 );
 
-                // Exactly what starting a keep-rows rebuild does: a new sequence
-                // number becomes the syntax generation, and nothing clears the
-                // in-flight set.
-                pane.file_diff_syntax_generation = pane.file_diff_syntax_generation.wrapping_add(1);
+                // A same-content refresh can advance the cache rev without
+                // replacing rows or their syntax generation.
+                pane.file_diff_cache_rev = pane.file_diff_cache_rev.wrapping_add(1);
             });
         });
     });
@@ -3242,7 +3240,7 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
         assert!(
             !pane
                 .file_diff_click_syntax_inflight
-                .contains(&DiffTextRegion::SplitRight),
+                .contains_key(&DiffTextRegion::SplitRight),
             "a superseded worker must release its side, or every later click on \
              it is dropped; inflight={:?}",
             pane.file_diff_click_syntax_inflight,
@@ -3273,6 +3271,141 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
             "`[` and `]` of `g([aaa])`"
         );
     });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+/// A superseded worker owns only the marker it acquired. If a same-file rebuild
+/// clears that marker and a click in the new generation reacquires the side, the
+/// old worker must not make the new worker appear absent when it completes.
+#[gpui::test]
+fn superseded_click_syntax_worker_preserves_a_new_generation_marker(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(888);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_click_worker_marker_ownership",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create marker-ownership fixture");
+    let path = std::path::PathBuf::from("src/marker_ownership.rs");
+    let old_source_path = source_dir.join("old.rs");
+    let new_source_path = source_dir.join("new.rs");
+    // Keep the render path from preparing this synchronously before the test
+    // can stage the two workers.
+    let filler: String = (0..48_000)
+        .map(|ix| format!("fn filler{ix}() {{ let v = {ix}; }}\n"))
+        .collect();
+    let old_text = format!("fn f() {{ g([zzz]); }}\n{filler}");
+    let new_text = format!("fn f() {{ g([aaa]); }}\n{filler}");
+    std::fs::write(&old_source_path, &old_text).expect("write old marker source");
+    std::fs::write(&new_source_path, &new_text).expect("write new marker source");
+    let unified = "@@ -1 +1 @@\n-fn f() { g([zzz]); }\n+fn f() { g([aaa]); }\n";
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed marker-ownership diff",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_source_path.as_deref() == Some(&new_source_path)
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    let new_worker_completed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let new_worker_saw_marker = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.prepared_syntax_documents.clear();
+                pane.file_diff_pair_syntax_text.clear();
+                pane.file_diff_click_syntax_before_complete_hook = None;
+                pane.request_file_diff_click_syntax_document(DiffTextRegion::SplitRight, cx);
+                assert!(
+                    pane.file_diff_click_syntax_inflight
+                        .contains_key(&DiffTextRegion::SplitRight),
+                    "the old generation should start a worker; language={:?} path={:?}",
+                    pane.file_diff_cache_language,
+                    pane.file_diff_new_source_path,
+                );
+                // A same-file rebuild installs a new generation and clears the
+                // old generation's markers before the next click arrives. Both
+                // workers are now queued in generation order.
+                pane.file_diff_syntax_generation = pane.file_diff_syntax_generation.wrapping_add(1);
+                pane.file_diff_click_syntax_inflight.clear();
+                let completed = Arc::clone(&new_worker_completed);
+                let saw_marker = Arc::clone(&new_worker_saw_marker);
+                pane.file_diff_click_syntax_before_complete_hook = Some(Arc::new(move |pane| {
+                    saw_marker.store(
+                        pane.file_diff_click_syntax_inflight
+                            .contains_key(&DiffTextRegion::SplitRight),
+                        std::sync::atomic::Ordering::SeqCst,
+                    );
+                    completed.store(true, std::sync::atomic::Ordering::SeqCst);
+                }));
+                pane.request_file_diff_click_syntax_document(DiffTextRegion::SplitRight, cx);
+                assert!(
+                    pane.file_diff_click_syntax_inflight
+                        .contains_key(&DiffTextRegion::SplitRight),
+                    "the new generation should own the side"
+                );
+            });
+        });
+    });
+    cx.run_until_parked();
+    assert!(
+        new_worker_completed.load(std::sync::atomic::Ordering::SeqCst),
+        "the new worker must reach its completion callback"
+    );
+    assert!(
+        new_worker_saw_marker.load(std::sync::atomic::Ordering::SeqCst),
+        "the old worker removed the marker owned by the still-running new generation"
+    );
 
     let _ = std::fs::remove_dir_all(&workdir);
 }
@@ -3381,7 +3514,7 @@ fn click_syntax_worker_rejects_a_source_changed_after_parse(cx: &mut gpui::TestA
                 pane.request_file_diff_click_syntax_document(DiffTextRegion::SplitRight, cx);
                 assert!(
                     pane.file_diff_click_syntax_inflight
-                        .contains(&DiffTextRegion::SplitRight),
+                        .contains_key(&DiffTextRegion::SplitRight),
                     "the cold source-backed side should start a click worker"
                 );
             });
@@ -3409,7 +3542,7 @@ fn click_syntax_worker_rejects_a_source_changed_after_parse(cx: &mut gpui::TestA
         assert!(
             !pane
                 .file_diff_click_syntax_inflight
-                .contains(&DiffTextRegion::SplitRight),
+                .contains_key(&DiffTextRegion::SplitRight),
             "the completed worker must release its side"
         );
     });
@@ -3727,7 +3860,7 @@ fn a_click_too_slow_to_parse_in_budget_defers_instead_of_blocking(cx: &mut gpui:
                     pane.diff_text_pending_syntax_click.is_some()
                         && pane
                             .file_diff_click_syntax_inflight
-                            .contains(&DiffTextRegion::SplitRight),
+                            .contains_key(&DiffTextRegion::SplitRight),
                     "it must be recorded as pending with a worker in flight"
                 );
             });
