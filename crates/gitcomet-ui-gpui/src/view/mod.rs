@@ -3641,7 +3641,12 @@ impl GitCometView {
             self.external_drag_payload = None;
             cx.notify();
         } else {
-            self.set_external_drag_payload(None, cx);
+            self.external_drag_payload = None;
+            let show_drop_zone = matches!(paths.paths(), [_]);
+            self.repo_tabs_bar.update(cx, |bar, cx| {
+                bar.set_external_folder_drag_active(show_drop_zone, cx);
+            });
+            cx.notify();
         }
 
         let expected_paths = paths.clone();

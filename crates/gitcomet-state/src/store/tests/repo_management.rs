@@ -4975,11 +4975,13 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
     let id_alloc = AtomicU64::new(1);
     let mut state = AppState::default();
 
+    let invalid_repo = PathBuf::from("/tmp/not-a-repo");
+    let normalized_invalid_repo = crate::store::reducer::normalize_repo_path(invalid_repo.clone());
     reduce(
         &mut repos,
         &id_alloc,
         &mut state,
-        Msg::OpenRepo(PathBuf::from("/tmp/not-a-repo")),
+        Msg::OpenRepo(invalid_repo.clone()),
     );
 
     let error = Error::new(ErrorKind::NotARepository);
@@ -4990,7 +4992,7 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
         Msg::Internal(crate::msg::InternalMsg::RepoOpenedErr {
             repo_id: RepoId(1),
             spec: RepoSpec {
-                workdir: PathBuf::from("/tmp/not-a-repo"),
+                workdir: invalid_repo.clone(),
             },
             error,
         }),
@@ -5000,7 +5002,11 @@ fn repo_opened_err_not_a_repository_shows_notification_and_does_not_add_repo() {
     assert_eq!(state.active_repo, None);
     assert!(state.notifications.iter().any(|notification| {
         notification.kind == AppNotificationKind::Warning
-            && notification.message == "No valid Git repository was found at /tmp/not-a-repo."
+            && notification.message
+                == format!(
+                    "No valid Git repository was found at {}.",
+                    normalized_invalid_repo.display()
+                )
     }));
 }
 

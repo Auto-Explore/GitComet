@@ -64,6 +64,12 @@ pub(crate) fn repo_external_folder_drag_active(view: &GitCometView, app: &App) -
         .external_folder_drag_active_for_tests()
 }
 
+pub(crate) fn repo_external_folder_drag_hovered(view: &GitCometView, app: &App) -> bool {
+    view.repo_tabs_bar
+        .read(app)
+        .external_folder_drag_hovered_for_tests()
+}
+
 pub(crate) fn external_drag_classification_seq(view: &GitCometView) -> u64 {
     view.external_drag_classification_seq
 }

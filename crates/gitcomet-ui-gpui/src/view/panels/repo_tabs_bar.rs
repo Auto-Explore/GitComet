@@ -13,6 +13,7 @@ pub(in super::super) struct RepoTabsBarView {
     root_view: WeakEntity<GitCometView>,
     open_terminal_repo_ids: FxHashSet<RepoId>,
     external_folder_drag_active: bool,
+    external_folder_drag_hovered: bool,
 
     hovered_repo_tab: Option<RepoId>,
     /// Left-pressed tab, tracked so its text fade matches the tab's active fill.
@@ -408,6 +409,7 @@ impl RepoTabsBarView {
             root_view,
             open_terminal_repo_ids: FxHashSet::default(),
             external_folder_drag_active: false,
+            external_folder_drag_hovered: false,
             hovered_repo_tab: None,
             pressed_repo_tab: None,
             active_context_menu_invoker: None,
@@ -434,10 +436,22 @@ impl RepoTabsBarView {
         active: bool,
         cx: &mut gpui::Context<Self>,
     ) {
-        if self.external_folder_drag_active == active {
+        let hovered = active && self.external_folder_drag_hovered;
+        if self.external_folder_drag_active == active
+            && self.external_folder_drag_hovered == hovered
+        {
             return;
         }
         self.external_folder_drag_active = active;
+        self.external_folder_drag_hovered = hovered;
+        cx.notify();
+    }
+
+    fn set_external_folder_drag_hovered(&mut self, hovered: bool, cx: &mut gpui::Context<Self>) {
+        if self.external_folder_drag_hovered == hovered {
+            return;
+        }
+        self.external_folder_drag_hovered = hovered;
         cx.notify();
     }
 
@@ -621,6 +635,11 @@ impl RepoTabsBarView {
     #[cfg(test)]
     pub(in crate::view) fn external_folder_drag_active_for_tests(&self) -> bool {
         self.external_folder_drag_active
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn external_folder_drag_hovered_for_tests(&self) -> bool {
+        self.external_folder_drag_hovered
     }
 
     fn active_repo_id(&self) -> Option<RepoId> {
@@ -1202,13 +1221,36 @@ impl Render for RepoTabsBarView {
                     .border_1()
                     .border_color(crate::theme::with_alpha(
                         theme.colors.accent.foreground,
-                        0.78,
+                        0.32,
                     ))
                     .bg(crate::theme::with_alpha(
                         theme.colors.accent.foreground,
-                        if theme.is_dark { 0.16 } else { 0.11 },
+                        if theme.is_dark { 0.05 } else { 0.035 },
                     ))
             })
+            .when(
+                self.external_folder_drag_active && self.external_folder_drag_hovered,
+                |target| {
+                    target
+                        .border_2()
+                        .border_color(crate::theme::with_alpha(
+                            theme.colors.accent.foreground,
+                            0.9,
+                        ))
+                        .bg(crate::theme::with_alpha(
+                            theme.colors.accent.foreground,
+                            if theme.is_dark { 0.14 } else { 0.1 },
+                        ))
+                },
+            )
+            .on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, _window, cx| {
+                    this.set_external_folder_drag_hovered(
+                        event.bounds.contains(&event.event.position),
+                        cx,
+                    );
+                },
+            ))
             .can_drop(|dragged, _window, _cx| {
                 dragged
                     .downcast_ref::<gpui::ExternalPaths>()
@@ -1216,7 +1258,7 @@ impl Render for RepoTabsBarView {
             })
             .on_drop(
                 cx.listener(|this, paths: &gpui::ExternalPaths, _window, cx| {
-                    this.external_folder_drag_active = false;
+                    this.set_external_folder_drag_active(false, cx);
                     let paths = paths.clone();
                     let _ = this.root_view.update(cx, |root, cx| {
                         root.submit_external_drag_payload_after_repo_drop(paths, cx);
@@ -1228,8 +1270,6 @@ impl Render for RepoTabsBarView {
             .relative()
             .size_full()
             .child(bar)
-            // Painted last so external drops also reach the strip over tabs and
-            // the add button. It does not occlude ordinary pointer input.
             .child(external_drop_target)
             .id("repo_tabs_responsive_root")
             .on_drag_move(tab_strip_drag_listener)

@@ -1,10 +1,6 @@
 use gpui::ExternalPaths;
 use std::path::PathBuf;
 
-/// The subset of an operating-system path drag that GitComet understands.
-///
-/// Files are identified separately as groundwork for future drop targets, but
-/// the repository bar currently accepts only one existing directory.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum ClassifiedExternalPaths {
     SingleDirectory(PathBuf),
@@ -21,8 +17,6 @@ impl ClassifiedExternalPaths {
     }
 }
 
-/// Performs filesystem I/O and must only be called from GPUI's background
-/// executor in production code.
 pub(super) fn classify_external_paths_blocking(paths: &ExternalPaths) -> ClassifiedExternalPaths {
     let [path] = paths.paths() else {
         return ClassifiedExternalPaths::Unsupported;

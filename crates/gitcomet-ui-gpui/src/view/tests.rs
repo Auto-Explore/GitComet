@@ -209,7 +209,7 @@ fn view_state_with_active_ready_repo(repo_id: RepoId) -> AppState {
 }
 
 #[gpui::test]
-fn folder_drag_anywhere_highlights_visible_repository_bar_and_exit_clears_it(
+fn folder_drag_marks_repository_bar_available_and_tracks_hover_emphasis(
     cx: &mut gpui::TestAppContext,
 ) {
     let _visual_guard = crate::test_support::lock_visual_test();
@@ -224,17 +224,63 @@ fn folder_drag_anywhere_highlights_visible_repository_bar_and_exit_clears_it(
         let viewport = window.viewport_size();
         gpui::point(viewport.width / 2.0, viewport.height / 2.0)
     });
-    dispatch_file_drop(
-        cx,
-        gpui::FileDropEvent::Entered {
-            position: outside_bar,
-            paths: gpui::ExternalPaths([folder.path().to_path_buf()].into_iter().collect()),
-        },
-    );
+    cx.update(|window, app| {
+        let _ = window.dispatch_event(
+            gpui::PlatformInput::FileDrop(gpui::FileDropEvent::Entered {
+                position: outside_bar,
+                paths: gpui::ExternalPaths([folder.path().to_path_buf()].into_iter().collect()),
+            }),
+            app,
+        );
+        assert!(test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+        assert!(!test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+        let _ = window.draw(app);
+    });
+    cx.run_until_parked();
     test_support::redraw(cx);
 
     cx.update(|_window, app| {
         assert!(test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+        assert!(!test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+    });
+
+    let bar_point = cx
+        .debug_bounds("repo_external_folder_drop_target")
+        .expect("repository bar drop target should be rendered")
+        .center();
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Pending {
+            position: bar_point,
+        },
+    );
+    cx.update(|_window, app| {
+        assert!(test_support::repo_external_folder_drag_hovered(
+            view.read(app),
+            app
+        ));
+    });
+
+    dispatch_file_drop(
+        cx,
+        gpui::FileDropEvent::Pending {
+            position: outside_bar,
+        },
+    );
+    cx.update(|_window, app| {
+        assert!(!test_support::repo_external_folder_drag_hovered(
             view.read(app),
             app
         ));
@@ -261,6 +307,10 @@ fn folder_drag_anywhere_highlights_visible_repository_bar_and_exit_clears_it(
     test_support::redraw(cx);
     cx.update(|_window, app| {
         assert!(!test_support::repo_external_folder_drag_active(
+            view.read(app),
+            app
+        ));
+        assert!(!test_support::repo_external_folder_drag_hovered(
             view.read(app),
             app
         ));
