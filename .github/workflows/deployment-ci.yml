@@ -66,6 +66,9 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  # Kept in step with build-release-artifacts.yml; asserted in
+  # formula-script-validation.
+  DUMP_SYMS_VERSION: 2.3.9
 
 jobs:
   formula-script-validation:
@@ -227,6 +230,27 @@ jobs:
           grep -Fq 'AUR_PRIVATE_SSH_KEY_PASSPHRASE' .github/workflows/deploy-aur.yml
           grep -Fq 'ssh://aur@aur.archlinux.org/gitcomet.git' .github/workflows/deploy-aur.yml
           grep -Fq 'HOMEBREW_TAP_TOKEN' .github/workflows/deploy-homebrew-tap.yml
+
+          # A skew would leave the smoke job validating a different dump_syms
+          # than releases use.
+          release_pin="$(grep -E '^  DUMP_SYMS_VERSION:' .github/workflows/build-release-artifacts.yml)"
+          ci_pin="$(grep -E '^  DUMP_SYMS_VERSION:' .github/workflows/deployment-ci.yml)"
+          if [ "$release_pin" != "$ci_pin" ]; then
+            echo "::error title=dump_syms version skew::build-release-artifacts.yml has '${release_pin}', deployment-ci.yml has '${ci_pin}'."
+            exit 1
+          fi
+
+          ci_shas="$(grep -oE 'dump_syms_sha256: [0-9a-f]{64}' .github/workflows/deployment-ci.yml | awk '{print $2}' | sort -u)"
+          if [ -z "$ci_shas" ]; then
+            echo "::error title=Missing dump_syms checksums::deployment-ci.yml pins no dump_syms_sha256 values."
+            exit 1
+          fi
+          for sha in $ci_shas; do
+            if ! grep -Fq "$sha" .github/workflows/build-release-artifacts.yml; then
+              echo "::error title=dump_syms checksum skew::${sha} is pinned in deployment-ci.yml but not in build-release-artifacts.yml."
+              exit 1
+            fi
+          done
 
       - name: Test Microsoft Store deployment workflow
         env:
@@ -621,9 +645,13 @@ jobs:
           - target_platform: aarch64-darwin
             arch: arm64
             runs_on: macos-latest
+            dump_syms_asset: dump_syms-aarch64-apple-darwin.tar.xz
+            dump_syms_sha256: 4945b7e5de0d7ad403822635f0fb912b69990fc412741ff2b7b512e168c40a32
           - target_platform: x86_64-darwin
             arch: x86_64
             runs_on: macos-15-intel
+            dump_syms_asset: dump_syms-x86_64-apple-darwin.tar.xz
+            dump_syms_sha256: e255caf99e403b31613c756babcead8463f6e600c1a9e1e5531fbe27a7e29cf2
     steps:
       - uses: actions/checkout@v7
 
@@ -633,7 +661,32 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      # Cached so an outage or rate limit at mozilla/dump_syms does not fail
+      # unrelated pull requests.
+      - name: Cache dump_syms
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/gitcomet-dump-syms
+          key: dump-syms-${{ env.DUMP_SYMS_VERSION }}-${{ matrix.dump_syms_asset }}
+
+      - name: Install dump_syms
+        run: |
+          set -euo pipefail
+          bin_dir="${HOME}/.cache/gitcomet-dump-syms"
+          if [ ! -x "${bin_dir}/dump_syms" ]; then
+            bin_dir="$(scripts/install-dump-syms.sh \
+              --version "${DUMP_SYMS_VERSION}" \
+              --asset "${{ matrix.dump_syms_asset }}" \
+              --sha256 "${{ matrix.dump_syms_sha256 }}" \
+              --bin-dir "$bin_dir")"
+          fi
+          echo "$bin_dir" >> "$GITHUB_PATH"
+
+      # Without a .dSYM there is nothing for the symbol pipeline below to read.
       - name: Build release binary
+        env:
+          CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
           set -euo pipefail
           cargo_config_output="$(scripts/macos-cargo-config.sh "${{ matrix.arch }}" release)"
@@ -643,7 +696,7 @@ jobs:
               set -- "$@" "$arg"
             done <<<"$cargo_config_output"
           fi
-          set -- "$@" -p gitcomet --release --locked --features ui-gpui,gix --bins
+          set -- "$@" -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
           cargo build "$@"
 
       - name: Package macOS artifacts
@@ -654,14 +707,40 @@ jobs:
             --arch "${{ matrix.arch }}" \
             --release \
             --no-build \
-            --out-dir dist
+            --out-dir dist \
+            --symbols-out dist/symbols
 
-      - name: Verify tarball contents
+      - name: Verify no tarball is produced
         run: |
           set -euo pipefail
-          tarball="dist/gitcomet-v0.0.0-ci-macos-${{ matrix.arch }}.tar.gz"
-          test -f "$tarball"
-          tar -tzf "$tarball" | grep -q "GitComet.app/Contents/MacOS/gitcomet$"
+          if ls dist/*.tar.gz >/dev/null 2>&1; then
+            echo "::error title=Unexpected tarball::macOS packaging produced a .tar.gz; it was removed deliberately."
+            exit 1
+          fi
+
+      # A stackwalker fetches MODULE/DEBUG_ID/MODULE.sym by the name in the
+      # crash report, so a bundle-derived name here is a 404 for every lookup
+      # while every other check still passes. The MODULE line itself is left to
+      # emit-breakpad-symbols.sh, which already checks it.
+      - name: Verify Breakpad symbol store layout
+        run: |
+          set -euo pipefail
+          found=0
+          while IFS= read -r sym; do
+            found=$((found + 1))
+            case "$sym" in
+              dist/symbols/gitcomet/*/gitcomet.sym) ;;
+              *)
+                echo "::error title=Wrong symbol store path::Expected dist/symbols/gitcomet/<DEBUG_ID>/gitcomet.sym, got ${sym}."
+                exit 1
+                ;;
+            esac
+          done < <(find dist/symbols -type f -name '*.sym')
+
+          if [ "$found" -ne 1 ]; then
+            echo "::error title=Unexpected symbol store contents::Expected exactly one .sym, found ${found}."
+            exit 1
+          fi
 
       - name: Verify DMG launches binary
         run: |
@@ -675,5 +754,13 @@ jobs:
             exit 1
           fi
 
-          "${mount_point}/GitComet.app/Contents/MacOS/gitcomet" --help >/dev/null
+          app="${mount_point}/GitComet.app"
+          "$app/Contents/MacOS/gitcomet" --help >/dev/null
+
+          # Against the mounted image, not the staging tree: this is what users
+          # receive, and the only macOS artifact carrying the licence.
+          test -f "$app/Contents/Resources/LICENSE-AGPL-3.0"
+          test -f "$app/Contents/Resources/NOTICE"
+          test -f "$app/Contents/Resources/README.md"
+
           hdiutil detach "$mount_point"

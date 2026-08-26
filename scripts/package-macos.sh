@@ -6,7 +6,6 @@ usage() {
 Usage: scripts/package-macos.sh --version VERSION [--arch arm64|x86_64] [--release|--debug] [--no-build] [--skip-dmg] [--out-dir PATH] [--symbols-out PATH] [--codesign-identity NAME] [--codesign-keychain PATH]
 
 Builds a macOS app bundle and release artifacts:
-  - gitcomet-v<VERSION>-macos-<ARCH>.tar.gz
   - gitcomet-v<VERSION>-macos-<ARCH>.dmg
 
 Defaults:
@@ -163,10 +162,9 @@ if [[ -n "$symbols_out" ]]; then
   # line numbers.
   symbol_input="${repo_root}/target/${mode}/gitcomet.dSYM"
   if [[ ! -d "$symbol_input" ]]; then
-    # Cargo normally uplifts the bundle next to the binary, but depending on the
-    # version it can stay beside the hashed artifact in deps/. The `|| true`
-    # matters: without it `set -euo pipefail` aborts here when deps/ is absent,
-    # skipping the diagnostic below.
+    # Only reached when Cargo left no uplifted symlink; the bundle then sits
+    # beside the hashed artifact. `|| true` so a missing deps/ does not abort
+    # before the diagnostic below.
     candidates="$(find "${repo_root}/target/${mode}/deps" -maxdepth 1 -type d \
       -name 'gitcomet-*.dSYM' 2>/dev/null | sort || true)"
 
@@ -187,6 +185,12 @@ if [[ -n "$symbols_out" ]]; then
 
   if [[ ! -d "$symbol_input" ]]; then
     echo "No dSYM bundle found under ${repo_root}/target/${mode}." >&2
+    if [[ -d "${repo_root}/target/${mode}/gitcomet.dSYM.staged" ]]; then
+      echo "A previous run was interrupted mid-move; the bundle is at" >&2
+      echo "  ${repo_root}/target/${mode}/gitcomet.dSYM.staged" >&2
+      echo "Rename it to gitcomet.dSYM to recover it, or delete it and rebuild." >&2
+      exit 1
+    fi
     echo "Build with split-debuginfo = \"packed\" (the release workflow sets" >&2
     echo "CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO) to produce one." >&2
     exit 1
@@ -213,23 +217,54 @@ if [[ -n "$symbols_out" ]]; then
     echo "::warning title=dSYM identity unverified::dwarfdump is unavailable, so ${symbol_input} was not checked against ${bin_src}."
   fi
 
-  # Normalize the location: clean_target_intermediates_for_ci deletes deps/, so
-  # a bundle left there would not survive for CI to archive.
+  # Cargo only symlinks the bundle here, into intermediates that
+  # clean_target_intermediates_for_ci deletes. Every check above follows the
+  # link, so the -L test is what stops it being left dangling -- which `tar`
+  # archives as a broken link, exiting 0 on a few hundred bytes.
   canonical_dsym="${repo_root}/target/${mode}/gitcomet.dSYM"
-  if [[ "$symbol_input" != "$canonical_dsym" ]]; then
-    rm -rf "$canonical_dsym"
-    cp -R "$symbol_input" "$canonical_dsym"
+  if [[ "$symbol_input" != "$canonical_dsym" || -L "$canonical_dsym" ]]; then
+    real_dsym="$(cd "$symbol_input" && pwd -P)"
+    target_prefix="$(cd "${repo_root}/target/${mode}" && pwd -P)/"
+
+    if [[ "$real_dsym" != "$canonical_dsym" ]]; then
+      staged_dsym="${canonical_dsym}.staged"
+      rm -rf "$staged_dsym"
+
+      # A rename within target/ is free where copying would duplicate ~183 MiB
+      # just before the cleanup runs. But it removes the source, so anything
+      # resolving outside target/ -- a shared build cache, another volume --
+      # must be copied instead of taken out of it.
+      if [[ "$real_dsym" == "$target_prefix"* ]]; then
+        # Aside first: the canonical path may be the symlink to this bundle.
+        mv "$real_dsym" "$staged_dsym"
+      else
+        echo "dSYM resolves outside ${target_prefix} (${real_dsym}); copying rather than moving it."
+        cp -RL "$real_dsym" "$staged_dsym"
+      fi
+
+      rm -rf "$canonical_dsym"
+      mv "$staged_dsym" "$canonical_dsym"
+    fi
     symbol_input="$canonical_dsym"
+  fi
+
+  if [[ -L "$canonical_dsym" || ! -d "$canonical_dsym" ]]; then
+    echo "Expected a real .dSYM directory at ${canonical_dsym}." >&2
+    exit 1
   fi
 
   # A dSYM carries DWARF but not __eh_frame, which stays in the linked binary,
   # and dump_syms reads a single file with no macOS equivalent of the .pdb/.exe
   # re-pairing it does on Windows. Requiring CFI here would fail every macOS
   # release; the warning keeps the gap visible instead.
+  #
+  # --module-name must match the executable a crash report names, which is
+  # Contents/MacOS/gitcomet below.
   "${repo_root}/scripts/emit-breakpad-symbols.sh" \
     --input "$symbol_input" \
     --store "$symbols_abs" \
     --arch "$arch" \
+    --module-name gitcomet \
     --allow-missing-cfi
 fi
 
@@ -311,10 +346,12 @@ rm -rf "$release_dir"
 mkdir -p "$macos_dir" "$resources_dir"
 
 install -m755 "$bin_src" "${macos_dir}/gitcomet"
-install -m755 "$bin_src" "${release_dir}/gitcomet"
-install -m644 "${repo_root}/README.md" "${release_dir}/README.md"
-install -m644 "${repo_root}/LICENSE-AGPL-3.0" "${release_dir}/LICENSE-AGPL-3.0"
-install -m644 "${repo_root}/NOTICE" "${release_dir}/NOTICE"
+
+# Inside the bundle: the DMG ships only GitComet.app, and it is now the only
+# macOS artifact, so this is what keeps the licence with the program.
+install -m644 "${repo_root}/README.md" "${resources_dir}/README.md"
+install -m644 "${repo_root}/LICENSE-AGPL-3.0" "${resources_dir}/LICENSE-AGPL-3.0"
+install -m644 "${repo_root}/NOTICE" "${resources_dir}/NOTICE"
 
 icon_png="${repo_root}/assets/gitcomet-512.png"
 icon_icns="${resources_dir}/GitComet.icns"
@@ -375,10 +412,8 @@ if [[ -n "$codesign_identity" ]]; then
 
   echo "Signing macOS artifacts with identity: $codesign_identity"
   codesign "${sign_args[@]}" "${macos_dir}/gitcomet"
-  codesign "${sign_args[@]}" "${release_dir}/gitcomet"
   codesign "${sign_args[@]}" "$app_bundle"
 
-  codesign --verify --strict --verbose=2 "${release_dir}/gitcomet"
   codesign --verify --strict --verbose=2 "$app_bundle"
 fi
 
@@ -388,11 +423,9 @@ if [[ "${GITCOMET_MACOS_PACKAGE_CLEAN_TARGET:-0}" == "1" ]]; then
   show_disk_usage "after target cleanup"
 fi
 
-# Create a deterministic tarball root directory per version/arch.
-tarball_path="${out_abs}/${release_root}.tar.gz"
-rm -f "$tarball_path"
-tar -C "$stage_root" -czf "$tarball_path" "$release_root"
-
+# No tarball: it duplicated the binary the DMG ships, and the bare copy at its
+# root could not be notarized (the notary service takes no .tar.gz). The
+# Homebrew cask symlinks the notarized binary for PATH users instead.
 dmg_path="${out_abs}/${release_root}.dmg"
 if [[ $create_dmg -eq 1 ]]; then
   # Build a drag-and-drop DMG with an /Applications shortcut.
@@ -424,7 +457,6 @@ if [[ $create_dmg -eq 1 ]]; then
 fi
 
 echo "Packaged macOS artifacts:"
-echo "  $tarball_path"
 if [[ $create_dmg -eq 1 ]]; then
   echo "  $dmg_path"
 else

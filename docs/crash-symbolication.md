@@ -105,8 +105,18 @@ CARGO_PROFILE_RELEASE_DEBUG=line-tables-only \
 CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO=packed \
   cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
 scripts/emit-breakpad-symbols.sh --input target/release/gitcomet.dSYM \
-  --store /tmp/symstore --arch "$(uname -m)" --allow-missing-cfi
+  --store /tmp/symstore --arch "$(uname -m)" --module-name gitcomet \
+  --allow-missing-cfi
 ```
+
+`--module-name` is not optional here. `dump_syms` names the module after the
+file it is handed, and the store path follows that name, so the bundle produces
+`gitcomet.dSYM/<DEBUG_ID>/gitcomet.dSYM.sym` and the hashed Mach-O inside it
+produces `gitcomet-<hash>/...`. A stackwalker asks for
+`<module>/<DEBUG_ID>/<module>.sym` using the name the crash report carries —
+the loaded executable, `Contents/MacOS/gitcomet` — so either spelling is a 404
+and the symbols may as well not have been published. Linux and Windows need no
+override: their inputs are already named `gitcomet` and `gitcomet.pdb`.
 
 **Windows** — the input is the `.pdb`; `strip` is irrelevant on MSVC:
 
@@ -138,6 +148,20 @@ its STACK records into the same debug ID.
 For debuggers that cannot read Breakpad `.sym`, CI also keeps the Windows `.pdb`
 (`windows-debug-symbols-*`) and the macOS `.dSYM`, tarred so the bundle wrapper
 survives the artifact round-trip (`macos-dsym-*`).
+
+All of these artifacts, and the `symbols-*` ones feeding the store, are uploaded
+only when the build carries a `release_id`, because `publish_symbols` is their
+only consumer and it requires one too. A `workflow_dispatch` build normally has
+none and uploads nothing — but the workflow does accept a `release_id` input for
+manual backfills, and a dispatch that sets one uploads and publishes exactly as
+a tagged release does. Either way such a build still *generates* the symbols, so
+a broken symbol pipeline fails there rather than during a release.
+
+Note that `target/release/gitcomet.dSYM` is a *symlink* into the build
+intermediates, not the bundle itself — Cargo uplifts it that way.
+`package-macos.sh` replaces it with a real directory before the release job
+cleans those intermediates, because `tar` stores a dangling symlink without
+complaint and would publish an empty bundle.
 
 Note what these do **not** contain. Everything here is built at
 `debug = "line-tables-only"`, which carries function names, file, line and

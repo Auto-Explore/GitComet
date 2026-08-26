@@ -286,7 +286,11 @@ jobs:
             --input target/release/gitcomet.pdb \
             --store dist/symbols
 
+      # Release-only: `publish_symbols` is the sole consumer and needs a
+      # release_id too. Symbols are still generated above, which is what
+      # exercises the pipeline.
       - name: Upload Windows Breakpad symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: symbols-${{ matrix.target_platform }}
@@ -297,6 +301,7 @@ jobs:
       # Uploaded before packaging so a later failure in this job still leaves
       # symbols for the binary that was built.
       - name: Upload Windows debug symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           # Deliberately not named `windows-release-artifacts-*`:
@@ -511,7 +516,9 @@ jobs:
             --input target/release/gitcomet \
             --store dist/symbols
 
+      # Release-only; see the Breakpad symbol upload above.
       - name: Upload Linux Breakpad symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: symbols-${{ matrix.target_platform }}
@@ -834,7 +841,9 @@ jobs:
 
           scripts/package-macos.sh "${package_args[@]}"
 
+      # Release-only; see the Breakpad symbol upload above.
       - name: Upload macOS Breakpad symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: symbols-${{ matrix.target_platform }}
@@ -842,24 +851,39 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-      # Kept for lldb, which cannot read Breakpad .sym. package-macos.sh
-      # normalizes the bundle to target/release regardless of where Cargo left it.
+      # Kept for lldb, which cannot read Breakpad .sym.
       #
       # Archived first because upload-artifact roots the artifact at the least
       # common ancestor of the matched files: pointing it at the bundle
       # directory would produce a download containing a bare `Contents/` tree,
       # with the `.dSYM` wrapper lost and the bundle no longer loadable. Staged
-      # outside dist/, whose `*.tar.gz` glob feeds the public release.
+      # outside dist/ so it stays out of the artifacts published to the release.
       - name: Archive macOS dSYM
+        if: ${{ needs.prepare.outputs.release_id != '' }}
         env:
           DSYM_DIR: ${{ runner.temp }}/gitcomet-dsym
         run: |
           set -euo pipefail
+          dsym="target/release/gitcomet.dSYM"
+
+          # package-macos.sh replaces Cargo's symlink with a real directory; if
+          # that regresses, `tar` would store a dangling link and still exit 0,
+          # sailing past `if-no-files-found` with an empty bundle.
+          if [ -L "$dsym" ] || [ ! -d "$dsym" ]; then
+            echo "::error title=No dSYM to archive::${dsym} is not a directory; the bundle Cargo symlinked to was probably cleaned away."
+            exit 1
+          fi
+          if [ -z "$(find "${dsym}/Contents/Resources/DWARF" -type f -print -quit 2>/dev/null)" ]; then
+            echo "::error title=Empty dSYM::${dsym} carries no DWARF payload."
+            exit 1
+          fi
+
           mkdir -p "$DSYM_DIR"
-          tar -czf "${DSYM_DIR}/gitcomet-${ARCH}.dSYM.tar.gz" \
+          tar -czhf "${DSYM_DIR}/gitcomet-${ARCH}.dSYM.tar.gz" \
             -C target/release gitcomet.dSYM
 
       - name: Upload macOS dSYM
+        if: ${{ needs.prepare.outputs.release_id != '' }}
         uses: actions/upload-artifact@v7
         with:
           name: macos-dsym-${{ matrix.target_platform }}
@@ -901,9 +925,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-release-artifacts-${{ matrix.target_platform }}
-          path: |
-            dist/*.tar.gz
-            dist/*.dmg
+          path: dist/*.dmg
           if-no-files-found: error
           retention-days: 7
 

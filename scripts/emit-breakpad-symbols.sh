@@ -3,7 +3,7 @@ set -euo pipefail
 
 usage() {
   cat <<'EOF'
-Usage: scripts/emit-breakpad-symbols.sh --input PATH --store DIR [--arch ARCH] [--min-bytes N] [--allow-missing-inlines] [--allow-missing-cfi]
+Usage: scripts/emit-breakpad-symbols.sh --input PATH --store DIR [--arch ARCH] [--module-name NAME] [--min-bytes N] [--allow-missing-inlines] [--allow-missing-cfi]
 
 Converts a binary, .pdb or .dSYM into a Breakpad .sym file and writes it into a
 symbol store laid out as NAME/DEBUG_ID/NAME.sym, which is what
@@ -17,6 +17,11 @@ Options:
   --input              Binary, .pdb or .dSYM to read symbols from
   --store              Symbol store root to write into (created if missing)
   --arch               Architecture to select from a fat binary (macOS)
+  --module-name        Module name to record, overriding the one dump_syms
+                       derives from the input file name. Required for a .dSYM,
+                       whose name matches neither the executable a crash report
+                       carries nor what the store is keyed on. Rejected for a
+                       .pdb, where dump_syms already names it correctly.
   --min-bytes          Minimum acceptable .sym size (default: 1048576)
   --allow-missing-inlines
                        Warn instead of failing when no INLINE records are
@@ -44,6 +49,8 @@ require_value() {
 input=""
 store=""
 arch=""
+module_name=""
+module_name_given=0
 min_bytes=1048576
 allow_missing_cfi=0
 allow_missing_inlines=0
@@ -63,6 +70,12 @@ while [[ $# -gt 0 ]]; do
     --arch)
       require_value "$@"
       arch="$2"
+      shift 2
+      ;;
+    --module-name)
+      require_value "$@"
+      module_name="$2"
+      module_name_given=1
       shift 2
       ;;
     --min-bytes)
@@ -106,6 +119,40 @@ if [[ ! -e "$input" ]]; then
   exit 1
 fi
 
+# Empty is otherwise indistinguishable from absent, and both the renaming and
+# its verification are skipped -- so a CI variable expanding to nothing would
+# publish the layout this flag exists to prevent, with a green build.
+if [[ "$module_name_given" -eq 1 && -z "$module_name" ]]; then
+  echo "--module-name was given an empty value." >&2
+  exit 2
+fi
+
+# It becomes a file name below, where a path would fail at `ln` against a
+# temporary directory the caller never named.
+if [[ "$module_name" == */* || "$module_name" == "." || "$module_name" == ".." ]]; then
+  echo "--module-name must be a plain file name, got '${module_name}'." >&2
+  exit 2
+fi
+
+# Enforced here rather than at the call site: this is what knows the input kind,
+# and both names dump_syms can infer from a bundle are ones nothing asks for.
+# Windows keys the store on the .pdb name, which is what a stackwalker
+# resolving a WER minidump asks for, so any override here can only be wrong.
+if [[ -n "$module_name" && "$input" == *.pdb ]]; then
+  echo "--module-name must not be used with a .pdb: $input" >&2
+  echo "Windows symbol lookups key on the .pdb name, so dump_syms' own naming is" >&2
+  echo "already correct and overriding it would make the symbols unreachable." >&2
+  exit 2
+fi
+
+if [[ -z "$module_name" && ( -d "$input" || "$input" == *.dSYM ) ]]; then
+  echo "--module-name is required when reading a .dSYM: $input" >&2
+  echo "Without it the module is named after the bundle or the hashed file inside" >&2
+  echo "it, and a stackwalker looking up MODULE/DEBUG_ID/MODULE.sym finds neither." >&2
+  echo "Pass the executable's name, e.g. --module-name gitcomet." >&2
+  exit 2
+fi
+
 if ! command -v dump_syms >/dev/null 2>&1; then
   echo "dump_syms is not on PATH. Install it with scripts/install-dump-syms.sh." >&2
   exit 1
@@ -116,8 +163,44 @@ fi
 # filesystem whose mtime granularity exceeds a fast dump_syms run, and a store
 # may legitimately already hold symbols for other modules or earlier builds.
 staging="$(mktemp -d)"
+link_dir="$(mktemp -d)"
 sym_list="$(mktemp)"
-trap 'rm -rf "$staging" "$sym_list"' EXIT
+trap 'rm -rf "$staging" "$link_dir" "$sym_list"' EXIT
+
+# dump_syms names the module after the file it is handed, and the store path
+# follows that name. Hand it a correctly named symlink rather than rewriting its
+# output, so the MODULE line and the store path stay consistent by construction.
+dump_input="$input"
+if [[ -n "$module_name" ]]; then
+  dwarf_input="$input"
+
+  if [[ -d "$input" ]]; then
+    dwarf_dir="${input%/}/Contents/Resources/DWARF"
+    if [[ ! -d "$dwarf_dir" ]]; then
+      echo "--module-name expects a file or a .dSYM bundle, and ${input} is neither." >&2
+      exit 1
+    fi
+
+    # Dotfiles excluded so a .DS_Store cannot fail a valid bundle. Counted with
+    # grep rather than an array: macOS runners ship bash 3.2, which has no
+    # mapfile.
+    dwarf_files="$(find "$dwarf_dir" -maxdepth 1 -type f ! -name '.*' | sort)"
+    dwarf_count="$(printf '%s' "$dwarf_files" | grep -c . || true)"
+    if [[ "$dwarf_count" -ne 1 ]]; then
+      echo "Expected exactly one Mach-O under ${dwarf_dir}, found ${dwarf_count}." >&2
+      printf '%s\n' "$dwarf_files" >&2
+      exit 1
+    fi
+    dwarf_input="$dwarf_files"
+  fi
+
+  if [[ "$dwarf_input" != /* ]]; then
+    dwarf_input="$(cd "$(dirname "$dwarf_input")" && pwd)/$(basename "$dwarf_input")"
+  fi
+
+  dump_input="${link_dir}/${module_name}"
+  ln -s "$dwarf_input" "$dump_input"
+fi
 
 dump_syms_args=(--store "$staging" --inlines)
 if [[ -n "$arch" ]]; then
@@ -126,7 +209,7 @@ if [[ -n "$arch" ]]; then
 fi
 
 echo "Generating Breakpad symbols from ${input}"
-dump_syms "${dump_syms_args[@]}" "$input"
+dump_syms "${dump_syms_args[@]}" "$dump_input"
 
 find "$staging" -type f -name '*.sym' | sort >"$sym_list"
 
@@ -186,6 +269,17 @@ while IFS= read -r sym; do
     echo "Symbol file has no STACK records (no CFI): ${rel}" >&2
     echo "Pass --allow-missing-cfi only if this input genuinely cannot carry unwind data." >&2
     exit 1
+  fi
+
+  # If dump_syms ever stops deriving this from the file name, the store path
+  # silently stops matching what a stackwalker asks for.
+  if [[ -n "$module_name" ]]; then
+    recorded_name="${module_line##* }"
+    if [[ "$recorded_name" != "$module_name" ]]; then
+      echo "Module is recorded as '${recorded_name}', expected '${module_name}': ${rel}" >&2
+      echo "A stackwalker looks up ${module_name}/DEBUG_ID/${module_name}.sym and would miss this file." >&2
+      exit 1
+    fi
   fi
 
   echo "  ${module_line}"
