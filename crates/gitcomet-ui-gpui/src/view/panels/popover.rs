@@ -216,6 +216,10 @@ pub(in super::super) struct PopoverHost {
     prompt_tab_wrap_end_focus_handle: FocusHandle,
     context_menu_selected_ix: Option<usize>,
     repo_picker_selected_index: Option<usize>,
+    /// Last trimmed query handled by the repository picker. Kept separately
+    /// from the input so text edits can reset keyboard selection without
+    /// mistaking cursor, focus, or styling notifications for query changes.
+    repo_picker_search_query: String,
     /// Session recent repositories snapshotted when a repository picker opens,
     /// so the list can't shift under the user mid-interaction.
     cached_recent_repos: Vec<std::path::PathBuf>,
@@ -1710,6 +1714,7 @@ impl PopoverHost {
             prompt_tab_wrap_end_focus_handle,
             context_menu_selected_ix: None,
             repo_picker_selected_index: None,
+            repo_picker_search_query: String::new(),
             cached_recent_repos: Vec::new(),
             cached_pinned_repos: Vec::new(),
             cached_collapsed_picker_sections: std::collections::BTreeSet::new(),
@@ -3037,6 +3042,7 @@ impl PopoverHost {
         self.popover_anchor = Some(anchor);
         self.context_menu_selected_ix = None;
         self.repo_picker_selected_index = None;
+        self.repo_picker_search_query.clear();
         // Belongs with the reset above, not with the RepoPicker arm below: every
         // popover kind draws `row_menu_layer`, so a menu left over from a closed
         // picker would spread its occluding scrim over an unrelated popover.
