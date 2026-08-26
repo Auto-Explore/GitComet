@@ -586,6 +586,9 @@ fn cleanup_aborted_clone_destination(dest: &Path, dest_preexisted: bool) -> Resu
         }
     };
 
+    #[cfg(windows)]
+    let mut removal_result = remove();
+    #[cfg(not(windows))]
     let removal_result = remove();
     #[cfg(windows)]
     for _ in 0..10 {
