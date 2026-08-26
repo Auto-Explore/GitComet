@@ -730,6 +730,14 @@ pub(super) fn remove_remote(repo_id: RepoId, name: String) -> Vec<Effect> {
     vec![Effect::RemoveRemote { repo_id, name }]
 }
 
+pub(super) fn rename_remote(repo_id: RepoId, old_name: String, new_name: String) -> Vec<Effect> {
+    vec![Effect::RenameRemote {
+        repo_id,
+        old_name,
+        new_name,
+    }]
+}
+
 pub(super) fn set_remote_url(
     repo_id: RepoId,
     name: String,
@@ -990,6 +998,7 @@ fn tracks_local_actions_in_flight(command: &RepoCommandKind) -> bool {
             | RepoCommandKind::DeleteTag { .. }
             | RepoCommandKind::AddRemote { .. }
             | RepoCommandKind::RemoveRemote { .. }
+            | RepoCommandKind::RenameRemote { .. }
             | RepoCommandKind::SetRemoteUrl { .. }
             | RepoCommandKind::SetUpstreamBranch { .. }
             | RepoCommandKind::UnsetUpstreamBranch { .. }

@@ -197,6 +197,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
             | Msg::DeleteRemoteTag { .. }
             | Msg::AddRemote { .. }
             | Msg::RemoveRemote { .. }
+            | Msg::RenameRemote { .. }
             | Msg::SetRemoteUrl { .. }
             | Msg::CheckoutConflictSide { .. }
             | Msg::AcceptConflictDeletion { .. }
@@ -464,6 +465,11 @@ fn retry_msg_for_repo_command(repo_id: RepoId, command: RepoCommandKind) -> Opti
         },
         RepoCommandKind::AddRemote { name, url } => Msg::AddRemote { repo_id, name, url },
         RepoCommandKind::RemoveRemote { name } => Msg::RemoveRemote { repo_id, name },
+        RepoCommandKind::RenameRemote { old_name, new_name } => Msg::RenameRemote {
+            repo_id,
+            old_name,
+            new_name,
+        },
         RepoCommandKind::SetRemoteUrl { name, url, kind } => Msg::SetRemoteUrl {
             repo_id,
             name,
@@ -1640,6 +1646,14 @@ fn reduce_inner(
         Msg::RemoveRemote { repo_id, name } => {
             begin_local_action(state, repo_id);
             actions_emit_effects::remove_remote(repo_id, name)
+        }
+        Msg::RenameRemote {
+            repo_id,
+            old_name,
+            new_name,
+        } => {
+            begin_local_action(state, repo_id);
+            actions_emit_effects::rename_remote(repo_id, old_name, new_name)
         }
         Msg::SetRemoteUrl {
             repo_id,

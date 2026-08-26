@@ -276,8 +276,17 @@ fn remote_add_set_url_and_remove_round_trip() {
         .to_string();
     assert_eq!(push_url, fetch_remote_str);
 
+    let rename_output = opened
+        .rename_remote_with_output("origin", "upstream")
+        .expect("rename remote");
+    assert_eq!(rename_output.exit_code, Some(0));
+
+    let remotes_after_rename = opened.list_remotes().expect("list remotes after rename");
+    assert_eq!(remotes_after_rename.len(), 1);
+    assert_eq!(remotes_after_rename[0].name, "upstream");
+
     let remove_output = opened
-        .remove_remote_with_output("origin")
+        .remove_remote_with_output("upstream")
         .expect("remove remote");
     assert_eq!(remove_output.exit_code, Some(0));
 

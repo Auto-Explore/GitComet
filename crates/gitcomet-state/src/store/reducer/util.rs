@@ -1145,6 +1145,7 @@ fn summarize_command(
             RepoCommandKind::DeleteTag { .. } => "Tag",
             RepoCommandKind::AddRemote { .. } => "Remote",
             RepoCommandKind::RemoveRemote { .. } => "Remote",
+            RepoCommandKind::RenameRemote { .. } => "Remote",
             RepoCommandKind::SetRemoteUrl { .. } => "Remote",
             RepoCommandKind::CheckoutConflict { side, .. } => match side {
                 ConflictSide::Ours => "Checkout ours",
@@ -1424,6 +1425,9 @@ fn summarize_command(
         RepoCommandKind::DeleteTag { name } => format!("Tag {name}: Deleted"),
         RepoCommandKind::AddRemote { name, .. } => format!("Remote {name}: Added"),
         RepoCommandKind::RemoveRemote { name } => format!("Remote {name}: Removed"),
+        RepoCommandKind::RenameRemote { old_name, new_name } => {
+            format!("Remote {old_name}: Renamed to {new_name}")
+        }
         RepoCommandKind::SetRemoteUrl { name, kind, .. } => {
             let kind = match kind {
                 gitcomet_core::services::RemoteUrlKind::Fetch => "fetch",

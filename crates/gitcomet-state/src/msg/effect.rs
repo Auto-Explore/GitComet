@@ -590,6 +590,11 @@ pub enum Effect {
         repo_id: RepoId,
         name: String,
     },
+    RenameRemote {
+        repo_id: RepoId,
+        old_name: String,
+        new_name: String,
+    },
     SetRemoteUrl {
         repo_id: RepoId,
         name: String,

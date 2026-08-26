@@ -883,6 +883,22 @@ fn remote_menu_lists_fetch_and_prune_actions(cx: &mut gpui::TestAppContext) {
             prune_tags,
             Some(ContextMenuAction::PruneLocalTags { repo_id: rid }) if rid == repo_id
         ));
+
+        let edit_remote = model.items.iter().find_map(|item| match item {
+            ContextMenuItem::Entry { label, action, .. } if label.as_ref() == "Edit remote…" => {
+                Some((**action).clone())
+            }
+            _ => None,
+        });
+        assert!(matches!(
+            edit_remote,
+            Some(ContextMenuAction::OpenPopover {
+                kind: PopoverKind::Repo {
+                    repo_id: rid,
+                    kind: RepoPopoverKind::Remote(RemotePopoverKind::EditPrompt { name }),
+                },
+            }) if rid == repo_id && name == remote_name
+        ));
     });
 }
 

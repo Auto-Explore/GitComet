@@ -891,6 +891,10 @@ impl GitRepository for GixRepo {
         self.remove_remote_with_output_impl(name)
     }
 
+    fn rename_remote_with_output(&self, old_name: &str, new_name: &str) -> Result<CommandOutput> {
+        self.rename_remote_with_output_impl(old_name, new_name)
+    }
+
     fn set_remote_url_with_output(
         &self,
         name: &str,

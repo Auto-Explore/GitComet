@@ -4821,6 +4821,7 @@ pub(super) enum RepoPopoverKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(super) enum RemotePopoverKind {
     AddPrompt,
+    EditPrompt { name: String },
     EditUrlPrompt { name: String, kind: RemoteUrlKind },
     RemoveConfirm { name: String },
     Menu { name: String },
