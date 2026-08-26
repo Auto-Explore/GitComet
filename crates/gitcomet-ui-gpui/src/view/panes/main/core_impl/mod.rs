@@ -3232,4 +3232,5 @@ use outline::*;
 #[cfg(test)]
 use scroll_sync::*;
 
+#[cfg(test)]
 mod tests;

@@ -1,5 +1,6 @@
 use super::*;
 
+#[derive(Clone)]
 pub(in crate::view) struct WorktreePreviewPreparedSyntaxSource {
     pub(in crate::view) document_text: Arc<str>,
     pub(in crate::view) line_starts: Arc<[usize]>,

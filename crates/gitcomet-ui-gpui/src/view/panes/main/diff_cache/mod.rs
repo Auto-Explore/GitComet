@@ -42,6 +42,7 @@ const DIFF_CLICK_FOREGROUND_COMPLETION_MAX_TEXT_BYTES: usize = 1024 * 1024;
 // syntax and fall back to plain/heuristic rendering until it is ready.
 const FULL_DOCUMENT_SYNTAX_MODE: rows::DiffSyntaxMode = rows::DiffSyntaxMode::Auto;
 
+#[derive(Clone, Debug, Default)]
 struct FileDiffBackgroundPreparedSyntaxDocuments {
     split_left: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
     split_right: Option<rows::BackgroundPreparedDiffSyntaxDocument>,
