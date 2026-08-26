@@ -57,6 +57,16 @@ pub(crate) fn pressed_repo_tab(view: &GitCometView, app: &App) -> Option<RepoId>
     view.repo_tabs_bar.read(app).pressed_repo_tab_for_tests()
 }
 
+pub(crate) fn repo_external_folder_drag_active(view: &GitCometView, app: &App) -> bool {
+    view.repo_tabs_bar
+        .read(app)
+        .external_folder_drag_active_for_tests()
+}
+
+pub(crate) fn external_drag_classification_seq(view: &GitCometView) -> u64 {
+    view.external_drag_classification_seq
+}
+
 pub(crate) fn add_repo_menu_is_open(view: &GitCometView, app: &App) -> bool {
     matches!(popover_kind(view, app), Some(PopoverKind::AddRepoMenu))
 }
