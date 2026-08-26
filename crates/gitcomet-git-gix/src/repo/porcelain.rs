@@ -542,7 +542,11 @@ impl GixRepo {
         validate_ref_like_arg(target.as_ref(), "branch target")?;
 
         let mut cmd = self.git_workdir_cmd();
-        cmd.arg("checkout").arg("-B").arg(name).arg(target.as_ref());
+        cmd.arg("checkout")
+            .arg("--no-track")
+            .arg("-B")
+            .arg(name)
+            .arg(target.as_ref());
         run_git_simple(cmd, "git checkout -B")
     }
 

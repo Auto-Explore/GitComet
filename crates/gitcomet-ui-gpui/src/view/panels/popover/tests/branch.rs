@@ -1157,6 +1157,75 @@ fn create_branch_popover_existing_name_can_checkout_existing_branch(cx: &mut gpu
 }
 
 #[gpui::test]
+fn replacing_branch_exists_prompt_cancels_it_and_allows_the_same_collision_to_retry(
+    cx: &mut gpui::TestAppContext,
+) {
+    let (store, events, repo, _workdir) = create_tracking_store("branch-exists-replaced");
+    let repo_id = store.snapshot().active_repo.expect("expected active repo");
+    let store_for_view = store.clone();
+    let (view, cx) = cx
+        .add_window_view(|window, cx| GitCometView::new(store_for_view, events, None, window, cx));
+
+    open_create_branch_prompt_for_enter_test(cx, &view, repo_id);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("main", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.simulate_keystrokes("enter");
+    wait_for_branch_exists_prompt(&store, &view, cx);
+
+    cx.update(|window, app| {
+        view.update(app, |this, cx| {
+            this.open_repository_switcher_centered(window, cx);
+        });
+    });
+    wait_until("replaced branch collision prompt to be cancelled", || {
+        store.snapshot().branch_exists_prompt.is_none()
+    });
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            crate::view::test_support::sync_store_snapshot(this, cx)
+        });
+        assert!(matches!(
+            view.read(app).popover_host.read(app).popover,
+            Some(PopoverKind::RepoPicker)
+        ));
+        view.update(app, |this, cx| {
+            this.popover_host
+                .update(cx, |host, cx| host.close_popover(cx));
+        });
+    });
+
+    open_create_branch_prompt_for_enter_test(cx, &view, repo_id);
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.popover_host.update(cx, |host, cx| {
+                host.create_branch_input
+                    .update(cx, |input, cx| input.set_text("main", cx));
+            });
+        });
+    });
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    cx.simulate_keystrokes("enter");
+    wait_for_branch_exists_prompt(&store, &view, cx);
+
+    assert_eq!(
+        repo.create_attempts(),
+        vec!["main@HEAD".to_string(), "main@HEAD".to_string()],
+        "the same collision should prompt again after the replacement was cancelled"
+    );
+}
+
+#[gpui::test]
 fn branch_exists_prompt_owns_focus_tabs_within_actions_and_escape_cancels(
     cx: &mut gpui::TestAppContext,
 ) {

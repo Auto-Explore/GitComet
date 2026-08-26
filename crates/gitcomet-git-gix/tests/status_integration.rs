@@ -5898,6 +5898,60 @@ fn create_branch_force_and_checkout_resets_existing_branch_and_checks_it_out() {
 }
 
 #[test]
+fn create_branch_force_and_checkout_preserves_existing_upstream_for_remote_target() {
+    if !require_git_shell_for_status_integration_tests() {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let repo = dir.path();
+    let remote_dir = tempfile::tempdir().unwrap();
+    let remote_repo = remote_dir.path();
+
+    run_git(repo, &["init", "-b", "main"]);
+    run_git(repo, &["config", "user.email", "you@example.com"]);
+    run_git(repo, &["config", "user.name", "You"]);
+    run_git(repo, &["config", "commit.gpgsign", "false"]);
+    run_git(remote_repo, &["init", "--bare"]);
+
+    write(repo, "a.txt", "one\n");
+    run_git(repo, &["add", "a.txt"]);
+    run_git(
+        repo,
+        &["-c", "commit.gpgsign=false", "commit", "-m", "init"],
+    );
+
+    let remote_url = git_remote_url(remote_repo);
+    run_git(repo, &["remote", "add", "origin", &remote_url]);
+    run_git(repo, &["update-ref", "refs/remotes/origin/feature", "HEAD"]);
+    run_git(repo, &["branch", "feature"]);
+    run_git(repo, &["config", "branch.feature.remote", "backup"]);
+    run_git(
+        repo,
+        &["config", "branch.feature.merge", "refs/heads/original"],
+    );
+
+    let backend = GixBackend;
+    let opened = backend.open(repo).unwrap();
+    opened
+        .create_branch_force_and_checkout(
+            "feature",
+            &gitcomet_core::domain::CommitId("origin/feature".into()),
+        )
+        .unwrap();
+
+    assert_eq!(
+        run_git_output(repo, &["config", "branch.feature.remote"]),
+        "backup",
+        "overwriting a branch must not change its configured remote"
+    );
+    assert_eq!(
+        run_git_output(repo, &["config", "branch.feature.merge"]),
+        "refs/heads/original",
+        "overwriting a branch must not change its configured merge ref"
+    );
+}
+
+#[test]
 fn create_branch_force_and_checkout_creates_missing_branch_and_checks_it_out() {
     if !require_git_shell_for_status_integration_tests() {
         return;

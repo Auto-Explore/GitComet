@@ -3020,6 +3020,12 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        // Branch-collision prompts are also held in shared state. Replacing one
+        // without resolving it leaves that state occupied, so the same
+        // collision cannot emit a fresh prompt later.
+        if self.popover.as_ref() != Some(&kind) {
+            self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
+        }
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         // The anchor stays hovered behind the opened surface; keep its
