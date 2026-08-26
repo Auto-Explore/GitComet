@@ -6,6 +6,12 @@ pub(super) struct ToastHost {
     root_view: WeakEntity<GitCometView>,
 
     toasts: Vec<ToastState>,
+    /// Monotonic, so an id is never reused. Deriving the next id from
+    /// `toasts.last()` restarted numbering whenever the list emptied, and both
+    /// removal paths are deferred — the TTL timer below and the launch
+    /// callbacks in `handle_toast_action` — so a recycled id let a stale
+    /// removal delete an unrelated newer toast.
+    next_toast_id: u64,
     clone_progress: Option<CloneOpState>,
     clone_progress_last_seq: u64,
     clone_progress_dest: Option<std::sync::Arc<std::path::PathBuf>>,
@@ -170,6 +176,7 @@ impl ToastHost {
             theme,
             root_view,
             toasts: Vec::new(),
+            next_toast_id: 1,
             clone_progress: None,
             clone_progress_last_seq: 0,
             clone_progress_dest: None,
@@ -303,11 +310,8 @@ impl ToastHost {
         ttl: Option<Duration>,
         cx: &mut gpui::Context<Self>,
     ) -> u64 {
-        let id = self
-            .toasts
-            .last()
-            .map(|t| t.id.wrapping_add(1))
-            .unwrap_or(1);
+        let id = self.next_toast_id;
+        self.next_toast_id = self.next_toast_id.wrapping_add(1).max(1);
         let theme = self.theme;
         let is_code_message = looks_like_code_message(&message);
         let display_message = if is_code_message {
@@ -418,18 +422,25 @@ impl ToastHost {
 
     fn handle_toast_action(&mut self, id: u64, action: ToastAction, cx: &mut gpui::Context<Self>) {
         match action {
-            ToastAction::OpenUrl { url, .. } => match super::platform_open::open_url(&url) {
-                Ok(()) => {
-                    self.remove_toast(id, cx);
-                }
-                Err(err) => {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open link: {err}"),
-                        cx,
-                    );
-                }
-            },
+            ToastAction::OpenUrl { url, .. } => {
+                // Keep the toast until the open succeeds: it carries the URL and
+                // its button, so dismissing it up front would leave a user whose
+                // browser failed to launch with no way to read or retry the link.
+                // Ids are monotonic, so this deferred removal cannot hit a
+                // different toast.
+                super::platform_open::spawn_launch(
+                    cx,
+                    move || super::platform_open::open_url_blocking(&url),
+                    move |this, result, cx| match result {
+                        Ok(()) => this.remove_toast(id, cx),
+                        Err(err) => this.push_toast(
+                            components::ToastKind::Error,
+                            format!("Failed to open link: {err}"),
+                            cx,
+                        ),
+                    },
+                );
+            }
             ToastAction::OpenSurvey {
                 survey_id,
                 survey_name,
@@ -444,15 +455,20 @@ impl ToastHost {
                         cx,
                     );
                 }
-                let open_result = super::platform_open::open_url(&url);
                 self.remove_toast(id, cx);
-                if let Err(err) = open_result {
-                    self.push_toast(
-                        components::ToastKind::Error,
-                        format!("Failed to open {survey_name}: {err}"),
-                        cx,
-                    );
-                }
+                super::platform_open::spawn_launch(
+                    cx,
+                    move || super::platform_open::open_url_blocking(&url),
+                    move |this, result, cx| {
+                        if let Err(err) = result {
+                            this.push_toast(
+                                components::ToastKind::Error,
+                                format!("Failed to open {survey_name}: {err}"),
+                                cx,
+                            );
+                        }
+                    },
+                );
             }
             ToastAction::PostponeSurvey {
                 survey_id,

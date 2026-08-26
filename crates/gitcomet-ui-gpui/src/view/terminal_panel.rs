@@ -3009,7 +3009,7 @@ impl GitCometView {
     pub(super) fn open_external_terminal_for_repo(
         &mut self,
         repo_id: RepoId,
-        _cx: &mut gpui::Context<Self>,
+        cx: &mut gpui::Context<Self>,
     ) {
         let workdir = self
             .terminal_sessions
@@ -3030,7 +3030,26 @@ impl GitCometView {
                     .get(&repo_id)
                     .map(|s| s.repo_name.clone()),
             };
-            let _ = launch_external_terminal_from_preferences(&self.terminal_preferences, &context);
+            match resolve_external_terminal_launch_spec(&self.terminal_preferences, &context) {
+                Ok(spec) => super::platform_open::spawn_launch(
+                    cx,
+                    move || spec.launch(),
+                    |this, result, cx| {
+                        if let Err(err) = result {
+                            this.push_toast(
+                                components::ToastKind::Error,
+                                format!("Failed to open external terminal: {err}"),
+                                cx,
+                            );
+                        }
+                    },
+                ),
+                Err(err) => self.push_toast(
+                    components::ToastKind::Error,
+                    format!("Failed to open external terminal: {err}"),
+                    cx,
+                ),
+            }
         }
     }
 

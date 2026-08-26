@@ -1,3 +1,4 @@
+use gpui::AppContext as _;
 use std::io;
 use std::path::Path;
 
@@ -26,14 +27,43 @@ const WSL_LINUX_OPEN_HELPERS: [LinuxOpenHelper; 3] = [
     LinuxOpenHelper::WslView,
 ];
 
+/// Run a blocking OS launch off the GPUI main thread.
+///
+/// `CreateProcessW`, `ShellExecute` and the Linux openers below all block, and
+/// on Windows `CreateProcessW` can pump the message queue from inside itself:
+/// resolving an App Execution Alias (`wt.exe`, `code`, …) performs an
+/// out-of-proc COM activation, and COM's wait on an STA thread dispatches
+/// window messages. GPUI runs the main thread as an STA, so launching from a
+/// click handler re-enters the window procedure while GPUI still holds the
+/// `App` borrow, and every platform callback it reaches — window-control hit
+/// testing, frame requests — fails with "RefCell already borrowed".
+///
+/// Resolve *what* to launch on the main thread, then hand the launch itself to
+/// this helper. `on_result` runs back on the main thread once it finishes.
+pub(in crate::view) fn spawn_launch<V, E>(
+    cx: &mut gpui::Context<V>,
+    launch: impl FnOnce() -> Result<(), E> + Send + 'static,
+    on_result: impl FnOnce(&mut V, Result<(), E>, &mut gpui::Context<V>) + 'static,
+) where
+    V: 'static,
+    E: Send + 'static,
+{
+    let task = cx.background_spawn(async move { launch() });
+    cx.spawn(async move |view, cx| {
+        let result = task.await;
+        let _ = view.update(cx, |view, cx| on_result(view, result, cx));
+    })
+    .detach();
+}
+
 /// Open a URL in the user's default browser.
-pub(super) fn open_url(url: &str) -> Result<(), io::Error> {
+pub(in crate::view) fn open_url_blocking(url: &str) -> Result<(), io::Error> {
     let url = validate_external_url(url)?;
     open_with_default(url)
 }
 
 /// Open a file or directory with the system's default application.
-pub(super) fn open_path(path: &Path) -> Result<(), io::Error> {
+pub(in crate::view) fn open_path_blocking(path: &Path) -> Result<(), io::Error> {
     if path.as_os_str().is_empty() {
         return Err(io::Error::new(io::ErrorKind::InvalidInput, "Path is empty"));
     }
@@ -52,9 +82,9 @@ pub(super) fn open_path(path: &Path) -> Result<(), io::Error> {
 }
 
 /// Open the file manager and select/reveal the given path.
-pub(super) fn open_file_location(path: &Path) -> Result<(), io::Error> {
+pub(in crate::view) fn open_file_location_blocking(path: &Path) -> Result<(), io::Error> {
     if path.is_dir() {
-        return open_path(path);
+        return open_path_blocking(path);
     }
 
     #[cfg(target_os = "macos")]
@@ -90,7 +120,7 @@ pub(super) fn open_file_location(path: &Path) -> Result<(), io::Error> {
         }
 
         let parent = path.parent().unwrap_or(path);
-        open_path(parent)
+        open_path_blocking(parent)
     }
 
     #[cfg(not(any(
@@ -624,5 +654,80 @@ mod windows_tests {
             .to_string();
         assert!(!normalized.starts_with(r"\\?\"));
         assert_eq!(normalized, r"C:\git\GitComet\src\main.rs");
+    }
+}
+
+#[cfg(test)]
+mod spawn_launch_tests {
+    use super::spawn_launch;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    struct LaunchProbe {
+        on_result_ran: bool,
+    }
+
+    impl gpui::Render for LaunchProbe {
+        fn render(
+            &mut self,
+            _window: &mut gpui::Window,
+            _cx: &mut gpui::Context<Self>,
+        ) -> impl gpui::IntoElement {
+            gpui::div()
+        }
+    }
+
+    /// Pins the half of the invariant this harness can observe: the launch must
+    /// not run inside the GPUI handler that asked for it, because that is where
+    /// `App` is borrowed and a nested Windows message pump would re-enter the
+    /// window procedure.
+    ///
+    /// It cannot prove the launch leaves the main thread — under `#[gpui::test]`
+    /// the background executor is a deterministic queue driven by the same
+    /// thread, so a foreground deferral would pass this too. That half is held
+    /// by `background_spawn`'s `Send` bound at the type level instead.
+    #[gpui::test]
+    fn spawn_launch_defers_the_launch_out_of_the_calling_handler(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let launched = Arc::new(AtomicBool::new(false));
+        let (view, cx) = cx.add_window_view(|_window, _cx| LaunchProbe {
+            on_result_ran: false,
+        });
+
+        let launched_in_task = Arc::clone(&launched);
+        cx.update(|_window, app| {
+            view.update(app, |_this, cx| {
+                spawn_launch(
+                    cx,
+                    move || {
+                        launched_in_task.store(true, Ordering::SeqCst);
+                        Ok::<(), std::io::Error>(())
+                    },
+                    |this, result, _cx| {
+                        assert!(result.is_ok(), "the probe launch cannot fail");
+                        this.on_result_ran = true;
+                    },
+                );
+            });
+        });
+
+        assert!(
+            !launched.load(Ordering::SeqCst),
+            "the launch ran synchronously inside the handler, which is exactly what \
+             re-enters the Windows window procedure while `App` is borrowed"
+        );
+
+        cx.run_until_parked();
+
+        assert!(
+            launched.load(Ordering::SeqCst),
+            "the launch must still happen, just after the handler has returned"
+        );
+        cx.update(|_window, app| {
+            assert!(
+                view.read(app).on_result_ran,
+                "on_result must run back on the main thread"
+            );
+        });
     }
 }
