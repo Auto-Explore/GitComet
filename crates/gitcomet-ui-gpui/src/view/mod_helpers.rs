@@ -5230,7 +5230,6 @@ pub(super) struct TerminalInstance {
     pub(super) events_rx:
         Option<smol::channel::Receiver<super::terminal_alacritty::TerminalBackendEvent>>,
     pub(super) connected: bool,
-    pub(super) exit_status: Option<String>,
     pub(super) viewport: Entity<TerminalViewportView>,
     pub(super) session_seq: u64,
     pub(super) title: String,
@@ -5246,6 +5245,10 @@ pub(super) struct RepoTerminalSession {
 impl RepoTerminalSession {
     pub(super) fn active_instance(&self) -> Option<&TerminalInstance> {
         self.instances.get(self.active_index)
+    }
+
+    pub(super) fn instance_by_seq(&self, seq: u64) -> Option<&TerminalInstance> {
+        self.instances.iter().find(|i| i.session_seq == seq)
     }
 
     pub(super) fn instance_by_seq_mut(&mut self, seq: u64) -> Option<&mut TerminalInstance> {
@@ -5264,7 +5267,7 @@ pub(crate) struct TerminalShutdownSummary {
 pub(in crate::view) enum TerminalShutdownAction {
     CloseRepo { repo_id: RepoId },
     CloseTerminalForRepo { repo_id: RepoId },
-    CloseTerminalTab { repo_id: RepoId, index: usize },
+    CloseTerminalTab { repo_id: RepoId, session_seq: u64 },
     CloseWindow,
     QuitApp,
 }
