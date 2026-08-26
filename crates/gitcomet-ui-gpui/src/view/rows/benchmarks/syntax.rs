@@ -66,7 +66,13 @@ impl SyntaxPairLookupFixture {
             .find('=')
             .unwrap_or_default()
             .saturating_sub(1);
-        Self::new(DiffSyntaxLanguage::Python, text, line_ix, display_offset, false)
+        Self::new(
+            DiffSyntaxLanguage::Python,
+            text,
+            line_ix,
+            display_offset,
+            false,
+        )
     }
 
     fn new(
