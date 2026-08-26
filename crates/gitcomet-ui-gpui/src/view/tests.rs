@@ -1,4 +1,5 @@
 use super::*;
+use chrome::{cursor_style_for_resize_edge, resize_edge};
 use gitcomet_core::domain::{
     Branch, CommitId, FileEntry, FileEntryKind, Remote, RemoteBranch, RepoSpec, StashEntry,
     Submodule, SubmoduleStatus, Upstream, Worktree,
@@ -2741,8 +2742,9 @@ fn full_chrome_layout_only_caches_always_mounted_subviews() {
         .collect();
 
     // The repo tabs bar lives inside the title bar since the browser-style
-    // chrome merge, so its cache boundary is the title bar mount in mod.rs.
-    let root_source = include_str!("mod.rs");
+    // chrome merge, so its cache boundary is the title bar mount in the render
+    // implementation.
+    let root_source = include_str!("gitcomet_view_render.rs");
     let normalized_root: String = root_source.chars().filter(|c| !c.is_whitespace()).collect();
 
     assert!(

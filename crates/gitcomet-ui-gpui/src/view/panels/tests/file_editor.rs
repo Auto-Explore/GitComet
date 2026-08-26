@@ -801,7 +801,28 @@ async fn file_editor_click_highlights_names_in_the_actual_syntax_rs(cx: &mut gpu
     let file_rel = std::path::PathBuf::from("syntax.rs");
     let source_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("src/view/rows/diff_text/syntax.rs");
-    let contents = std::fs::read_to_string(source_path).expect("read actual syntax.rs");
+    let mut contents = std::fs::read_to_string(&source_path).expect("read actual syntax.rs");
+    for module in [
+        "prepared/drop_queue.rs",
+        "prepared/document_cache.rs",
+        "prepared/document_prepare.rs",
+        "prepared/incremental_reparse.rs",
+        "prepared/highlight_spec.rs",
+        "prepared/query_tokens.rs",
+        "prepared/injections.rs",
+        "live.rs",
+        "heuristic.rs",
+    ] {
+        let module_path = source_path
+            .parent()
+            .expect("syntax dir")
+            .join("syntax")
+            .join(module);
+        contents.push_str(
+            &std::fs::read_to_string(module_path)
+                .expect("read syntax module as part of the large-file fixture"),
+        );
+    }
     assert!(
         contents.len() > 256 * 1024,
         "the regression needs a large file"
