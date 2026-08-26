@@ -75,7 +75,7 @@ pub(super) fn panel(
                 )
                 .child(
                     components::Button::new("branch_exists_overwrite", "Overwrite & checkout")
-                        .style(components::ButtonStyle::Filled)
+                        .style(components::ButtonStyle::Danger)
                         .on_click(theme, cx, |this, _e, _w, cx| {
                             this.resolve_open_branch_exists_prompt(
                                 BranchExistsChoice::OverwriteAndCheckout,
