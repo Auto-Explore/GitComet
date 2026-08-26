@@ -445,6 +445,16 @@ impl std::fmt::Debug for InternalMsg {
                 .field("action", action)
                 .field("result", result)
                 .finish(),
+            InternalMsg::CreateBranchAlreadyExists {
+                repo_id,
+                name,
+                target,
+            } => f
+                .debug_struct("CreateBranchAlreadyExists")
+                .field("repo_id", repo_id)
+                .field("name", name)
+                .field("target", target)
+                .finish(),
             InternalMsg::CommitFinished { repo_id, result } => f
                 .debug_struct("CommitFinished")
                 .field("repo_id", repo_id)

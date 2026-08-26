@@ -528,6 +528,13 @@ pub(super) fn close_repo(
     repo_id: RepoId,
 ) -> Vec<Effect> {
     clear_banner_error_for_repo(state, repo_id);
+    if state
+        .branch_exists_prompt
+        .as_ref()
+        .is_some_and(|prompt| prompt.repo_id == repo_id)
+    {
+        state.branch_exists_prompt = None;
+    }
     let mut effects = Vec::with_capacity(3 + SET_ACTIVE_REPO_INLINE_EFFECT_CAPACITY);
     let Some(removed_repo_ix) = state.repos.iter().position(|repo| repo.id == repo_id) else {
         effects.push(persist_session_effect(
@@ -591,6 +598,13 @@ pub(super) fn close_repos(
     }
     if close_ids.is_empty() {
         return Vec::new();
+    }
+    if state
+        .branch_exists_prompt
+        .as_ref()
+        .is_some_and(|prompt| close_ids.contains(&prompt.repo_id))
+    {
+        state.branch_exists_prompt = None;
     }
 
     let original_order: Vec<RepoId> = state.repos.iter().map(|repo| repo.id).collect();

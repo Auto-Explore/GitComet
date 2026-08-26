@@ -1,5 +1,8 @@
 use crate::model::GitLogTagFetchMode;
-use crate::model::{ConflictFileLoadMode, DefaultTagType, RepoId, SidebarDataRequest, SidebarMode};
+use crate::model::{
+    BranchExistsPromptState, ConflictFileLoadMode, DefaultTagType, RepoId, SidebarDataRequest,
+    SidebarMode,
+};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
@@ -41,6 +44,13 @@ pub enum RepoActionKind {
     ApplyStash,
     PopStash,
     DropStash,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BranchExistsChoice {
+    Cancel,
+    CheckoutExisting,
+    OverwriteAndCheckout,
 }
 
 /// How a history-row click mutates the commit selection.
@@ -521,6 +531,10 @@ pub enum Msg {
         /// Reset the branch to `target` first when a branch with this name
         /// already exists, instead of failing with "already exists".
         force: bool,
+    },
+    ResolveBranchExistsPrompt {
+        prompt: BranchExistsPromptState,
+        choice: BranchExistsChoice,
     },
     RenameBranch {
         repo_id: RepoId,
@@ -1241,6 +1255,11 @@ pub enum InternalMsg {
         repo_id: RepoId,
         action: RepoActionKind,
         result: Result<(), Error>,
+    },
+    CreateBranchAlreadyExists {
+        repo_id: RepoId,
+        name: String,
+        target: String,
     },
     CommitFinished {
         repo_id: RepoId,

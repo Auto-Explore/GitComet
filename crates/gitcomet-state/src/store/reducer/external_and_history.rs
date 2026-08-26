@@ -11,7 +11,8 @@ use super::util::{
     start_conflict_target_reload, start_current_conflict_target_reload,
 };
 use crate::model::{
-    AppState, DiagnosticKind, InteractiveRebaseSetup, Loadable, RepoLoadsInFlight, SidebarMode,
+    AppState, BranchExistsPromptState, DiagnosticKind, InteractiveRebaseSetup, Loadable,
+    RepoLoadsInFlight, SidebarMode,
 };
 use crate::msg::{Effect, RepoActionKind, RepoExternalChange};
 use gitcomet_core::domain::{DiffArea, DiffTarget, LogCursor, LogPage, LogScope};
@@ -720,25 +721,32 @@ pub(super) fn log_loaded(
     effects
 }
 
-pub(super) fn repo_action_finished(
+enum RepoActionCompletion {
+    Succeeded,
+    ExpectedNoop,
+    Failed(Error),
+}
+
+fn finish_repo_action(
     state: &mut AppState,
     repo_id: crate::model::RepoId,
     action: RepoActionKind,
-    result: std::result::Result<(), Error>,
+    completion: RepoActionCompletion,
 ) -> Vec<Effect> {
     let mut clear_banner = false;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
         repo_state.bump_ops_rev();
-        match result {
-            Ok(()) => {
+        match completion {
+            RepoActionCompletion::Succeeded => {
                 repo_state.last_error = None;
                 if repo_action_clears_head_dependent_state(action) {
                     repo_state.clear_head_dependent_cached_state();
                 }
                 clear_banner = true;
             }
-            Err(e) => {
+            RepoActionCompletion::ExpectedNoop => {}
+            RepoActionCompletion::Failed(e) => {
                 repo_state.last_error = Some(e.to_string());
                 push_diagnostic(repo_state, DiagnosticKind::Error, e.to_string());
             }
@@ -749,11 +757,11 @@ pub(super) fn repo_action_finished(
     }
     let is_active = state.active_repo == Some(repo_id);
 
-    // A completed action mutated the repo, so every load issued before it is now stale. Bump the
-    // load epoch (so those stale results are dropped by the epoch gate), clear all in-flight flags,
-    // reset every `Loading` loadable back to `NotLoaded`, and cancel the orphaned worker tasks.
-    // This mirrors the invalidation repo activation performs; unlike a partial flag clear it never
-    // leaves a non-status load stranded in flight (its flag would otherwise never be cleared).
+    // A completed action either mutated the repo or observed an external mutation (the expected
+    // branch-collision case), so every load issued before it may now be stale. Bump the load epoch,
+    // clear all in-flight flags, reset every `Loading` loadable back to `NotLoaded`, and cancel the
+    // orphaned worker tasks. This also restores the head-dependent state cleared optimistically
+    // when an expected collision prevented checkout.
     let mut effects: Vec<Effect> = Vec::new();
     append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
 
@@ -808,6 +816,37 @@ pub(super) fn repo_action_finished(
     }
 
     effects
+}
+
+pub(super) fn repo_action_finished(
+    state: &mut AppState,
+    repo_id: crate::model::RepoId,
+    action: RepoActionKind,
+    result: std::result::Result<(), Error>,
+) -> Vec<Effect> {
+    let completion = match result {
+        Ok(()) => RepoActionCompletion::Succeeded,
+        Err(error) => RepoActionCompletion::Failed(error),
+    };
+    finish_repo_action(state, repo_id, action, completion)
+}
+
+pub(super) fn create_branch_already_exists(
+    state: &mut AppState,
+    prompt: BranchExistsPromptState,
+) -> Vec<Effect> {
+    if !state.repos.iter().any(|repo| repo.id == prompt.repo_id) {
+        return Vec::new();
+    }
+
+    let repo_id = prompt.repo_id;
+    state.branch_exists_prompt = Some(prompt);
+    finish_repo_action(
+        state,
+        repo_id,
+        RepoActionKind::CreateBranchAndCheckout,
+        RepoActionCompletion::ExpectedNoop,
+    )
 }
 
 fn repo_action_clears_head_dependent_state(action: RepoActionKind) -> bool {

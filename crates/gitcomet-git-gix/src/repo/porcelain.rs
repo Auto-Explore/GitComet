@@ -156,7 +156,14 @@ fn create_branch_error(detail: impl Into<String>) -> Error {
 }
 
 fn create_branch_already_exists_error(branch: &str) -> Error {
-    create_branch_error(format!("fatal: a branch named '{branch}' already exists"))
+    Error::new(ErrorKind::Git(GitFailure::new(
+        "git branch",
+        GitFailureId::BranchAlreadyExists,
+        Some(128),
+        Vec::new(),
+        Vec::new(),
+        Some(format!("fatal: a branch named '{branch}' already exists")),
+    )))
 }
 
 fn resolve_branch_target_commit_id(repo: &gix::Repository, target: &str) -> Result<gix::ObjectId> {

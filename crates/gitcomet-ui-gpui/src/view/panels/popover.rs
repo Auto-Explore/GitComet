@@ -516,6 +516,7 @@ fn popover_is_confirm_dialog(kind: &PopoverKind) -> bool {
             | PopoverKind::MergeAbortConfirm { .. }
             | PopoverKind::RebaseOntoConfirm { .. }
             | PopoverKind::RebaseReword { .. }
+            | PopoverKind::BranchExistsPrompt { .. }
             | PopoverKind::ForceDeleteBranchConfirm { .. }
             | PopoverKind::DeleteBranchesConfirm { .. }
             | PopoverKind::ForceRemoveWorktreeConfirm { .. }
@@ -865,8 +866,8 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         PopoverKind::ResetPrompt { .. }
         | PopoverKind::RebaseOntoConfirm { .. }
         | PopoverKind::CherryPickCommitConfirm { .. }
-        | PopoverKind::MergeCommitConfirm { .. }
-        | PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_380_WIDTH),
+        | PopoverKind::MergeCommitConfirm { .. } => Some(DIALOG_380_WIDTH),
+        PopoverKind::BranchExistsPrompt { .. } => Some(DIALOG_540_WIDTH),
         PopoverKind::MergeAbortConfirm { .. } => Some(DIALOG_360_WIDTH),
         PopoverKind::ForceRemoveWorktreeConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::PullReconcilePrompt { .. } | PopoverKind::AddToGitignorePrompt { .. } => {
@@ -2165,11 +2166,36 @@ impl PopoverHost {
         cx.stop_propagation();
     }
 
+    fn resolve_open_branch_exists_prompt(&self, choice: BranchExistsChoice) -> bool {
+        let Some(PopoverKind::BranchExistsPrompt {
+            repo_id,
+            name,
+            target,
+        }) = self.popover.as_ref()
+        else {
+            return false;
+        };
+
+        self.store.dispatch(Msg::ResolveBranchExistsPrompt {
+            prompt: BranchExistsPromptState {
+                repo_id: *repo_id,
+                name: name.clone(),
+                target: target.clone(),
+            },
+            choice,
+        });
+        true
+    }
+
     pub(in super::super) fn dismiss_prompt_popover(
         &mut self,
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel) {
+            self.close_popover(cx);
+            return;
+        }
         if self.popover.as_ref().is_some_and(popover_is_confirm_dialog) {
             self.close_popover(cx);
             return;
@@ -2516,26 +2542,6 @@ impl PopoverHost {
         }
     }
 
-    /// Whether a local branch with this name is already known for the repo.
-    ///
-    /// `repo.branches` is loaded for every open repo well before the user can
-    /// reach the create-branch prompt, so a missing load means "unknown" and
-    /// the caller falls back to the plain create (git then reports the
-    /// collision itself) rather than blocking on a load.
-    fn local_branch_exists(&self, repo_id: RepoId, name: &str) -> bool {
-        self.state
-            .repos
-            .iter()
-            .find(|repo| repo.id == repo_id)
-            .and_then(|repo| match &repo.branches {
-                Loadable::Ready(branches) => {
-                    Some(branches.iter().any(|branch| branch.name == name))
-                }
-                _ => None,
-            })
-            .unwrap_or(false)
-    }
-
     fn can_submit_create_branch(&self, cx: &mut gpui::Context<Self>) -> bool {
         self.create_branch_prompt_repo_and_target().is_some()
             && self
@@ -2583,21 +2589,6 @@ impl PopoverHost {
         };
 
         if checkout {
-            // A branch with this name may already exist. Ask first instead of
-            // letting git fail with "already exists": the user may want to
-            // check out the existing branch, or overwrite it with this commit.
-            if self.local_branch_exists(repo_id, &name) {
-                self.open_popover_centered(
-                    PopoverKind::BranchExistsPrompt {
-                        repo_id,
-                        name,
-                        target,
-                    },
-                    window,
-                    cx,
-                );
-                return;
-            }
             self.store.dispatch(Msg::CreateBranchAndCheckout {
                 repo_id,
                 name,
@@ -4738,6 +4729,7 @@ impl PopoverHost {
         if is_centered {
             let top_offset = scaled_px(80.0);
             let scrim_close = cx.listener(|this, _: &MouseDownEvent, window, cx| {
+                this.resolve_open_branch_exists_prompt(BranchExistsChoice::Cancel);
                 this.close_popover_and_restore_focus(window, cx);
             });
             div()

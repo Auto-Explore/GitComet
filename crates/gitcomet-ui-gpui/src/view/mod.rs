@@ -17,10 +17,11 @@ use gitcomet_core::file_diff::FileDiffRow;
 use gitcomet_core::process::refresh_git_runtime;
 use gitcomet_core::services::{PullMode, RemoteUrlKind, ResetMode};
 use gitcomet_state::model::{
-    AppNotificationKind, AppState, AuthPromptKind, CloneOpState, CloneOpStatus, DefaultTagType,
-    DiagnosticKind, Loadable, RepoId, RepoState, SubmoduleTrustPromptOperation,
+    AppNotificationKind, AppState, AuthPromptKind, BranchExistsPromptState, CloneOpState,
+    CloneOpStatus, DefaultTagType, DiagnosticKind, Loadable, RepoId, RepoState,
+    SubmoduleTrustPromptOperation,
 };
-use gitcomet_state::msg::{Msg, StoreEvent};
+use gitcomet_state::msg::{BranchExistsChoice, Msg, StoreEvent};
 use gitcomet_state::session;
 use gitcomet_state::store::AppStore;
 use gpui::prelude::*;
@@ -1964,6 +1965,7 @@ impl GitCometView {
             pending_unsaved_file_edits_flush: None,
             pending_quit_other_views: Vec::new(),
             pending_pull_reconcile_prompt: None,
+            pending_branch_exists_prompt: initial_state.branch_exists_prompt.clone(),
             pending_force_delete_branch_prompt: None,
             pending_force_delete_branch_centered: false,
             pending_force_remove_worktree_prompt: None,
@@ -3615,6 +3617,26 @@ impl Render for GitCometView {
         if self.last_window_size != self.ui_window_size_last_seen {
             self.ui_window_size_last_seen = self.last_window_size;
             self.schedule_ui_settings_persist(cx);
+        }
+
+        if self
+            .pending_branch_exists_prompt
+            .as_ref()
+            .is_some_and(|prompt| self.active_repo_id() == Some(prompt.repo_id))
+        {
+            let prompt = self
+                .pending_branch_exists_prompt
+                .take()
+                .expect("branch-exists prompt checked above");
+            self.open_popover_centered(
+                PopoverKind::BranchExistsPrompt {
+                    repo_id: prompt.repo_id,
+                    name: prompt.name,
+                    target: prompt.target,
+                },
+                window,
+                cx,
+            );
         }
 
         if let Some(repo_id) = self.pending_pull_reconcile_prompt.take()

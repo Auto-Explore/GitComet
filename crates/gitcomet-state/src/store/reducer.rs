@@ -7,11 +7,13 @@ mod repo_management;
 mod util;
 
 use crate::model::{
-    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, PendingCommitRetry, RepoId,
-    SubmoduleAddProgressState, SubmoduleTrustCheckOperation, SubmoduleTrustCheckState,
-    SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
+    AppState, AuthPromptState, AuthRetryOperation, BannerErrorState, BranchExistsPromptState,
+    PendingCommitRetry, RepoId, SubmoduleAddProgressState, SubmoduleTrustCheckOperation,
+    SubmoduleTrustCheckState, SubmoduleTrustPromptOperation, SubmoduleTrustPromptState,
 };
-use crate::msg::{ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList};
+use crate::msg::{
+    BranchExistsChoice, ConflictRegionChoice, Effect, Msg, RepoCommandKind, RepoPath, RepoPathList,
+};
 use crate::store::repo_load_trace;
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::services::{GitRepository, SafePushAfterCommitContext};
@@ -1191,6 +1193,43 @@ fn reduce_inner(
             begin_head_changing_local_action(state, repo_id);
             actions_emit_effects::create_branch_and_checkout(repo_id, name, target, force)
         }
+        Msg::ResolveBranchExistsPrompt { prompt, choice } => {
+            if state.branch_exists_prompt.as_ref() != Some(&prompt) {
+                return Vec::new();
+            }
+            state.branch_exists_prompt = None;
+
+            match choice {
+                BranchExistsChoice::Cancel => Vec::new(),
+                BranchExistsChoice::CheckoutExisting => {
+                    if let Some(repo_state) = state
+                        .repos
+                        .iter_mut()
+                        .find(|repo| repo.id == prompt.repo_id)
+                    {
+                        repo_state.set_detached_head_commit(None);
+                    }
+                    begin_head_changing_local_action(state, prompt.repo_id);
+                    actions_emit_effects::checkout_branch(prompt.repo_id, prompt.name)
+                }
+                BranchExistsChoice::OverwriteAndCheckout => {
+                    if let Some(repo_state) = state
+                        .repos
+                        .iter_mut()
+                        .find(|repo| repo.id == prompt.repo_id)
+                    {
+                        repo_state.set_detached_head_commit(None);
+                    }
+                    begin_head_changing_local_action(state, prompt.repo_id);
+                    actions_emit_effects::create_branch_and_checkout(
+                        prompt.repo_id,
+                        prompt.name,
+                        prompt.target,
+                        true,
+                    )
+                }
+            }
+        }
         Msg::RenameBranch {
             repo_id,
             old_name,
@@ -2199,6 +2238,18 @@ fn reduce_inner(
             action,
             result,
         }) => external_and_history::repo_action_finished(state, repo_id, action, result),
+        Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
+            repo_id,
+            name,
+            target,
+        }) => external_and_history::create_branch_already_exists(
+            state,
+            BranchExistsPromptState {
+                repo_id,
+                name,
+                target,
+            },
+        ),
         Msg::Internal(crate::msg::InternalMsg::CommitFinished { repo_id, result }) => {
             let pending_commit = state
                 .repos

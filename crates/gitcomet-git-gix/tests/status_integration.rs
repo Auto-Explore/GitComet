@@ -5533,7 +5533,7 @@ fn create_branch_existing_branch_returns_structured_git_error() {
     let err = opened
         .create_branch("feature", &gitcomet_core::domain::CommitId(head.into()))
         .expect_err("creating an existing branch should fail");
-    assert_git_failure(&err, "git branch", GitFailureId::CommandFailed);
+    assert_git_failure(&err, "git branch", GitFailureId::BranchAlreadyExists);
     let ErrorKind::Git(failure) = err.kind() else {
         unreachable!();
     };

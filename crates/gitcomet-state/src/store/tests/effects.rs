@@ -3875,6 +3875,7 @@ impl GitRepository for RecordingLogRepo {
 struct RecordingCheckoutRepo {
     spec: RepoSpec,
     calls: Arc<std::sync::Mutex<Vec<String>>>,
+    create_branch_already_exists: bool,
 }
 
 impl GitRepository for RecordingCheckoutRepo {
@@ -3915,6 +3916,18 @@ impl GitRepository for RecordingCheckoutRepo {
             .lock()
             .expect("checkout recording mutex")
             .push(format!("create {name} {}", target.as_ref()));
+        if self.create_branch_already_exists {
+            return Err(Error::new(ErrorKind::Git(
+                gitcomet_core::error::GitFailure::new(
+                    "git branch",
+                    gitcomet_core::error::GitFailureId::BranchAlreadyExists,
+                    Some(128),
+                    Vec::new(),
+                    Vec::new(),
+                    Some(format!("a branch named '{name}' already exists")),
+                ),
+            )));
+        }
         Ok(())
     }
     fn create_branch_force_and_checkout(&self, name: &str, target: &CommitId) -> Result<()> {
@@ -4063,6 +4076,7 @@ fn checkout_branch_effect_requests_branch_and_worktree_reload_on_success() {
             workdir: unique_temp_path("gitcomet-checkout-branch-effect"),
         },
         calls: Arc::clone(&calls),
+        create_branch_already_exists: false,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4101,6 +4115,7 @@ fn checkout_remote_branch_effect_requests_branch_and_worktree_reload_on_success(
             workdir: unique_temp_path("gitcomet-checkout-remote-branch-effect"),
         },
         calls: Arc::clone(&calls),
+        create_branch_already_exists: false,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4141,6 +4156,7 @@ fn checkout_commit_effect_requests_worktree_reload_on_success() {
             workdir: unique_temp_path("gitcomet-checkout-commit-effect"),
         },
         calls: Arc::clone(&calls),
+        create_branch_already_exists: false,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4180,6 +4196,7 @@ fn create_branch_and_checkout_effect_requests_branch_and_worktree_reload_on_succ
             workdir: unique_temp_path("gitcomet-create-branch-and-checkout-effect"),
         },
         calls: Arc::clone(&calls),
+        create_branch_already_exists: false,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4223,6 +4240,7 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
             workdir: unique_temp_path("gitcomet-create-branch-and-checkout-force-effect"),
         },
         calls: Arc::clone(&calls),
+        create_branch_already_exists: false,
     });
     let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
         let mut repos = FxHashMap::default();
@@ -4250,6 +4268,65 @@ fn create_branch_and_checkout_force_effect_skips_separate_create_and_checkout() 
     assert_eq!(
         *calls.lock().expect("checkout recording mutex"),
         vec!["force-create-and-checkout feature HEAD".to_string()]
+    );
+}
+
+#[test]
+fn create_branch_and_checkout_effect_routes_collision_with_original_target() {
+    let repo_id = RepoId(705);
+    let calls = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let backend: Arc<dyn GitBackend> = Arc::new(PanicOpenBackend);
+    let repo: Arc<dyn GitRepository> = Arc::new(RecordingCheckoutRepo {
+        spec: RepoSpec {
+            workdir: unique_temp_path("gitcomet-create-branch-collision-effect"),
+        },
+        calls: Arc::clone(&calls),
+        create_branch_already_exists: true,
+    });
+    let repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = {
+        let mut repos = FxHashMap::default();
+        repos.insert(repo_id, repo);
+        repos
+    };
+    let executor = super::executor::TaskExecutor::new(1);
+    let (msg_tx, msg_rx) = std::sync::mpsc::channel::<Msg>();
+
+    schedule_effect_for_test(
+        &executor,
+        &executor,
+        &backend,
+        &repos,
+        msg_tx,
+        Effect::CreateBranchAndCheckout {
+            repo_id,
+            name: "feature".to_string(),
+            target: "origin/feature-one".to_string(),
+            force: false,
+        },
+    );
+
+    let first = msg_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("expected collision refresh");
+    assert!(matches!(first, Msg::RefreshBranches { repo_id: id } if id == repo_id));
+    let second = msg_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("expected semantic collision");
+    assert!(matches!(
+        second,
+        Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
+            repo_id: id,
+            name,
+            target,
+        }) if id == repo_id && name == "feature" && target == "origin/feature-one"
+    ));
+    assert!(
+        msg_rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        "collision must not emit checkout, worktree reload, or generic failure messages"
+    );
+    assert_eq!(
+        *calls.lock().expect("checkout recording mutex"),
+        vec!["create feature origin/feature-one".to_string()]
     );
 }
 

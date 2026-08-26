@@ -2,7 +2,7 @@ use crate::msg::{Msg, RepoActionKind, RepoPathList};
 use gitcomet_core::auth::{
     StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
 };
-use gitcomet_core::error::Error;
+use gitcomet_core::error::{Error, ErrorKind, GitFailureId};
 use gitcomet_core::services::GitRepository;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -236,12 +236,40 @@ pub(super) fn schedule_create_branch_and_checkout(
     force: bool,
 ) {
     spawn_with_repo(executor, repos, repo_id, msg_tx, move |repo, msg_tx| {
-        let target = gitcomet_core::domain::CommitId(target.into());
+        let target_id = gitcomet_core::domain::CommitId(target.clone().into());
         let created = if force {
-            repo.create_branch_force_and_checkout(&name, &target)
+            repo.create_branch_force_and_checkout(&name, &target_id)
         } else {
-            repo.create_branch(&name, &target)
+            repo.create_branch(&name, &target_id)
         };
+
+        if !force
+            && matches!(
+                &created,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        ErrorKind::Git(failure)
+                            if failure.id() == GitFailureId::BranchAlreadyExists
+                    )
+            )
+        {
+            // The backend performs the create atomically and classifies both a
+            // pre-existing ref and a concurrent creator as the same semantic
+            // outcome. Refresh the branch list and let shared state open the
+            // confirmation prompt; this is expected, not a generic repo error.
+            send_or_log(&msg_tx, Msg::RefreshBranches { repo_id });
+            send_or_log(
+                &msg_tx,
+                Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
+                    repo_id,
+                    name,
+                    target,
+                }),
+            );
+            return;
+        }
+
         let refresh = created.is_ok();
         let result = if force {
             created

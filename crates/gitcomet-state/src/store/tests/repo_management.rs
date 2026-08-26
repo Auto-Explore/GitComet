@@ -4113,6 +4113,51 @@ fn repo_action_finished_err_records_diagnostic() {
 }
 
 #[test]
+fn create_branch_collision_opens_prompt_without_recording_a_repo_error() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+    let repo_id = RepoId(1);
+    state.repos.push(RepoState::new_opening(
+        repo_id,
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/repo"),
+        },
+    ));
+    state.active_repo = Some(repo_id);
+    state.repos[0].local_actions_in_flight = 1;
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::Internal(crate::msg::InternalMsg::CreateBranchAlreadyExists {
+            repo_id,
+            name: "feature".to_string(),
+            target: "origin/feature-one".to_string(),
+        }),
+    );
+
+    assert_eq!(
+        state.branch_exists_prompt,
+        Some(crate::model::BranchExistsPromptState {
+            repo_id,
+            name: "feature".to_string(),
+            target: "origin/feature-one".to_string(),
+        })
+    );
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+    assert!(state.repos[0].last_error.is_none());
+    assert!(state.repos[0].diagnostics.is_empty());
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadBranches { repo_id: id } if *id == repo_id)),
+        "expected collision handling to refresh the potentially stale branch snapshot"
+    );
+}
+
+#[test]
 fn cherry_pick_error_completion_refreshes_status_log_and_sequencer_state() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);

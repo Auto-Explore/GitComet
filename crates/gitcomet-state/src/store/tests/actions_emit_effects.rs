@@ -2466,6 +2466,108 @@ fn additional_routing_messages_emit_effects_and_update_counters() {
 }
 
 #[test]
+fn branch_collision_prompt_choices_emit_exact_follow_up_actions() {
+    fn seeded_state(repo_id: RepoId) -> AppState {
+        let mut state = AppState::default();
+        state.repos.push(RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/repo"),
+            },
+        ));
+        state.active_repo = Some(repo_id);
+        state
+    }
+
+    let repo_id = RepoId(1);
+    let prompt = crate::model::BranchExistsPromptState {
+        repo_id,
+        name: "feature".to_string(),
+        target: "origin/feature-one".to_string(),
+    };
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::Cancel,
+        },
+    );
+    assert!(effects.is_empty());
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::CheckoutExisting,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CheckoutBranch { repo_id: id, name }]
+            if *id == repo_id && name == "feature"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: prompt.clone(),
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CreateBranchAndCheckout {
+            repo_id: id,
+            name,
+            target,
+            force: true,
+        }] if *id == repo_id
+            && name == "feature"
+            && target == "origin/feature-one"
+    ));
+    assert!(state.branch_exists_prompt.is_none());
+    assert_eq!(state.repos[0].local_actions_in_flight, 1);
+
+    let mut state = seeded_state(repo_id);
+    state.branch_exists_prompt = Some(prompt.clone());
+    let stale_prompt = crate::model::BranchExistsPromptState {
+        name: "different".to_string(),
+        ..prompt.clone()
+    };
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::ResolveBranchExistsPrompt {
+            prompt: stale_prompt,
+            choice: crate::msg::BranchExistsChoice::OverwriteAndCheckout,
+        },
+    );
+    assert!(effects.is_empty());
+    assert_eq!(state.branch_exists_prompt, Some(prompt));
+    assert_eq!(state.repos[0].local_actions_in_flight, 0);
+}
+
+#[test]
 fn repo_command_finished_error_summaries_cover_additional_labels() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
