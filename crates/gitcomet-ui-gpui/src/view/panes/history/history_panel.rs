@@ -233,23 +233,23 @@ impl HistoryView {
         let show_working_tree_summary_row = plan.show_working_tree_summary_row();
         let offset = usize::from(show_working_tree_summary_row);
 
-        let (selected_commit, page, log_rev, stashes_rev, history_scope) = match self.active_repo()
-        {
-            Some(repo) => {
-                let page = match Self::display_log_page_for_repo(repo) {
-                    Some(page) => page,
-                    None => return false,
-                };
-                (
-                    repo.history_state.selected_commit.clone(),
-                    page,
-                    repo.log_rev,
-                    repo.stashes_rev,
-                    repo.history_state.history_scope,
-                )
-            }
-            None => return false,
-        };
+        let (primary_selection, page, log_rev, stashes_rev, history_scope) =
+            match self.active_repo() {
+                Some(repo) => {
+                    let page = match Self::display_log_page_for_repo(repo) {
+                        Some(page) => page,
+                        None => return false,
+                    };
+                    (
+                        super::history_primary_selection(repo, show_working_tree_summary_row),
+                        page,
+                        repo.log_rev,
+                        repo.stashes_rev,
+                        repo.history_state.history_scope,
+                    )
+                }
+                None => return false,
+            };
 
         let cache = self
             .history_cache
@@ -266,10 +266,22 @@ impl HistoryView {
 
         let list_len = plan.list_len(total_commits);
 
-        // Read before the cache is borrowed mutably below.
-        let selected_worktree = self
-            .active_repo()
-            .and_then(|repo| repo.history_state.worktree_selection.clone());
+        let selected_commit = match &primary_selection {
+            Some(super::HistoryPrimarySelection::Commit(commit_id)) => Some(commit_id),
+            Some(
+                super::HistoryPrimarySelection::WorkingTree
+                | super::HistoryPrimarySelection::Worktree(_),
+            )
+            | None => None,
+        };
+        let selected_worktree = match &primary_selection {
+            Some(super::HistoryPrimarySelection::Worktree(path)) => Some(path.clone()),
+            Some(
+                super::HistoryPrimarySelection::WorkingTree
+                | super::HistoryPrimarySelection::Commit(_),
+            )
+            | None => None,
+        };
 
         let current_list_ix = super::resolve_history_selected_list_index(
             &mut self.history_selected_list_index_cache,
@@ -279,7 +291,7 @@ impl HistoryView {
             history_scope,
             &plan,
             super::HistorySelectionRef {
-                commit: selected_commit.as_ref(),
+                commit: selected_commit,
                 worktree_selected: selected_worktree.is_some(),
             },
             &cache.base.visible_indices,

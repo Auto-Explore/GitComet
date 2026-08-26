@@ -2887,6 +2887,8 @@ impl HistoryView {
         let Some(repo) = this.active_repo() else {
             return Vec::new();
         };
+        let primary_selection =
+            super::history_primary_selection(repo, plan.show_working_tree_summary_row());
         let show_graph_color_marker =
             history_scope_shows_graph_color_marker(repo.history_state.history_scope);
 
@@ -2960,8 +2962,11 @@ impl HistoryView {
                         show_graph_color_marker,
                         repo.id,
                         list_ix,
-                        repo.history_state.worktree_selection.as_deref()
-                            == Some(summary.path.as_path()),
+                        matches!(
+                            &primary_selection,
+                            Some(super::HistoryPrimarySelection::Worktree(path))
+                                if path == &summary.path
+                        ),
                         (summary.added, summary.modified, summary.deleted),
                         summary,
                         cx,
@@ -2969,10 +2974,10 @@ impl HistoryView {
                 }
 
                 if matches!(row, HistoryListRow::WorkingTreeSummary) {
-                    // A selected worktree row also leaves `selected_commit`
-                    // empty, and only one row may read as selected.
-                    let selected = repo.history_state.selected_commit.is_none()
-                        && repo.history_state.worktree_selection.is_none();
+                    let selected = matches!(
+                        &primary_selection,
+                        Some(super::HistoryPrimarySelection::WorkingTree)
+                    );
                     return Some(working_tree_summary_history_row(
                         theme,
                         ui_scale,
@@ -3020,9 +3025,12 @@ impl HistoryView {
                             .map_or(&[][..], |dirty| dirty.as_slice()),
                         list_ix,
                     );
-                let selected = repo.history_state.selected_commit.as_ref() == Some(&commit.id)
-                    || repo.history_state.multi_selection.is_multi()
-                        && repo.history_state.multi_selection.contains(&commit.id);
+                let selected = matches!(
+                    &primary_selection,
+                    Some(super::HistoryPrimarySelection::Commit(commit_id))
+                        if commit_id == &commit.id
+                ) || repo.history_state.multi_selection.is_multi()
+                    && repo.history_state.multi_selection.contains(&commit.id);
                 let selected_branch = this.selected_branch_for_history_row(repo.id, selected);
                 let is_stash_node = base_row_vm.is_stash
                     || stash_ids

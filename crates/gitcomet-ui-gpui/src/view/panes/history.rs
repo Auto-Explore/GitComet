@@ -727,6 +727,34 @@ struct HistorySelectionRef<'a> {
     worktree_selected: bool,
 }
 
+/// The row that should read as selected in the active workspace's history.
+///
+/// An explicit selection wins while the user remains in the tab. With no
+/// explicit selection, the live workspace is the focus: its uncommitted row
+/// when one exists, otherwise the commit at HEAD.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum HistoryPrimarySelection {
+    WorkingTree,
+    Commit(CommitId),
+    Worktree(PathBuf),
+}
+
+pub(in crate::view) fn history_primary_selection(
+    repo: &RepoState,
+    show_working_tree_summary_row: bool,
+) -> Option<HistoryPrimarySelection> {
+    if let Some(path) = &repo.history_state.worktree_selection {
+        return Some(HistoryPrimarySelection::Worktree(path.clone()));
+    }
+    if let Some(commit_id) = &repo.history_state.selected_commit {
+        return Some(HistoryPrimarySelection::Commit(commit_id.clone()));
+    }
+    if show_working_tree_summary_row {
+        return Some(HistoryPrimarySelection::WorkingTree);
+    }
+    repo.head_commit_id().map(HistoryPrimarySelection::Commit)
+}
+
 fn peek_history_selected_list_index(
     cache: Option<&HistorySelectedListIndexCache>,
     repo_id: RepoId,
@@ -1128,7 +1156,17 @@ impl HistoryView {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
+            let switched_repo = this.state.active_repo != next.active_repo;
             this.state = next;
+
+            if switched_repo {
+                // These memos describe the selection in the tab we just left.
+                // Their keys also include repository identity, but dropping
+                // them here makes the transition atomic even when sibling
+                // workspaces expose an identical commit page.
+                this.history_selected_list_index_cache = None;
+                this.history_selected_lane_color_cache = None;
+            }
 
             // When the historical browse point changes, scroll the history to that
             // commit (its row is highlighted purple by the canvas).
@@ -1988,9 +2026,9 @@ impl HistoryView {
     /// coloured from a lane, the nodes, the message borders and the graph fade —
     /// washes out against it.
     ///
-    /// The anchor is the selected commit, or HEAD while the uncommitted-changes
-    /// row holds the selection: those changes sit on HEAD, so selecting that row
-    /// lights the lane they will land on rather than leaving the list unwashed.
+    /// The anchor is the selected commit, or HEAD while the workspace's default
+    /// row holds the selection. Dirty changes sit on HEAD, and a clean workspace
+    /// defaults to HEAD itself, so either state lights the active branch lane.
     /// A multi-selection has no single lane to pick, so nothing washes.
     ///
     /// Memoised because resolving it is a scan of the page — the colour is one
@@ -2009,34 +2047,27 @@ impl HistoryView {
             if repo.history_state.multi_selection.is_multi() {
                 return None;
             }
-            // A selected worktree row highlights that worktree's branch, not the
-            // commit underneath it -- the two differ whenever the branch is
-            // behind and has been given a lane of its own.
-            let worktree_anchor = repo
-                .history_state
-                .worktree_selection
-                .as_ref()
-                .and_then(|path| match &repo.worktree_dirty {
-                    Loadable::Ready(dirty) => dirty.iter().find(|summary| &summary.path == path),
-                    _ => None,
-                })
-                .and_then(|summary| {
-                    Some(HistoryLaneAnchor::Worktree {
-                        head: summary.head.clone()?,
-                        on_branch: summary.branch.is_some() && !summary.detached,
-                    })
-                });
-            let anchor = worktree_anchor.or_else(|| {
-                repo.history_state
-                    .selected_commit
-                    .clone()
-                    .or_else(|| {
-                        show_worktree_summary_row
-                            .then(|| repo.head_commit_id())
-                            .flatten()
-                    })
-                    .map(HistoryLaneAnchor::Commit)
-            })?;
+            let anchor = match history_primary_selection(repo, show_worktree_summary_row)? {
+                // A selected worktree row highlights that worktree's branch,
+                // not the commit underneath it -- the two differ whenever the
+                // branch is behind and has been given a lane of its own.
+                HistoryPrimarySelection::Worktree(path) => match &repo.worktree_dirty {
+                    Loadable::Ready(dirty) => dirty
+                        .iter()
+                        .find(|summary| summary.path == path)
+                        .and_then(|summary| {
+                            Some(HistoryLaneAnchor::Worktree {
+                                head: summary.head.clone()?,
+                                on_branch: summary.branch.is_some() && !summary.detached,
+                            })
+                        })?,
+                    _ => return None,
+                },
+                HistoryPrimarySelection::WorkingTree => {
+                    HistoryLaneAnchor::Commit(repo.head_commit_id()?)
+                }
+                HistoryPrimarySelection::Commit(commit_id) => HistoryLaneAnchor::Commit(commit_id),
+            };
             (repo.id, anchor)
         };
 
@@ -3947,6 +3978,74 @@ mod tests {
         );
     }
 
+    #[test]
+    fn history_default_selection_uses_dirty_changes_then_head() {
+        let mut repo = RepoState::new_opening(
+            RepoId(1),
+            RepoSpec {
+                workdir: PathBuf::from("/tmp/history-default-selection"),
+            },
+        );
+        repo.head_branch = Loadable::Ready("feature".to_string());
+        repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "feature-tip")]));
+
+        assert_eq!(
+            history_primary_selection(&repo, true),
+            Some(HistoryPrimarySelection::WorkingTree),
+            "a dirty workspace should select its uncommitted row"
+        );
+        let clean_selection = history_primary_selection(&repo, false);
+        assert_eq!(
+            clean_selection,
+            Some(HistoryPrimarySelection::Commit(CommitId(
+                "feature-tip".into()
+            ))),
+            "a clean workspace should select its active HEAD"
+        );
+        let HistoryPrimarySelection::Commit(clean_head) =
+            clean_selection.expect("clean workspace selection")
+        else {
+            panic!("clean workspace should focus a commit");
+        };
+        assert_eq!(
+            peek_history_selected_list_index(
+                None,
+                repo.id,
+                1,
+                1,
+                LogScope::AllBranches,
+                &HistoryListPlan::new(false, Vec::new()),
+                HistorySelectionRef {
+                    commit: Some(&clean_head),
+                    worktree_selected: false,
+                },
+                &HistoryVisibleIndices::all(2),
+                &[
+                    commit("feature-tip", &["base"], "feature tip"),
+                    commit("base", &[], "base"),
+                ],
+            ),
+            Some(0),
+            "keyboard navigation should start at the implicit HEAD row"
+        );
+
+        repo.history_state.selected_commit = Some(CommitId("older".into()));
+        assert_eq!(
+            history_primary_selection(&repo, false),
+            Some(HistoryPrimarySelection::Commit(CommitId("older".into()))),
+            "an explicit selection made in the active tab should win"
+        );
+
+        repo.history_state.worktree_selection = Some(PathBuf::from("/tmp/linked"));
+        assert_eq!(
+            history_primary_selection(&repo, false),
+            Some(HistoryPrimarySelection::Worktree(PathBuf::from(
+                "/tmp/linked"
+            ))),
+            "a linked-worktree row selection should remain distinct from HEAD"
+        );
+    }
+
     /// Selecting a worktree row also leaves the commit selection empty, which is
     /// the state the working-tree row uses to decide it is selected. Claiming
     /// index 0 here is what made both rows light up at once.
@@ -4994,6 +5093,116 @@ mod tests {
             after,
             Some(after_fresh),
             "the memo must be reissued when the graph it read is rebuilt"
+        );
+    }
+
+    #[gpui::test]
+    fn switching_same_graph_workspaces_highlights_the_new_heads_lane(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+        let page = Arc::new(log_page(
+            vec![
+                commit("main-tip", &["base"], "main tip"),
+                commit("feature-tip", &["base"], "feature tip"),
+                commit("base", &[], "base"),
+            ],
+            None,
+        ));
+        let make_repo = |repo_id: RepoId, path: &str, head_branch: &str| {
+            let mut repo = RepoState::new_opening(
+                repo_id,
+                RepoSpec {
+                    workdir: PathBuf::from(path),
+                },
+            );
+            repo.history_state.history_scope = LogScope::AllBranches;
+            repo.head_branch = Loadable::Ready(head_branch.to_string());
+            repo.head_branch_rev = 1;
+            repo.branches = Loadable::Ready(Arc::new(vec![
+                branch("main", "main-tip"),
+                branch("feature", "feature-tip"),
+            ]));
+            repo.branches_rev = 1;
+            repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+            repo.remote_branches_rev = 1;
+            repo.log = Loadable::Ready(Arc::clone(&page));
+            repo.log_rev = 1;
+            repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+            repo.history_state.log_rev = 1;
+            repo
+        };
+        let main_repo = make_repo(RepoId(1), "/tmp/history-main-workspace", "main");
+        let feature_repo = make_repo(RepoId(2), "/tmp/history-feature-workspace", "feature");
+        let state_for = |active_repo| {
+            Arc::new(AppState {
+                repos: vec![main_repo.clone(), feature_repo.clone()],
+                active_repo: Some(active_repo),
+                ..Default::default()
+            })
+        };
+
+        cx.update(|window, app| {
+            let _ = window.draw(app);
+        });
+        ensure_history_cache_for_tests(cx, &view, state_for(RepoId(1)));
+
+        cx.update(|_window, app| {
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, _cx| {
+                history
+                    .history_selected_lane(false)
+                    .expect("clean main workspace should highlight HEAD")
+            })
+        });
+
+        ensure_history_cache_for_tests(cx, &view, state_for(RepoId(2)));
+        let (feature_lane, expected_feature_lane, cached_repo_id, memo_anchor) =
+            cx.update(|_window, app| {
+                let history_view = view.read(app).main_pane.read(app).history_view.clone();
+                history_view.update(app, |history, _cx| {
+                    let feature_lane = history.history_selected_lane(false);
+                    let cache = history
+                        .history_cache
+                        .as_ref()
+                        .expect("feature workspace history cache");
+                    let anchor_row = *cache
+                        .base
+                        .visible_ix_by_commit
+                        .get(&CommitId("feature-tip".into()))
+                        .expect("feature HEAD should be visible");
+                    let row = &cache.base.graph_rows[anchor_row];
+                    let expected = crate::view::rows::history_graph_paint::selected_lane_at(
+                        &cache.base.graph_rows,
+                        anchor_row,
+                        row.node_color_ix,
+                    );
+                    let memo_anchor = history
+                        .history_selected_lane_color_cache
+                        .as_ref()
+                        .map(|memo| memo.anchor.clone());
+                    (
+                        feature_lane,
+                        expected,
+                        cache.base.request.repo_id,
+                        memo_anchor,
+                    )
+                })
+            });
+
+        assert_eq!(cached_repo_id, RepoId(2));
+        assert_eq!(
+            memo_anchor,
+            Some(HistoryLaneAnchor::Commit(CommitId("feature-tip".into()))),
+            "the lane memo must be anchored to the newly active workspace's HEAD"
+        );
+        assert_eq!(
+            feature_lane, expected_feature_lane,
+            "the sibling workspace must not reuse the previous tab's lane"
         );
     }
 

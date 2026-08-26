@@ -587,7 +587,12 @@ pub(crate) fn fill_set_active_repo_inline(
     repo_id: RepoId,
     effects: &mut SetActiveRepoEffects,
 ) {
-    repo_management::fill_set_active_repo_inline(state, repo_id, effects)
+    // The store handles tab switches on this inline path instead of calling
+    // `reduce`, so bracket the mutation with the same navigation reconciliation
+    // and state finalizers the ordinary reducer wrapper applies.
+    reconcile_active_nav_history(state, false);
+    repo_management::fill_set_active_repo_inline(state, repo_id, effects);
+    finalize_reduced_state(state, Some(false));
 }
 
 pub(crate) fn fill_reorder_repo_tabs_inline(
@@ -743,15 +748,24 @@ pub(super) fn reduce(
 
     let effects = reduce_inner(repos, id_alloc, state, msg);
 
-    // Enforced here rather than at each of the four places a worktree selection
-    // can end; see the helper.
-    effects::retire_orphaned_worktree_diffs(state);
-
-    if reconcile {
-        reconcile_active_nav_history(state, push);
-    }
+    finalize_reduced_state(state, reconcile.then_some(push));
 
     effects
+}
+
+/// Apply invariants that must hold whenever a reducer mutation is published.
+///
+/// Control-message fast paths call this too, so adding a finalizer here keeps
+/// them from exposing an intermediate state that the ordinary `reduce` wrapper
+/// would have repaired before returning.
+fn finalize_reduced_state(state: &mut AppState, nav_push: Option<bool>) {
+    // Enforced here rather than at each of the places a worktree selection can
+    // end; see the helper.
+    effects::retire_orphaned_worktree_diffs(state);
+
+    if let Some(push) = nav_push {
+        reconcile_active_nav_history(state, push);
+    }
 }
 
 /// Whether `msg` is a user-initiated navigation that should create a new global

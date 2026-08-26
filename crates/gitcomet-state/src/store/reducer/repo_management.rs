@@ -734,6 +734,16 @@ fn fill_set_active_repo_inline_impl(
 
     let repo_state = &mut state.repos[repo_ix];
 
+    if changed {
+        // A repository tab is a workspace context, not a suspended history
+        // selection. Enter it at that workspace's live tip: the history view
+        // interprets no explicit commit as the uncommitted row when it exists,
+        // and as HEAD when the worktree is clean. `set_selected_commit` also
+        // retires multi/range and linked-worktree selections.
+        repo_state.set_selected_commit(None);
+        repo_state.set_commit_details(Loadable::NotLoaded);
+    }
+
     // Session-restore placeholders and repos still opening do not have a backend handle yet.
     // Defer handle-dependent refreshes until RepoOpenedOk installs the handle and schedules the
     // initial refresh for the active repo.
