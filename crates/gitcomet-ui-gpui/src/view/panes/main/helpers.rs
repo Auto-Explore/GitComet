@@ -3204,6 +3204,11 @@ pub(crate) struct MainPaneView {
     /// Source sides currently being read and parsed for an interactive click.
     /// Prevents repeated clicks from launching duplicate full-document work.
     pub(in crate::view) file_diff_click_syntax_inflight: FxHashSet<DiffTextRegion>,
+    /// Test-only mutation point after a click worker has parsed but before its
+    /// result is returned to the UI thread.
+    #[cfg(test)]
+    pub(in crate::view) file_diff_click_syntax_after_prepare_hook:
+        Option<Arc<dyn Fn() + Send + Sync>>,
     /// Where each side's content lives when it is a file rather than text in
     /// memory. A source-backed side keeps its text off the heap so a huge diff
     /// can render from per-line slices; the click path reads it back from here

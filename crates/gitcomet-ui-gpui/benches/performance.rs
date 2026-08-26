@@ -112,6 +112,9 @@ exact_filtered_target!(bench_file_diff_syntax_prepare_selected => bench_file_dif
 exact_filtered_target!(
     bench_file_diff_syntax_query_stress_selected => bench_file_diff_syntax_query_stress
 );
+exact_filtered_target!(
+    bench_file_diff_syntax_pair_lookup_selected => bench_file_diff_syntax_pair_lookup
+);
 exact_filtered_target!(bench_file_diff_syntax_reparse_selected => bench_file_diff_syntax_reparse);
 exact_filtered_target!(
     bench_file_diff_inline_syntax_projection_selected => bench_file_diff_inline_syntax_projection
@@ -270,6 +273,7 @@ criterion_group! {
         bench_text_model_fragmented_edits_selected,
         bench_file_diff_syntax_prepare_selected,
         bench_file_diff_syntax_query_stress_selected,
+        bench_file_diff_syntax_pair_lookup_selected,
         bench_file_diff_syntax_reparse_selected,
         bench_file_diff_inline_syntax_projection_selected,
         bench_file_diff_syntax_cache_drop_selected,

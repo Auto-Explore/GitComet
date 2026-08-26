@@ -1201,28 +1201,138 @@ mod tests {
         );
     }
 
-    /// The two halves of that shortcut, stated directly: which grammars name a
-    /// delimiter, and which leave every one of them anonymous.
+    /// A generated flat array must answer from its structural boundary pair,
+    /// both when the caret is directly on the opener and when it is among the
+    /// many values. The fixture exceeds the bounded fallback scan, so either
+    /// answer proves the first/last-child path handled it.
     #[test]
-    fn named_delimiter_grammars_are_recognised() {
-        let named = |language: DiffSyntaxLanguage| -> bool {
-            let (ts_language, _) = tree_sitter_grammar(language).expect("language should be wired");
-            super::pairs::language_has_named_delimiters_for_tests(&ts_language)
-        };
+    fn wide_flat_json_array_pairs_without_fallback_scanning() {
+        let elements = 5_000usize;
+        let text = format!(
+            "[{}]",
+            std::iter::repeat_n("0", elements)
+                .collect::<Vec<_>>()
+                .join(",")
+        );
+        let document = prepare_test_document(DiffSyntaxLanguage::Json, &text);
+        let expected = [(0, 0..1), (0, text.len() - 1..text.len())];
 
-        // `start_tag`/`end_tag`, `STag`/`ETag`, `jsx_opening_element`.
-        assert!(named(DiffSyntaxLanguage::Html));
-        assert!(named(DiffSyntaxLanguage::Xml));
-        assert!(named(DiffSyntaxLanguage::Tsx));
-        // `string_start`/`string_end`.
-        assert!(named(DiffSyntaxLanguage::Python));
-        // `block_start`, `object_start`, `tuple_start`, `quoted_template_start`.
-        assert!(named(DiffSyntaxLanguage::Hcl));
+        for column in [0, text.len() / 2] {
+            let hit = prepared_document_syntax_pair_at_display_offset(document, 0, column)
+                .expect("the wide array's boundary brackets should pair");
+            assert_eq!(
+                hit.open
+                    .iter()
+                    .chain(hit.close.iter())
+                    .map(|span| (span.line_ix, span.display_range.clone()))
+                    .collect::<Vec<_>>(),
+                expected,
+                "caret column {column}"
+            );
+        }
+    }
 
-        // Every delimiter is an anonymous token, so the shortcut applies.
-        assert!(!named(DiffSyntaxLanguage::Rust));
-        assert!(!named(DiffSyntaxLanguage::Json));
-        assert!(!named(DiffSyntaxLanguage::C));
+    /// Named delimiters elsewhere in a grammar must not force a wide root to
+    /// scan ordinary named children. Python is the regression case because its
+    /// strings use named `string_start`/`string_end` nodes while module children
+    /// are statements.
+    #[test]
+    fn wide_python_module_without_direct_delimiters_returns_none() {
+        let statements = 5_000usize;
+        let text = (0..statements)
+            .map(|ix| format!("value_{ix} = {ix}\n"))
+            .collect::<String>();
+        let document = prepare_test_document(DiffSyntaxLanguage::Python, &text);
+        assert!(
+            prepared_document_syntax_pair_at_display_offset(document, statements - 1, 2).is_none(),
+            "ordinary module statements are not direct named delimiters"
+        );
+    }
+
+    /// A parse error *anywhere* inside a wide element must not stop its tags
+    /// from pairing.
+    ///
+    /// The boundary shortcut skips nodes with a parse error because recovery can
+    /// flatten several adjacent pairs, where first and last need not be
+    /// partners. `has_error` is the wrong question for that: it is true for the
+    /// whole subtree, so a stray `<` in one paragraph of a hundred marks the
+    /// enclosing `<div>` too, even though the div's own first and last children
+    /// are still its `start_tag` and `end_tag`. With the shortcut skipped, the
+    /// all-named bail below then answers `None` for an element whose children --
+    /// `start_tag`, content, `end_tag` -- are all named.
+    #[test]
+    fn wide_html_element_pairs_its_tags_despite_a_parse_error_inside() {
+        let mut text = String::from("<div>\n");
+        for ix in 0..100 {
+            text.push_str(&format!("<p>item {ix}</p>\n"));
+            if ix == 50 {
+                text.push_str("MARKER\n");
+            }
+            if ix == 70 {
+                // A bare `<` in prose: ordinary content, and a parse error.
+                text.push_str("< \n");
+            }
+        }
+        text.push_str("</div>\n");
+        let document = prepare_test_document(DiffSyntaxLanguage::Html, &text);
+
+        let marker_line = text[..text.find("MARKER").expect("marker")]
+            .bytes()
+            .filter(|byte| *byte == b'\n')
+            .count();
+        let hit = prepared_document_syntax_pair_at_display_offset(document, marker_line, 3)
+            .expect("a parse error in a sibling must not unpair the enclosing element");
+        assert_eq!(hit.kind, SyntaxPairKind::Tag);
+        assert_eq!(hit.open[0].line_ix, 0, "the `<div>` start tag");
+        assert_eq!(hit.open[0].display_range, 0..5);
+        assert_eq!(
+            hit.close[0].line_ix,
+            text.lines().count() - 1,
+            "the `</div>` end tag"
+        );
+    }
+
+    /// One bad element must not unpair a generated array's brackets.
+    ///
+    /// Clicking the `[`: the boundary shortcut is skipped because the array's
+    /// *subtree* has an error, and the fallback is then refused outright for
+    /// being wider than the sibling cap, so the click answers nothing. The
+    /// array's own first and last children are still `[` and `]`.
+    #[test]
+    fn wide_malformed_json_array_pairs_from_its_opening_bracket() {
+        let text = malformed_wide_json_array(5_000);
+        let document = prepare_test_document(DiffSyntaxLanguage::Json, &text);
+
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 0, 0)
+            .expect("clicking `[` must pair the array's own brackets");
+        assert_eq!(hit.open[0].display_range, 0..1);
+        assert_eq!(hit.close[0].display_range, text.len() - 1..text.len());
+    }
+
+    /// The same array, with the caret among its values rather than on a bracket.
+    ///
+    /// This is the enclosing path rather than the delimiter path, and it fails
+    /// differently: the fallback scan runs but is cut off at the sibling cap, so
+    /// it walks thousands of children and still never reaches the `]`.
+    #[test]
+    fn wide_malformed_json_array_pairs_from_inside() {
+        let text = malformed_wide_json_array(5_000);
+        let document = prepare_test_document(DiffSyntaxLanguage::Json, &text);
+
+        let column = text.len() / 4;
+        let hit = prepared_document_syntax_pair_at_display_offset(document, 0, column)
+            .expect("a caret among the values must pair the enclosing array");
+        assert_eq!(hit.open[0].display_range, 0..1);
+        assert_eq!(hit.close[0].display_range, text.len() - 1..text.len());
+    }
+
+    /// A flat array of `elements` values with a single unparseable one in the
+    /// middle, so the array node carries a subtree error while its own boundary
+    /// children stay `[` and `]`.
+    fn malformed_wide_json_array(elements: usize) -> String {
+        let mut values = vec!["0"; elements];
+        values[elements / 2] = "@@";
+        format!("[{}]", values.join(","))
     }
 
     /// A delimiter its grammar wraps in a named node of its own must pair from

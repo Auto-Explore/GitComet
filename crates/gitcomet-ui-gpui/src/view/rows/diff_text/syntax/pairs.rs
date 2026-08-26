@@ -284,31 +284,69 @@ fn partner_of_delimiter(
     let parent = node.parent()?;
     let role = pair_role(&node)?;
     let kind = node.kind();
-    let mut cursor = parent.walk();
-    let children: Vec<tree_sitter::Node<'_>> = parent.children(&mut cursor).collect();
-    let index = children.iter().position(|child| child.id() == node.id())?;
+
+    // Wide arrays, objects, argument lists, tag elements, and HCL wrappers put
+    // their structural delimiters at the first and last child. A click on one
+    // of those boundaries can answer without walking the intervening siblings.
+    // Recovery nodes are excluded because they can flatten several adjacent
+    // pairs, where first and last need not be partners. That is `is_error`, not
+    // `has_error`: the latter is true for the whole subtree, so one stray `<`
+    // among a hundred paragraphs would disqualify the enclosing element, whose
+    // own first and last children are still its tags.
+    let child_count = parent.child_count();
+    if child_count >= PAIR_SCAN_BOUNDARY_CHECK_MIN_CHILDREN
+        && !parent.is_error()
+        && let Some(pair) = outer_pair_among_children(&parent, source_ranges_equal)
+        && (pair.open == node.byte_range() || pair.close == node.byte_range())
+    {
+        return Some(pair);
+    }
+
+    // This is a synchronous caret path. Bound recovery for irregular wide
+    // nodes rather than letting a malformed generated file monopolise the UI.
+    if child_count > PAIR_SCAN_MAX_CHILDREN {
+        return None;
+    }
 
     match role {
         PairRole::Ambiguous(pair) => {
             // Open and close are the same token, so position decides: among the
             // parent's children of this kind, they pair up two by two.
-            let same: Vec<&tree_sitter::Node<'_>> = children
-                .iter()
-                .filter(|child| !child.is_named() && child.kind() == kind)
-                .collect();
-            let position = same.iter().position(|child| child.id() == node.id())?;
-            let (open, close) = if position % 2 == 0 {
-                (same.get(position)?, same.get(position + 1)?)
-            } else {
-                (same.get(position - 1)?, same.get(position)?)
-            };
-            let (open, close) = (open.byte_range(), close.byte_range());
-            delimits_whole_node(&parent, &open, &close).then(|| SyntaxPair::new(open, close, pair))
+            // Keep only the preceding match and, for an opener, stop on the
+            // following one. Memory stays constant instead of collecting two
+            // full sibling vectors.
+            let mut cursor = parent.walk();
+            let mut children = parent.children(&mut cursor);
+            let mut previous_same = None;
+            let mut same_before = 0usize;
+            while let Some(child) = children.next() {
+                if child.is_named() || child.kind() != kind {
+                    continue;
+                }
+                if child.id() != node.id() {
+                    previous_same = Some(child);
+                    same_before += 1;
+                    continue;
+                }
+                let (open, close) = if same_before.is_multiple_of(2) {
+                    let close = children
+                        .find(|candidate| !candidate.is_named() && candidate.kind() == kind)?;
+                    (child, close)
+                } else {
+                    (previous_same?, child)
+                };
+                let (open, close) = (open.byte_range(), close.byte_range());
+                return delimits_whole_node(&parent, &open, &close)
+                    .then(|| SyntaxPair::new(open, close, pair));
+            }
+            None
         }
         PairRole::Open(pair) => {
             let close = counterpart_of_open(kind, pair)?;
+            let mut cursor = direct_child_cursor(&parent, &node)?;
             let mut depth = 1usize;
-            for child in &children[index + 1..] {
+            while cursor.goto_next_sibling() {
+                let child = cursor.node();
                 // Any sibling opener this `close` can end, not only one spelled
                 // the same way -- the same many-to-one relation the `Close` arm
                 // reads with [`closes_open`]. Counting `kind` alone let a `$(`
@@ -319,22 +357,29 @@ fn partner_of_delimiter(
                 } else if child.kind() == close {
                     depth -= 1;
                     if depth == 0 {
-                        return syntax_pair_for_nodes(node, *child, pair, source_ranges_equal);
+                        return syntax_pair_for_nodes(node, child, pair, source_ranges_equal);
                     }
                 }
             }
             None
         }
         PairRole::Close(pair) => {
-            let mut depth = 1usize;
-            for child in children[..index].iter().rev() {
-                if child.kind() == kind {
-                    depth += 1;
-                } else if closes_open(child.kind(), kind, pair) {
-                    depth -= 1;
-                    if depth == 0 {
-                        return syntax_pair_for_nodes(*child, node, pair, source_ranges_equal);
-                    }
+            // Streaming the siblings forward keeps only the openers still
+            // outstanding, where collecting them first held a `Node` for every
+            // child of the parent. The direction is not the saving -- a close
+            // delimiter late among wide siblings is stepped over either way --
+            // the dropped allocation is.
+            let mut open_stack = Vec::new();
+            let mut cursor = parent.walk();
+            for child in parent.children(&mut cursor) {
+                if child.id() == node.id() {
+                    let open = open_stack.pop()?;
+                    return syntax_pair_for_nodes(open, node, pair, source_ranges_equal);
+                }
+                if closes_open(child.kind(), kind, pair) {
+                    open_stack.push(child);
+                } else if child.kind() == kind {
+                    let _ = open_stack.pop();
                 }
             }
             None
@@ -342,38 +387,62 @@ fn partner_of_delimiter(
     }
 }
 
-/// Above this many direct children, it is worth asking the grammar whether a
-/// delimiter could be among them before walking them all.
-///
-/// Below it the walk is cheaper than the question. The number only has to be
-/// large enough that ordinary constructs -- an argument list, a small object
-/// literal -- skip the check, and small enough to catch the wide nodes: a source
-/// file's top-level item list, a generated array, a long block.
-const PAIR_SCAN_GRAMMAR_CHECK_MIN_CHILDREN: usize = 64;
-
-/// Whether `language` spells any pair delimiter as a *named* node.
-///
-/// Most grammars do not: `(`, `)`, `{`, `"` and the rest are anonymous tokens.
-/// The exceptions are the tag grammars and the few that wrap their punctuation
-/// -- HCL's `block_start`, Python's `string_start`. Derived from the tables
-/// themselves so a new row cannot drift out of sync; looking an anonymous
-/// spelling up as a named kind simply finds nothing.
-fn language_has_named_delimiters(language: &tree_sitter::Language) -> bool {
-    [
-        SyntaxPairKind::Bracket,
-        SyntaxPairKind::Tag,
-        SyntaxPairKind::Quote,
-    ]
-    .into_iter()
-    .flat_map(table_for)
-    .flat_map(|(open, close)| [*open, *close])
-    .any(|kind| language.id_for_node_kind(kind, true) != 0)
+/// A cursor positioned on `node` as one of `parent`'s direct children.
+fn direct_child_cursor<'tree>(
+    parent: &tree_sitter::Node<'tree>,
+    node: &tree_sitter::Node<'tree>,
+) -> Option<tree_sitter::TreeCursor<'tree>> {
+    let mut cursor = parent.walk();
+    cursor.goto_first_child_for_byte(node.start_byte())?;
+    loop {
+        let current = cursor.node();
+        if current.id() == node.id() {
+            return Some(cursor);
+        }
+        if current.start_byte() > node.start_byte() || !cursor.goto_next_sibling() {
+            return None;
+        }
+    }
 }
 
-#[cfg(test)]
-pub(super) fn language_has_named_delimiters_for_tests(language: &tree_sitter::Language) -> bool {
-    language_has_named_delimiters(language)
+/// A pair formed by the first and last direct children and spanning all of
+/// `node`. Valid wide constructs expose their structural delimiters this way,
+/// even when their middle contains hundreds of thousands of children.
+fn outer_pair_among_children(
+    node: &tree_sitter::Node<'_>,
+    source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
+) -> Option<SyntaxPair> {
+    let child_count = node.child_count();
+    let first = node.child(0)?;
+    let last = node.child(u32::try_from(child_count.checked_sub(1)?).ok()?)?;
+    if !delimits_whole_node(node, &first.byte_range(), &last.byte_range()) {
+        return None;
+    }
+
+    match (pair_role(&first)?, pair_role(&last)?) {
+        (PairRole::Open(open_pair), PairRole::Close(close_pair))
+            if open_pair == close_pair && closes_open(first.kind(), last.kind(), open_pair) =>
+        {
+            syntax_pair_for_nodes(first, last, open_pair, source_ranges_equal)
+        }
+        (PairRole::Ambiguous(open_pair), PairRole::Ambiguous(close_pair))
+            if open_pair == close_pair && first.kind() == last.kind() =>
+        {
+            Some(SyntaxPair::new(
+                first.byte_range(),
+                last.byte_range(),
+                open_pair,
+            ))
+        }
+        _ => None,
+    }
 }
+
+/// Start checking structural boundary children at this width.
+const PAIR_SCAN_BOUNDARY_CHECK_MIN_CHILDREN: usize = 64;
+
+/// Maximum fallback sibling work on the synchronous caret path.
+const PAIR_SCAN_MAX_CHILDREN: usize = 4_096;
 
 /// The tightest delimiter pair among `node`'s direct children that contains
 /// `offset` strictly between them.
@@ -382,21 +451,30 @@ fn enclosing_pair_among_children(
     offset: usize,
     source_ranges_equal: &dyn Fn(Range<usize>, Range<usize>) -> bool,
 ) -> Option<SyntaxPair> {
-    // A node whose children are all named can only hold a delimiter if this
-    // grammar has a named one, and both counts are O(1) where the walk is not.
+    // Valid wide constructs put their structural pair at their first and last
+    // child. Check those two nodes directly so a generated JSON array does not
+    // retain its `[` on the stack while walking every value to reach `]`.
     //
-    // This is what keeps the caret-move path off the wide nodes. The outward
-    // walk reaches a source file's top-level item list for any caret that is not
-    // inside a bracketed construct -- a blank line, a doc comment, a declaration
-    // name -- and every item there is a named node, so the old code stepped
-    // tree-sitter's cursor over tens of thousands of children to conclude what
-    // these two counts conclude immediately.
+    // If all children are named and the boundary is not a pair, this *node's*
+    // direct children cannot contain one of the named delimiter shapes we
+    // support: tags, string markers, and HCL wrappers all delimit their parent.
+    // This node-local fact avoids the grammar-wide false positive where Python
+    // has `string_start` somewhere in its grammar but a module's 100,000 direct
+    // statement children are ordinary named nodes.
     let child_count = node.child_count();
-    if child_count >= PAIR_SCAN_GRAMMAR_CHECK_MIN_CHILDREN
-        && child_count == node.named_child_count()
-        && !language_has_named_delimiters(&node.language())
-    {
-        return None;
+    if child_count >= PAIR_SCAN_BOUNDARY_CHECK_MIN_CHILDREN {
+        // `is_error` for the reason given in `partner_of_delimiter`: a parse
+        // error anywhere below must not disqualify this node's own boundary.
+        if !node.is_error()
+            && let Some(pair) = outer_pair_among_children(node, source_ranges_equal)
+            && pair.open.end <= offset
+            && pair.close.start >= offset
+        {
+            return Some(pair);
+        }
+        if child_count == node.named_child_count() {
+            return None;
+        }
     }
 
     let mut best: Option<SyntaxPair> = None;
@@ -425,7 +503,7 @@ fn enclosing_pair_among_children(
     let mut quote_settled = [false; QUOTE_CHARS.len()];
 
     let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
+    for child in node.children(&mut cursor).take(PAIR_SCAN_MAX_CHILDREN) {
         // Nothing past `offset` can start an accepted pair: `consider` requires
         // `open.end <= offset`, so an opener found here could only ever be
         // rejected. It is still worth reading while some *earlier* opener is

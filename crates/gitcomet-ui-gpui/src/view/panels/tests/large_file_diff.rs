@@ -3277,6 +3277,146 @@ fn superseded_click_syntax_worker_releases_its_side(cx: &mut gpui::TestAppContex
     let _ = std::fs::remove_dir_all(&workdir);
 }
 
+/// Source freshness must be checked after parsing, not only around the worker's
+/// file read. This hook changes the file in the otherwise-unobservable window
+/// after the tree is ready and before the UI callback tries to cache it.
+#[gpui::test]
+fn click_syntax_worker_rejects_a_source_changed_after_parse(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = gitcomet_state::model::RepoId(887);
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_click_worker_completion_freshness",
+        std::process::id()
+    ));
+    let source_dir = workdir.join(".source-backed");
+    std::fs::create_dir_all(&source_dir).expect("create completion-freshness fixture");
+    let path = std::path::PathBuf::from("src/completion_freshness.rs");
+    let old_source_path = source_dir.join("old.rs");
+    let new_source_path = source_dir.join("new.rs");
+
+    // Exceed the foreground allowance so request_file_diff_click_syntax_document
+    // owns the parse. The completion hook then makes a same-length edit, which
+    // preserves all line starts and isolates source identity as the guard.
+    let filler: String = (0..48_000)
+        .map(|ix| format!("fn filler{ix}() {{ let v = {ix}; }}\n"))
+        .collect();
+    let old_text = format!("fn f() {{ g([zzz]); }}\n{filler}");
+    let indexed_text = format!("fn f() {{ g([aaa]); }}\n{filler}");
+    let changed_text = format!("fn f() {{ g((aaa)); }}\n{filler}");
+    assert!(indexed_text.len() > 1024 * 1024);
+    assert_eq!(indexed_text.len(), changed_text.len());
+    std::fs::write(&old_source_path, &old_text).expect("write old completion source");
+    std::fs::write(&new_source_path, &indexed_text).expect("write indexed completion source");
+    let unified = "@@ -1 +1 @@\n-fn f() { g([zzz]); }\n+fn f() { g([aaa]); }\n";
+
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = opening_repo_state(repo_id, &workdir);
+            set_test_file_status(
+                &mut repo,
+                path.clone(),
+                gitcomet_core::domain::FileStatusKind::Modified,
+                gitcomet_core::domain::DiffArea::Unstaged,
+            );
+            let target = repo
+                .diff_state
+                .diff_target
+                .clone()
+                .expect("test file status should select a diff target");
+            repo.diff_state.diff_rev = 1;
+            repo.diff_state.diff = gitcomet_state::model::Loadable::Ready(Arc::new(
+                gitcomet_core::domain::Diff::from_unified(target, unified),
+            ));
+            repo.diff_state.diff_file_rev = 1;
+            repo.diff_state.diff_file = gitcomet_state::model::Loadable::Ready(Some(Arc::new(
+                gitcomet_core::domain::FileDiffText::new_sources(
+                    path.clone(),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        old_source_path.clone(),
+                    )),
+                    Some(gitcomet_core::domain::FileDiffTextSource::new(
+                        new_source_path.clone(),
+                    )),
+                ),
+            )));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    wait_for_main_pane_condition(
+        cx,
+        &view,
+        "source-backed completion-freshness diff",
+        |pane| {
+            pane.file_diff_cache_rev == 1
+                && pane.file_diff_cache_inflight.is_none()
+                && pane.file_diff_new_source_path.as_deref() == Some(&new_source_path)
+        },
+        |pane| {
+            format!(
+                "rev={} inflight={:?}",
+                pane.file_diff_cache_rev, pane.file_diff_cache_inflight
+            )
+        },
+    );
+
+    let hook_ran = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.prepared_syntax_documents.clear();
+                pane.file_diff_pair_syntax_text.clear();
+                let hook_path = new_source_path.clone();
+                let hook_text = changed_text.clone();
+                let hook_ran = Arc::clone(&hook_ran);
+                pane.file_diff_click_syntax_after_prepare_hook = Some(Arc::new(move || {
+                    std::fs::write(&hook_path, &hook_text)
+                        .expect("change source after worker parse");
+                    hook_ran.store(true, std::sync::atomic::Ordering::SeqCst);
+                }));
+                pane.request_file_diff_click_syntax_document(DiffTextRegion::SplitRight, cx);
+                assert!(
+                    pane.file_diff_click_syntax_inflight
+                        .contains(&DiffTextRegion::SplitRight),
+                    "the cold source-backed side should start a click worker"
+                );
+            });
+        });
+    });
+    cx.run_until_parked();
+
+    cx.update(|_window, app| {
+        let pane = view.read(app).main_pane.read(app);
+        assert!(
+            hook_ran.load(std::sync::atomic::Ordering::SeqCst),
+            "the regression must mutate after a successful parse"
+        );
+        assert!(
+            pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                .is_none(),
+            "a tree parsed from the pre-edit source must not enter the cache"
+        );
+        assert!(
+            !pane
+                .file_diff_pair_syntax_text
+                .contains_key(&DiffTextRegion::SplitRight),
+            "the stale source allocation must not be retained"
+        );
+        assert!(
+            !pane
+                .file_diff_click_syntax_inflight
+                .contains(&DiffTextRegion::SplitRight),
+            "the completed worker must release its side"
+        );
+    });
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 /// A click must never be answered from a file the rows are no longer showing.
 ///
 /// A source-backed side is re-read at click time and the read is retained for
@@ -3412,6 +3552,24 @@ fn same_shape_worktree_edit_is_not_answered_from_the_indexed_body(cx: &mut gpui:
         Some(vec![11..12, 15..16]),
         "against the file as indexed, the click pairs the brackets it landed on"
     );
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, _cx| {
+                let document = pane
+                    .file_diff_pair_syntax_document(DiffTextRegion::SplitRight)
+                    .expect("the indexed source should have a prepared document");
+                pane.cache_file_diff_pair_syntax_document_for_tests(
+                    DiffTextRegion::SplitRight,
+                    document,
+                );
+                assert!(
+                    pane.file_diff_split_prepared_syntax_document(DiffTextRegion::SplitRight)
+                        .is_some(),
+                    "the regression must exercise a prepared-document cache hit"
+                );
+            });
+        });
+    });
 
     // The worktree file changes under the open diff, keeping every line length.
     std::fs::write(&new_source_path, edited_once).expect("first same-shape edit");

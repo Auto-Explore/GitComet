@@ -6,7 +6,7 @@ use super::diff_text::{
     benchmark_diff_syntax_prepared_loaded_chunk_count,
     benchmark_flush_diff_syntax_deferred_drop_queue,
     benchmark_reset_diff_syntax_prepared_cache_metrics,
-    prepare_diff_syntax_document_in_background_text,
+    prepare_diff_syntax_document_in_background_text, prepared_diff_syntax_pair_at_display_offset,
 };
 use super::*;
 use crate::view::markdown_preview::{
@@ -18,6 +18,107 @@ use crate::view::panes::main::diff_cache::render_svg_image_diff_preview;
 pub struct FileDiffSyntaxPrepareSource {
     text: SharedString,
     line_starts: Arc<[usize]>,
+}
+
+/// A prepared tree and a caret position for measuring the synchronous
+/// matching-delimiter path independently from parse and row rendering.
+pub struct SyntaxPairLookupFixture {
+    // Prepared-document identity includes this allocation, so keep the source
+    // alive for the fixture's lifetime even though each lookup only needs the
+    // opaque document handle.
+    _text: SharedString,
+    document: super::diff_text::PreparedDiffSyntaxDocument,
+    line_ix: usize,
+    display_offset: usize,
+    /// Whether this caret is expected to pair. A document evicted from the
+    /// prepared cache answers `None` immediately, which would otherwise be
+    /// reported as a very fast lookup instead of as a broken fixture.
+    expect_pair: bool,
+}
+
+impl SyntaxPairLookupFixture {
+    pub fn wide_json_array(elements: usize, on_open_delimiter: bool) -> Self {
+        let elements = elements.max(1);
+        let mut text = String::with_capacity(elements.saturating_mul(2).saturating_add(2));
+        text.push('[');
+        for ix in 0..elements {
+            if ix != 0 {
+                text.push(',');
+            }
+            text.push('0');
+        }
+        text.push(']');
+        let display_offset = if on_open_delimiter { 0 } else { text.len() / 2 };
+        Self::new(DiffSyntaxLanguage::Json, text, 0, display_offset, true)
+    }
+
+    pub fn wide_python_module(statements: usize) -> Self {
+        let statements = statements.max(1);
+        let mut text = String::with_capacity(statements.saturating_mul(24));
+        let mut last_line_start = 0usize;
+        for ix in 0..statements {
+            last_line_start = text.len();
+            use std::fmt::Write as _;
+            let _ = writeln!(text, "value_{ix} = {ix}");
+        }
+        let line_ix = statements - 1;
+        let display_offset = text[last_line_start..]
+            .find('=')
+            .unwrap_or_default()
+            .saturating_sub(1);
+        Self::new(DiffSyntaxLanguage::Python, text, line_ix, display_offset, false)
+    }
+
+    fn new(
+        language: DiffSyntaxLanguage,
+        text: String,
+        line_ix: usize,
+        display_offset: usize,
+        expect_pair: bool,
+    ) -> Self {
+        let text: SharedString = text.into();
+        let line_starts: Arc<[usize]> = Arc::from(line_starts_for_text(text.as_ref()));
+        let document = prepare_bench_diff_syntax_document_from_shared(
+            language,
+            DiffSyntaxBudget::default(),
+            text.clone(),
+            line_starts,
+            None,
+        )
+        .expect("syntax-pair benchmark fixture should prepare");
+        Self {
+            _text: text,
+            document,
+            line_ix,
+            display_offset,
+            expect_pair,
+        }
+    }
+
+    pub fn run_lookup(&self) -> u64 {
+        let mut h = FxHasher::default();
+        let pair = prepared_diff_syntax_pair_at_display_offset(
+            self.document,
+            self.line_ix,
+            self.display_offset,
+        );
+        assert_eq!(
+            pair.is_some(),
+            self.expect_pair,
+            "syntax-pair fixture measured the wrong path: line {} offset {}",
+            self.line_ix,
+            self.display_offset
+        );
+        pair.is_some().hash(&mut h);
+        if let Some(pair) = pair {
+            for span in pair.open.iter().chain(pair.close.iter()) {
+                span.line_ix.hash(&mut h);
+                span.display_range.start.hash(&mut h);
+                span.display_range.end.hash(&mut h);
+            }
+        }
+        h.finish()
+    }
 }
 
 impl FileDiffSyntaxPrepareSource {

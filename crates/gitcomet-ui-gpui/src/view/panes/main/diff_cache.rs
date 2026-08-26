@@ -1577,10 +1577,34 @@ impl MainPaneView {
         file_diff_source_identity(Some(source_path)).as_deref() == Some(indexed.as_ref())
     }
 
+    /// The split side a region reads its source from. Inline shares the new
+    /// side's file, so only the left side is its own source.
+    fn split_side_for_region(region: DiffTextRegion) -> DiffTextRegion {
+        match region {
+            DiffTextRegion::SplitLeft => DiffTextRegion::SplitLeft,
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => DiffTextRegion::SplitRight,
+        }
+    }
+
     pub(in crate::view) fn file_diff_pair_syntax_document(
         &mut self,
         region: DiffTextRegion,
     ) -> Option<rows::PreparedDiffSyntaxDocument> {
+        let side = Self::split_side_for_region(region);
+        // A prepared cache hit is still source-dependent. The file can move in
+        // the 250 ms before the diff revision advances, while rows already read
+        // its current bytes, so freshness must precede every return path.
+        //
+        // A source-backed side is re-read further down, and a retained body is a
+        // read from an earlier click. Both describe the file as it was, and the
+        // rows beside them are slices of the file as it is -- so neither may be
+        // used once the file has moved on. The retained body is why this has to
+        // come first: it never re-reads, and would otherwise answer from bytes
+        // that are two edits old.
+        if !self.file_diff_source_is_current(side) {
+            self.file_diff_pair_syntax_text.remove(&side);
+            return None;
+        }
         if let Some(document) = self.file_diff_split_prepared_syntax_document(region) {
             return Some(document);
         }
@@ -1603,20 +1627,6 @@ impl MainPaneView {
         // for a worktree file, whose new side *is* the file, and it leaves
         // nothing to parse a document from. Small sources are read back here;
         // larger syntax-sized sources are deliberately left for the worker.
-        let side = match region {
-            DiffTextRegion::SplitLeft => DiffTextRegion::SplitLeft,
-            DiffTextRegion::SplitRight | DiffTextRegion::Inline => DiffTextRegion::SplitRight,
-        };
-        // A source-backed side is re-read below, and a retained body is a read
-        // from an earlier click. Both describe the file as it was, and the rows
-        // beside them are slices of the file as it is -- so neither may be used
-        // once the file has moved on. Checked before the retained body is even
-        // consulted, since that one never re-reads and would otherwise answer
-        // from bytes that are two edits old.
-        if !self.file_diff_source_is_current(side) {
-            self.file_diff_pair_syntax_text.remove(&side);
-            return None;
-        }
         let text = if text.is_empty() {
             match self.file_diff_pair_syntax_text.get(&side) {
                 // Kept from an earlier click: the same allocation, so the parse
@@ -1708,24 +1718,23 @@ impl MainPaneView {
         region: DiffTextRegion,
         cx: &mut gpui::Context<Self>,
     ) {
-        let side = match region {
-            DiffTextRegion::SplitLeft => DiffTextRegion::SplitLeft,
-            DiffTextRegion::SplitRight | DiffTextRegion::Inline => DiffTextRegion::SplitRight,
-        };
+        let side = Self::split_side_for_region(region);
+        // As in the synchronous path, a cache hit is not proof that a
+        // source-backed file still matches the indexed generation: a file that
+        // has moved on since this generation indexed it describes different
+        // columns than the rows do, so there is nothing worth parsing until the
+        // rebuild lands.
+        if !self.file_diff_source_is_current(side) {
+            self.file_diff_pair_syntax_text.remove(&side);
+            self.clear_pending_diff_text_syntax_click_for(side);
+            return;
+        }
         if self
             .file_diff_split_prepared_syntax_document(side)
             .is_some()
         {
             self.retry_pending_diff_text_syntax_click();
             cx.notify();
-            return;
-        }
-        // Same rule as the synchronous path: a file that has moved on since this
-        // generation indexed it describes different columns than the rows do, so
-        // there is nothing worth parsing until the rebuild lands.
-        if !self.file_diff_source_is_current(side) {
-            self.file_diff_pair_syntax_text.remove(&side);
-            self.clear_pending_diff_text_syntax_click_for(side);
             return;
         }
         if !self.file_diff_click_syntax_inflight.insert(side) {
@@ -1793,6 +1802,8 @@ impl MainPaneView {
                 self.file_diff_new_source_identity.clone()
             }
         };
+        #[cfg(test)]
+        let after_prepare_hook = self.file_diff_click_syntax_after_prepare_hook.clone();
 
         cx.spawn(
             async move |view: WeakEntity<MainPaneView>, cx: &mut gpui::AsyncApp| {
@@ -1837,6 +1848,12 @@ impl MainPaneView {
                 } else {
                     prepare_document()
                 };
+                #[cfg(test)]
+                if prepared.is_some()
+                    && let Some(hook) = after_prepare_hook
+                {
+                    hook();
+                }
 
                 let _ = view.update(cx, |this, cx| {
                     // Before the guard below, so the marker's lifetime is this
@@ -1852,6 +1869,14 @@ impl MainPaneView {
                         || this.file_diff_cache_rev != diff_file_rev
                         || this.file_diff_cache_target != diff_target
                     {
+                        return;
+                    }
+                    // The worker's pre-spawn and post-read checks do not cover
+                    // an edit during parsing. Re-stat at completion before the
+                    // parsed tree or its retained source can enter the cache.
+                    if !this.file_diff_source_is_current(side) {
+                        this.file_diff_pair_syntax_text.remove(&side);
+                        this.clear_pending_diff_text_syntax_click_for(side);
                         return;
                     }
                     let Some((text, document)) = prepared else {
@@ -1923,6 +1948,24 @@ impl MainPaneView {
             }
         };
         self.file_diff_prepared_syntax_document(view_mode)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn cache_file_diff_pair_syntax_document_for_tests(
+        &mut self,
+        region: DiffTextRegion,
+        document: rows::PreparedDiffSyntaxDocument,
+    ) {
+        let view_mode = match region {
+            DiffTextRegion::SplitLeft => PreparedSyntaxViewMode::FileDiffSplitLeft,
+            DiffTextRegion::SplitRight | DiffTextRegion::Inline => {
+                PreparedSyntaxViewMode::FileDiffSplitRight
+            }
+        };
+        let key = self
+            .file_diff_prepared_syntax_key(view_mode)
+            .expect("test file diff should have a prepared syntax key");
+        self.insert_prepared_syntax_document(key, document);
     }
 
     pub(in crate::view) fn worktree_preview_prepared_syntax_key(
