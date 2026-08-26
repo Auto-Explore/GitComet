@@ -90,6 +90,7 @@ pub(crate) fn msg_requires_available_git(msg: &Msg) -> bool {
     matches!(
         msg,
         Msg::OpenRepo(_)
+            | Msg::OpenRepoFromExternalDrop(_)
             | Msg::RestoreSession { .. }
             | Msg::ReloadRepo { .. }
             | Msg::RepoActivated { .. }
@@ -835,6 +836,9 @@ fn reduce_inner(
 
     match msg {
         Msg::OpenRepo(path) => repo_management::open_repo(id_alloc, state, path),
+        Msg::OpenRepoFromExternalDrop(path) => {
+            repo_management::open_repo_from_external_drop(id_alloc, state, path)
+        }
         Msg::RestoreSession {
             open_repos,
             active_repo,
