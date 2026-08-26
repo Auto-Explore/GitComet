@@ -2,8 +2,9 @@ use super::*;
 use crate::model::{
     AppNotificationKind, CommitMultiSelection, ForeignDiffOrigin, GitLogSettings,
     GitLogTagFetchMode, InlineSubmoduleDiffState, MainViewSnapshot, RangeSelection,
-    RepoLoadsInFlight, SidebarDataRequest, SidebarMode,
+    RepoLoadsInFlight, SidebarDataRequest, SidebarMode, ViewNavDir,
 };
+use gitcomet_core::domain::{CommitFileChange, FileStatusKind};
 use rustc_hash::{FxHashMap, FxHashSet};
 
 fn mark_repo_switch_secondary_metadata_ready(repo: &mut RepoState) {
@@ -3593,6 +3594,109 @@ fn set_active_repo_refreshes_repo_state_and_selected_diff() {
 }
 
 #[test]
+fn set_active_repo_plans_retained_commit_submodule_diff_before_clearing_details() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let repo1 = RepoId(1);
+    let repo2 = RepoId(2);
+    for repo in &mut state.repos {
+        mark_repo_switch_secondary_metadata_ready(repo);
+    }
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    let commit_id = CommitId("submodule-commit".into());
+    let path = PathBuf::from("vendor/dependency");
+    let target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some(path.clone()),
+    };
+    let repo1_state = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    repo1_state.set_selected_commit(Some(commit_id.clone()));
+    repo1_state.set_commit_details(Loadable::Ready(Arc::new(CommitDetails {
+        id: commit_id,
+        message: "update dependency".to_string(),
+        author_name: String::new(),
+        author_email: String::new(),
+        authored_at_unix: 0,
+        committed_at: String::new(),
+        committed_at_unix: 0,
+        parent_ids: Vec::new(),
+        files: vec![CommitFileChange {
+            path,
+            kind: FileStatusKind::Modified,
+            is_submodule: true,
+            additions: None,
+            deletions: None,
+        }],
+    })));
+    repo1_state.set_diff_target(Some(target));
+    repo1_state.diff_state.submodule_summary = Loadable::Loading;
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo2 },
+    );
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(matches!(
+        repo1_state.diff_state.submodule_summary,
+        Loadable::NotLoaded
+    ));
+    assert!(matches!(
+        repo1_state.history_state.commit_details,
+        Loadable::Ready(_)
+    ));
+
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SetActiveRepo { repo_id: repo1 },
+    );
+
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::LoadSelectedDiff {
+            repo_id,
+            load_patch_diff: false,
+            load_file_text: false,
+            preview_text_side: None,
+            load_submodule_summary: true,
+            load_file_image: false,
+        } if *repo_id == repo1
+    )));
+    let repo1_state = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo1)
+        .expect("repo1 exists");
+    assert!(repo1_state.history_state.selected_commit.is_none());
+    assert!(matches!(
+        repo1_state.history_state.commit_details,
+        Loadable::NotLoaded
+    ));
+}
+
+#[test]
 fn set_active_repo_resets_the_activated_tabs_history_selection_only_on_change() {
     let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
     let id_alloc = AtomicU64::new(1);
@@ -3818,6 +3922,99 @@ fn set_active_repo_inline_folds_the_reset_selection_into_navigation_tail() {
     assert_ne!(
         target.history_state.selected_commit.as_ref(),
         Some(&stale_commit)
+    );
+}
+
+#[test]
+fn set_active_repo_inline_realigns_a_mid_stack_reset_before_new_navigation() {
+    let mut repos: FxHashMap<RepoId, Arc<dyn GitRepository>> = FxHashMap::default();
+    let id_alloc = AtomicU64::new(1);
+    let mut state = AppState::default();
+
+    let target_repo = open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo1");
+    open_repo_ready(&mut repos, &id_alloc, &mut state, "/tmp/repo2");
+
+    let older_commit = CommitId("older".into());
+    let stale_commit = CommitId("stale".into());
+    let forward_commit = CommitId("forward".into());
+    let new_commit = CommitId("new".into());
+    let snapshot = |selected_commit| MainViewSnapshot {
+        diff_target: None,
+        content_preview: false,
+        edit_mode: false,
+        selected_commit,
+        range_selection: None,
+        worktree_selection: None,
+    };
+    let target = state
+        .repos
+        .iter_mut()
+        .find(|repo| repo.id == target_repo)
+        .expect("target repo exists");
+    target.history_state.selected_commit = Some(stale_commit.clone());
+    target.nav_history.clear();
+    target
+        .nav_history
+        .record(snapshot(Some(older_commit.clone())));
+    target
+        .nav_history
+        .record(snapshot(Some(stale_commit.clone())));
+    target
+        .nav_history
+        .record(snapshot(Some(forward_commit.clone())));
+    assert_eq!(
+        target.nav_history.step(ViewNavDir::Back),
+        Some(snapshot(Some(stale_commit.clone())))
+    );
+
+    let mut effects = crate::store::reducer::SetActiveRepoEffects::new();
+    crate::store::reducer::fill_set_active_repo_inline(&mut state, target_repo, &mut effects);
+
+    let target = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == target_repo)
+        .expect("target repo exists");
+    assert!(target.history_state.selected_commit.is_none());
+    assert_eq!(target.nav_history.cursor, 1);
+    assert_eq!(target.nav_history.entries.get(1), Some(&snapshot(None)));
+    assert_eq!(
+        target.nav_history.entries.get(2),
+        Some(&snapshot(Some(forward_commit))),
+        "activation must preserve forward history while replacing the stale current entry"
+    );
+
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectCommit {
+            repo_id: target_repo,
+            commit_id: new_commit,
+        },
+    );
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack {
+            repo_id: target_repo,
+        },
+    );
+
+    let target = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == target_repo)
+        .expect("target repo exists");
+    assert!(
+        target.history_state.selected_commit.is_none(),
+        "Back after a new destination must return to the reset activation view"
+    );
+    assert_ne!(
+        target.history_state.selected_commit.as_ref(),
+        Some(&stale_commit),
+        "the stale mid-stack selection must not survive as the Back origin"
     );
 }
 
