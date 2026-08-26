@@ -135,6 +135,12 @@ pub struct EditorColors {
     pub search_match_background: Rgba,
     pub search_match_foreground: Rgba,
     pub bracket_match_background: Rgba,
+    /// Wash for every other place the clicked name appears.
+    ///
+    /// Deliberately distinct from `bracket_match_background`: a click can light
+    /// both at once, and from `search_match_background`, which already means
+    /// "this matched your query".
+    pub occurrence_highlight_background: Rgba,
     pub indent_guide: Rgba,
 }
 
@@ -703,6 +709,10 @@ struct ThemeFileEditorColors {
     search_match_background: ThemeColor,
     search_match_foreground: ThemeColor,
     bracket_match_background: ThemeColor,
+    /// Optional: a theme written before this existed still parses, and falls
+    /// back to the bracket wash rather than to nothing.
+    #[serde(default)]
+    occurrence_highlight_background: Option<ThemeColor>,
     indent_guide: ThemeColor,
 }
 
@@ -992,6 +1002,10 @@ impl From<ThemeFile> for AppTheme {
                 search_match_background: editor.search_match_background.into_rgba(),
                 search_match_foreground: editor.search_match_foreground.into_rgba(),
                 bracket_match_background: editor.bracket_match_background.into_rgba(),
+                occurrence_highlight_background: editor
+                    .occurrence_highlight_background
+                    .unwrap_or(editor.bracket_match_background)
+                    .into_rgba(),
                 indent_guide: editor.indent_guide.into_rgba(),
             },
             diff: DiffColors {
@@ -2950,6 +2964,10 @@ mod tests {
                     (
                         "editor.bracket_match",
                         colors.editor.bracket_match_background,
+                    ),
+                    (
+                        "editor.occurrence_highlight",
+                        colors.editor.occurrence_highlight_background,
                     ),
                 ] {
                     assert_min_contrast(

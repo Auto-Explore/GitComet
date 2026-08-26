@@ -88,7 +88,8 @@
           "selection_background": "#f0dac1ff",
           "search_match_background": "#f8ecd0ff",
           "search_match_foreground": "#76500fff",
-          "bracket_match_background": "#f4e4d2ff",
+          "bracket_match_background": "#cbdff7ff",
+          "occurrence_highlight_background": "#eddcefff",
           "indent_guide": "#e2d6c9ff"
         },
         "diff": {

@@ -389,12 +389,12 @@ impl PickerPromptGeometry {
     }
 
     /// Top edge of displayed row `ix`, below any header that introduces it.
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(test)]
     pub fn row_top(&self, ix: usize) -> Pixels {
         self.tops[ix]
     }
 
-    #[cfg(any(test, feature = "benchmarks"))]
+    #[cfg(test)]
     pub fn row_height(&self, ix: usize) -> Pixels {
         self.heights[ix]
     }

@@ -1,0 +1,2707 @@
+[
+  {
+    "type": "and_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "application_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "builtin_function",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "arrow_operator",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "assert_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assert_operator",
+          "named": true
+        },
+        {
+          "type": "expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "block_comment",
+    "named": true,
+    "extra": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "block_comment_close",
+          "named": true
+        },
+        {
+          "type": "block_comment_content",
+          "named": true
+        },
+        {
+          "type": "block_comment_open",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "boolean_literal",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "builtin",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "builtin_function",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "bytes_literal",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "combine_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "combine_types_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "completion",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "primitive_expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "completion_operator",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "de_bruijn_index",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "natural_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "double_literal",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "double_quote_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "double_quote_escaped",
+          "named": true
+        },
+        {
+          "type": "interpolation",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "env_import",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "env_variable",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "env_variable",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "equal_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "equivalence_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "expression",
+    "named": true,
+    "root": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "assert_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "forall_expression",
+          "named": true
+        },
+        {
+          "type": "function_type",
+          "named": true
+        },
+        {
+          "type": "if_then_else_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "lambda_expression",
+          "named": true
+        },
+        {
+          "type": "let_expression",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        },
+        {
+          "type": "type_operator",
+          "named": true
+        },
+        {
+          "type": "with_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "forall_expression",
+    "named": true,
+    "fields": {
+      "expression": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      },
+      "label": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "label",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "arrow_operator",
+          "named": true
+        },
+        {
+          "type": "forall_operator",
+          "named": true
+        },
+        {
+          "type": "type_operator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "forall_operator",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "function_type",
+    "named": true,
+    "fields": {
+      "left": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "and_expression",
+            "named": true
+          },
+          {
+            "type": "application_expression",
+            "named": true
+          },
+          {
+            "type": "combine_expression",
+            "named": true
+          },
+          {
+            "type": "combine_types_expression",
+            "named": true
+          },
+          {
+            "type": "completion",
+            "named": true
+          },
+          {
+            "type": "equal_expression",
+            "named": true
+          },
+          {
+            "type": "equivalence_expression",
+            "named": true
+          },
+          {
+            "type": "import",
+            "named": true
+          },
+          {
+            "type": "import_alt_expression",
+            "named": true
+          },
+          {
+            "type": "list_append_expression",
+            "named": true
+          },
+          {
+            "type": "not_equal_expression",
+            "named": true
+          },
+          {
+            "type": "or_expression",
+            "named": true
+          },
+          {
+            "type": "plus_expression",
+            "named": true
+          },
+          {
+            "type": "prefer_expression",
+            "named": true
+          },
+          {
+            "type": "primitive_expression",
+            "named": true
+          },
+          {
+            "type": "text_append_expression",
+            "named": true
+          },
+          {
+            "type": "times_expression",
+            "named": true
+          }
+        ]
+      },
+      "right": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "arrow_operator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "http_import",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "http_raw",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "identifier",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "builtin",
+          "named": true
+        },
+        {
+          "type": "de_bruijn_index",
+          "named": true
+        },
+        {
+          "type": "label",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "if_then_else_expression",
+    "named": true,
+    "fields": {
+      "alternate": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      },
+      "expression": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      },
+      "predicate": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    }
+  },
+  {
+    "type": "import",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "env_import",
+          "named": true
+        },
+        {
+          "type": "http_import",
+          "named": true
+        },
+        {
+          "type": "import_as_bytes",
+          "named": true
+        },
+        {
+          "type": "import_as_location",
+          "named": true
+        },
+        {
+          "type": "import_as_text",
+          "named": true
+        },
+        {
+          "type": "import_hash",
+          "named": true
+        },
+        {
+          "type": "local_import",
+          "named": true
+        },
+        {
+          "type": "missing_import",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "import_alt_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "interpolation",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "label_set",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "label",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "lambda_expression",
+    "named": true,
+    "fields": {
+      "expression": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      },
+      "label": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "label",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "arrow_operator",
+          "named": true
+        },
+        {
+          "type": "lambda_operator",
+          "named": true
+        },
+        {
+          "type": "type_operator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "lambda_operator",
+    "named": true,
+    "fields": {}
+  },
+  {
+    "type": "let_binding",
+    "named": true,
+    "fields": {
+      "label": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "label",
+            "named": true
+          }
+        ]
+      },
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assign_operator",
+          "named": true
+        },
+        {
+          "type": "expression",
+          "named": true
+        },
+        {
+          "type": "type_operator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "let_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        },
+        {
+          "type": "let_binding",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "line_comment",
+    "named": true,
+    "extra": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "line_comment_content",
+          "named": true
+        },
+        {
+          "type": "line_comment_prefix",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "list_append_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "list_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "not_equal_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "numeric_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "double_literal",
+          "named": true
+        },
+        {
+          "type": "integer_literal",
+          "named": true
+        },
+        {
+          "type": "natural_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "or_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "plus_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "prefer_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "primitive_expression",
+    "named": true,
+    "fields": {
+      "selector": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "selector",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "boolean_literal",
+          "named": true
+        },
+        {
+          "type": "bytes_literal",
+          "named": true
+        },
+        {
+          "type": "expression",
+          "named": true
+        },
+        {
+          "type": "identifier",
+          "named": true
+        },
+        {
+          "type": "list_literal",
+          "named": true
+        },
+        {
+          "type": "numeric_literal",
+          "named": true
+        },
+        {
+          "type": "record_literal",
+          "named": true
+        },
+        {
+          "type": "record_type",
+          "named": true
+        },
+        {
+          "type": "temporal_literal",
+          "named": true
+        },
+        {
+          "type": "text_literal",
+          "named": true
+        },
+        {
+          "type": "union_type",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "empty_record_literal",
+          "named": true
+        },
+        {
+          "type": "record_literal_entry",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_literal_entry",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "assign_operator",
+          "named": true
+        },
+        {
+          "type": "expression",
+          "named": true
+        },
+        {
+          "type": "label",
+          "named": true
+        },
+        {
+          "type": "selector",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "record_type_entry",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "record_type_entry",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": true,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "label",
+          "named": true
+        },
+        {
+          "type": "type_operator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "selector",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "label",
+          "named": true
+        },
+        {
+          "type": "label_set",
+          "named": true
+        },
+        {
+          "type": "question_mark",
+          "named": true
+        },
+        {
+          "type": "selector_dot",
+          "named": true
+        },
+        {
+          "type": "type_selector",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "single_quote_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "interpolation",
+          "named": true
+        },
+        {
+          "type": "single_quote_escaped",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "text_append_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "text_literal",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "double_quote_literal",
+          "named": true
+        },
+        {
+          "type": "single_quote_literal",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "times_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "infix_operator",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "type_selector",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": false,
+      "required": true,
+      "types": [
+        {
+          "type": "expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "union_type",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": false,
+      "types": [
+        {
+          "type": "union_type_entry",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "union_type_entry",
+    "named": true,
+    "fields": {
+      "type": {
+        "multiple": false,
+        "required": false,
+        "types": [
+          {
+            "type": "expression",
+            "named": true
+          }
+        ]
+      }
+    },
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "label",
+          "named": true
+        },
+        {
+          "type": "type_operator",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "with_expression",
+    "named": true,
+    "fields": {},
+    "children": {
+      "multiple": true,
+      "required": true,
+      "types": [
+        {
+          "type": "and_expression",
+          "named": true
+        },
+        {
+          "type": "application_expression",
+          "named": true
+        },
+        {
+          "type": "assign_operator",
+          "named": true
+        },
+        {
+          "type": "combine_expression",
+          "named": true
+        },
+        {
+          "type": "combine_types_expression",
+          "named": true
+        },
+        {
+          "type": "completion",
+          "named": true
+        },
+        {
+          "type": "equal_expression",
+          "named": true
+        },
+        {
+          "type": "equivalence_expression",
+          "named": true
+        },
+        {
+          "type": "import",
+          "named": true
+        },
+        {
+          "type": "import_alt_expression",
+          "named": true
+        },
+        {
+          "type": "label",
+          "named": true
+        },
+        {
+          "type": "list_append_expression",
+          "named": true
+        },
+        {
+          "type": "not_equal_expression",
+          "named": true
+        },
+        {
+          "type": "or_expression",
+          "named": true
+        },
+        {
+          "type": "plus_expression",
+          "named": true
+        },
+        {
+          "type": "prefer_expression",
+          "named": true
+        },
+        {
+          "type": "primitive_expression",
+          "named": true
+        },
+        {
+          "type": "question_mark",
+          "named": true
+        },
+        {
+          "type": "selector",
+          "named": true
+        },
+        {
+          "type": "text_append_expression",
+          "named": true
+        },
+        {
+          "type": "times_expression",
+          "named": true
+        },
+        {
+          "type": "with_expression",
+          "named": true
+        }
+      ]
+    }
+  },
+  {
+    "type": "\n",
+    "named": false
+  },
+  {
+    "type": "\r\n",
+    "named": false
+  },
+  {
+    "type": "\"",
+    "named": false
+  },
+  {
+    "type": "$",
+    "named": false
+  },
+  {
+    "type": "${",
+    "named": false
+  },
+  {
+    "type": "'",
+    "named": false
+  },
+  {
+    "type": "''",
+    "named": false
+  },
+  {
+    "type": "(",
+    "named": false
+  },
+  {
+    "type": ")",
+    "named": false
+  },
+  {
+    "type": ",",
+    "named": false
+  },
+  {
+    "type": "->",
+    "named": false
+  },
+  {
+    "type": "-Infinity",
+    "named": false
+  },
+  {
+    "type": "0x\"",
+    "named": false
+  },
+  {
+    "type": "<",
+    "named": false
+  },
+  {
+    "type": ">",
+    "named": false
+  },
+  {
+    "type": "@",
+    "named": false
+  },
+  {
+    "type": "Bool",
+    "named": false
+  },
+  {
+    "type": "Bytes",
+    "named": false
+  },
+  {
+    "type": "Date",
+    "named": false
+  },
+  {
+    "type": "Date/show",
+    "named": false
+  },
+  {
+    "type": "Double",
+    "named": false
+  },
+  {
+    "type": "Double/show",
+    "named": false
+  },
+  {
+    "type": "False",
+    "named": false
+  },
+  {
+    "type": "Infinity",
+    "named": false
+  },
+  {
+    "type": "Integer",
+    "named": false
+  },
+  {
+    "type": "Integer/clamp",
+    "named": false
+  },
+  {
+    "type": "Integer/negate",
+    "named": false
+  },
+  {
+    "type": "Integer/show",
+    "named": false
+  },
+  {
+    "type": "Integer/toDouble",
+    "named": false
+  },
+  {
+    "type": "Kind",
+    "named": false
+  },
+  {
+    "type": "List",
+    "named": false
+  },
+  {
+    "type": "List/build",
+    "named": false
+  },
+  {
+    "type": "List/fold",
+    "named": false
+  },
+  {
+    "type": "List/head",
+    "named": false
+  },
+  {
+    "type": "List/indexed",
+    "named": false
+  },
+  {
+    "type": "List/last",
+    "named": false
+  },
+  {
+    "type": "List/length",
+    "named": false
+  },
+  {
+    "type": "List/reverse",
+    "named": false
+  },
+  {
+    "type": "NaN",
+    "named": false
+  },
+  {
+    "type": "Natural",
+    "named": false
+  },
+  {
+    "type": "Natural/build",
+    "named": false
+  },
+  {
+    "type": "Natural/even",
+    "named": false
+  },
+  {
+    "type": "Natural/fold",
+    "named": false
+  },
+  {
+    "type": "Natural/isZero",
+    "named": false
+  },
+  {
+    "type": "Natural/odd",
+    "named": false
+  },
+  {
+    "type": "Natural/show",
+    "named": false
+  },
+  {
+    "type": "Natural/subtract",
+    "named": false
+  },
+  {
+    "type": "Natural/toInteger",
+    "named": false
+  },
+  {
+    "type": "None",
+    "named": false
+  },
+  {
+    "type": "Optional",
+    "named": false
+  },
+  {
+    "type": "Some",
+    "named": false
+  },
+  {
+    "type": "Sort",
+    "named": false
+  },
+  {
+    "type": "Text",
+    "named": false
+  },
+  {
+    "type": "Text/replace",
+    "named": false
+  },
+  {
+    "type": "Text/show",
+    "named": false
+  },
+  {
+    "type": "Time",
+    "named": false
+  },
+  {
+    "type": "Time/show",
+    "named": false
+  },
+  {
+    "type": "TimeZone",
+    "named": false
+  },
+  {
+    "type": "TimeZone/show",
+    "named": false
+  },
+  {
+    "type": "True",
+    "named": false
+  },
+  {
+    "type": "Type",
+    "named": false
+  },
+  {
+    "type": "[",
+    "named": false
+  },
+  {
+    "type": "\\",
+    "named": false
+  },
+  {
+    "type": "]",
+    "named": false
+  },
+  {
+    "type": "as",
+    "named": false
+  },
+  {
+    "type": "assert",
+    "named": false
+  },
+  {
+    "type": "assert_operator",
+    "named": true
+  },
+  {
+    "type": "assign_operator",
+    "named": true
+  },
+  {
+    "type": "block_comment_close",
+    "named": true
+  },
+  {
+    "type": "block_comment_content",
+    "named": true
+  },
+  {
+    "type": "block_comment_open",
+    "named": true
+  },
+  {
+    "type": "completion_operator",
+    "named": true
+  },
+  {
+    "type": "double_quote_escaped",
+    "named": true
+  },
+  {
+    "type": "else",
+    "named": false
+  },
+  {
+    "type": "empty_record_literal",
+    "named": true
+  },
+  {
+    "type": "forall",
+    "named": false
+  },
+  {
+    "type": "http_raw",
+    "named": true
+  },
+  {
+    "type": "if",
+    "named": false
+  },
+  {
+    "type": "import_as_bytes",
+    "named": true
+  },
+  {
+    "type": "import_as_location",
+    "named": true
+  },
+  {
+    "type": "import_as_text",
+    "named": true
+  },
+  {
+    "type": "import_hash",
+    "named": true
+  },
+  {
+    "type": "in",
+    "named": false
+  },
+  {
+    "type": "infix_operator",
+    "named": true
+  },
+  {
+    "type": "integer_literal",
+    "named": true
+  },
+  {
+    "type": "label",
+    "named": true
+  },
+  {
+    "type": "let",
+    "named": false
+  },
+  {
+    "type": "line_comment_content",
+    "named": true
+  },
+  {
+    "type": "line_comment_prefix",
+    "named": true
+  },
+  {
+    "type": "local_import",
+    "named": true
+  },
+  {
+    "type": "merge",
+    "named": false
+  },
+  {
+    "type": "missing_import",
+    "named": true
+  },
+  {
+    "type": "natural_literal",
+    "named": true
+  },
+  {
+    "type": "question_mark",
+    "named": true
+  },
+  {
+    "type": "selector_dot",
+    "named": true
+  },
+  {
+    "type": "showConstructor",
+    "named": false
+  },
+  {
+    "type": "single_quote_escaped",
+    "named": true
+  },
+  {
+    "type": "temporal_literal",
+    "named": true
+  },
+  {
+    "type": "then",
+    "named": false
+  },
+  {
+    "type": "toMap",
+    "named": false
+  },
+  {
+    "type": "type_operator",
+    "named": true
+  },
+  {
+    "type": "using",
+    "named": false
+  },
+  {
+    "type": "with",
+    "named": false
+  },
+  {
+    "type": "{",
+    "named": false
+  },
+  {
+    "type": "|",
+    "named": false
+  },
+  {
+    "type": "}",
+    "named": false
+  },
+  {
+    "type": "λ",
+    "named": false
+  },
+  {
+    "type": "→",
+    "named": false
+  },
+  {
+    "type": "∀",
+    "named": false
+  }
+]

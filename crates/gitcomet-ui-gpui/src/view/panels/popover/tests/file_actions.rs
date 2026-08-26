@@ -231,6 +231,85 @@ fn commit_menu_disables_cherry_pick_when_local_operation_in_progress(
 }
 
 #[gpui::test]
+fn commit_menu_disables_merge_when_repository_is_busy(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(11);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.head_branch = Loadable::Ready("main".to_string());
+            repo.local_actions_in_flight = 1;
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected commit context menu model");
+
+        assert!(context_menu_entry_disabled(
+            &model,
+            "Merge deadbeef into main"
+        ));
+    });
+}
+
+#[gpui::test]
+fn detached_head_commit_menu_names_head_as_merge_destination(cx: &mut gpui::TestAppContext) {
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let repo_id = RepoId(12);
+    let commit_id = CommitId("deadbeefdeadbeef".into());
+    cx.update(|_window, app| {
+        view.update(app, |this, cx| {
+            let mut repo = commit_menu_test_repo(repo_id, &commit_id);
+            repo.head_branch = Loadable::Ready("HEAD".to_string());
+            repo.detached_head_commit = Some(CommitId("cafebabecafebabe".into()));
+            push_test_state(this, app_state_with_repo(repo, repo_id), cx);
+        });
+    });
+
+    cx.update(|_window, app| {
+        let model = view
+            .update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+            .expect("expected commit context menu model");
+
+        assert!(context_menu_has_entry(&model, "Merge deadbeef into HEAD"));
+        assert!(!context_menu_has_entry(
+            &model,
+            "Merge deadbeef into deadbeef"
+        ));
+    });
+}
+
+#[gpui::test]
 fn commit_file_menu_has_open_file_entries(cx: &mut gpui::TestAppContext) {
     let (store, events) = AppStore::new(Arc::new(TestBackend));
     let (view, cx) =

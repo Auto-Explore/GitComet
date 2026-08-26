@@ -22,6 +22,47 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "lua" => DiffSyntaxLanguage::Lua,
         "nix" => DiffSyntaxLanguage::Nix,
         "mk" | "make" | "makefile" | "gnumakefile" => DiffSyntaxLanguage::Makefile,
+        "cmake" | "cmakelists.txt" => DiffSyntaxLanguage::Cmake,
+        "dockerfile" | "containerfile" => DiffSyntaxLanguage::Dockerfile,
+        // systemd unit types, `.desktop` entries, and the dotted and undotted
+        // spellings of git's own config -- all INI, none of them named `.ini`.
+        "ini" | "cfg" | "editorconfig" | ".editorconfig" | "gitconfig" | ".gitconfig"
+        | "gitmodules" | ".gitmodules" | "desktop" | "service" | "timer" | "socket" | "target"
+        | "mount" | "automount" | "path" | "slice" | "swap" | "netdev" | "network" | "nspawn" => {
+            DiffSyntaxLanguage::Ini
+        }
+        // Deliberately last of the config family, and deliberately grammarless --
+        // see `DiffSyntaxLanguage::Conf`.
+        "conf" | "cnf" => DiffSyntaxLanguage::Conf,
+        "env" | "dotenv" | ".env" => DiffSyntaxLanguage::Dotenv,
+        "ll" | "llvm" => DiffSyntaxLanguage::Llvm,
+        "just" | "justfile" | ".justfile" => DiffSyntaxLanguage::Just,
+        "caddyfile" | ".caddyfile" => DiffSyntaxLanguage::Caddyfile,
+        // Every one of these is git's own ignore syntax, byte for byte -- the
+        // tools copied the format rather than inventing one.
+        "gitignore" | ".gitignore" | "dockerignore" | ".dockerignore" | ".npmignore"
+        | ".eslintignore" | ".prettierignore" | ".helmignore" | ".gcloudignore"
+        | ".vscodeignore" => DiffSyntaxLanguage::Gitignore,
+        "wat" | "wast" => DiffSyntaxLanguage::Wat,
+        "spvasm" => DiffSyntaxLanguage::Spirv,
+        "properties" => DiffSyntaxLanguage::JavaProperties,
+        "jsonnet" | "libsonnet" => DiffSyntaxLanguage::Jsonnet,
+        "proto" | "protobuf" => DiffSyntaxLanguage::Proto,
+        "gleam" => DiffSyntaxLanguage::Gleam,
+        "dhall" => DiffSyntaxLanguage::Dhall,
+        "coffee" | "coffeescript" | "cson" | "iced" => DiffSyntaxLanguage::CoffeeScript,
+        "csv" => DiffSyntaxLanguage::Csv,
+        "kdl" => DiffSyntaxLanguage::Kdl,
+        "ron" => DiffSyntaxLanguage::Ron,
+        "cue" => DiffSyntaxLanguage::Cue,
+        "ebnf" => DiffSyntaxLanguage::Ebnf,
+        // `.v` is also Verilog and Coq. Neither is wired, and the one the corpus
+        // covers is V, so it takes the extension rather than leaving it blank.
+        "v" | "vsh" | "vv" => DiffSyntaxLanguage::V,
+        "pas" | "dpr" | "pascal" => DiffSyntaxLanguage::Pascal,
+        "crontab" | "cron" | "cronfile" => DiffSyntaxLanguage::Crontab,
+        // Not `.ils` or `.cil`: neither is a thing. `ilasm` reads `.il`.
+        "il" => DiffSyntaxLanguage::Cil,
         "kt" | "kts" | "kotlin" => DiffSyntaxLanguage::Kotlin,
         "zig" => DiffSyntaxLanguage::Zig,
         // `.gradle` is Groovy unless it is `.gradle.kts`, and that suffix resolves
@@ -45,7 +86,12 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "asm" | "s" | "nasm" | "assembly" => DiffSyntaxLanguage::Assembly,
         "rs" | "rust" => DiffSyntaxLanguage::Rust,
         "py" | "python" | "pyi" | "mpy" => DiffSyntaxLanguage::Python,
-        "js" | "mjs" | "cjs" | "javascript" => DiffSyntaxLanguage::JavaScript,
+        // `.json5` is JavaScript, not JSON. Its additions over JSON -- comments,
+        // unquoted keys, single quotes, trailing commas -- are all ordinary
+        // ECMAScript object-literal syntax, so tree-sitter-javascript parses the
+        // corpus sample with zero errors where tree-sitter-json produces 72 in 58
+        // lines.
+        "js" | "mjs" | "cjs" | "javascript" | "json5" => DiffSyntaxLanguage::JavaScript,
         "jsdoc" => DiffSyntaxLanguage::Jsdoc,
         "jsx" => DiffSyntaxLanguage::Tsx,
         "ts" | "cts" | "mts" | "typescript" => DiffSyntaxLanguage::TypeScript,
@@ -82,12 +128,12 @@ fn diff_syntax_language_for_identifier(identifier: &str) -> Option<DiffSyntaxLan
         "diff" | "patch" => DiffSyntaxLanguage::Diff,
         "commit_editmsg" | "merge_msg" | "tag_editmsg" | "notes_editmsg" | "edit_description"
         | "gitcommit" | "git-commit" => DiffSyntaxLanguage::GitCommit,
-        "sh" | "bash" | "zsh" | "shell" | "shellscript" | "console" | ".env" | ".bashrc"
-        | "bashrc" | ".bash_profile" | "bash_profile" | ".bash_aliases" | "bash_aliases"
-        | ".bash_logout" | "bash_logout" | ".profile" | "profile" | ".zshrc" | "zshrc"
-        | ".zshenv" | "zshenv" | ".zsh_profile" | "zsh_profile" | ".zsh_aliases"
-        | "zsh_aliases" | ".zsh_histfile" | "zsh_histfile" | ".zlogin" | "zlogin" | ".zprofile"
-        | "zprofile" | "bats" | "pkgbuild" | "apkbuild" => DiffSyntaxLanguage::Bash,
+        "sh" | "bash" | "zsh" | "shell" | "shellscript" | "console" | ".bashrc" | "bashrc"
+        | ".bash_profile" | "bash_profile" | ".bash_aliases" | "bash_aliases" | ".bash_logout"
+        | "bash_logout" | ".profile" | "profile" | ".zshrc" | "zshrc" | ".zshenv" | "zshenv"
+        | ".zsh_profile" | "zsh_profile" | ".zsh_aliases" | "zsh_aliases" | ".zsh_histfile"
+        | "zsh_histfile" | ".zlogin" | "zlogin" | ".zprofile" | "zprofile" | "bats"
+        | "pkgbuild" | "apkbuild" => DiffSyntaxLanguage::Bash,
         _ => return None,
     })
 }
@@ -258,6 +304,10 @@ pub(super) fn tree_sitter_grammar(
             tree_sitter_md::INLINE_LANGUAGE.into(),
             TreesitterQueryAsset::highlights(MARKDOWN_INLINE_HIGHLIGHTS_QUERY),
         )),
+        DiffSyntaxLanguage::Hcl => Some((
+            tree_sitter_hcl::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(HCL_HIGHLIGHTS_QUERY, HCL_INJECTIONS_QUERY),
+        )),
         DiffSyntaxLanguage::Html => Some((
             tree_sitter_html::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(HTML_HIGHLIGHTS_QUERY, HTML_INJECTIONS_QUERY),
@@ -300,9 +350,116 @@ pub(super) fn tree_sitter_grammar(
                 tree_sitter_lua::INJECTIONS_QUERY,
             ),
         )),
+        DiffSyntaxLanguage::JavaProperties => Some((
+            tree_sitter_properties::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_properties::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Pascal => Some((
+            tree_sitter_pascal::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(PASCAL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Proto => Some((
+            tree_sitter_proto::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(PROTO_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Jsonnet => Some((
+            tree_sitter_jsonnet::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_jsonnet::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Csv => Some((
+            tree_sitter_csv::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CSV_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Kdl => Some((
+            tree_sitter_kdl::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(KDL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Ron => Some((
+            tree_sitter_ron::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(RON_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Cue => Some((
+            tree_sitter_cue::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CUE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Ebnf => Some((
+            tree_sitter_ebnf::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(EBNF_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Dhall => Some((
+            tree_sitter_dhall::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(DHALL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::CoffeeScript => Some((
+            tree_sitter_coffee::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(COFFEE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Gleam => Some((
+            tree_sitter_gleam::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_gleam::HIGHLIGHT_QUERY),
+        )),
+        DiffSyntaxLanguage::V => Some((
+            tree_sitter_v::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(V_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Cil => Some((
+            tree_sitter_cil::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CIL_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Crontab => Some((
+            tree_sitter_crontab::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(
+                CRONTAB_HIGHLIGHTS_QUERY,
+                CRONTAB_INJECTIONS_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Caddyfile => Some((
+            tree_sitter_caddyfile::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(CADDYFILE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Gitignore => Some((
+            tree_sitter_gitignore::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(GITIGNORE_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Just => Some((
+            tree_sitter_just::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections(JUST_HIGHLIGHTS_QUERY, JUST_INJECTIONS_QUERY),
+        )),
+        DiffSyntaxLanguage::Spirv => Some((
+            tree_sitter_spirv::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(SPIRV_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Wat => Some((
+            tree_sitter_wat::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(WAT_HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Cmake => Some((
+            tree_sitter_cmake::LANGUAGE.into(),
+            TreesitterQueryAsset::with_injections_and_supplement(
+                tree_sitter_cmake::HIGHLIGHTS_QUERY,
+                tree_sitter_cmake::INJECTIONS_QUERY,
+                CMAKE_SUPPLEMENT_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Dockerfile => Some((
+            tree_sitter_containerfile::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_containerfile::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Ini => Some((
+            tree_sitter_ini::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_ini::HIGHLIGHTS_QUERY),
+        )),
+        DiffSyntaxLanguage::Llvm => Some((
+            tree_sitter_llvm::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(tree_sitter_llvm::HIGHLIGHTS_QUERY),
+        )),
         DiffSyntaxLanguage::Makefile => Some((
             tree_sitter_make::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_make::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_injections_and_supplement(
+                tree_sitter_make::HIGHLIGHTS_QUERY,
+                MAKEFILE_INJECTIONS_QUERY,
+                MAKEFILE_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Kotlin => Some((
             tree_sitter_kotlin_sg::LANGUAGE.into(),
@@ -311,13 +468,16 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Zig => Some((
             tree_sitter_zig::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
-                tree_sitter_zig::HIGHLIGHTS_QUERY,
+                ZIG_HIGHLIGHTS_QUERY,
                 tree_sitter_zig::INJECTIONS_QUERY,
             ),
         )),
         DiffSyntaxLanguage::Groovy => Some((
             dekobon_tree_sitter_groovy::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                dekobon_tree_sitter_groovy::HIGHLIGHTS_QUERY,
+                GROOVY_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Clojure => Some((
             tree_sitter_clojure_orchard::LANGUAGE.into(),
@@ -340,7 +500,7 @@ pub(super) fn tree_sitter_grammar(
         DiffSyntaxLanguage::Haskell => Some((
             tree_sitter_haskell::LANGUAGE.into(),
             TreesitterQueryAsset::with_injections(
-                tree_sitter_haskell::HIGHLIGHTS_QUERY,
+                HASKELL_HIGHLIGHTS_QUERY,
                 tree_sitter_haskell::INJECTIONS_QUERY,
             ),
         )),
@@ -362,7 +522,7 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Assembly => Some((
             tree_sitter_asm::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_asm::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::highlights(ASM_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Rust => Some((
             tree_sitter_rust::LANGUAGE.into(),
@@ -394,9 +554,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::ObjectiveC => Some((
             tree_sitter_objc::LANGUAGE.into(),
-            TreesitterQueryAsset::with_injections(
+            TreesitterQueryAsset::with_injections_and_supplement(
                 tree_sitter_objc::HIGHLIGHTS_QUERY,
                 tree_sitter_objc::INJECTIONS_QUERY,
+                OBJC_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::CSharp => Some((
@@ -412,22 +573,33 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Java => Some((
             tree_sitter_java::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_java::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                tree_sitter_java::HIGHLIGHTS_QUERY,
+                JAVA_SUPPLEMENT_QUERY,
+            ),
+        )),
+        DiffSyntaxLanguage::Perl => Some((
+            tree_sitter_perl::LANGUAGE.into(),
+            TreesitterQueryAsset::highlights(PERL_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::Php => Some((
             tree_sitter_php::LANGUAGE_PHP.into(),
-            TreesitterQueryAsset::with_injections(
+            TreesitterQueryAsset::with_injections_and_supplement(
                 tree_sitter_php::HIGHLIGHTS_QUERY,
-                tree_sitter_php::INJECTIONS_QUERY,
+                PHP_INJECTIONS_QUERY,
+                PHP_SUPPLEMENT_QUERY,
             ),
         )),
         DiffSyntaxLanguage::Ruby => Some((
             tree_sitter_ruby::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_ruby::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::highlights(RUBY_HIGHLIGHTS_QUERY),
         )),
         DiffSyntaxLanguage::PowerShell => Some((
             tree_sitter_powershell::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(POWERSHELL_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                POWERSHELL_HIGHLIGHTS_QUERY,
+                POWERSHELL_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Swift => Some((
             tree_sitter_swift::LANGUAGE.into(),
@@ -462,7 +634,10 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Sql => Some((
             tree_sitter_sequel::LANGUAGE.into(),
-            TreesitterQueryAsset::highlights(tree_sitter_sequel::HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(
+                tree_sitter_sequel::HIGHLIGHTS_QUERY,
+                SQL_SUPPLEMENT_QUERY,
+            ),
         )),
         DiffSyntaxLanguage::Diff => Some((
             tree_sitter_diff::LANGUAGE.into(),
@@ -504,7 +679,7 @@ pub(super) fn tree_sitter_grammar(
         )),
         DiffSyntaxLanguage::Xml => Some((
             tree_sitter_xml::LANGUAGE_XML.into(),
-            TreesitterQueryAsset::highlights(XML_HIGHLIGHTS_QUERY),
+            TreesitterQueryAsset::with_supplement(XML_HIGHLIGHTS_QUERY, XML_SUPPLEMENT_QUERY),
         )),
         // Languages without a wired tree-sitter grammar, or grammars gated off
         // by the current feature set, fall back to heuristic-only highlighting.
@@ -513,10 +688,23 @@ pub(super) fn tree_sitter_grammar(
 }
 
 fn init_highlight_spec(language: DiffSyntaxLanguage) -> TreesitterHighlightSpec {
+    // A `Query` allocates through tree-sitter's C, and this is the only place
+    // the app builds one -- so like the `TS_PARSER`/`TS_CURSOR` initialisers,
+    // it has to route that C at mimalloc before the first byte is taken. A
+    // thread that only ever compiles queries never touches those thread-locals.
+    super::ensure_tree_sitter_allocator();
     let (ts_language, asset) =
         tree_sitter_grammar(language).expect("tree-sitter grammar should exist");
-    let query = tree_sitter::Query::new(&ts_language, asset.highlights)
-        .expect("highlights.scm should compile");
+    let combined;
+    let highlights = match asset.supplement {
+        None => asset.highlights,
+        Some(supplement) => {
+            combined = format!("{}\n{supplement}", asset.highlights);
+            combined.as_str()
+        }
+    };
+    let query =
+        tree_sitter::Query::new(&ts_language, highlights).expect("highlights.scm should compile");
     let capture_kinds = query
         .capture_names()
         .iter()
@@ -651,6 +839,7 @@ pub(super) fn tree_sitter_highlight_spec(
     match language {
         DiffSyntaxLanguage::Markdown => highlight_spec_entry!(Markdown),
         DiffSyntaxLanguage::MarkdownInline => highlight_spec_entry!(MarkdownInline),
+        DiffSyntaxLanguage::Hcl => highlight_spec_entry!(Hcl),
         DiffSyntaxLanguage::Html => highlight_spec_entry!(Html),
         DiffSyntaxLanguage::Vue => highlight_spec_entry!(Vue),
         DiffSyntaxLanguage::Svelte => highlight_spec_entry!(Svelte),
@@ -660,6 +849,30 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::Bicep => highlight_spec_entry!(Bicep),
         DiffSyntaxLanguage::Lua => highlight_spec_entry!(Lua),
         DiffSyntaxLanguage::Nix => highlight_spec_entry!(Nix),
+        DiffSyntaxLanguage::JavaProperties => highlight_spec_entry!(JavaProperties),
+        DiffSyntaxLanguage::Pascal => highlight_spec_entry!(Pascal),
+        DiffSyntaxLanguage::Proto => highlight_spec_entry!(Proto),
+        DiffSyntaxLanguage::Jsonnet => highlight_spec_entry!(Jsonnet),
+        DiffSyntaxLanguage::Csv => highlight_spec_entry!(Csv),
+        DiffSyntaxLanguage::Kdl => highlight_spec_entry!(Kdl),
+        DiffSyntaxLanguage::Ron => highlight_spec_entry!(Ron),
+        DiffSyntaxLanguage::Cue => highlight_spec_entry!(Cue),
+        DiffSyntaxLanguage::Ebnf => highlight_spec_entry!(Ebnf),
+        DiffSyntaxLanguage::Dhall => highlight_spec_entry!(Dhall),
+        DiffSyntaxLanguage::CoffeeScript => highlight_spec_entry!(CoffeeScript),
+        DiffSyntaxLanguage::Gleam => highlight_spec_entry!(Gleam),
+        DiffSyntaxLanguage::V => highlight_spec_entry!(V),
+        DiffSyntaxLanguage::Cil => highlight_spec_entry!(Cil),
+        DiffSyntaxLanguage::Crontab => highlight_spec_entry!(Crontab),
+        DiffSyntaxLanguage::Caddyfile => highlight_spec_entry!(Caddyfile),
+        DiffSyntaxLanguage::Gitignore => highlight_spec_entry!(Gitignore),
+        DiffSyntaxLanguage::Just => highlight_spec_entry!(Just),
+        DiffSyntaxLanguage::Spirv => highlight_spec_entry!(Spirv),
+        DiffSyntaxLanguage::Wat => highlight_spec_entry!(Wat),
+        DiffSyntaxLanguage::Cmake => highlight_spec_entry!(Cmake),
+        DiffSyntaxLanguage::Dockerfile => highlight_spec_entry!(Dockerfile),
+        DiffSyntaxLanguage::Ini => highlight_spec_entry!(Ini),
+        DiffSyntaxLanguage::Llvm => highlight_spec_entry!(Llvm),
         DiffSyntaxLanguage::Makefile => highlight_spec_entry!(Makefile),
         DiffSyntaxLanguage::Kotlin => highlight_spec_entry!(Kotlin),
         DiffSyntaxLanguage::Zig => highlight_spec_entry!(Zig),
@@ -684,6 +897,7 @@ pub(super) fn tree_sitter_highlight_spec(
         DiffSyntaxLanguage::CSharp => highlight_spec_entry!(CSharp),
         DiffSyntaxLanguage::FSharp => highlight_spec_entry!(FSharp),
         DiffSyntaxLanguage::Java => highlight_spec_entry!(Java),
+        DiffSyntaxLanguage::Perl => highlight_spec_entry!(Perl),
         DiffSyntaxLanguage::Php => highlight_spec_entry!(Php),
         DiffSyntaxLanguage::Ruby => highlight_spec_entry!(Ruby),
         DiffSyntaxLanguage::PowerShell => highlight_spec_entry!(PowerShell),
@@ -756,7 +970,12 @@ fn syntax_kind_for_capture_name(name: &str) -> Option<SyntaxTokenKind> {
         "module.builtin" | "type.builtin" => SyntaxTokenKind::TypeBuiltin,
         "concept" | "type.interface" => SyntaxTokenKind::TypeInterface,
         "module" | "namespace" => SyntaxTokenKind::Namespace,
-        "array" | "selector" | "type" | "type.class" => SyntaxTokenKind::Type,
+        // Note "array" is deliberately absent: PowerShell is the only query that
+        // uses it, on `(array_expression)`, which spans the whole `@(1, 2)` --
+        // parens, commas and the spaces between. Painting that as a type made an
+        // array literal read as one long type name. Left unmapped, the elements
+        // inside keep their own colours.
+        "selector" | "type" | "type.class" => SyntaxTokenKind::Type,
         // Variables - general `@variable` renders as plain text (no color) to avoid
         // "everything is highlighted" noise. Sub-captures get distinct treatment.
         "parameter" | "variable.parameter" => SyntaxTokenKind::VariableParameter,

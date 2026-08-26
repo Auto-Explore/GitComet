@@ -1,0 +1,58 @@
+==========
+Line comment
+==========
+; This is a comment 
+---
+
+(program
+  (line_comment))
+
+==========
+Inline comment with instr no args
+==========
+MOVLPS ; This is an in-line comment
+---
+
+(program
+  (instruction
+    kind: (mnemonic))
+  (line_comment))
+
+==========
+Inline comment with instr one reg arg, no space between
+==========
+pushq %rbp; This is an in-line comment 
+---
+
+(program
+  (instruction
+    kind: (mnemonic)
+    (ident
+      (reg)))
+  (line_comment))
+
+==========
+Inline comment with instr one reg arg, space between
+==========
+pushq %rbp ; This is an in-line comment 
+---
+
+(program
+  (instruction
+    kind: (mnemonic)
+    (ident
+      (reg)))
+  (line_comment))
+
+==========
+Block comment
+==========
+/*
+*
+* This is a C-style block comment...
+* ...spanning multiple lines
+*/
+---
+
+(program
+  (block_comment))

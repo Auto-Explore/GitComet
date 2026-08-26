@@ -1,0 +1,38 @@
+{
+  "grammars": [
+    {
+      "name": "asm",
+      "camelcase": "Asm",
+      "scope": "source.asm",
+      "path": ".",
+      "file-types": [
+        "s",
+        "asm",
+        "assembly"
+      ],
+      "highlights": "queries/asm/highlights.scm",
+      "injections": "queries/asm/injections.scm"
+    }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "assembly grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "RubixDev"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/RubixDev/tree-sitter-asm"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}

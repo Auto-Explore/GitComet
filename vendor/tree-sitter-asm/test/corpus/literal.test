@@ -1,0 +1,96 @@
+==========
+Integer literal base 10
+==========
+.int 123
+---
+
+(program
+  (meta
+    (meta_ident)
+    (int)))
+
+==========
+Integer literal hex
+==========
+.int 0xFFF
+---
+
+(program
+  (meta
+    (meta_ident)
+    (int)))
+
+==========
+Float literal
+==========
+.float 3.14
+---
+
+(program
+  (meta
+    (meta_ident)
+    (float)))
+
+==========
+String literal
+==========
+.asciz "Hello, World!"
+---
+
+(program
+  (meta
+    (meta_ident)
+    (string)))
+
+==========
+String literal with single quotes
+==========
+cmp byte ptr [rdi], '"'
+---
+
+(program
+  (instruction
+    (mnemonic)
+    (ptr
+      (reg
+        (word)))
+    (string)))
+
+==========
+Comma separated list of integer literals base 10
+==========
+.int 123, 456, 789
+---
+
+(program
+  (meta
+    (meta_ident)
+    (int)
+    (int)
+    (int)))
+
+==========
+Comma separated list of integer literals hex
+==========
+.int 0x0FF1CE, 0x8BADF00D, 0xDEADBEAF
+---
+
+(program
+  (meta
+    (meta_ident)
+    (int)
+    (int)
+    (int)))
+
+==========
+Comma separated list of string literals
+==========
+.int "A", "passing", "test"
+---
+
+(program
+  (meta
+    (meta_ident)
+    (string)
+    (string)
+    (string)))

@@ -158,3 +158,106 @@ fn successful_commit_prompt_submission_clears_draft(cx: &mut gpui::TestAppContex
         });
     });
 }
+
+/// The "Merge into current" entry and the dialog it opens must agree.
+///
+/// The entry used to resolve the destination through `active_repo()`, which is
+/// `None` for a commit belonging to any *other* open repository, so with two
+/// repositories open the menu read "into HEAD" while the confirmation it opened
+/// -- which resolves through `state.repos` -- read "into release". The same
+/// split left the entry enabled for a repository the dialog was about to
+/// refuse.
+#[gpui::test]
+fn merge_entry_names_and_gates_on_the_commits_own_repository(cx: &mut gpui::TestAppContext) {
+    fn merge_entry(
+        cx: &mut gpui::VisualTestContext,
+        view: &gpui::Entity<GitCometView>,
+        repo_id: RepoId,
+        commit_id: &CommitId,
+    ) -> (String, bool) {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                this.popover_host.update(cx, |host, cx| {
+                    host.context_menu_model(
+                        &PopoverKind::CommitMenu {
+                            repo_id,
+                            commit_id: commit_id.clone(),
+                        },
+                        cx,
+                    )
+                })
+            })
+        })
+        .expect("expected a commit context menu model")
+        .items
+        .iter()
+        .find_map(|item| match item {
+            ContextMenuItem::Entry {
+                label, disabled, ..
+            } if label.starts_with("Merge ") => Some((label.to_string(), *disabled)),
+            _ => None,
+        })
+        .expect("expected the merge entry")
+    }
+
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let active_id = RepoId(1);
+    let other_id = RepoId(2);
+    let commit_id = CommitId("0123456789abcdef".into());
+
+    let apply = |cx: &mut gpui::VisualTestContext, other_busy: bool| {
+        cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let mut active = open_repo(active_id, "/tmp/merge-entry-active");
+                active.head_branch = Loadable::Ready("active-branch".into());
+                let mut other = open_repo(other_id, "/tmp/merge-entry-other");
+                other.head_branch = Loadable::Ready("release".into());
+                other.local_actions_in_flight = u32::from(other_busy);
+
+                let state = Arc::new(AppState {
+                    repos: vec![active, other],
+                    active_repo: Some(active_id),
+                    ..Default::default()
+                });
+                this.state = Arc::clone(&state);
+                this._ui_model
+                    .update(cx, |model, cx| model.set_state(state, cx));
+                cx.notify();
+            });
+        });
+    };
+
+    apply(cx, false);
+
+    let (active_label, _) = merge_entry(cx, &view, active_id, &commit_id);
+    assert!(
+        active_label.ends_with(" into active-branch"),
+        "the active repository still names its own head: {active_label:?}"
+    );
+
+    let (other_label, other_disabled) = merge_entry(cx, &view, other_id, &commit_id);
+    assert!(
+        other_label.ends_with(" into release"),
+        "the entry must name the destination its confirmation dialog will: {other_label:?}"
+    );
+    assert!(
+        !other_disabled,
+        "an idle repository's commit is mergeable from any menu"
+    );
+
+    // And readiness comes from that same repository, not from the active one.
+    apply(cx, true);
+    let (_, other_disabled) = merge_entry(cx, &view, other_id, &commit_id);
+    assert!(
+        other_disabled,
+        "a busy repository's entry must be disabled, not offered and then refused"
+    );
+    let (_, active_disabled) = merge_entry(cx, &view, active_id, &commit_id);
+    assert!(
+        !active_disabled,
+        "the other repository being busy says nothing about this one"
+    );
+}

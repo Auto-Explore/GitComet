@@ -1,0 +1,47 @@
+{
+  "grammars": [
+    {
+      "name": "haskell",
+      "camelcase": "Haskell",
+      "scope": "source.haskell",
+      "path": ".",
+      "file-types": [
+        "hs",
+        "hs-boot"
+      ],
+      "highlights": "queries/highlights.scm",
+      "injection-regex": "^(hs|haskell)$"
+    }
+  ],
+  "metadata": {
+    "version": "0.23.1",
+    "license": "MIT",
+    "description": "Haskell grammar for tree-sitter",
+    "authors": [
+      {
+        "name": "Rick Winfrey"
+      },
+      {
+        "name": "Max Brunsfeld",
+        "email": "maxbrunsfeld@gmail.com"
+      },
+      {
+        "name": "Owen Shepherd"
+      },
+      {
+        "name": "Torsten Schmits"
+      }
+    ],
+    "links": {
+      "repository": "https://github.com/tree-sitter/tree-sitter-haskell"
+    }
+  },
+  "bindings": {
+    "c": true,
+    "go": true,
+    "node": true,
+    "python": true,
+    "rust": true,
+    "swift": true
+  }
+}

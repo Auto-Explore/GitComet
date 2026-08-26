@@ -6,6 +6,22 @@ enum DiffTextOffsetBias {
     End,
 }
 
+/// A row hit keeps the caret boundary and the pointer's geometric relation to
+/// the painted text separate. The right half of the final glyph resolves to the
+/// end caret boundary just like trailing blank space does, but only the latter
+/// should suppress click highlights.
+#[derive(Clone, Copy)]
+struct DiffTextHit {
+    pos: DiffTextPos,
+    past_painted_text: bool,
+}
+
+enum DiffTextPairDocumentLookup {
+    Ready(rows::PreparedDiffSyntaxDocument, usize, DiffTextPairSide),
+    Pending(DiffTextRegion),
+    Unavailable,
+}
+
 fn diff_text_local_range_from_source_ranges(
     selected: Range<usize>,
     visual: Range<usize>,
@@ -56,6 +72,18 @@ impl MainPaneView {
         self.diff_text_anchor = None;
         self.diff_text_head = None;
         self.diff_text_autoscroll_target = None;
+        self.clear_diff_text_projected_highlights();
+    }
+
+    /// Drop click affordances projected into the current visible-row space.
+    /// Pair and occurrence spans carry row indices and display offsets, so
+    /// neither can survive a projection reset or a replacement source.
+    pub(in crate::view) fn clear_diff_text_projected_highlights(&mut self) {
+        // Reached on every file switch, view-mode change and diff rebuild, all of
+        // which move the row indices these spans were projected onto.
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+        self.diff_text_pending_syntax_click = None;
     }
 
     pub(in super::super::super) fn clear_diff_selection_state(&mut self) {
@@ -96,6 +124,16 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
     ) -> Option<DiffTextPos> {
+        self.diff_text_hit_from_hitbox(visible_ix, region, position)
+            .map(|hit| hit.pos)
+    }
+
+    fn diff_text_hit_from_hitbox(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextHit> {
         let hitbox = self.diff_text_hitboxes.get(&(visible_ix, region))?;
         // A press off the text is not a press on it: the caller has to be able
         // to tell "not this row" from "the start of this row", or clicking a
@@ -104,7 +142,7 @@ impl MainPaneView {
         if !hitbox.bounds.contains(&position) {
             return None;
         }
-        self.diff_text_pos_in_hitbox(hitbox, region, position)
+        self.diff_text_hit_in_hitbox(hitbox, region, position)
     }
 
     /// Where a point outside every row belongs, once the nearest row is known.
@@ -132,42 +170,64 @@ impl MainPaneView {
         region: DiffTextRegion,
         position: Point<Pixels>,
     ) -> Option<DiffTextPos> {
+        self.diff_text_hit_in_hitbox(hitbox, region, position)
+            .map(|hit| hit.pos)
+    }
+
+    fn diff_text_hit_in_hitbox(
+        &self,
+        hitbox: &DiffTextHitbox,
+        region: DiffTextRegion,
+        position: Point<Pixels>,
+    ) -> Option<DiffTextHit> {
         if let Some(wrapped) = &hitbox.wrapped {
             // A wrapped row spans several visual lines, so the click resolves
             // against the layout it was painted with; `Err` is the clamp to the
             // nearest boundary, which is what a drag past the text wants.
-            let painted_offset = match wrapped.layout.index_for_position(position) {
-                Ok(offset) | Err(offset) => offset,
-            };
-            return Some(DiffTextPos {
-                source_visible_ix: hitbox.source_visible_ix,
-                region,
-                offset: hitbox
-                    .text_start_offset
-                    .saturating_add(wrapped.row_offset(painted_offset).min(hitbox.text_len)),
+            let (painted_offset, past_painted_text) =
+                match wrapped.layout.index_for_position(position) {
+                    Ok(offset) => (offset, false),
+                    Err(offset) => (offset, true),
+                };
+            return Some(DiffTextHit {
+                pos: DiffTextPos {
+                    source_visible_ix: hitbox.source_visible_ix,
+                    region,
+                    offset: hitbox
+                        .text_start_offset
+                        .saturating_add(wrapped.row_offset(painted_offset).min(hitbox.text_len)),
+                },
+                past_painted_text,
             });
         }
         // A single shaped line lies wholly below a point above it and wholly
         // above one below it, so those resolve to its ends rather than to
         // whatever character shares their x.
-        let local_offset = if position.y < hitbox.bounds.top() {
-            0
+        let (local_offset, past_painted_text) = if position.y < hitbox.bounds.top() {
+            (0, true)
         } else if position.y > hitbox.bounds.bottom() {
-            hitbox.text_len
+            (hitbox.text_len, true)
         } else {
             let x = (position.x - hitbox.bounds.left()).max(px(0.0));
             if let Some(cell_width) = hitbox.streamed_ascii_monospace_cell_width {
                 if cell_width <= px(0.0) {
-                    0
+                    (0, x > px(0.0))
                 } else {
-                    (((x / cell_width) + 0.5).floor() as usize).min(hitbox.text_len)
+                    let text_width = cell_width * hitbox.text_len as f32;
+                    (
+                        (((x / cell_width) + 0.5).floor() as usize).min(hitbox.text_len),
+                        x > text_width,
+                    )
                 }
             } else {
                 let layout = &self.diff_text_layout_cache.get(&hitbox.layout_key)?.layout;
-                layout
-                    .closest_index_for_x(x)
-                    .min(layout.len())
-                    .min(hitbox.text_len)
+                (
+                    layout
+                        .closest_index_for_x(x)
+                        .min(layout.len())
+                        .min(hitbox.text_len),
+                    x > layout.width,
+                )
             }
         };
         let local_offset = hitbox
@@ -175,10 +235,13 @@ impl MainPaneView {
             .as_ref()
             .map(|map| map.source_offset_for_display(local_offset))
             .unwrap_or(local_offset);
-        Some(DiffTextPos {
-            source_visible_ix: hitbox.source_visible_ix,
-            region,
-            offset: hitbox.text_start_offset.saturating_add(local_offset),
+        Some(DiffTextHit {
+            pos: DiffTextPos {
+                source_visible_ix: hitbox.source_visible_ix,
+                region,
+                offset: hitbox.text_start_offset.saturating_add(local_offset),
+            },
+            past_painted_text,
         })
     }
 
@@ -721,6 +784,13 @@ impl MainPaneView {
         // A drag that actually moved is suppressed by
         // `diff_suppress_clicks_remaining` instead, which a plain click leaves
         // alone.
+        // Cleared for every press, not just the ones that resolve to a position:
+        // a double- or triple-click selects a span, and a press that misses the
+        // text entirely is a press away from the pair. Both must dismiss it, and
+        // both skip `begin_diff_text_selection`'s set below.
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+        self.diff_text_pending_syntax_click = None;
         match click_count {
             3.. => {
                 self.select_diff_text_line_at_mouse(visible_ix, region, position);
@@ -729,13 +799,13 @@ impl MainPaneView {
                 self.select_diff_text_token_at_mouse(visible_ix, region, position);
             }
             _ if self.diff_text_has_selection() => {
-                self.begin_diff_text_selection(visible_ix, region, position);
+                self.begin_diff_text_selection(visible_ix, region, position, cx);
                 if self.diff_text_selecting {
                     self.diff_suppress_clicks_remaining = 1;
                 }
             }
             _ => {
-                self.begin_diff_text_selection(visible_ix, region, position);
+                self.begin_diff_text_selection(visible_ix, region, position, cx);
                 self.begin_diff_text_scroll_tracking(position, cx);
             }
         }
@@ -746,16 +816,29 @@ impl MainPaneView {
         visible_ix: usize,
         region: DiffTextRegion,
         position: Point<Pixels>,
+        cx: &mut gpui::Context<Self>,
     ) {
-        let Some(pos) = self.diff_text_pos_from_hitbox(visible_ix, region, position) else {
+        let Some(hit) = self.diff_text_hit_from_hitbox(visible_ix, region, position) else {
             return;
         };
+        let pos = hit.pos;
         self.diff_text_selecting = true;
         self.diff_text_anchor = Some(pos);
         self.diff_text_head = Some(pos);
         self.diff_selection_range = None;
         self.diff_text_last_mouse_pos = position;
         self.diff_suppress_clicks_remaining = 0;
+        if let Some(document_region) =
+            self.set_diff_text_click_highlights(&pos, hit.past_painted_text)
+        {
+            self.diff_text_pending_syntax_click = Some((pos, document_region));
+            // The preview builds its own document from the render path and
+            // replays the click when that lands; the file-diff worker reads
+            // `file_diff_*` state, which is not the preview's document.
+            if !self.is_file_preview_active() {
+                self.request_file_diff_click_syntax_document(document_region, cx);
+            }
+        }
     }
 
     pub(in super::super::super) fn begin_diff_text_scroll_tracking(
@@ -819,6 +902,11 @@ impl MainPaneView {
                 .diff_text_normalized_selection()
                 .is_some_and(|(a, b)| a != b)
             {
+                // A selection is the user working on a span, not sitting in one;
+                // a pair lit at each end of it reads as part of the selection.
+                self.diff_text_pair_match = None;
+                self.diff_text_occurrences.clear();
+                self.diff_text_pending_syntax_click = None;
                 self.sync_diff_focus_to_text_selection();
                 self.diff_suppress_clicks_remaining = 1;
             }
@@ -840,11 +928,460 @@ impl MainPaneView {
         visible_ix: usize,
         region: DiffTextRegion,
     ) -> Option<Range<usize>> {
-        let (source_visible_ix, visual_range) =
-            self.diff_text_visual_source_range_for_region(visible_ix, region);
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_selection_range_in(region, resolved)
+    }
+
+    /// As above, for a caller that already resolved the row's visual range.
+    ///
+    /// The paint path asks three of these per row -- selection, pair,
+    /// occurrences -- and resolving the range is not free: its non-wrapped arm
+    /// re-fetches the row model and can re-measure the row's display text.
+    pub(in super::super::super) fn diff_text_local_selection_range_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> Option<Range<usize>> {
+        let (source_visible_ix, visual_range) = resolved;
         let selected =
             self.diff_text_source_selection_range(source_visible_ix, region, visual_range.end)?;
         diff_text_local_range_from_source_ranges(selected, visual_range)
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_pair_match_for_tests(&self) -> Option<&DiffTextPairMatch> {
+        self.diff_text_pair_match.as_ref()
+    }
+
+    pub(in super::super::super) fn diff_text_pair_match_color(&self) -> gpui::Rgba {
+        self.theme.colors.editor.bracket_match_background
+    }
+
+    /// Whether the row's painted text is a truncated stand-in for its line.
+    ///
+    /// `file_diff_display_text` replaces lines past a size gate with a prefix
+    /// plus an ellipsis, so display offsets into them do not convert back to
+    /// real bytes.
+    fn diff_text_row_is_display_truncated(
+        &self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> bool {
+        use crate::view::file_diff_display::should_truncate_file_diff_display as truncated;
+        if self.is_file_preview_active() {
+            return self
+                .worktree_preview_line_raw_text(source_visible_ix)
+                .is_some_and(|raw| truncated(&raw));
+        }
+        let Some(row_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
+            return false;
+        };
+        match self.diff_view {
+            DiffViewMode::Inline => self
+                .file_diff_inline_render_data(row_ix)
+                .is_some_and(|row| truncated(&row.text)),
+            DiffViewMode::Split => self
+                .file_diff_split_render_data(row_ix)
+                .and_then(|row| match region {
+                    DiffTextRegion::SplitLeft => row.old,
+                    DiffTextRegion::SplitRight => row.new,
+                    DiffTextRegion::Inline => None,
+                })
+                .is_some_and(|text| truncated(&text)),
+        }
+    }
+
+    /// Which real document a row's text came from.
+    ///
+    /// A diff interleaves two file versions, so a pair found in one of them can
+    /// only ever be projected back through that same side's line map. This is
+    /// also why a pair can never span the two halves of a split view: the two
+    /// sides are different documents and the matcher only ever walks one tree.
+    fn diff_text_pair_document_for_row(
+        &mut self,
+        source_visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> DiffTextPairDocumentLookup {
+        if self.is_markdown_preview_active() {
+            return DiffTextPairDocumentLookup::Unavailable;
+        }
+
+        if self.is_file_preview_active() {
+            if region != DiffTextRegion::Inline {
+                return DiffTextPairDocumentLookup::Unavailable;
+            }
+            let Some(document) = self.worktree_preview_prepared_syntax_document() else {
+                // Pending, not unavailable: the preview schedules its own
+                // prepare, so a cold document here means "not yet", exactly as
+                // it does for a file diff. Reporting it as unavailable recorded
+                // no pending click, and a click made during the warm-up window
+                // then produced nothing and was never replayed.
+                return DiffTextPairDocumentLookup::Pending(DiffTextRegion::Inline);
+            };
+            return DiffTextPairDocumentLookup::Ready(
+                document,
+                source_visible_ix,
+                DiffTextPairSide::Preview,
+            );
+        }
+
+        // Deliberately not gated on `is_file_diff_view_active()`: that is a
+        // *mode* flag (it requires `DiffContentMode::Full`), and file-diff rows
+        // also render under the collapsed projection. Asking the row model and
+        // the document cache directly covers every mode and fails closed when
+        // either is absent, which is what a patch/commit diff does.
+        let Some(row_ix) = self.diff_source_mapped_ix_for_visible_ix(source_visible_ix) else {
+            return DiffTextPairDocumentLookup::Unavailable;
+        };
+        // `line_to_row` maps are indexed by 0-based line; the row models carry
+        // 1-based diff line numbers.
+        let zero_based = |line: Option<u32>| {
+            line.and_then(|line| usize::try_from(line).ok())
+                .and_then(|line| line.checked_sub(1))
+        };
+
+        match self.diff_view {
+            DiffViewMode::Inline => {
+                if region != DiffTextRegion::Inline {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                }
+                use gitcomet_core::domain::DiffLineKind;
+                let Some(row) = self.file_diff_inline_render_data(row_ix) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let (side, line) = match row.kind {
+                    DiffLineKind::Remove => (DiffTextPairSide::Old, row.old_line),
+                    DiffLineKind::Add | DiffLineKind::Context => {
+                        (DiffTextPairSide::New, row.new_line)
+                    }
+                    // Headers and hunk markers are not document text.
+                    DiffLineKind::Header | DiffLineKind::Hunk => {
+                        return DiffTextPairDocumentLookup::Unavailable;
+                    }
+                };
+                let document_region = match side {
+                    DiffTextPairSide::Old => DiffTextRegion::SplitLeft,
+                    _ => DiffTextRegion::SplitRight,
+                };
+                let Some(line_ix) = zero_based(line) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let Some(document) = self.file_diff_pair_syntax_document(document_region) else {
+                    return DiffTextPairDocumentLookup::Pending(document_region);
+                };
+                DiffTextPairDocumentLookup::Ready(document, line_ix, side)
+            }
+            DiffViewMode::Split => {
+                let Some(row) = self.file_diff_split_render_data(row_ix) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let (side, line) = match region {
+                    DiffTextRegion::SplitLeft => (DiffTextPairSide::Old, row.old_line),
+                    DiffTextRegion::SplitRight => (DiffTextPairSide::New, row.new_line),
+                    DiffTextRegion::Inline => return DiffTextPairDocumentLookup::Unavailable,
+                };
+                let Some(line_ix) = zero_based(line) else {
+                    return DiffTextPairDocumentLookup::Unavailable;
+                };
+                let Some(document) = self.file_diff_pair_syntax_document(region) else {
+                    return DiffTextPairDocumentLookup::Pending(region);
+                };
+                DiffTextPairDocumentLookup::Ready(document, line_ix, side)
+            }
+        }
+    }
+
+    /// The inverse: a document line back onto the row rendering it, if any.
+    ///
+    /// `None` means that end is simply not on screen as a row -- outside the
+    /// diff, or folded into a collapsed hunk. Its partner is still painted.
+    fn diff_text_pair_row_for_document_line(
+        &self,
+        side: DiffTextPairSide,
+        line_ix: usize,
+    ) -> Option<(usize, DiffTextRegion)> {
+        self.diff_text_pair_row_for_document_line_with(side, line_ix, None)
+    }
+
+    fn diff_text_pair_row_for_document_line_with(
+        &self,
+        side: DiffTextPairSide,
+        line_ix: usize,
+        collapsed_rows: Option<&FxHashMap<usize, usize>>,
+    ) -> Option<(usize, DiffTextRegion)> {
+        if side == DiffTextPairSide::Preview {
+            return Some((line_ix, DiffTextRegion::Inline));
+        }
+        let inline = self.diff_view == DiffViewMode::Inline;
+        let map: &[Option<usize>] = match (side, inline) {
+            (DiffTextPairSide::Old, true) => self.file_diff_old_line_to_inline_row.as_ref(),
+            (DiffTextPairSide::Old, false) => self.file_diff_old_line_to_row.as_ref(),
+            (_, true) => self.file_diff_new_line_to_inline_row.as_ref(),
+            (_, false) => self.file_diff_new_line_to_row.as_ref(),
+        };
+        let row_ix = (*map.get(line_ix)?)?;
+        let source_visible_ix = match collapsed_rows {
+            Some(index) => index.get(&row_ix).copied()?,
+            None => self.diff_text_pair_source_visible_ix_for_row(row_ix)?,
+        };
+        let region = match (inline, side) {
+            (true, _) => DiffTextRegion::Inline,
+            (false, DiffTextPairSide::Old) => DiffTextRegion::SplitLeft,
+            (false, _) => DiffTextRegion::SplitRight,
+        };
+        Some((source_visible_ix, region))
+    }
+
+    /// The inverse of [`Self::diff_source_mapped_ix_for_visible_ix`].
+    ///
+    /// Only the collapsed arm is new: that projection keeps no reverse index, so
+    /// it scans. Everything else delegates to the existing inverse rather than
+    /// growing a second one, and the scan runs twice per click, never per frame.
+    fn diff_text_pair_source_visible_ix_for_row(&self, row_ix: usize) -> Option<usize> {
+        if self.is_collapsed_diff_projection_active() {
+            return self
+                .collapsed_diff_visible_rows
+                .iter()
+                .position(|row| row.row_ix() == Some(row_ix));
+        }
+        self.diff_source_visible_ix_for_mapped_ix(row_ix)
+    }
+
+    /// Both of a click's highlights, off one resolution of the row.
+    ///
+    /// The pair and the occurrences need the same three answers -- is this row's
+    /// text a truncated stand-in, which document does it belong to, and which
+    /// line of it -- and that resolution is the expensive half: it re-fetches
+    /// the row model through the paged providers, and on a cold cache it reads a
+    /// source-backed side's file back off disk and parses it. Asking for the two
+    /// highlights separately paid all of it twice on every mouse-down.
+    fn set_diff_text_click_highlights(
+        &mut self,
+        pos: &DiffTextPos,
+        past_painted_text: bool,
+    ) -> Option<DiffTextRegion> {
+        self.diff_text_pair_match = None;
+        self.diff_text_occurrences.clear();
+
+        if past_painted_text {
+            return None;
+        }
+
+        // A row the display truncated is not the tab-expansion of its line, so
+        // offsets into it do not convert. Better no answer than a confident one
+        // pointing at the wrong character.
+        if self.diff_text_row_is_display_truncated(pos.source_visible_ix, pos.region) {
+            return None;
+        }
+        let (document, line_ix, side) = match self
+            .diff_text_pair_document_for_row(pos.source_visible_ix, pos.region)
+        {
+            DiffTextPairDocumentLookup::Ready(document, line_ix, side) => (document, line_ix, side),
+            DiffTextPairDocumentLookup::Pending(region) => return Some(region),
+            DiffTextPairDocumentLookup::Unavailable => return None,
+        };
+        self.diff_text_pair_match = self.diff_text_pair_match_in(document, line_ix, side, pos);
+        self.diff_text_occurrences = self.diff_text_occurrences_in(document, line_ix, side, pos);
+        None
+    }
+
+    /// Replays a click whose full syntax document was cold when the pointer
+    /// landed. The byte/row position is valid only while it is still the active
+    /// caret and no projection rebuild has cleared it.
+    pub(in crate::view) fn retry_pending_diff_text_syntax_click(&mut self) {
+        let Some((pos, document_region)) = self.diff_text_pending_syntax_click.take() else {
+            return;
+        };
+        if self.diff_text_head != Some(pos) {
+            return;
+        }
+        if let Some(still_pending_region) = self.set_diff_text_click_highlights(&pos, false) {
+            debug_assert_eq!(still_pending_region, document_region);
+            self.diff_text_pending_syntax_click = Some((pos, still_pending_region));
+        }
+    }
+
+    pub(in crate::view) fn clear_pending_diff_text_syntax_click_for(
+        &mut self,
+        document_region: DiffTextRegion,
+    ) {
+        if self
+            .diff_text_pending_syntax_click
+            .is_some_and(|(_, pending_region)| pending_region == document_region)
+        {
+            self.diff_text_pending_syntax_click = None;
+        }
+    }
+
+    /// The matching delimiter pair for a click, projected onto rows.
+    fn diff_text_pair_match_in(
+        &mut self,
+        document: rows::PreparedDiffSyntaxDocument,
+        line_ix: usize,
+        side: DiffTextPairSide,
+        pos: &DiffTextPos,
+    ) -> Option<DiffTextPairMatch> {
+        let hit = rows::prepared_diff_syntax_pair_at_display_offset(document, line_ix, pos.offset)?;
+
+        let spans: Vec<DiffTextPairSpan> = hit
+            .open
+            .into_iter()
+            .chain(hit.close)
+            .filter_map(|end| {
+                let (source_visible_ix, region) =
+                    self.diff_text_pair_row_for_document_line(side, end.line_ix)?;
+                Some(DiffTextPairSpan {
+                    source_visible_ix,
+                    region,
+                    range: end.display_range,
+                })
+            })
+            .collect();
+        // Both ends off-screen is not a pair worth remembering.
+        (!spans.is_empty()).then_some(DiffTextPairMatch {
+            #[cfg(test)]
+            kind: hit.kind,
+            spans,
+        })
+    }
+
+    /// Every place the clicked name appears, projected onto rows.
+    ///
+    /// Shares the pair path's row resolution: both answer "which document and
+    /// line is this row", and both project document lines back onto rows, so a
+    /// name's uses land on rows exactly the way a delimiter's partner does.
+    fn diff_text_occurrences_in(
+        &mut self,
+        document: rows::PreparedDiffSyntaxDocument,
+        line_ix: usize,
+        side: DiffTextPairSide,
+        pos: &DiffTextPos,
+    ) -> FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> {
+        let ends =
+            rows::prepared_diff_syntax_occurrences_at_display_offset(document, line_ix, pos.offset);
+        if ends.is_empty() {
+            return FxHashMap::default();
+        }
+        // The collapsed projection keeps no reverse index, and the per-occurrence
+        // lookup would otherwise scan every projected row for every match. Build
+        // it once here instead -- O(rows + matches) rather than rows times
+        // matches.
+        let collapsed_rows = self.diff_text_collapsed_row_index();
+        let mut buckets: FxHashMap<(usize, DiffTextRegion), smallvec::SmallVec<[Range<usize>; 4]>> =
+            FxHashMap::default();
+        for end in ends {
+            let Some((source_visible_ix, region)) = self.diff_text_pair_row_for_document_line_with(
+                side,
+                end.line_ix,
+                collapsed_rows.as_ref(),
+            ) else {
+                continue;
+            };
+            buckets
+                .entry((source_visible_ix, region))
+                .or_default()
+                .push(end.display_range);
+        }
+        for ranges in buckets.values_mut() {
+            ranges.sort_by_key(|range| range.start);
+        }
+        buckets
+    }
+
+    /// `row_ix -> source_visible_ix` for the collapsed projection, or `None`
+    /// when that projection is not active and the mapping is not a scan.
+    fn diff_text_collapsed_row_index(&self) -> Option<FxHashMap<usize, usize>> {
+        self.is_collapsed_diff_projection_active().then(|| {
+            self.collapsed_diff_visible_rows
+                .iter()
+                .enumerate()
+                .filter_map(|(visible_ix, row)| Some((row.row_ix()?, visible_ix)))
+                .collect()
+        })
+    }
+
+    pub(in super::super::super) fn diff_text_occurrence_color(&self) -> gpui::Rgba {
+        self.theme.colors.editor.occurrence_highlight_background
+    }
+
+    /// The occurrences falling on one row, resolving the row itself. See the
+    /// note on the pair equivalent.
+    #[cfg(test)]
+    pub(in super::super::super) fn diff_text_local_occurrence_ranges(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_occurrence_ranges_in(region, resolved)
+    }
+
+    pub(in super::super::super) fn diff_text_local_occurrence_ranges_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> smallvec::SmallVec<[Range<usize>; 4]> {
+        if self.diff_text_occurrences.is_empty() {
+            return smallvec::SmallVec::new();
+        }
+        let (source_visible_ix, visual_range) = resolved;
+        let Some(ranges) = self.diff_text_occurrences.get(&(source_visible_ix, region)) else {
+            return smallvec::SmallVec::new();
+        };
+        // Already sorted when the buckets were built.
+        ranges
+            .iter()
+            .filter_map(|range| {
+                diff_text_local_range_from_source_ranges(range.clone(), visual_range.clone())
+            })
+            .collect()
+    }
+
+    /// Every occurrence span, flattened and ordered, for assertions.
+    #[cfg(test)]
+    pub(in crate::view) fn diff_text_occurrences_for_tests(&self) -> Vec<(usize, Range<usize>)> {
+        let mut out: Vec<(usize, Range<usize>)> = self
+            .diff_text_occurrences
+            .iter()
+            .flat_map(|((source_visible_ix, _), ranges)| {
+                ranges
+                    .iter()
+                    .map(move |range| (*source_visible_ix, range.clone()))
+            })
+            .collect();
+        out.sort_by_key(|(row, range)| (*row, range.start));
+        out
+    }
+
+    /// The parts of the pair that fall on one row, resolving the row itself.
+    ///
+    /// The paint path uses the `_in` form, which shares one resolution across
+    /// all three row queries; this is the standalone form the tests read.
+    #[cfg(test)]
+    pub(in super::super::super) fn diff_text_local_pair_ranges(
+        &self,
+        visible_ix: usize,
+        region: DiffTextRegion,
+    ) -> smallvec::SmallVec<[Range<usize>; 2]> {
+        let resolved = self.diff_text_visual_source_range_for_region(visible_ix, region);
+        self.diff_text_local_pair_ranges_in(region, resolved)
+    }
+
+    pub(in super::super::super) fn diff_text_local_pair_ranges_in(
+        &self,
+        region: DiffTextRegion,
+        resolved: (usize, Range<usize>),
+    ) -> smallvec::SmallVec<[Range<usize>; 2]> {
+        let Some(pair) = self.diff_text_pair_match.as_ref() else {
+            return smallvec::SmallVec::new();
+        };
+        let (source_visible_ix, visual_range) = resolved;
+        pair.ranges_on_row(source_visible_ix, region)
+            .into_iter()
+            .filter_map(|range| {
+                diff_text_local_range_from_source_ranges(range, visual_range.clone())
+            })
+            .collect()
     }
 
     /// The part of one row a selection covers, or `None` when the selection

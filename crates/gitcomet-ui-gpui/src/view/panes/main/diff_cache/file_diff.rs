@@ -165,6 +165,29 @@ fn line_byte_range(text: &str, line_starts: &[usize], line_ix: usize) -> std::op
     start..end
 }
 
+/// Whether `line_starts` is the index of exactly this text.
+///
+/// The one place the indexing convention of [`IndexedFileDiffSource`] is
+/// restated as a test: a start at 0, one after every `\n` including a trailing
+/// one, and nothing else. A click can re-read a source-backed side long after
+/// the diff was indexed, and a stale index is not a cosmetic mismatch -- the
+/// pair projection would report ranges of a document the reader is not looking
+/// at, and a shortened file leaves starts past the end of the text.
+///
+/// O(text) with no allocation, which is nothing beside the parse it guards.
+pub(in crate::view) fn line_starts_describe(text: &str, line_starts: &[usize]) -> bool {
+    let mut expected = line_starts.iter().copied();
+    if expected.next() != Some(0) {
+        return false;
+    }
+    for (ix, byte) in text.bytes().enumerate() {
+        if byte == b'\n' && expected.next() != Some(ix + 1) {
+            return false;
+        }
+    }
+    expected.next().is_none()
+}
+
 const FILE_DIFF_INDEX_SCAN_BUFFER_BYTES: usize = 64 * 1024;
 const FILE_DIFF_INDEX_LINE_CAPACITY_MAX: usize = 64 * 1024;
 
@@ -1553,6 +1576,33 @@ fn file_diff_source_text(source: &IndexedFileDiffSource) -> SharedString {
     }
 }
 
+/// Where a side's content lives, when it is a file rather than text in memory.
+///
+/// A source-backed side deliberately keeps its text off the heap -- that is what
+/// lets a huge diff render from per-line slices. Anything that genuinely needs
+/// the whole document (a tree-sitter parse, and so delimiter matching) can read
+/// it back from here on demand instead of forcing every diff to hold it.
+fn file_diff_source_path(source: &IndexedFileDiffSource) -> Option<Arc<std::path::PathBuf>> {
+    match &source.content {
+        IndexedFileDiffContent::File(path) => Some(Arc::clone(path)),
+        IndexedFileDiffContent::Shared(_) | IndexedFileDiffContent::Empty => None,
+    }
+}
+
+/// What the file behind a source-backed side looked like when this generation
+/// indexed it: path, length and mtime, hashed.
+///
+/// Read back at click time to answer "is this still the document the rows are
+/// showing?". [`line_starts_describe`] cannot answer that -- it validates where
+/// the newlines are and says nothing about the bytes between them, so an edit
+/// that keeps the line lengths passes it while changing every column the pair
+/// projection is about to report.
+pub(in crate::view) fn file_diff_source_identity(
+    path: Option<&Arc<std::path::PathBuf>>,
+) -> Option<Arc<str>> {
+    path.map(|path| gitcomet_core::domain::FileDiffTextSource::new(path.as_ref().clone()).identity)
+}
+
 fn file_diff_source_plan_text(source: &IndexedFileDiffSource) -> Result<SharedString, String> {
     match &source.content {
         IndexedFileDiffContent::Shared(text) => Ok(SharedString::from(Arc::clone(text))),
@@ -1839,6 +1889,12 @@ pub(in crate::view) struct FileDiffCacheRebuild {
     pub(in crate::view) language: Option<rows::DiffSyntaxLanguage>,
     pub(in crate::view) row_provider: Arc<PagedFileDiffRows>,
     pub(in crate::view) inline_row_provider: Arc<PagedFileDiffInlineRows>,
+    pub(in crate::view) old_source_path: Option<Arc<std::path::PathBuf>>,
+    pub(in crate::view) new_source_path: Option<Arc<std::path::PathBuf>>,
+    /// Filesystem identity of each source-backed side as indexed, so a click can
+    /// tell whether the file has moved on. See [`file_diff_source_identity`].
+    pub(in crate::view) old_source_identity: Option<Arc<str>>,
+    pub(in crate::view) new_source_identity: Option<Arc<str>>,
     pub(in crate::view) old_text: SharedString,
     pub(in crate::view) old_line_starts: Arc<[usize]>,
     pub(in crate::view) old_line_to_row: Arc<[Option<usize>]>,
@@ -1872,6 +1928,12 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     let new_source = index_file_diff_side(file.new_source.as_ref(), file.new.as_ref())?;
     let old_text = file_diff_source_text(&old_source);
     let new_text = file_diff_source_text(&new_source);
+    let old_source_path = file_diff_source_path(&old_source);
+    let new_source_path = file_diff_source_path(&new_source);
+    // Taken straight after the index read, so it describes the same bytes the
+    // rows and `line_starts` below were built from.
+    let old_source_identity = file_diff_source_identity(old_source_path.as_ref());
+    let new_source_identity = file_diff_source_identity(new_source_path.as_ref());
     let old_line_starts = Arc::clone(&old_source.line_starts);
     let new_line_starts = Arc::clone(&new_source.line_starts);
     let old_line_count = old_source.line_count();
@@ -1925,6 +1987,10 @@ pub(in crate::view) fn build_file_diff_cache_rebuild_with_patch(
     Ok(FileDiffCacheRebuild {
         file_path,
         language,
+        old_source_path,
+        new_source_path,
+        old_source_identity,
+        new_source_identity,
         row_provider,
         inline_row_provider,
         old_text,
@@ -2165,6 +2231,60 @@ mod tests {
         }
     }
 
+    /// A side backed by a file on disk -- an unstaged diff's new side is the
+    /// worktree file -- keeps its text off the heap, which is what lets a huge
+    /// diff render from per-line slices. The rebuild must therefore hand back
+    /// the *path*, or nothing can ever parse a whole document for that side.
+    ///
+    /// Without it `file_diff_old_text`/`new_text` are empty, every prepared
+    /// syntax document lookup returns `None`, and anything needing the whole
+    /// tree (matching delimiters) silently gets nothing while row colouring
+    /// carries on from per-line tokens.
+    #[test]
+    fn file_backed_diff_sides_report_their_source_path() {
+        let dir = std::env::temp_dir().join(format!(
+            "gitcomet_file_diff_syntax_text_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create fixture dir");
+        let new_path = dir.join("lib.rs");
+        let new_body = "fn main() {\n    let v = vec![1, 2];\n}\n";
+        std::fs::write(&new_path, new_body).expect("write new side");
+
+        let file = gitcomet_core::domain::FileDiffText::new_sources(
+            std::path::PathBuf::from("lib.rs"),
+            None,
+            Some(gitcomet_core::domain::FileDiffTextSource::new(
+                new_path.clone(),
+            )),
+        );
+        let rebuild = build_file_diff_cache_rebuild(&file, &dir)
+            .expect("rebuild should succeed for a file-backed side");
+
+        assert!(
+            rebuild.new_text.is_empty(),
+            "a file-backed side deliberately keeps its text off the heap"
+        );
+        assert_eq!(
+            rebuild.new_source_path.as_deref(),
+            Some(&new_path),
+            "but it must report where that text can be read back from"
+        );
+        assert!(
+            !rebuild.new_line_starts.is_empty(),
+            "line starts are indexed even when the text is not held"
+        );
+        // And what the path points at is what the line starts describe.
+        let body = std::fs::read_to_string(&new_path).expect("read back");
+        assert_eq!(body, new_body);
+        // Three lines plus the start following the trailing newline.
+        assert_eq!(rebuild.new_line_starts.len(), 4);
+        assert_eq!(rebuild.new_line_starts.first(), Some(&0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn file_diff_index_line_capacity_hint_is_bounded_for_massive_files() {
         assert_eq!(file_diff_index_line_capacity_hint(0), 1);
@@ -2173,6 +2293,41 @@ mod tests {
             file_diff_index_line_capacity_hint(usize::MAX),
             FILE_DIFF_INDEX_LINE_CAPACITY_MAX
         );
+    }
+
+    /// The staleness guard the click path leans on, against the indexer that
+    /// produced the index it is checking.
+    ///
+    /// Pinned against `IndexedFileDiffSource` itself rather than against a
+    /// hand-written expectation: if the two ever disagree about the convention
+    /// -- a start after a trailing newline, no start for an empty file -- every
+    /// source-backed side would silently stop pairing instead of failing here.
+    #[test]
+    fn line_starts_describe_accepts_its_own_index_and_rejects_a_changed_file() {
+        for text in [
+            "alpha\nbeta\n",
+            "alpha\nbeta",
+            "\n",
+            "one line no newline",
+            "trailing\n\n\n",
+        ] {
+            let indexed = IndexedFileDiffSource::from_shared(Some(&Arc::from(text)));
+            assert!(
+                line_starts_describe(text, indexed.line_starts.as_ref()),
+                "the indexer's own answer for {text:?} must be accepted",
+            );
+        }
+
+        let indexed = IndexedFileDiffSource::from_shared(Some(&Arc::from("alpha\nbeta\ngamma\n")));
+        let starts = indexed.line_starts.as_ref();
+        // The file shrank: the index's later starts sit past the end of the
+        // text, which is exactly the pairing that used to panic downstream.
+        assert!(!line_starts_describe("alpha\n", starts));
+        // The file grew, or a line moved: same length class, different lines.
+        assert!(!line_starts_describe("alpha\nbeta\ngamma\ndelta\n", starts));
+        assert!(!line_starts_describe("alphaX\nbeta\ngamma\n", starts));
+        // An empty read against a real index is not a match either.
+        assert!(!line_starts_describe("", starts));
     }
 
     #[test]

@@ -1,6 +1,29 @@
 use super::helpers::*;
 use super::*;
 
+/// What a left-click on a row should leave selected.
+///
+/// Clicking a hunk or file header is a deliberate "act on this whole region"
+/// gesture, so it still selects the region it spans. Clicking a single line is
+/// not: it is how you put the caret somewhere to read, and washing the whole row
+/// for it both drowns the matching-delimiter highlight and says a range is
+/// selected when the user only pointed at something.
+///
+/// The anchor is still set either way, so shift-click still extends from the
+/// last place clicked and keyboard focus still has a row. Right-click sets its
+/// own selection when the clicked row is not already inside one
+/// (`diff_text.rs`), so the stage/discard actions still show their target.
+fn row_click_selection_range(
+    kind: DiffClickKind,
+    clicked_visible_ix: usize,
+    end: usize,
+) -> Option<(usize, usize)> {
+    match kind {
+        DiffClickKind::Line => None,
+        DiffClickKind::HunkHeader | DiffClickKind::FileHeader => Some((clicked_visible_ix, end)),
+    }
+}
+
 impl MainPaneView {
     pub(in crate::view) fn handle_patch_row_click(
         &mut self,
@@ -73,7 +96,7 @@ impl MainPaneView {
         };
 
         self.diff_selection_anchor = Some(clicked_visible_ix);
-        self.diff_selection_range = Some((clicked_visible_ix, end));
+        self.diff_selection_range = row_click_selection_range(kind, clicked_visible_ix, end);
     }
 
     pub(super) fn handle_diff_row_click(
@@ -126,7 +149,7 @@ impl MainPaneView {
         };
 
         self.diff_selection_anchor = Some(clicked_visible_ix);
-        self.diff_selection_range = Some((clicked_visible_ix, end));
+        self.diff_selection_range = row_click_selection_range(kind, clicked_visible_ix, end);
     }
 
     pub(super) fn handle_file_diff_row_click(&mut self, clicked_visible_ix: usize, shift: bool) {
@@ -146,7 +169,12 @@ impl MainPaneView {
         }
 
         self.diff_selection_anchor = Some(clicked_visible_ix);
-        self.diff_selection_range = Some((clicked_visible_ix, clicked_visible_ix));
+        // A file diff has no hunk or file headers to click, so every row here is
+        // a line -- and a plain line click anchors without selecting a range, as
+        // [`row_click_selection_range`]'s `Line` arm says. Written out rather
+        // than called, because passing a constant kind to a helper reads as a
+        // decision being made per click when there is nothing to decide.
+        self.diff_selection_range = None;
     }
 
     pub(super) fn file_change_visible_indices(&self) -> Vec<usize> {
@@ -204,7 +232,7 @@ impl MainPaneView {
         }
     }
 
-    fn diff_source_visible_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
+    pub(super) fn diff_source_visible_ix_for_mapped_ix(&self, mapped_ix: usize) -> Option<usize> {
         if let Some(map) = self.diff_visible_inline_map.as_ref() {
             return map.visible_ix_for_src_ix(mapped_ix);
         }

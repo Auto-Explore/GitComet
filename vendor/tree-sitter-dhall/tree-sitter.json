@@ -1,0 +1,12 @@
+{
+  "grammars": [
+    { "name": "dhall", "camelcase": "Dhall", "scope": "source.dhall", "path": ".", "file-types": ["dhall"] }
+  ],
+  "metadata": {
+    "version": "0.1.0",
+    "license": "MIT",
+    "description": "Dhall grammar for tree-sitter",
+    "links": { "repository": "https://github.com/jbellerb/tree-sitter-dhall" }
+  },
+  "bindings": { "c": false, "go": false, "node": false, "python": false, "rust": true, "swift": false, "zig": false }
+}

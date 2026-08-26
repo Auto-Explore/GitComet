@@ -213,7 +213,8 @@ you misspell is still an error — the file is rejected rather than half-applied
   `foreground`, `background`, and `border`
 - `editor`: `background`, `foreground`, `gutter_background`, `line_number`,
   `cursor`, `selection_background`, `search_match_background`,
-  `search_match_foreground`, `bracket_match_background`, `indent_guide`
+  `search_match_foreground`, `bracket_match_background`,
+  `occurrence_highlight_background`, `indent_guide`
 - `diff`: `added`, `removed`, `modified`; each contains `foreground`,
   `background`, `word_background`, and `focused_background`
 - `tooltip`: `background`, `foreground`

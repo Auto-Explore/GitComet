@@ -1,0 +1,12 @@
+{
+  "$schema": "https://tree-sitter.github.io/tree-sitter/assets/schemas/config.schema.json",
+  "grammars": [
+    {"name": "swift", "camelcase": "Swift", "scope": "source.swift", "path": ".",
+     "file-types": ["swift"], "injection-regex": "^swift$"}
+  ],
+  "metadata": {
+    "version": "0.7.3", "license": "MIT", "description": "Swift grammar for tree-sitter",
+    "links": {"repository": "https://github.com/alex-pinkus/tree-sitter-swift"}
+  },
+  "bindings": {"c": true, "go": false, "node": false, "python": false, "rust": true, "swift": false}
+}
