@@ -1143,6 +1143,14 @@ pub struct RepoState {
     pub id: RepoId,
     pub spec: RepoSpec,
     session_workdir_key: Arc<str>,
+    /// A loading tab created from an external folder drop. It remains visible
+    /// while the backend validates it, but session persistence must ignore it
+    /// until [`Self::commit_external_drop_open`] is called.
+    provisional_external_drop_open: bool,
+    /// Repository that was active immediately before this external-drop tab
+    /// was created. A failed validation restores this exact tab when it still
+    /// exists instead of selecting the dropped tab's neighbour.
+    external_drop_previous_active_repo: Option<RepoId>,
     pub loads_in_flight: RepoLoadsInFlight,
     pub pull_in_flight: u32,
     pub push_in_flight: u32,
@@ -1266,6 +1274,8 @@ impl RepoState {
             id,
             spec,
             session_workdir_key,
+            provisional_external_drop_open: false,
+            external_drop_previous_active_repo: None,
             loads_in_flight: RepoLoadsInFlight::default(),
             pull_in_flight: 0,
             push_in_flight: 0,
@@ -1342,6 +1352,36 @@ impl RepoState {
             pending_force_push_lease: None,
             comparison_mark: None,
         }
+    }
+
+    pub(crate) fn new_external_drop_opening(
+        id: RepoId,
+        spec: RepoSpec,
+        previous_active_repo: Option<RepoId>,
+    ) -> Self {
+        let mut repo = Self::new_opening(id, spec);
+        repo.provisional_external_drop_open = true;
+        repo.external_drop_previous_active_repo = previous_active_repo;
+        repo
+    }
+
+    pub(crate) fn is_provisional_external_drop_open(&self) -> bool {
+        self.provisional_external_drop_open
+    }
+
+    pub(crate) fn external_drop_previous_active_repo(&self) -> Option<RepoId> {
+        self.external_drop_previous_active_repo
+    }
+
+    /// Commits a successfully opened external-drop candidate. Returns whether
+    /// the repository was provisional so the reducer can emit its deferred
+    /// session and recent-repository persistence exactly once.
+    pub(crate) fn commit_external_drop_open(&mut self) -> bool {
+        let was_provisional = std::mem::take(&mut self.provisional_external_drop_open);
+        if was_provisional {
+            self.external_drop_previous_active_repo = None;
+        }
+        was_provisional
     }
 
     pub(crate) fn set_spec(&mut self, spec: RepoSpec) {

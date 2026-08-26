@@ -159,6 +159,7 @@ mod diff_preview;
 mod diff_text_model;
 mod diff_text_selection;
 mod diff_utils;
+mod external_drag;
 mod file_diff_display;
 mod file_icons;
 mod fingerprint;
@@ -1941,6 +1942,10 @@ impl GitCometView {
             ui_scale_percent: ui_scale.percent,
             open_repo_panel: false,
             open_repo_input,
+            external_drag_paths: None,
+            external_drag_payload: None,
+            external_drag_classification_seq: 0,
+            external_drag_drop_pending: false,
             hover_resize_edge: None,
             sidebar_collapsed: restored_sidebar_collapsed,
             sidebar_collapsed_popover: None,
@@ -3599,12 +3604,152 @@ impl GitCometView {
     pub(in crate::view) fn diff_scroll_sync_for_test(&self) -> DiffScrollSync {
         self.diff_scroll_sync
     }
+
+    fn set_external_drag_payload(
+        &mut self,
+        payload: Option<external_drag::ClassifiedExternalPaths>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.external_drag_payload == payload {
+            return;
+        }
+
+        let folder_active = payload
+            .as_ref()
+            .is_some_and(|classified| classified.directory().is_some());
+        self.external_drag_payload = payload;
+        self.repo_tabs_bar.update(cx, |bar, cx| {
+            bar.set_external_folder_drag_active(folder_active, cx);
+        });
+        cx.notify();
+    }
+
+    fn begin_external_drag_classification(
+        &mut self,
+        paths: gpui::ExternalPaths,
+        repository_bar_already_cleared: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if self.external_drag_paths.as_ref() == Some(&paths) {
+            return;
+        }
+
+        self.external_drag_classification_seq =
+            self.external_drag_classification_seq.wrapping_add(1);
+        let classification_seq = self.external_drag_classification_seq;
+        self.external_drag_paths = Some(paths.clone());
+        self.external_drag_drop_pending = false;
+        if repository_bar_already_cleared {
+            self.external_drag_payload = None;
+            cx.notify();
+        } else {
+            self.external_drag_payload = None;
+            let show_drop_zone = matches!(paths.paths(), [_]);
+            self.repo_tabs_bar.update(cx, |bar, cx| {
+                bar.set_external_folder_drag_active(show_drop_zone, cx);
+            });
+            cx.notify();
+        }
+
+        let expected_paths = paths.clone();
+        let classification_task =
+            cx.background_spawn(
+                async move { external_drag::classify_external_paths_blocking(&paths) },
+            );
+        cx.spawn(async move |view, cx| {
+            let classification = classification_task.await;
+            let _ = view.update(cx, |this, cx| {
+                if this.external_drag_classification_seq != classification_seq
+                    || this.external_drag_paths.as_ref() != Some(&expected_paths)
+                {
+                    return;
+                }
+
+                if this.external_drag_drop_pending {
+                    this.external_drag_payload = Some(classification);
+                    this.finish_external_drag_drop(false, cx);
+                } else {
+                    this.set_external_drag_payload(Some(classification), cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn clear_external_drag_state(
+        &mut self,
+        repository_bar_already_cleared: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let changed = self.external_drag_paths.take().is_some()
+            || self.external_drag_payload.take().is_some()
+            || self.external_drag_drop_pending;
+        self.external_drag_drop_pending = false;
+        self.external_drag_classification_seq =
+            self.external_drag_classification_seq.wrapping_add(1);
+        if !repository_bar_already_cleared {
+            self.repo_tabs_bar.update(cx, |bar, cx| {
+                bar.set_external_folder_drag_active(false, cx);
+            });
+        }
+        if changed {
+            cx.notify();
+        }
+    }
+
+    fn finish_external_drag_drop(
+        &mut self,
+        repository_bar_already_cleared: bool,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let directory = self
+            .external_drag_payload
+            .as_ref()
+            .and_then(external_drag::ClassifiedExternalPaths::directory)
+            .cloned();
+        self.clear_external_drag_state(repository_bar_already_cleared, cx);
+        if let Some(path) = directory {
+            self.store.dispatch(Msg::OpenRepoFromExternalDrop(path));
+        }
+    }
+
+    /// Called by the repository bar after it has cleared its own highlight, so
+    /// this must not update that entity re-entrantly from its drop handler.
+    pub(in crate::view) fn submit_external_drag_payload_after_repo_drop(
+        &mut self,
+        paths: gpui::ExternalPaths,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        if !matches!(paths.paths(), [_]) {
+            self.clear_external_drag_state(true, cx);
+            return;
+        }
+
+        if self.external_drag_paths.as_ref() != Some(&paths) {
+            self.begin_external_drag_classification(paths, true, cx);
+        }
+        self.external_drag_drop_pending = true;
+        if self.external_drag_payload.is_some() {
+            self.finish_external_drag_drop(true, cx);
+        } else {
+            cx.notify();
+        }
+    }
 }
 
 impl Render for GitCometView {
     fn render(&mut self, window: &mut Window, cx: &mut gpui::Context<Self>) -> impl IntoElement {
         #[cfg(test)]
         clear_visible_tooltip_text_for_test();
+
+        let external_repo_drop_enabled =
+            renders_full_chrome(self.view_mode) && !self.state.repos.is_empty();
+        if self.external_drag_paths.is_some()
+            && (!external_repo_drop_enabled
+                || (!cx.has_active_drag() && !self.external_drag_drop_pending))
+        {
+            self.clear_external_drag_state(false, cx);
+        }
 
         let theme = self.theme;
         let font_preferences = crate::font_preferences::current(cx);
@@ -4091,6 +4236,13 @@ impl Render for GitCometView {
             .cursor(cursor)
             .text_color(theme.colors.foreground.primary);
         root = root.relative();
+        if external_repo_drop_enabled {
+            root = root.on_drag_move(cx.listener(
+                |this, event: &gpui::DragMoveEvent<gpui::ExternalPaths>, _window, cx| {
+                    this.begin_external_drag_classification(event.drag(cx).clone(), false, cx);
+                },
+            ));
+        }
         root = root.child(UiScaleScrollCapture { view: cx.entity() });
         root = root
             .on_action(cx.listener(|this, _: &OpenActiveViewSearch, window, cx| {

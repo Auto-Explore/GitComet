@@ -35,6 +35,18 @@ pub(crate) const REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY: usize = 1;
 pub(crate) type ReorderRepoTabsEffects =
     SmallVec<[Effect; REORDER_REPO_TABS_INLINE_EFFECT_CAPACITY]>;
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum OpenRepoMode {
+    Standard,
+    ProvisionalExternalDrop,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FailedOpenActivation {
+    AdjacentTab,
+    PreviousActive(Option<RepoId>),
+}
+
 fn repo_switch_secondary_metadata_ready(
     repo_state: &RepoState,
     git_log_settings: GitLogSettings,
@@ -339,18 +351,37 @@ pub(in crate::store::reducer) fn append_selected_history_reload_effects(
 }
 
 pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBuf) -> Vec<Effect> {
+    open_repo_with_mode(id_alloc, state, path, OpenRepoMode::Standard)
+}
+
+pub(super) fn open_repo_from_external_drop(
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: PathBuf,
+) -> Vec<Effect> {
+    open_repo_with_mode(id_alloc, state, path, OpenRepoMode::ProvisionalExternalDrop)
+}
+
+fn open_repo_with_mode(
+    id_alloc: &AtomicU64,
+    state: &mut AppState,
+    path: PathBuf,
+    mode: OpenRepoMode,
+) -> Vec<Effect> {
     let now = SystemTime::now();
     let path = normalize_repo_path(path);
-    if let Some(repo_id) = state
+    if let Some((repo_id, existing_is_provisional_drop)) = state
         .repos
         .iter()
         .find(|r| r.spec.workdir == path)
-        .map(|r| r.id)
+        .map(|r| (r.id, r.is_provisional_external_drop_open()))
     {
         // Re-opening an already open repository should still refresh primary state, so stale
         // status/diff data gets reconciled immediately.
         let mut effects = set_active_repo(state, repo_id);
-        effects.push(persist_recent_repo_effect(Some(repo_id), path));
+        if mode == OpenRepoMode::Standard || !existing_is_provisional_drop {
+            effects.push(persist_recent_repo_effect(Some(repo_id), path));
+        }
         return effects;
     }
 
@@ -374,7 +405,12 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         .unwrap_or_default();
 
     state.repos.push({
-        let mut repo_state = crate::model::RepoState::new_opening(repo_id, spec.clone());
+        let mut repo_state = match mode {
+            OpenRepoMode::Standard => RepoState::new_opening(repo_id, spec.clone()),
+            OpenRepoMode::ProvisionalExternalDrop => {
+                RepoState::new_external_drop_opening(repo_id, spec.clone(), previous_active)
+            }
+        };
         repo_state.history_state.history_scope = history_mode;
         repo_state.history_state.history_author_filter = session_preferences
             .repo_history_author_filters
@@ -398,21 +434,23 @@ pub(super) fn open_repo(id_alloc: &AtomicU64, state: &mut AppState, path: PathBu
         repo_id,
         path: spec.workdir.clone(),
     });
-    effects.push(persist_recent_repo_effect(
-        Some(repo_id),
-        spec.workdir.clone(),
-    ));
-    effects.push(persist_session_effect(
-        state,
-        Some(repo_id),
-        "opening a repository",
-    ));
-    if saved_history_mode.is_none() {
-        effects.push(persist_repo_history_mode_effect(
+    if mode == OpenRepoMode::Standard {
+        effects.push(persist_recent_repo_effect(
             Some(repo_id),
-            spec.workdir,
-            history_mode,
+            spec.workdir.clone(),
         ));
+        effects.push(persist_session_effect(
+            state,
+            Some(repo_id),
+            "opening a repository",
+        ));
+        if saved_history_mode.is_none() {
+            effects.push(persist_repo_history_mode_effect(
+                Some(repo_id),
+                spec.workdir,
+                history_mode,
+            ));
+        }
     }
     effects
 }
@@ -551,7 +589,9 @@ pub(super) fn close_repo(
     // the Recently Closed list is ordered by when repositories were closed no
     // matter which of them (tab `x`, tab menu, picker row menu, close-others)
     // the user reached for.
-    let closed_workdir = state.repos[removed_repo_ix].spec.workdir.clone();
+    let closed_repo = &state.repos[removed_repo_ix];
+    let closed_workdir = closed_repo.spec.workdir.clone();
+    let persist_closed_recent = !closed_repo.is_provisional_external_drop_open();
     state.repos.remove(removed_repo_ix);
     repos.remove(&repo_id);
     // The worktree scan's cached handles are pruned only by that repo's own scan,
@@ -559,7 +599,9 @@ pub(super) fn close_repo(
     // repo is gone rather than merely idle -- `CancelRepoLoads` also fires on tab
     // switches and reloads, where the handles are still worth keeping.
     crate::store::effects::release_worktree_scan_handles(repo_id);
-    effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
+    if persist_closed_recent {
+        effects.push(persist_recent_repo_effect(Some(repo_id), closed_workdir));
+    }
     if was_active {
         let next_active_repo = if state.repos.is_empty() {
             None
@@ -623,7 +665,12 @@ pub(super) fn close_repos(
         }
         clear_banner_error_for_repo(state, repo_id);
         append_cancel_repo_loads_effect_for_repo(state, Some(repo_id), &mut effects);
-        if let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) {
+        if let Some(repo) = state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .filter(|repo| !repo.is_provisional_external_drop_open())
+        {
             effects.push(persist_recent_repo_effect(
                 Some(repo_id),
                 repo.spec.workdir.clone(),
@@ -1110,9 +1157,16 @@ pub(super) fn repo_opened_ok(
         workdir: normalize_repo_path(spec.workdir),
     };
     let mut clear_banner = false;
+    let mut committed_external_drop = None;
     let should_refresh_worktrees = state.active_repo == Some(repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.set_spec(spec);
+        if repo_state.commit_external_drop_open() {
+            committed_external_drop = Some((
+                repo_state.spec.workdir.clone(),
+                repo_state.history_state.history_scope,
+            ));
+        }
         repo_state.set_open(Loadable::Ready(()));
         repo_state.missing_on_disk = false;
         if !should_refresh_worktrees {
@@ -1168,12 +1222,27 @@ pub(super) fn repo_opened_ok(
         clear_banner_error_for_repo(state, repo_id);
     }
 
+    let mut effects = Vec::new();
+    if let Some((workdir, history_mode)) = committed_external_drop {
+        effects.push(persist_recent_repo_effect(Some(repo_id), workdir.clone()));
+        effects.push(persist_session_effect(
+            state,
+            Some(repo_id),
+            "opening a dropped repository",
+        ));
+        effects.push(persist_repo_history_mode_effect(
+            Some(repo_id),
+            workdir,
+            history_mode,
+        ));
+    }
+
     if !should_refresh_worktrees {
-        return Vec::new();
+        return effects;
     }
     let sidebar_mode = state.sidebar_mode;
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
-        let mut effects = refresh_full_effects(repo_state, git_log_settings);
+        effects.extend(refresh_full_effects(repo_state, git_log_settings));
         if should_refresh_worktrees
             && repo_state
                 .loads_in_flight
@@ -1199,7 +1268,78 @@ pub(super) fn repo_opened_ok(
         return effects;
     }
 
-    Vec::new()
+    effects
+}
+
+fn discard_failed_repo_open(
+    repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+    workdir: &std::path::Path,
+    message: String,
+    remove_from_recents: bool,
+    activation: FailedOpenActivation,
+) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    clear_banner_error_for_repo(state, repo_id);
+    push_notification(state, AppNotificationKind::Warning, message);
+
+    if remove_from_recents {
+        let remove_recent_result = session::remove_recent_repo(workdir);
+        handle_session_persist_result(
+            state,
+            Some(repo_id),
+            "removing an invalid repository from recent repositories",
+            remove_recent_result,
+        );
+    }
+
+    repos.remove(&repo_id);
+    if let Some(ix) = state.repos.iter().position(|r| r.id == repo_id) {
+        let was_active = state.active_repo == Some(repo_id);
+        state.repos.remove(ix);
+        if was_active {
+            let adjacent_repo = if ix > 0 {
+                state.repos.get(ix - 1).map(|r| r.id)
+            } else {
+                state.repos.get(ix).map(|r| r.id)
+            };
+            let next_active_repo = match activation {
+                FailedOpenActivation::AdjacentTab => adjacent_repo,
+                FailedOpenActivation::PreviousActive(None) => None,
+                FailedOpenActivation::PreviousActive(Some(previous_active)) => state
+                    .repos
+                    .iter()
+                    .any(|repo| repo.id == previous_active)
+                    .then_some(previous_active)
+                    .or(adjacent_repo),
+            };
+            if let Some(active_repo_id) = next_active_repo {
+                // Opening the provisional tab canceled the previous tab's
+                // in-flight loads. Run the ordinary activation path so those
+                // loads are requested again instead of leaving Ready repos
+                // with status/log/branch fields stuck at NotLoaded.
+                let mut activation_effects = SetActiveRepoEffects::new();
+                fill_set_active_repo_inline_impl(
+                    state,
+                    active_repo_id,
+                    &mut activation_effects,
+                    false,
+                );
+                effects.extend(activation_effects);
+            } else {
+                state.active_repo = None;
+            }
+        }
+        let persist_result = session::persist_from_state(state);
+        handle_session_persist_result(
+            state,
+            state.active_repo,
+            "discarding a failed repository open from the session",
+            persist_result,
+        );
+    }
+    effects
 }
 
 pub(super) fn repo_opened_err(
@@ -1209,62 +1349,49 @@ pub(super) fn repo_opened_err(
     spec: RepoSpec,
     error: Error,
 ) -> Vec<Effect> {
-    if !state.repos.iter().any(|repo| repo.id == repo_id) {
+    let Some((provisional_external_drop, previous_active_repo)) = state
+        .repos
+        .iter()
+        .find(|repo| repo.id == repo_id)
+        .map(|repo| {
+            (
+                repo.is_provisional_external_drop_open(),
+                repo.external_drop_previous_active_repo(),
+            )
+        })
+    else {
         return Vec::new();
-    }
+    };
 
     let spec = RepoSpec {
         workdir: normalize_repo_path(spec.workdir),
     };
-    if matches!(
-        error.kind(),
-        gitcomet_core::error::ErrorKind::NotARepository
-    ) {
-        let mut effects = Vec::new();
-        clear_banner_error_for_repo(state, repo_id);
-        push_notification(
+    let not_a_repository = matches!(error.kind(), ErrorKind::NotARepository);
+    if not_a_repository || provisional_external_drop {
+        let message = if not_a_repository {
+            format!(
+                "No valid Git repository was found at {}.",
+                spec.workdir.display()
+            )
+        } else {
+            format!(
+                "Could not open repository at {}: {error}",
+                spec.workdir.display()
+            )
+        };
+        return discard_failed_repo_open(
+            repos,
             state,
-            AppNotificationKind::Error,
-            format!("Folder is not a git repository: {}", spec.workdir.display()),
+            repo_id,
+            &spec.workdir,
+            message,
+            not_a_repository,
+            if provisional_external_drop {
+                FailedOpenActivation::PreviousActive(previous_active_repo)
+            } else {
+                FailedOpenActivation::AdjacentTab
+            },
         );
-
-        let remove_recent_result = session::remove_recent_repo(&spec.workdir);
-        handle_session_persist_result(
-            state,
-            Some(repo_id),
-            "removing an invalid repository from recent repositories",
-            remove_recent_result,
-        );
-
-        repos.remove(&repo_id);
-        if let Some(ix) = state.repos.iter().position(|r| r.id == repo_id) {
-            let was_active = state.active_repo == Some(repo_id);
-            state.repos.remove(ix);
-            if was_active {
-                state.active_repo = if ix > 0 {
-                    state.repos.get(ix - 1).map(|r| r.id)
-                } else {
-                    state.repos.get(ix).map(|r| r.id)
-                };
-                if let Some(active_repo_id) = state.active_repo
-                    && let Some(repo_state) = state
-                        .repos
-                        .iter_mut()
-                        .find(|repo| repo.id == active_repo_id)
-                {
-                    repo_state.last_active_at = Some(SystemTime::now());
-                    append_open_repo_effect_if_not_loaded(repo_state, &mut effects);
-                }
-            }
-            let persist_result = session::persist_from_state(state);
-            handle_session_persist_result(
-                state,
-                state.active_repo,
-                "removing an invalid repository from session",
-                persist_result,
-            );
-        }
-        return effects;
     }
 
     let mut clear_banner = false;

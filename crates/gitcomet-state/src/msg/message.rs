@@ -155,6 +155,10 @@ pub enum RepoWatchDegradedReason {
 #[derive(Debug)]
 pub enum Msg {
     OpenRepo(PathBuf),
+    /// Opens a repository candidate supplied by an external file-system drop.
+    /// The candidate is not persisted until the backend has opened it
+    /// successfully, and any open failure discards its temporary tab.
+    OpenRepoFromExternalDrop(PathBuf),
     RestoreSession {
         open_repos: Vec<PathBuf>,
         active_repo: Option<PathBuf>,

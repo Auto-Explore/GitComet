@@ -124,7 +124,12 @@ fn install_terminal_interrupt_handler() -> std::io::Result<()> {
                 // SIGINT is the user's explicit request to stop a terminal
                 // launch, then preserve the conventional shell exit status.
                 retire_active_session();
-                std::process::exit(128 + SIGINT);
+                // `std::process::exit` runs native exit handlers while the UI
+                // and renderer threads are still active. Graphics-driver exit
+                // handlers can then tear down state those threads are using.
+                // The signal-hook primitive is a raw `_exit`, so it preserves
+                // status 130 without running that concurrent native teardown.
+                signal_hook::low_level::exit(128 + SIGINT);
             }
         })?;
     Ok(())
@@ -1897,8 +1902,17 @@ new frame
     #[test]
     fn terminal_interrupt_clears_active_session_state() {
         const CHILD_PROCESS: &str = "GITCOMET_SIGINT_CLEANUP_TEST_CHILD";
+        const SIGINT_CHILD: &str = "sigint";
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        const PROCESS_EXIT_CONTROL_CHILD: &str = "process-exit-control";
 
-        if std::env::var_os(CHILD_PROCESS).is_some() {
+        let child_mode = std::env::var_os(CHILD_PROCESS);
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        if child_mode.as_deref() == Some(std::ffi::OsStr::new(PROCESS_EXIT_CONTROL_CHILD)) {
+            std::process::exit(130);
+        }
+
+        if child_mode.is_some() {
             install_terminal_interrupt_handler().expect("install SIGINT handler");
             begin_session().expect("begin child session");
             let dir = crash_dir().expect("child crash directory");
@@ -1914,21 +1928,53 @@ new frame
         }
 
         let state_root = tempdir().expect("temporary state root");
-        let mut child =
-            std::process::Command::new(std::env::current_exe().expect("test executable"))
-                .arg("terminal_interrupt_clears_active_session_state")
-                .env(CHILD_PROCESS, "1")
-                .env("XDG_STATE_HOME", state_root.path())
-                .spawn()
-                .expect("run SIGINT cleanup child");
-        let child_pid = child.id();
-        let status = child.wait().expect("wait for SIGINT cleanup child");
 
-        assert_eq!(status.code(), Some(130));
+        // glibc's loader diagnostics give the test a safe way to distinguish
+        // normal process exit from raw `_exit`: the control child must run
+        // native finalizers, while the SIGINT child must not run any.
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        {
+            let output =
+                std::process::Command::new(std::env::current_exe().expect("test executable"))
+                    .arg("terminal_interrupt_clears_active_session_state")
+                    .env(CHILD_PROCESS, PROCESS_EXIT_CONTROL_CHILD)
+                    .env("LD_DEBUG", "files")
+                    .output()
+                    .expect("run process-exit control child");
+            assert_eq!(output.status.code(), Some(130));
+            assert!(loader_diagnostics_show_finalizers(&output.stderr));
+        }
+
+        let mut command =
+            std::process::Command::new(std::env::current_exe().expect("test executable"));
+        command
+            .arg("terminal_interrupt_clears_active_session_state")
+            .env(CHILD_PROCESS, SIGINT_CHILD)
+            .env("XDG_STATE_HOME", state_root.path());
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        command
+            .env("LD_DEBUG", "files")
+            .stderr(std::process::Stdio::piped());
+        let child = command.spawn().expect("run SIGINT cleanup child");
+        let child_pid = child.id();
+        let output = child
+            .wait_with_output()
+            .expect("wait for SIGINT cleanup child");
+
+        assert_eq!(output.status.code(), Some(130));
+        #[cfg(all(target_os = "linux", target_env = "gnu"))]
+        assert!(!loader_diagnostics_show_finalizers(&output.stderr));
         let dir = state_root.path().join("gitcomet").join("crashes");
         assert!(!session_marker_path_for_pid(&dir, child_pid).exists());
         assert!(!last_operation_path_for_pid(&dir, child_pid).exists());
         assert!(!runtime_error_path_for_pid(&dir, child_pid).exists());
+    }
+
+    #[cfg(all(unix, target_os = "linux", target_env = "gnu"))]
+    fn loader_diagnostics_show_finalizers(stderr: &[u8]) -> bool {
+        String::from_utf8_lossy(stderr)
+            .lines()
+            .any(|line| line.contains("calling fini:"))
     }
 
     #[cfg(windows)]
