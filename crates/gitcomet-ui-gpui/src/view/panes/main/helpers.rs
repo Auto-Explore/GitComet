@@ -787,7 +787,7 @@ pub(super) fn append_line_insertion_text(existing: &str, line: &str) -> String {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(super) struct ResolvedOutlineDelta {
+pub(in crate::view) struct ResolvedOutlineDelta {
     pub(super) old_range: Range<usize>,
     pub(super) new_range: Range<usize>,
 }
