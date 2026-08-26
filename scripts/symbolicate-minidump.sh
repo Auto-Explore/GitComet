@@ -106,13 +106,21 @@ if [[ -z "$symbols_url" ]]; then
 fi
 
 mkdir -p "$cache_dir"
+# Downloads are atomically renamed into the cache, so the temporary directory
+# must live on the same filesystem as the cache.
+symbols_tmp="$(mktemp -d "${cache_dir%/}/.symbols-tmp.XXXXXX")"
+cleanup_symbols_tmp() {
+  rm -rf -- "$symbols_tmp"
+}
+trap cleanup_symbols_tmp EXIT
 
 # minidump-stackwalk is `[OPTIONS] <MINIDUMP> [SYMBOLS_PATHS]...`, so extra
 # arguments have to precede the positional: after it they are parsed as local
 # symbol paths and silently ignored.
-exec minidump-stackwalk \
+minidump-stackwalk \
   "$output_flag" \
   --symbols-url "$symbols_url" \
   --symbols-cache "$cache_dir" \
+  --symbols-tmp "$symbols_tmp" \
   "$@" \
   "$minidump"

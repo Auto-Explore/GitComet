@@ -934,20 +934,17 @@ jobs:
     runs-on: ubuntu-22.04
     # Six ~239 MiB symbol files are downloaded, merged and re-uploaded here.
     timeout-minutes: 60
-    needs: [prepare, build_windows, build_linux, build_macos]
-    # Publish whatever built: one target failing should not cost the others
-    # their symbols, since a crash report can arrive for any platform. But if
-    # every build failed there is nothing to publish, and a red job here would
-    # only point away from the real failure.
+    # `publish_release_assets` depends on every build matrix and only succeeds
+    # after the complete payload has been attached to the draft release. Keep
+    # production symbols behind that same all-or-nothing release boundary: a
+    # failed target cancels the release, so none of that build's symbols belong
+    # in the store either.
+    needs: [prepare, publish_release_assets]
     #
     # `release_id` is empty for test builds, which must not push ~1.4 GiB into
     # the production store for a release that may never exist — the same
     # distinction the Windows signing profile makes.
-    if: >-
-      ${{ !cancelled() && needs.prepare.outputs.release_id != ''
-      && (needs.build_windows.result == 'success'
-      || needs.build_linux.result == 'success'
-      || needs.build_macos.result == 'success') }}
+    if: ${{ needs.prepare.outputs.release_id != '' && needs.publish_release_assets.result == 'success' }}
     # Symbols are auxiliary triage data. This job lives inside a reusable
     # workflow whose overall result gates publish_release and every deploy job
     # in release-manual-main.yml, so a transient Azure error must not strand a
