@@ -522,14 +522,31 @@ impl<T: Clone + PartialEq> NavStack<T> {
         if self.cursor + 1 < self.entries.len() {
             return;
         }
-        if self.cursor > 0 && self.entries.get(self.cursor - 1) == Some(&cur) {
-            // Folding in-place made this entry match the previous one;
-            // collapse to avoid a consecutive duplicate that would require
-            // two back clicks to step past a closed/cleared view.
-            self.entries.truncate(self.cursor);
+        self.replace_current(cur);
+    }
+
+    /// Replace the snapshot at the cursor without discarding forward history.
+    ///
+    /// Unlike a background [`Self::reconcile`] this is allowed while parked
+    /// mid-stack. It is used when an external context change deliberately
+    /// resets the view represented by the current entry, such as activating a
+    /// repository tab at its live history tip.
+    pub fn replace_current(&mut self, entry: T) {
+        if self.entries.get(self.cursor) == Some(&entry) {
+            return;
+        }
+        if self.entries.is_empty() {
+            self.entries.push(entry);
+            self.cursor = 0;
+            return;
+        }
+        if self.cursor > 0 && self.entries.get(self.cursor - 1) == Some(&entry) {
+            // Replacing this entry made it match the previous one. Remove only
+            // the duplicate current entry so any forward history survives.
+            self.entries.remove(self.cursor);
             self.cursor -= 1;
         } else {
-            self.entries[self.cursor] = cur;
+            self.entries[self.cursor] = entry;
         }
     }
 

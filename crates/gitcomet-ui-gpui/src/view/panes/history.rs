@@ -727,6 +727,34 @@ struct HistorySelectionRef<'a> {
     worktree_selected: bool,
 }
 
+/// The row that should read as selected in the active workspace's history.
+///
+/// An explicit selection wins while the user remains in the tab. With no
+/// explicit selection, the live workspace is the focus: its uncommitted row
+/// when one exists, otherwise the commit at HEAD.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(in crate::view) enum HistoryPrimarySelection {
+    WorkingTree,
+    Commit(CommitId),
+    Worktree(PathBuf),
+}
+
+pub(in crate::view) fn history_primary_selection(
+    repo: &RepoState,
+    show_working_tree_summary_row: bool,
+) -> Option<HistoryPrimarySelection> {
+    if let Some(path) = &repo.history_state.worktree_selection {
+        return Some(HistoryPrimarySelection::Worktree(path.clone()));
+    }
+    if let Some(commit_id) = &repo.history_state.selected_commit {
+        return Some(HistoryPrimarySelection::Commit(commit_id.clone()));
+    }
+    if show_working_tree_summary_row {
+        return Some(HistoryPrimarySelection::WorkingTree);
+    }
+    repo.head_commit_id().map(HistoryPrimarySelection::Commit)
+}
+
 fn peek_history_selected_list_index(
     cache: Option<&HistorySelectedListIndexCache>,
     repo_id: RepoId,
@@ -1128,7 +1156,17 @@ impl HistoryView {
             let next = Arc::clone(&model.read(cx).state);
             let next_fingerprint = Self::notify_fingerprint_for(&next, this.history_show_tags);
             let changed = next_fingerprint != this.notify_fingerprint;
+            let switched_repo = this.state.active_repo != next.active_repo;
             this.state = next;
+
+            if switched_repo {
+                // These memos describe the selection in the tab we just left.
+                // Their keys also include repository identity, but dropping
+                // them here makes the transition atomic even when sibling
+                // workspaces expose an identical commit page.
+                this.history_selected_list_index_cache = None;
+                this.history_selected_lane_color_cache = None;
+            }
 
             // When the historical browse point changes, scroll the history to that
             // commit (its row is highlighted purple by the canvas).
@@ -1988,9 +2026,9 @@ impl HistoryView {
     /// coloured from a lane, the nodes, the message borders and the graph fade —
     /// washes out against it.
     ///
-    /// The anchor is the selected commit, or HEAD while the uncommitted-changes
-    /// row holds the selection: those changes sit on HEAD, so selecting that row
-    /// lights the lane they will land on rather than leaving the list unwashed.
+    /// The anchor is the selected commit, or HEAD while the workspace's default
+    /// row holds the selection. Dirty changes sit on HEAD, and a clean workspace
+    /// defaults to HEAD itself, so either state lights the active branch lane.
     /// A multi-selection has no single lane to pick, so nothing washes.
     ///
     /// Memoised because resolving it is a scan of the page — the colour is one
@@ -2009,34 +2047,27 @@ impl HistoryView {
             if repo.history_state.multi_selection.is_multi() {
                 return None;
             }
-            // A selected worktree row highlights that worktree's branch, not the
-            // commit underneath it -- the two differ whenever the branch is
-            // behind and has been given a lane of its own.
-            let worktree_anchor = repo
-                .history_state
-                .worktree_selection
-                .as_ref()
-                .and_then(|path| match &repo.worktree_dirty {
-                    Loadable::Ready(dirty) => dirty.iter().find(|summary| &summary.path == path),
-                    _ => None,
-                })
-                .and_then(|summary| {
-                    Some(HistoryLaneAnchor::Worktree {
-                        head: summary.head.clone()?,
-                        on_branch: summary.branch.is_some() && !summary.detached,
-                    })
-                });
-            let anchor = worktree_anchor.or_else(|| {
-                repo.history_state
-                    .selected_commit
-                    .clone()
-                    .or_else(|| {
-                        show_worktree_summary_row
-                            .then(|| repo.head_commit_id())
-                            .flatten()
-                    })
-                    .map(HistoryLaneAnchor::Commit)
-            })?;
+            let anchor = match history_primary_selection(repo, show_worktree_summary_row)? {
+                // A selected worktree row highlights that worktree's branch,
+                // not the commit underneath it -- the two differ whenever the
+                // branch is behind and has been given a lane of its own.
+                HistoryPrimarySelection::Worktree(path) => match &repo.worktree_dirty {
+                    Loadable::Ready(dirty) => dirty
+                        .iter()
+                        .find(|summary| summary.path == path)
+                        .and_then(|summary| {
+                            Some(HistoryLaneAnchor::Worktree {
+                                head: summary.head.clone()?,
+                                on_branch: summary.branch.is_some() && !summary.detached,
+                            })
+                        })?,
+                    _ => return None,
+                },
+                HistoryPrimarySelection::WorkingTree => {
+                    HistoryLaneAnchor::Commit(repo.head_commit_id()?)
+                }
+                HistoryPrimarySelection::Commit(commit_id) => HistoryLaneAnchor::Commit(commit_id),
+            };
             (repo.id, anchor)
         };
 
