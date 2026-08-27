@@ -102,6 +102,8 @@ pub(crate) fn is_diff_shortcut_candidate(keystroke: &gpui::Keystroke) -> bool {
         || ((mods.control || mods.platform)
             && !mods.alt
             && !mods.function
+            // Ctrl/Cmd+Shift+A is the app-level recent-repositories shortcut.
+            && (key != "a" || !mods.shift)
             && matches!(
                 key,
                 "1" | "2" | "3" | "a" | "c" | "e" | "s" | "d" | "h" | "u"

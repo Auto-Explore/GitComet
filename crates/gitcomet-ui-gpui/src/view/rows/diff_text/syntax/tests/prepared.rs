@@ -645,6 +645,80 @@ fn treesitter_line_fallback_survives_incomplete_fragments() {
 }
 
 #[test]
+fn document_collector_reports_host_query_failure_after_collecting_injections() {
+    let ts_language: tree_sitter::Language = tree_sitter_rust::LANGUAGE.into();
+    let query = tree_sitter::Query::new(
+        &ts_language,
+        r#"
+        ((identifier) @variable
+          (#eq? @variable "host_failure"))
+        "#,
+    )
+    .expect("test highlight query should compile");
+    let capture_kinds = query
+        .capture_names()
+        .iter()
+        .map(|name| syntax_kind_from_capture_name(name))
+        .collect();
+    let injection_query = tree_sitter::Query::new(
+        &ts_language,
+        r#"
+        ((string_content) @injection.content
+          (#set! injection.language "rust"))
+        "#,
+    )
+    .expect("test injection query should compile");
+    let spec = TreesitterHighlightSpec {
+        ts_language: ts_language.clone(),
+        query,
+        capture_kinds,
+        injection_query: Some(injection_query),
+        injection_combined_patterns: vec![false],
+        has_combined_injections: false,
+    };
+
+    let parsed_input = br#"const SCRIPT: &str = "fn injected() {}"; host_failure"#;
+    let host_start = parsed_input
+        .windows(b"host_failure".len())
+        .position(|window| window == b"host_failure")
+        .expect("host identifier should be present");
+    // Model the upstream recovered-node bug: the tree's identifier extends
+    // beyond the text provider, so evaluating its #eq? predicate panics. The
+    // earlier injection remains wholly inside the available input.
+    let input = &parsed_input[..host_start + "host".len()];
+    let tree = with_ts_parser_parse_result(&ts_language, |parser| parser.parse(parsed_input, None))
+        .expect("test input should parse");
+
+    let result = with_silenced_panic_hook(|| {
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            collect_treesitter_document_line_tokens_for_line_window_with_host_query_status(
+                &tree,
+                &spec,
+                input,
+                &[0],
+                0,
+                1,
+                treesitter_document_hash(DiffSyntaxLanguage::Rust, "collector regression"),
+            )
+        }))
+    });
+    let (per_line, host_query_succeeded) =
+        result.expect("the collector should recover the query panic");
+
+    assert!(
+        !host_query_succeeded,
+        "the caller needs the host failure signal to select its heuristic fallback"
+    );
+    assert!(
+        per_line[0].iter().any(|token| {
+            token.kind == SyntaxTokenKind::Keyword && &input[token.range.clone()] == b"fn"
+        }),
+        "injections should still be collected after the host query fails: {:?}",
+        per_line[0]
+    );
+}
+
+#[test]
 fn parser_fast_path_reuses_same_language_until_switch() {
     reset_ts_parser_test_state();
 

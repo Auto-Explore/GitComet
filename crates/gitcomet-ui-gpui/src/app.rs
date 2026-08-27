@@ -2473,6 +2473,7 @@ mod tests {
                 "f3",
                 crate::view::TextInputDiffNextSearchMatchOrChange.name(),
             ),
+            ("secondary-shift-a", SwitchRepository.name()),
         ];
 
         for (keystroke, expected_action) in cases {

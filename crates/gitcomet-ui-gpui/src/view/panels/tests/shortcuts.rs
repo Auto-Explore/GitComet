@@ -639,6 +639,59 @@ fn simple_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
     }
 }
 
+#[gpui::test]
+fn recent_repository_shortcut_does_not_select_diff_content(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let repo_id = RepoId(70512);
+    let commit_id = CommitId("fedcba0987654323".into());
+    let workdir = std::env::temp_dir().join(format!(
+        "gitcomet_ui_test_{}_recent_repo_diff_shortcut",
+        std::process::id()
+    ));
+    let _ = std::fs::create_dir_all(&workdir);
+    let target = DiffTarget::Commit {
+        commit_id: commit_id.clone(),
+        path: Some("src/lib.rs".into()),
+    };
+    let mut repo = shortcut_fixture_repo(repo_id, &workdir, &commit_id);
+    repo.diff_state.diff_target = Some(target.clone());
+    repo.diff_state.diff = Loadable::Ready(simple_hunk_diff(target).into());
+    apply_state(cx, &view, app_state_with_active_repo(repo));
+
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+    focus_diff_panel(cx, &view);
+    draw_and_drain_test_window(cx);
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "the fixture must start without a text selection"
+    );
+
+    cx.simulate_keystrokes("secondary-shift-a");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds("app_popover").is_some(),
+        "Ctrl/Cmd+Shift+A must open the recent-repositories picker"
+    );
+    assert!(
+        !diff_text_has_selection(cx, &view),
+        "opening recent repositories must not also select the diff contents"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
 fn two_hunk_diff(target: DiffTarget) -> gitcomet_core::domain::Diff {
     gitcomet_core::domain::Diff {
         target,

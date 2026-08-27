@@ -447,6 +447,31 @@ fn prepared_jinja_document_highlights_html_via_the_combined_injection() {
     );
 }
 
+/// Patch rows take the single-line path while file-content rows project from a
+/// prepared document. They must run the same injection query: Jinja itself sees
+/// this line as opaque text, so only the injected HTML grammar can colour it.
+#[test]
+fn single_line_jinja_highlighting_matches_the_prepared_document() {
+    let line = "<nav class=\"menu\"><span>Home</span></nav>";
+    let single_line = syntax_tokens_for_line(line, DiffSyntaxLanguage::Jinja, DiffSyntaxMode::Auto);
+    let prepared = prepare_test_document(DiffSyntaxLanguage::Jinja, line);
+    let prepared_line = syntax_tokens_for_prepared_document_line(prepared, 0)
+        .expect("prepared line tokens should be available");
+
+    assert_eq!(
+        single_line, prepared_line,
+        "patch and file-content highlighting must use the same host and injected grammars"
+    );
+    assert!(
+        has_token_kind_and_text(line, &single_line, SyntaxTokenKind::Tag, "nav"),
+        "the equality must cover real injected HTML tokens, not two empty results: {single_line:?}"
+    );
+    assert!(
+        has_token_kind_and_text(line, &single_line, SyntaxTokenKind::Attribute, "class"),
+        "the injected HTML attribute should be highlighted: {single_line:?}"
+    );
+}
+
 /// The injected HTML must stay off the template tags, which the Jinja
 /// grammar owns. See `combined_injection_gaps`.
 #[test]

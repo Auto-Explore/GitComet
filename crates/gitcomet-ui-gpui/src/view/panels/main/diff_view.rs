@@ -875,6 +875,7 @@ impl MainPaneView {
                 && (mods.control || mods.platform)
                 && !mods.alt
                 && !mods.function
+                && !mods.shift
                 && key == "a"
             {
                 self.select_all_diff_text();
@@ -1120,6 +1121,7 @@ impl MainPaneView {
             && (mods.control || mods.platform)
             && !mods.alt
             && !mods.function
+            && !mods.shift
             && key == "a"
         {
             self.select_all_diff_text();
