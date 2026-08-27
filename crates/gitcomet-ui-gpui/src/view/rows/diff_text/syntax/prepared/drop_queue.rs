@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::rows::LruTouchQueue;
 
 #[derive(Clone, Copy)]
 pub(crate) enum SyntaxCacheDropMode {
@@ -69,32 +70,24 @@ pub(crate) struct CachedSingleLineSyntaxTokens {
 
 pub(crate) struct SingleLineSyntaxTokenCache {
     pub(crate) by_key: FxHashMap<SingleLineSyntaxTokenCacheKey, CachedSingleLineSyntaxTokens>,
-    pub(crate) lru_order: VecDeque<SingleLineSyntaxTokenCacheKey>,
+    pub(crate) lru_order: LruTouchQueue<SingleLineSyntaxTokenCacheKey>,
 }
 
 impl SingleLineSyntaxTokenCache {
     pub(crate) fn new() -> Self {
         Self {
             by_key: FxHashMap::default(),
-            lru_order: VecDeque::new(),
+            lru_order: LruTouchQueue::default(),
         }
     }
 
     pub(crate) fn touch_key(&mut self, key: SingleLineSyntaxTokenCacheKey) {
-        if self.lru_order.back() == Some(&key) {
-            return;
-        }
-        if let Some(pos) = self.lru_order.iter().position(|existing| *existing == key) {
-            self.lru_order.remove(pos);
-        }
-        self.lru_order.push_back(key);
+        self.lru_order.touch(key);
     }
 
     pub(crate) fn remove_key(&mut self, key: SingleLineSyntaxTokenCacheKey) {
         self.by_key.remove(&key);
-        if let Some(pos) = self.lru_order.iter().position(|existing| *existing == key) {
-            self.lru_order.remove(pos);
-        }
+        self.lru_order.remove(&key);
     }
 
     pub(crate) fn get(
@@ -131,7 +124,7 @@ impl SingleLineSyntaxTokenCache {
         );
         self.touch_key(key);
         while self.by_key.len() > TS_LINE_TOKEN_CACHE_MAX_ENTRIES {
-            let Some(evicted) = self.lru_order.pop_front() else {
+            let Some(evicted) = self.lru_order.pop_oldest() else {
                 break;
             };
             self.by_key.remove(&evicted);

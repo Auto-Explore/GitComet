@@ -29,15 +29,8 @@ use gitcomet_core::process::install_git_executable_path;
 use linux_wayland_fallback::maybe_relaunch_with_linux_x11_fallback;
 use mimalloc::MiMalloc;
 
-pub(crate) fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
-}
+pub(crate) use gitcomet_core::hex::encode as hex_encode;
+
 use std::io::{self, Write};
 
 /// This covers Rust only. tree-sitter is C and calls `malloc`, which resolves to

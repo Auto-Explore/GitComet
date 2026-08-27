@@ -1,5 +1,9 @@
 #[cfg(target_os = "linux")]
 use crate::cli::{AppMode, exit_code};
+#[cfg(any(target_os = "linux", test))]
+use gitcomet_core::platform::detect_is_wsl;
+#[cfg(target_os = "linux")]
+use gitcomet_core::platform::read_linux_osrelease;
 
 const WL_COMPOSITOR_MIN_VERSION: u32 = 3;
 const WL_SHM_MIN_VERSION: u32 = 1;
@@ -196,27 +200,6 @@ fn relaunch_under_x11_fallback() -> Option<i32> {
 #[cfg(target_os = "linux")]
 fn env_var_is_non_empty(name: &str) -> bool {
     std::env::var_os(name).is_some_and(|value| !value.is_empty())
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn detect_is_wsl(
-    has_wsl_distro_name: bool,
-    has_wsl_interop: bool,
-    osrelease: Option<&str>,
-) -> bool {
-    has_wsl_distro_name || has_wsl_interop || osrelease_mentions_microsoft(osrelease)
-}
-
-#[cfg(any(target_os = "linux", test))]
-fn osrelease_mentions_microsoft(osrelease: Option<&str>) -> bool {
-    osrelease
-        .map(|value| value.to_ascii_lowercase().contains("microsoft"))
-        .unwrap_or(false)
-}
-
-#[cfg(target_os = "linux")]
-fn read_linux_osrelease() -> Option<String> {
-    std::fs::read_to_string("/proc/sys/kernel/osrelease").ok()
 }
 
 fn validate_wayland_advertised_globals(

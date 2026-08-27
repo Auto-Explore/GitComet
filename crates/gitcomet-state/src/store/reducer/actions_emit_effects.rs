@@ -812,53 +812,7 @@ pub(super) fn commit_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
-    let mut clear_banner = false;
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    repo_state.local_actions_in_flight = repo_state.local_actions_in_flight.saturating_sub(1);
-    repo_state.commit_in_flight = repo_state.commit_in_flight.saturating_sub(1);
-    repo_state.bump_ops_rev();
-    match result {
-        Ok(()) => {
-            repo_state.last_error = None;
-            clear_banner = true;
-            repo_state.set_recent_commit_messages(Loadable::NotLoaded);
-            repo_state.set_diff_target(None);
-            repo_state.diff_state.diff = Loadable::NotLoaded;
-            repo_state.diff_state.diff_file = Loadable::NotLoaded;
-            repo_state.diff_state.diff_preview_text_file = Loadable::NotLoaded;
-            repo_state.diff_state.submodule_summary = Loadable::NotLoaded;
-            repo_state.diff_state.inline_submodule_diff = None;
-            repo_state.diff_state.diff_file_image = Loadable::NotLoaded;
-            repo_state.bump_diff_state_rev();
-            invalidate_loaded_blame(repo_state);
-            push_action_log(
-                repo_state,
-                true,
-                "Commit".to_string(),
-                "Commit: Completed".to_string(),
-                None,
-            );
-        }
-        Err(e) => {
-            let summary = format_failure_summary("Commit", &e);
-            repo_state.last_error = Some(summary.clone());
-            push_action_log(repo_state, false, "Commit".to_string(), summary, Some(&e));
-        }
-    }
-    if clear_banner {
-        let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-            return Vec::new();
-        };
-        let effects = refresh_primary_effects(repo_state);
-        clear_banner_error_for_repo(state, repo_id);
-        return effects;
-    }
-    let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
-        return Vec::new();
-    };
-    refresh_primary_effects(repo_state)
+    commit_completion_finished(state, repo_id, result, CommitCompletionKind::Commit)
 }
 
 pub(super) fn commit_amend_finished(
@@ -866,6 +820,32 @@ pub(super) fn commit_amend_finished(
     repo_id: RepoId,
     result: std::result::Result<(), Error>,
 ) -> Vec<Effect> {
+    commit_completion_finished(state, repo_id, result, CommitCompletionKind::Amend)
+}
+
+#[derive(Clone, Copy)]
+enum CommitCompletionKind {
+    Commit,
+    Amend,
+}
+
+impl CommitCompletionKind {
+    fn label(self) -> &'static str {
+        match self {
+            Self::Commit => "Commit",
+            Self::Amend => "Amend",
+        }
+    }
+}
+
+/// Shared completion handling for `Msg::CommitFinished` / `Msg::CommitAmendFinished`.
+fn commit_completion_finished(
+    state: &mut AppState,
+    repo_id: RepoId,
+    result: std::result::Result<(), Error>,
+    kind: CommitCompletionKind,
+) -> Vec<Effect> {
+    let label = kind.label();
     let mut clear_banner = false;
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
@@ -890,15 +870,15 @@ pub(super) fn commit_amend_finished(
             push_action_log(
                 repo_state,
                 true,
-                "Amend".to_string(),
-                "Amend: Completed".to_string(),
+                label.to_string(),
+                format!("{label}: Completed"),
                 None,
             );
         }
         Err(e) => {
-            let summary = format_failure_summary("Amend", &e);
+            let summary = format_failure_summary(label, &e);
             repo_state.last_error = Some(summary.clone());
-            push_action_log(repo_state, false, "Amend".to_string(), summary, Some(&e));
+            push_action_log(repo_state, false, label.to_string(), summary, Some(&e));
         }
     }
     if clear_banner {

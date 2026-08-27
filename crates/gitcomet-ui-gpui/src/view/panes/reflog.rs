@@ -925,6 +925,7 @@ mod tests {
 #[cfg(test)]
 mod view_tests {
     use super::*;
+    use crate::view::test_support::NoopBackend;
     use gitcomet_state::model::RepoState;
     use std::cell::Cell;
     use std::rc::Rc;
@@ -933,22 +934,6 @@ mod view_tests {
     /// Tall enough to show a handful of 28px rows, short enough that the list
     /// cannot possibly want all `ENTRY_COUNT` of them.
     const PANE_HEIGHT_PX: f32 = 300.0;
-
-    struct NoopBackend;
-
-    impl gitcomet_core::services::GitBackend for NoopBackend {
-        fn open(
-            &self,
-            _workdir: &std::path::Path,
-        ) -> std::result::Result<
-            Arc<dyn gitcomet_core::services::GitRepository>,
-            gitcomet_core::error::Error,
-        > {
-            Err(gitcomet_core::error::Error::new(
-                gitcomet_core::error::ErrorKind::Unsupported("no repositories in this test"),
-            ))
-        }
-    }
 
     /// Hosts the pane at a fixed height, the way the bottom panel does — a
     /// `uniform_list` with no bounded height would have no visible window to

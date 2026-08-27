@@ -2,7 +2,7 @@
 //!
 //! Extracted from `diff_view.rs`: the kdiff3-style three-way resolver pane,
 //! its toolbar control clusters, and the rendered (SVG/Markdown) conflict
-//! previews. See UI_DESIGN.md section 30 for the design spec.
+//! previews.
 
 use super::*;
 

@@ -177,3 +177,31 @@ pub(in crate::view) fn diff_word_wrap(view: &GitCometView) -> bool {
 pub(in crate::view) fn diff_show_line_numbers(view: &GitCometView) -> bool {
     view.diff_show_line_numbers
 }
+
+/// No-op backend shared by view tests: `open` always fails as unsupported.
+pub(crate) struct TestBackend;
+
+impl gitcomet_core::services::GitBackend for TestBackend {
+    fn open(
+        &self,
+        _workdir: &std::path::Path,
+    ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>> {
+        Err(gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::Unsupported("Test backend does not open repositories"),
+        ))
+    }
+}
+
+/// No-op backend for tests that do not touch repositories at all.
+pub(crate) struct NoopBackend;
+
+impl gitcomet_core::services::GitBackend for NoopBackend {
+    fn open(
+        &self,
+        _workdir: &std::path::Path,
+    ) -> gitcomet_core::services::Result<Arc<dyn gitcomet_core::services::GitRepository>> {
+        Err(gitcomet_core::error::Error::new(
+            gitcomet_core::error::ErrorKind::Unsupported("no repositories in this test"),
+        ))
+    }
+}

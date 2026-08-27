@@ -844,6 +844,15 @@ impl RepoTerminalSession {
     pub(crate) fn instance_by_seq_mut(&mut self, seq: u64) -> Option<&mut TerminalInstance> {
         self.instances.iter_mut().find(|i| i.session_seq == seq)
     }
+
+    /// Tab index for a stable session sequence. Backend events and delayed
+    /// confirmations resolve through this at close time, never by a stored
+    /// index that sibling closings may have shifted.
+    pub(crate) fn index_by_seq(&self, seq: u64) -> Option<usize> {
+        self.instances
+            .iter()
+            .position(|instance| instance.session_seq == seq)
+    }
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]

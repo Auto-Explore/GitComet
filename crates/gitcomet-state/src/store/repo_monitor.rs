@@ -5,7 +5,6 @@ use notify::event::{AccessKind, AccessMode, EventKindMask};
 use notify::{Config as NotifyConfig, RecommendedWatcher, RecursiveMode, Watcher};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::fs;
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -87,12 +86,11 @@ fn record_monitor_failure(
     detail: impl std::fmt::Display,
 ) {
     let count = monitor_failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
-    // See send_diagnostics::record_send_failure: `eprintln!` panics when stderr
-    // is unavailable, and this runs on threads with no unwind guard.
-    let _ = writeln!(
-        std::io::stderr(),
+    // This runs on threads with no unwind guard (see
+    // process::write_stderr_line).
+    gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: repo monitor failure ({kind:?}) in {context}: {detail}; total_failures={count}"
-    );
+    ));
 }
 
 fn send_stop_or_log(tx: &mpsc::Sender<MonitorMsg>, repo_id: RepoId, context: &'static str) {
@@ -1269,17 +1267,15 @@ fn setup_workdir_watch_with_limit(
             subdir_count,
             max_dirs
         );
-        // `eprintln!` would panic with no stderr (see record_monitor_failure);
-        // this runs on the unguarded monitor thread, and a degraded-watch repo
-        // is a path users hit routinely.
-        let _ = writeln!(
-            std::io::stderr(),
+        // This runs on the unguarded monitor thread, and a degraded-watch repo
+        // is a path users hit routinely (see process::write_stderr_line).
+        gitcomet_core::process::write_stderr_line(format_args!(
             "gitcomet-state: repo monitor is not watching the {subdir_count} worktree folders of \
              repo_id={repo_id:?} (workdir={}) because that exceeds the watch budget ({max_dirs}); \
              live file watching is disabled and changes refresh when the window regains focus. Add \
              build/output dirs to .gitignore or raise fs.inotify.max_user_watches to re-enable.",
             workdir.display(),
-        );
+        ));
         return WatchSetupOutcome::WorktreeSubdirsSkipped {
             dir_count: subdir_count,
         };
@@ -1319,14 +1315,13 @@ fn setup_workdir_watch_with_limit(
         // The worktree is then only partially watched, so some external edits will not be observed
         // until the next refresh. Surface it so the limit can be raised if it keeps happening; the
         // `failed_dirs` count also drives the user-facing degraded-watch warning.
-        let _ = writeln!(
-            std::io::stderr(),
+        gitcomet_core::process::write_stderr_line(format_args!(
             "gitcomet-state: repo monitor could not watch {failed}/{subdir_count} worktree \
              subdirectories for repo_id={repo_id:?} (workdir={}); some external changes may be \
              missed until the next refresh. If this persists, raise fs.inotify.max_user_watches. \
              first_failure={first_failure:?}",
             workdir.display(),
-        );
+        ));
     }
     WatchSetupOutcome::Watching {
         failed_dirs: failed,

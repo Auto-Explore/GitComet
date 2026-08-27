@@ -1,8 +1,8 @@
 use super::GixRepo;
 use super::history::gix_head_id_or_none;
 use crate::util::{
-    bytes_to_text_preserving_utf8, git_workdir_cmd_for, path_buf_from_git_bytes,
-    run_git_raw_output, run_git_simple, run_git_with_output,
+    bytes_to_text_preserving_utf8, fnv1a_64, git_workdir_cmd_for, path_buf_from_git_bytes,
+    run_git_raw_output, run_git_simple, run_git_with_output, stable_path_bytes,
 };
 use gitcomet_core::domain::{
     CommitFileChange, CommitId, DiffTarget, FileStatus, RepoStatus, Submodule, SubmoduleDiffRange,
@@ -1804,42 +1804,6 @@ fn git_config_get_bool_global(trust_root: &Path, key: &str) -> Result<Option<boo
         "git config --global --type=bool --get {key} failed: {}",
         bytes_to_text_preserving_utf8(&output.stderr).trim()
     ))))
-}
-
-fn stable_path_bytes(path: &Path) -> Vec<u8> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt as _;
-
-        path.as_os_str().as_bytes().to_vec()
-    }
-
-    #[cfg(windows)]
-    {
-        use std::os::windows::ffi::OsStrExt as _;
-
-        let mut bytes = Vec::new();
-        for unit in path.as_os_str().encode_wide() {
-            bytes.extend_from_slice(&unit.to_le_bytes());
-        }
-        bytes
-    }
-
-    #[cfg(not(any(unix, windows)))]
-    {
-        path.to_str()
-            .map(|text| text.as_bytes().to_vec())
-            .unwrap_or_else(|| format!("{path:?}").into_bytes())
-    }
-}
-
-fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf29ce484222325u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x100000001b3);
-    }
-    hash
 }
 
 fn pathbuf_from_gix_path(path: &gix::bstr::BStr) -> Result<PathBuf> {

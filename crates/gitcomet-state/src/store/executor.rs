@@ -1,7 +1,6 @@
 use super::send_diagnostics::{SendFailureKind, panic_payload_to_string, send_or_log};
 use gitcomet_core::mergetool_trace;
 use std::any::Any;
-use std::io::Write as _;
 use std::panic::{self, AssertUnwindSafe};
 #[cfg(any(test, feature = "test-support"))]
 use std::sync::OnceLock;
@@ -84,15 +83,9 @@ fn record_worker_task_panic(payload: &(dyn Any + Send)) {
     let thread = thread::current();
     let thread = thread.name().unwrap_or("<unnamed>");
     let message = panic_payload_to_string(payload);
-    // Deliberately not `eprintln!`, which panics when stderr cannot be written.
-    // A release build sets `windows_subsystem = "windows"`, so a GitComet
-    // launched from Explorer has no stderr at all; that second panic would
-    // escape the `catch_unwind` above and kill the very worker this recovery
-    // exists to keep alive.
-    let _ = writeln!(
-        std::io::stderr(),
+    gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: executor task panicked on worker thread {thread}: {message}; total_panics={count}"
-    );
+    ));
 }
 
 impl TaskExecutor {

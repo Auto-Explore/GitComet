@@ -4,6 +4,7 @@ use std::ops::Range;
 use std::sync::{Arc, OnceLock, RwLock};
 
 use super::{ConflictSegment, ConflictText, ConflictTextStorage};
+use crate::view::rows::LruTouchQueue;
 
 pub(super) const CONFLICT_SPLIT_PAGE_SIZE: usize = 256;
 pub(super) const CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES: usize = 8;
@@ -365,18 +366,12 @@ struct SplitLayoutEntry {
 #[derive(Debug, Default)]
 struct ConflictSplitPageCache {
     pages: FxHashMap<usize, Arc<[gitcomet_core::file_diff::FileDiffRow]>>,
-    lru: std::collections::VecDeque<usize>,
+    lru: LruTouchQueue<usize>,
 }
 
 impl ConflictSplitPageCache {
     fn touch(&mut self, page_ix: usize) {
-        if self.lru.back().copied() == Some(page_ix) {
-            return;
-        }
-        if let Some(pos) = self.lru.iter().position(|&cached_ix| cached_ix == page_ix) {
-            self.lru.remove(pos);
-        }
-        self.lru.push_back(page_ix);
+        self.lru.touch(page_ix);
     }
 
     fn get(&mut self, page_ix: usize) -> Option<Arc<[gitcomet_core::file_diff::FileDiffRow]>> {
@@ -393,7 +388,7 @@ impl ConflictSplitPageCache {
         self.pages.insert(page_ix, Arc::clone(&page));
         self.touch(page_ix);
         while self.pages.len() > CONFLICT_SPLIT_PAGE_CACHE_MAX_PAGES {
-            if let Some(evicted) = self.lru.pop_front() {
+            if let Some(evicted) = self.lru.pop_oldest() {
                 self.pages.remove(&evicted);
             }
         }

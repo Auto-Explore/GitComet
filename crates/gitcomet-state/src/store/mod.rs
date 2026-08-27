@@ -159,12 +159,13 @@ fn recv_next_worker_command(
     Ok(first)
 }
 
-struct ReducerEffectsContext<'a> {
+/// Per-message scratch context for the store worker loop: the shared handles
+/// for the reduce-then-handle skeleton plus the effect dispatch machinery.
+struct WorkerLoopContext<'a> {
     thread_state: &'a Arc<RwLock<Arc<AppState>>>,
     active_repo_id: &'a Arc<AtomicU64>,
     event_tx: &'a smol::channel::Sender<StoreEvent>,
     repo_monitors: &'a mut RepoMonitorManager,
-    repos: &'a FxHashMap<RepoId, Arc<dyn GitRepository>>,
     repo_task_tokens: &'a mut FxHashMap<RepoId, RepoTaskToken>,
     thread_msg_tx: &'a StoreWorkerSender,
     executor: &'a TaskExecutor,
@@ -174,97 +175,129 @@ struct ReducerEffectsContext<'a> {
     backend: &'a Arc<dyn GitBackend>,
 }
 
-fn handle_reducer_effects<I>(effects: I, ctx: ReducerEffectsContext<'_>)
-where
-    I: IntoIterator<Item = crate::msg::Effect>,
-{
-    let active_value = ctx
-        .thread_state
-        .read()
-        .unwrap_or_else(|e| e.into_inner())
-        .active_repo
-        .map(|id| id.0)
-        .unwrap_or(0);
-    ctx.active_repo_id.store(active_value, Ordering::Relaxed);
-
-    try_send_state_changed_or_log(
-        ctx.event_tx,
-        "store worker loop state notification",
-        ctx.thread_msg_tx.store_id(),
-        ctx.thread_msg_tx.is_alive(),
-    );
-
-    // Keep filesystem monitoring scoped to the active repository only, to minimize
-    // OS watcher load in large multi-repo sessions.
-    let (active_repo, active_workdir) = {
-        let state = ctx.thread_state.read().unwrap_or_else(|e| e.into_inner());
-        let active_repo = state.active_repo;
-        let active_workdir = active_repo.and_then(|repo_id| {
-            state
-                .repos
-                .iter()
-                .find(|r| r.id == repo_id)
-                .map(|r| r.spec.workdir.clone())
-        });
-        (active_repo, active_workdir)
-    };
-
-    for repo_id in ctx.repo_monitors.running_repo_ids() {
-        if Some(repo_id) != active_repo {
-            ctx.repo_monitors.stop(repo_id);
-        }
-    }
-
-    if let Some(repo_id) = active_repo
-        && let Some(workdir) = active_workdir
-        && ctx.repos.contains_key(&repo_id)
+impl WorkerLoopContext<'_> {
+    /// Runs one reducer under the write lock, records its pass, and dispatches
+    /// its effects.
+    ///
+    /// Every reducer funnels through this so the lock/timing/effect-dispatch
+    /// skeleton lives in one place. Inline reducers keep their canonical
+    /// wrappers; active-repo switching specifically continues through
+    /// [`fill_set_active_repo_inline`] and its navigation/finalization logic.
+    fn reduce_and_handle<I>(
+        &mut self,
+        repos: &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+        id_alloc: &AtomicU64,
+        reduce_with: impl FnOnce(
+            &mut AppState,
+            &mut FxHashMap<RepoId, Arc<dyn GitRepository>>,
+            &AtomicU64,
+        ) -> I,
+    ) where
+        I: IntoIterator<Item = crate::msg::Effect>,
     {
-        ctx.repo_monitors.start(
-            repo_id,
-            workdir,
-            ctx.thread_msg_tx.clone(),
-            Arc::clone(ctx.active_repo_id),
-        );
+        let effects = {
+            let mut app_state = self.thread_state.write().unwrap_or_else(|e| e.into_inner());
+            let app_state = make_mut_state_with_diagnostics(&mut app_state);
+            let reduce_started = Instant::now();
+            let effects = reduce_with(app_state, repos, id_alloc);
+            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
+            effects
+        };
+        self.handle_effects(repos, effects);
     }
 
-    for effect in effects {
-        if repo_load_trace::enabled() {
-            let effect_repo_id = repo_load_trace::effect_repo_id(&effect);
-            let (load_epoch, workdir) = effect_repo_id.map_or((None, None), |repo_id| {
-                let state = ctx.thread_state.read().unwrap_or_else(|e| e.into_inner());
+    fn handle_effects<I>(&mut self, repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>, effects: I)
+    where
+        I: IntoIterator<Item = crate::msg::Effect>,
+    {
+        let active_value = self
+            .thread_state
+            .read()
+            .unwrap_or_else(|e| e.into_inner())
+            .active_repo
+            .map(|id| id.0)
+            .unwrap_or(0);
+        self.active_repo_id.store(active_value, Ordering::Relaxed);
+
+        try_send_state_changed_or_log(
+            self.event_tx,
+            "store worker loop state notification",
+            self.thread_msg_tx.store_id(),
+            self.thread_msg_tx.is_alive(),
+        );
+
+        // Keep filesystem monitoring scoped to the active repository only, to minimize
+        // OS watcher load in large multi-repo sessions.
+        let (active_repo, active_workdir) = {
+            let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
+            let active_repo = state.active_repo;
+            let active_workdir = active_repo.and_then(|repo_id| {
                 state
                     .repos
                     .iter()
-                    .find(|repo| repo.id == repo_id)
-                    .map_or((None, None), |repo| {
-                        (Some(repo.load_epoch), Some(repo.spec.workdir.clone()))
-                    })
+                    .find(|r| r.id == repo_id)
+                    .map(|r| r.spec.workdir.clone())
             });
-            repo_load_trace::trace!(
-                "scheduling_effect effect={} repo_id={:?} load_epoch={:?} active_repo={:?} workdir={}",
-                repo_load_trace::effect_name(&effect),
-                effect_repo_id,
-                load_epoch,
-                active_repo,
-                workdir.as_ref().map_or("<unknown>", |workdir| workdir
-                    .to_str()
-                    .unwrap_or("<non-utf8>"))
+            (active_repo, active_workdir)
+        };
+
+        for repo_id in self.repo_monitors.running_repo_ids() {
+            if Some(repo_id) != active_repo {
+                self.repo_monitors.stop(repo_id);
+            }
+        }
+
+        if let Some(repo_id) = active_repo
+            && let Some(workdir) = active_workdir
+            && repos.contains_key(&repo_id)
+        {
+            self.repo_monitors.start(
+                repo_id,
+                workdir,
+                self.thread_msg_tx.clone(),
+                Arc::clone(self.active_repo_id),
             );
         }
-        schedule_effect(
-            EffectExecutors {
-                executor: ctx.executor,
-                repo_load_executor: ctx.repo_load_executor,
-                session_persist_executor: ctx.session_persist_executor,
-                metadata_executor: ctx.metadata_executor,
-            },
-            ctx.thread_state,
-            ctx.backend,
-            ctx.repos,
-            ctx.repo_task_tokens,
-            ctx.thread_msg_tx.clone(),
-            effect,
-        );
+
+        for effect in effects {
+            if repo_load_trace::enabled() {
+                let effect_repo_id = repo_load_trace::effect_repo_id(&effect);
+                let (load_epoch, workdir) = effect_repo_id.map_or((None, None), |repo_id| {
+                    let state = self.thread_state.read().unwrap_or_else(|e| e.into_inner());
+                    state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .map_or((None, None), |repo| {
+                            (Some(repo.load_epoch), Some(repo.spec.workdir.clone()))
+                        })
+                });
+                repo_load_trace::trace!(
+                    "scheduling_effect effect={} repo_id={:?} load_epoch={:?} active_repo={:?} workdir={}",
+                    repo_load_trace::effect_name(&effect),
+                    effect_repo_id,
+                    load_epoch,
+                    active_repo,
+                    workdir.as_ref().map_or("<unknown>", |workdir| workdir
+                        .to_str()
+                        .unwrap_or("<non-utf8>"))
+                );
+            }
+            schedule_effect(
+                EffectExecutors {
+                    executor: self.executor,
+                    repo_load_executor: self.repo_load_executor,
+                    session_persist_executor: self.session_persist_executor,
+                    metadata_executor: self.metadata_executor,
+                },
+                self.thread_state,
+                self.backend,
+                repos,
+                self.repo_task_tokens,
+                self.thread_msg_tx.clone(),
+                effect,
+            );
+        }
     }
 }
 
@@ -426,6 +459,13 @@ impl AppStore {
                             }
                         }
                     }
+                    Msg::RepoActivated { repo_id } => {
+                        repo_load_trace::trace!(
+                            "repo_activated_full_refresh repo_id={:?} monitor_running={}",
+                            repo_id,
+                            repo_monitors.is_running(*repo_id)
+                        );
+                    }
                     Msg::Internal(crate::msg::InternalMsg::RepoLoadFinished {
                         repo_id,
                         load_epoch,
@@ -447,188 +487,70 @@ impl AppStore {
                     _ => {}
                 }
 
+                let mut worker_ctx = WorkerLoopContext {
+                    thread_state: &thread_state,
+                    active_repo_id: &active_repo_id,
+                    event_tx: &event_tx,
+                    repo_monitors: &mut repo_monitors,
+                    repo_task_tokens: &mut repo_task_tokens,
+                    thread_msg_tx: &thread_msg_tx,
+                    executor: &executor,
+                    repo_load_executor: &repo_load_executor,
+                    metadata_executor: &metadata_executor,
+                    session_persist_executor: &session_persist_executor,
+                    backend: &backend,
+                };
+
                 match msg {
                     Msg::SetActiveRepo { repo_id } => {
-                        let mut effects = reducer::SetActiveRepoEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
+                            let mut effects = reducer::SetActiveRepoEffects::new();
                             fill_set_active_repo_inline(app_state, repo_id, &mut effects);
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                        });
                     }
                     Msg::ReorderRepoTabs {
                         repo_id,
                         insert_before,
                     } => {
-                        let mut effects = reducer::ReorderRepoTabsEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
+                            let mut effects = reducer::ReorderRepoTabsEffects::new();
                             fill_reorder_repo_tabs_inline(
                                 app_state,
                                 repo_id,
                                 insert_before,
                                 &mut effects,
                             );
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                        });
                     }
                     Msg::StagePath { repo_id, path } => {
-                        let mut effects = reducer::SinglePathActionEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
+                            let mut effects = reducer::SinglePathActionEffects::new();
                             fill_stage_path_inline(app_state, repo_id, path, &mut effects);
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                        });
                     }
                     Msg::StagePaths { repo_id, paths } => {
-                        let mut effects = reducer::BatchPathActionEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
+                            let mut effects = reducer::BatchPathActionEffects::new();
                             fill_stage_paths_inline(app_state, repo_id, paths, &mut effects);
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                        });
                     }
                     Msg::UnstagePath { repo_id, path } => {
-                        let mut effects = reducer::SinglePathActionEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
+                            let mut effects = reducer::SinglePathActionEffects::new();
                             fill_unstage_path_inline(app_state, repo_id, path, &mut effects);
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                        });
                     }
                     Msg::UnstagePaths { repo_id, paths } => {
-                        let mut effects = reducer::BatchPathActionEffects::new();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
+                            let mut effects = reducer::BatchPathActionEffects::new();
                             fill_unstage_paths_inline(app_state, repo_id, paths, &mut effects);
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
                             effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                        });
                     }
                     Msg::ConflictSetRegionChoice {
                         repo_id,
@@ -636,11 +558,7 @@ impl AppStore {
                         region_index,
                         choice,
                     } => {
-                        {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
                             set_conflict_region_choice_inline(
                                 app_state,
                                 repo_id,
@@ -648,52 +566,14 @@ impl AppStore {
                                 region_index,
                                 choice,
                             );
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                        }
-                        handle_reducer_effects(
-                            std::iter::empty::<crate::msg::Effect>(),
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                            Vec::<crate::msg::Effect>::new()
+                        });
                     }
                     Msg::ConflictResetResolutions { repo_id, path } => {
-                        {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
+                        worker_ctx.reduce_and_handle(&mut repos, &id_alloc, |app_state, _, _| {
                             reset_conflict_resolutions_inline(app_state, repo_id, path);
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                        }
-                        handle_reducer_effects(
-                            std::iter::empty::<crate::msg::Effect>(),
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
-                        );
+                            Vec::<crate::msg::Effect>::new()
+                        });
                     }
                     Msg::RepoActivated { repo_id } => {
                         // Do a FULL refresh on activation (window focus). The filesystem monitor is
@@ -706,70 +586,25 @@ impl AppStore {
                         // that case. A full refresh keeps every view correct regardless of whether,
                         // or how reliably, the watcher is delivering events; activation is throttled
                         // upstream (REPO_ACTIVATION_THROTTLE), so this does not run on every alt-tab.
-                        repo_load_trace::trace!(
-                            "repo_activated_full_refresh repo_id={:?} monitor_running={}",
-                            repo_id,
-                            repo_monitors.is_running(repo_id)
-                        );
                         let change = RepoExternalChange::all();
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
-                            let effects = reduce(
-                                &mut repos,
-                                &id_alloc,
-                                app_state,
-                                Msg::RepoExternallyChanged { repo_id, change },
-                            );
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                            effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
+                        worker_ctx.reduce_and_handle(
+                            &mut repos,
+                            &id_alloc,
+                            |app_state, repos, id| {
+                                reduce(
+                                    repos,
+                                    id,
+                                    app_state,
+                                    Msg::RepoExternallyChanged { repo_id, change },
+                                )
                             },
                         );
                     }
                     msg => {
-                        let effects = {
-                            let mut app_state =
-                                thread_state.write().unwrap_or_else(|e| e.into_inner());
-                            let app_state = make_mut_state_with_diagnostics(&mut app_state);
-                            let reduce_started = Instant::now();
-                            let effects = reduce(&mut repos, &id_alloc, app_state, msg);
-                            reducer_diagnostics::record_reducer_pass(reduce_started.elapsed());
-                            effects
-                        };
-                        handle_reducer_effects(
-                            effects,
-                            ReducerEffectsContext {
-                                thread_state: &thread_state,
-                                active_repo_id: &active_repo_id,
-                                event_tx: &event_tx,
-                                repo_monitors: &mut repo_monitors,
-                                repos: &repos,
-                                repo_task_tokens: &mut repo_task_tokens,
-                                thread_msg_tx: &thread_msg_tx,
-                                executor: &executor,
-                                repo_load_executor: &repo_load_executor,
-                                metadata_executor: &metadata_executor,
-                                session_persist_executor: &session_persist_executor,
-                                backend: &backend,
-                            },
+                        worker_ctx.reduce_and_handle(
+                            &mut repos,
+                            &id_alloc,
+                            |app_state, repos, id| reduce(repos, id, app_state, msg),
                         );
                     }
                 }

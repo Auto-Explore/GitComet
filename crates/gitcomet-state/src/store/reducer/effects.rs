@@ -135,7 +135,7 @@ pub(super) fn conflict_file_loaded(
     Vec::new()
 }
 
-/// UI_DESIGN.md section 30 auto-solve policy: only the always-safe rules
+/// Auto-solve policy: only the always-safe rules
 /// (identical sides, one-side-changed) and the subchunk split apply
 /// automatically when a conflicted file first opens in the resolver.
 ///

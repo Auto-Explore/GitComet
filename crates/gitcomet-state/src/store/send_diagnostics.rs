@@ -1,6 +1,5 @@
 use crate::msg::StoreEvent;
 use std::any::Any;
-use std::io::Write as _;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 
@@ -37,32 +36,22 @@ fn failure_counter(kind: SendFailureKind) -> &'static AtomicU64 {
 /// stays consistent; takes a reference so a caller holding a `Box` can pass
 /// `payload.as_ref()` without giving up ownership.
 pub(super) fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
-    if let Some(message) = payload.downcast_ref::<&'static str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "unknown panic payload".to_string()
-    }
+    gitcomet_core::text_utils::panic_payload_to_string(payload, "unknown panic payload")
 }
 
 fn record_send_failure(kind: SendFailureKind, context: &'static str) {
     let count = failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
-    // Not `eprintln!`: it panics when stderr cannot be written, which is the
-    // norm for a `windows_subsystem = "windows"` build launched from Explorer.
     // These run on the store worker thread, which has no unwind guard.
-    let _ = writeln!(
-        std::io::stderr(),
+    gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: channel send failed ({kind:?}) in {context}; total_failures={count}"
-    );
+    ));
 }
 
 fn record_send_failure_with_detail(kind: SendFailureKind, context: &'static str, detail: String) {
     let count = failure_counter(kind).fetch_add(1, Ordering::Relaxed) + 1;
-    let _ = writeln!(
-        std::io::stderr(),
+    gitcomet_core::process::write_stderr_line(format_args!(
         "gitcomet-state: channel send failed ({kind:?}) in {context}; {detail}; total_failures={count}"
-    );
+    ));
 }
 
 pub(super) fn send_or_log<T>(
