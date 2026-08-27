@@ -2031,7 +2031,6 @@ impl GitCometView {
             child_pid: spawned.child_pid,
             events_rx: Some(events_rx),
             connected: true,
-            exit_status: None,
             viewport,
             session_seq,
             title: terminal_tab_default_title(),
@@ -2052,11 +2051,30 @@ impl GitCometView {
         let Some(events_rx) = events_rx else {
             return;
         };
+        let window_handle = self.window_handle;
 
         cx.spawn(
             async move |view: WeakEntity<GitCometView>, cx: &mut gpui::AsyncApp| {
                 let rx = events_rx;
                 while let Ok(event) = rx.recv().await {
+                    if matches!(&event, TerminalBackendEvent::Exit) {
+                        // The shell is already gone, so close this tab without a
+                        // running-command prompt. Resolve the tab from its stable
+                        // session sequence at removal time: another tab may have
+                        // closed and shifted every index while this event waited.
+                        let _ = window_handle.update(cx, |_, window, cx| {
+                            let _ = view.update(cx, |this, cx| {
+                                this.close_exited_terminal_tab_by_session_seq(
+                                    repo_id,
+                                    session_seq,
+                                    window,
+                                    cx,
+                                );
+                            });
+                        });
+                        break;
+                    }
+
                     let result = view.update(cx, |this, cx| {
                         let Some(session) = this.terminal_sessions.get_mut(&repo_id) else {
                             return;
@@ -2087,15 +2105,10 @@ impl GitCometView {
                                 }
                             }
                             TerminalBackendEvent::Bell => {}
-                            TerminalBackendEvent::Exit => {
-                                instance.connected = false;
-                                instance.exit_status = Some("Shell exited.".to_string());
-                                instance.viewport.update(cx, |viewport, _cx| {
-                                    viewport.pty_sender = None;
-                                    viewport.term_lock = None;
-                                });
-                                cx.notify();
-                            }
+                            TerminalBackendEvent::Exit => unreachable!(
+                                "terminal exit events are handled before instance updates"
+                            ),
+                            TerminalBackendEvent::ChildExit(Some(0)) => {}
                             TerminalBackendEvent::ChildExit(code) => {
                                 let msg = match code {
                                     Some(c) => format!("Child process exited with code {c}"),
@@ -2155,6 +2168,17 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.close_terminal_tab_inner(repo_id, index, true, window, cx);
+    }
+
+    fn close_terminal_tab_inner(
+        &mut self,
+        repo_id: RepoId,
+        index: usize,
+        focus_surviving_tab: bool,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
         let mut session_emptied = false;
         match self.terminal_sessions.get_mut(&repo_id) {
             Some(session) => {
@@ -2182,11 +2206,62 @@ impl GitCometView {
         }
         if !self.active_repo_has_open_terminal() {
             self.deactivate_terminal_cursor_blink();
-        } else {
+        } else if focus_surviving_tab && self.active_repo_id() == Some(repo_id) {
             self.focus_terminal_view(repo_id, window, cx);
         }
         self.sync_terminal_indicator_views(cx);
         cx.notify();
+    }
+
+    /// Close the terminal identified by its stable session sequence.
+    ///
+    /// Backend events are asynchronous, so the tab's index at spawn time may
+    /// no longer identify it. A missing sequence means the tab was already
+    /// closed manually (or its repository went away), in which case the late
+    /// event is intentionally ignored.
+    fn close_exited_terminal_tab_by_session_seq(
+        &mut self,
+        repo_id: RepoId,
+        session_seq: u64,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some((index, focus_surviving_tab)) =
+            self.terminal_sessions.get(&repo_id).and_then(|session| {
+                session
+                    .instances
+                    .iter()
+                    .position(|instance| instance.session_seq == session_seq)
+                    .map(|index| {
+                        let focus_surviving_tab = self.active_repo_id() == Some(repo_id)
+                            && session.instances[index].focus_handle.is_focused(window);
+                        (index, focus_surviving_tab)
+                    })
+            })
+        else {
+            return;
+        };
+        self.close_terminal_tab_inner(repo_id, index, focus_surviving_tab, window, cx);
+    }
+
+    /// Close a user-selected terminal by stable sequence and focus its survivor.
+    /// A delayed confirmation safely does nothing if that terminal already exited.
+    fn close_terminal_tab_by_session_seq(
+        &mut self,
+        repo_id: RepoId,
+        session_seq: u64,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        let Some(index) = self.terminal_sessions.get(&repo_id).and_then(|session| {
+            session
+                .instances
+                .iter()
+                .position(|instance| instance.session_seq == session_seq)
+        }) else {
+            return;
+        };
+        self.close_terminal_tab_inner(repo_id, index, true, window, cx);
     }
 
     pub(in crate::view) fn select_terminal_tab(
@@ -2268,11 +2343,14 @@ impl GitCometView {
                 }
                 summary
             }
-            TerminalShutdownAction::CloseTerminalTab { repo_id, index } => {
+            TerminalShutdownAction::CloseTerminalTab {
+                repo_id,
+                session_seq,
+            } => {
                 let mut summary = self
                     .terminal_sessions
                     .get(repo_id)
-                    .and_then(|session| session.instances.get(*index))
+                    .and_then(|session| session.instance_by_seq(*session_seq))
                     .map(|instance| {
                         terminal_shutdown_summary_for_instances(std::iter::once(instance))
                     })
@@ -2517,8 +2595,11 @@ impl GitCometView {
             TerminalShutdownAction::CloseTerminalForRepo { repo_id } => {
                 self.close_terminal_for_repo(repo_id, cx);
             }
-            TerminalShutdownAction::CloseTerminalTab { repo_id, index } => {
-                self.close_terminal_tab(repo_id, index, window, cx);
+            TerminalShutdownAction::CloseTerminalTab {
+                repo_id,
+                session_seq,
+            } => {
+                self.close_terminal_tab_by_session_seq(repo_id, session_seq, window, cx);
             }
             TerminalShutdownAction::CloseWindow => {
                 crate::app::mark_clean_shutdown_if_last_window_from_view(cx);
@@ -2560,8 +2641,19 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        let Some(session_seq) = self
+            .terminal_sessions
+            .get(&repo_id)
+            .and_then(|session| session.instances.get(index))
+            .map(|instance| instance.session_seq)
+        else {
+            return;
+        };
         if !self.request_terminal_shutdown_action(
-            TerminalShutdownAction::CloseTerminalTab { repo_id, index },
+            TerminalShutdownAction::CloseTerminalTab {
+                repo_id,
+                session_seq,
+            },
             cx,
         ) {
             self.close_terminal_tab(repo_id, index, window, cx);
@@ -2666,7 +2758,7 @@ impl GitCometView {
     ) -> Option<AnyElement> {
         let active_repo = self.active_repo_id()?;
 
-        let (viewport_entity, exit_status, connected, tabs, active_index) = {
+        let (viewport_entity, connected, tabs, active_index) = {
             let session = self.terminal_sessions.get(&active_repo)?;
             let active = session.active_instance()?;
             let tabs: Vec<SharedString> = session
@@ -2676,7 +2768,6 @@ impl GitCometView {
                 .collect();
             (
                 active.viewport.clone(),
-                active.exit_status.clone(),
                 active.connected,
                 tabs,
                 session.active_index,
@@ -2743,42 +2834,26 @@ impl GitCometView {
             .child(viewport_entity)
             .into_any_element();
 
-        let panel = div()
-            .flex()
-            .flex_col()
-            .h(self.terminal_panel_height)
-            .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
-            .bg(terminal_default_background(theme))
-            // A focus ring along the top edge reinforces that the terminal is
-            // capturing keyboard input. The border is always present (kept
-            // transparent when unfocused) so toggling focus never shifts layout.
-            .border_t_2()
-            .border_color(if terminal_focused {
-                theme.colors.interaction.focus_ring
-            } else {
-                with_alpha(theme.colors.interaction.focus_ring, 0.0)
-            })
-            .child(header)
-            .child(viewport_element)
-            .into_any_element();
-
-        if let Some(status) = exit_status {
-            return Some(
-                div()
-                    .flex()
-                    .flex_col()
-                    .child(
-                        div()
-                            .px(px(8.0))
-                            .py(px(4.0))
-                            .text_color(theme.colors.foreground.secondary)
-                            .child(format!("Terminal — {status}")),
-                    )
-                    .child(panel)
-                    .into_any(),
-            );
-        }
-        Some(panel.into_any())
+        Some(
+            div()
+                .flex()
+                .flex_col()
+                .h(self.terminal_panel_height)
+                .min_h(px(TERMINAL_PANEL_MIN_HEIGHT_PX))
+                .bg(terminal_default_background(theme))
+                // A focus ring along the top edge reinforces that the terminal is
+                // capturing keyboard input. The border is always present (kept
+                // transparent when unfocused) so toggling focus never shifts layout.
+                .border_t_2()
+                .border_color(if terminal_focused {
+                    theme.colors.interaction.focus_ring
+                } else {
+                    with_alpha(theme.colors.interaction.focus_ring, 0.0)
+                })
+                .child(header)
+                .child(viewport_element)
+                .into_any(),
+        )
     }
 
     fn render_terminal_header(
@@ -3580,11 +3655,14 @@ fn terminate_terminals_for_action(view: &mut GitCometView, action: &TerminalShut
                 }
             }
         }
-        TerminalShutdownAction::CloseTerminalTab { repo_id, index } => {
+        TerminalShutdownAction::CloseTerminalTab {
+            repo_id,
+            session_seq,
+        } => {
             if let Some(instance) = view
                 .terminal_sessions
                 .get(repo_id)
-                .and_then(|session| session.instances.get(*index))
+                .and_then(|session| session.instance_by_seq(*session_seq))
             {
                 terminate_terminal_process_group(instance.child_pid);
             }
@@ -3671,6 +3749,8 @@ fn terminal_clipboard_shortcut_action(
 mod tests {
     use super::*;
     use alacritty_terminal::vte::ansi::Handler;
+    use gitcomet_core::error::{Error, ErrorKind};
+    use gitcomet_core::services::{GitBackend, GitRepository};
 
     // A 20x6 grid of 6x12 cells, so the viewport is 120x72 at (100, 200).
     const TEST_COLS: usize = 20;
@@ -3678,6 +3758,258 @@ mod tests {
     const TEST_CELL_W: f32 = 6.0;
     const TEST_LINE_H: f32 = 12.0;
     const TEST_SCROLLBACK: usize = 100;
+
+    struct TerminalTestBackend;
+
+    impl GitBackend for TerminalTestBackend {
+        fn open(
+            &self,
+            _workdir: &std::path::Path,
+        ) -> gitcomet_core::services::Result<Arc<dyn GitRepository>> {
+            Err(Error::new(ErrorKind::Unsupported(
+                "terminal test backend does not open repositories",
+            )))
+        }
+    }
+
+    fn test_root_view_with_active_repo(
+        cx: &mut gpui::TestAppContext,
+    ) -> (Entity<GitCometView>, RepoId, &mut gpui::VisualTestContext) {
+        let repo_id = RepoId(1);
+        let (store, events) = AppStore::new(Arc::new(TerminalTestBackend));
+        let (view, cx) =
+            cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+        let state = Arc::new(AppState {
+            repos: vec![RepoState::new_opening(
+                repo_id,
+                gitcomet_core::domain::RepoSpec {
+                    workdir: PathBuf::from("/tmp/terminal-exit-test"),
+                },
+            )],
+            active_repo: Some(repo_id),
+            ..AppState::default()
+        });
+        cx.update(|_window, app| {
+            view.update(app, |this, _cx| this.state = state);
+        });
+        (view, repo_id, cx)
+    }
+
+    fn test_terminal_instance(
+        session_seq: u64,
+        events_rx: Option<smol::channel::Receiver<TerminalBackendEvent>>,
+        cx: &mut gpui::Context<GitCometView>,
+    ) -> TerminalInstance {
+        let focus_handle = cx.focus_handle().tab_index(0).tab_stop(false);
+        let viewport_focus = focus_handle.clone();
+        let viewport = cx.new(move |_cx| {
+            TerminalViewportView::with_backend(
+                AppTheme::gitcomet_dark(),
+                viewport_focus,
+                None,
+                None,
+            )
+        });
+        TerminalInstance {
+            focus_handle,
+            pty_sender: None,
+            child_pid: None,
+            events_rx,
+            connected: true,
+            viewport,
+            session_seq,
+            title: format!("terminal-{session_seq}"),
+        }
+    }
+
+    fn test_terminal_session(
+        tabs: Vec<(u64, Option<smol::channel::Receiver<TerminalBackendEvent>>)>,
+        active_index: usize,
+        cx: &mut gpui::Context<GitCometView>,
+    ) -> RepoTerminalSession {
+        RepoTerminalSession {
+            workdir: PathBuf::from("/tmp/terminal-exit-test"),
+            repo_name: "terminal-exit-test".to_string(),
+            instances: tabs
+                .into_iter()
+                .map(|(session_seq, events_rx)| test_terminal_instance(session_seq, events_rx, cx))
+                .collect(),
+            active_index,
+        }
+    }
+
+    #[gpui::test]
+    fn shell_exit_closes_the_matching_tab_after_indices_shift(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+        let events_tx = cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                let (events_tx, events_rx) = smol::channel::unbounded();
+                this.terminal_sessions.insert(
+                    repo_id,
+                    test_terminal_session(
+                        vec![(10, None), (20, Some(events_rx)), (30, None)],
+                        2,
+                        cx,
+                    ),
+                );
+                this.spawn_terminal_event_task(repo_id, 20, cx);
+
+                // Shift the target from index 1 to index 0 before its delayed
+                // exit arrives. An index captured at spawn would close seq 30.
+                this.close_terminal_tab(repo_id, 0, window, cx);
+                events_tx
+            })
+        });
+
+        events_tx
+            .try_send(TerminalBackendEvent::Exit)
+            .expect("send terminal exit event");
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            let session = view
+                .read(app)
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("surviving terminal session");
+            assert_eq!(
+                session
+                    .instances
+                    .iter()
+                    .map(|instance| instance.session_seq)
+                    .collect::<Vec<_>>(),
+                vec![30]
+            );
+            assert_eq!(session.active_index, 0);
+        });
+    }
+
+    #[gpui::test]
+    fn shell_exit_of_the_last_tab_closes_the_terminal_panel(cx: &mut gpui::TestAppContext) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+        let events_tx = cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let (events_tx, events_rx) = smol::channel::unbounded();
+                this.terminal_sessions.insert(
+                    repo_id,
+                    test_terminal_session(vec![(40, Some(events_rx))], 0, cx),
+                );
+                this.spawn_terminal_event_task(repo_id, 40, cx);
+                events_tx
+            })
+        });
+
+        events_tx
+            .try_send(TerminalBackendEvent::Exit)
+            .expect("send terminal exit event");
+        cx.run_until_parked();
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                assert!(!this.terminal_sessions.contains_key(&repo_id));
+                let theme = this.theme;
+                assert!(this.render_terminal_panel(theme, window, cx).is_none());
+                assert!(!this.terminal_cursor_blink_active);
+            });
+        });
+    }
+
+    #[gpui::test]
+    fn stale_shell_exit_after_manual_close_does_not_close_another_tab(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+        let events_tx = cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                let (events_tx, events_rx) = smol::channel::unbounded();
+                this.terminal_sessions.insert(
+                    repo_id,
+                    test_terminal_session(vec![(50, Some(events_rx)), (60, None)], 1, cx),
+                );
+                this.spawn_terminal_event_task(repo_id, 50, cx);
+                this.close_terminal_tab(repo_id, 0, window, cx);
+                events_tx
+            })
+        });
+
+        events_tx
+            .try_send(TerminalBackendEvent::Exit)
+            .expect("send stale terminal exit event");
+        cx.run_until_parked();
+
+        cx.update(|_window, app| {
+            let session = view
+                .read(app)
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("surviving terminal session");
+            assert_eq!(session.instances.len(), 1);
+            assert_eq!(session.instances[0].session_seq, 60);
+            assert_eq!(session.active_index, 0);
+        });
+    }
+
+    #[gpui::test]
+    fn shutdown_confirmation_for_an_exited_tab_does_not_close_its_sibling(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let _visual_guard = crate::test_support::lock_visual_test();
+        let (view, repo_id, cx) = test_root_view_with_active_repo(cx);
+
+        let (events_tx, prompt) = cx.update(|_window, app| {
+            view.update(app, |this, cx| {
+                let (events_tx, events_rx) = smol::channel::unbounded();
+                this.terminal_sessions.insert(
+                    repo_id,
+                    test_terminal_session(vec![(70, Some(events_rx)), (80, None)], 0, cx),
+                );
+                this.spawn_terminal_event_task(repo_id, 70, cx);
+                let prompt = TerminalShutdownPrompt {
+                    action: TerminalShutdownAction::CloseTerminalTab {
+                        repo_id,
+                        session_seq: 70,
+                    },
+                    summary: TerminalShutdownSummary {
+                        terminal_count: 1,
+                        running_command_count: 1,
+                        repo_names: vec!["terminal-exit-test".to_string()],
+                    },
+                };
+                (events_tx, prompt)
+            })
+        });
+
+        // The target exits while its terminate-and-close prompt is still open.
+        // Its sibling shifts into index 0, which an index-keyed prompt would
+        // incorrectly terminate and remove when confirmed.
+        events_tx
+            .try_send(TerminalBackendEvent::Exit)
+            .expect("send terminal exit event");
+        cx.run_until_parked();
+
+        cx.update(|window, app| {
+            view.update(app, |this, cx| {
+                this.confirm_terminal_shutdown(prompt, window, cx);
+            });
+        });
+
+        cx.update(|_window, app| {
+            let session = view
+                .read(app)
+                .terminal_sessions
+                .get(&repo_id)
+                .expect("sibling terminal session");
+            assert_eq!(session.instances.len(), 1);
+            assert_eq!(session.instances[0].session_seq, 80);
+            assert_eq!(session.active_index, 0);
+        });
+    }
 
     fn test_viewport_bounds() -> Bounds<Pixels> {
         Bounds::new(

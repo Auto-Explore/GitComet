@@ -851,12 +851,12 @@ fn repo_switch_two_hot_repos_reloads_selected_diff_and_persists_session() {
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
     assert_eq!(metrics.hydrated_repo_count, 2);
-    assert_eq!(metrics.selected_commit_repo_count, 2);
+    assert_eq!(metrics.selected_commit_repo_count, 1);
     assert_eq!(metrics.selected_diff_repo_count, 2);
 }
 
 #[test]
-fn repo_switch_selected_commit_and_details_skips_diff_reload_path() {
+fn repo_switch_selected_commit_and_details_resets_target_without_diff_reload() {
     let fixture = RepoSwitchFixture::selected_commit_and_details(500, 20, 40, 2);
     let (hash, metrics) = fixture.run();
     assert_ne!(hash, 0);
@@ -866,7 +866,7 @@ fn repo_switch_selected_commit_and_details_skips_diff_reload_path() {
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
     assert_eq!(metrics.hydrated_repo_count, 2);
-    assert_eq!(metrics.selected_commit_repo_count, 2);
+    assert_eq!(metrics.selected_commit_repo_count, 1);
     assert_eq!(metrics.selected_diff_repo_count, 0);
 }
 
@@ -881,7 +881,7 @@ fn repo_switch_twenty_tabs_scales_repo_count_without_heating_all_tabs() {
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
     assert_eq!(metrics.hydrated_repo_count, 2);
-    assert_eq!(metrics.selected_commit_repo_count, 2);
+    assert_eq!(metrics.selected_commit_repo_count, 1);
     assert_eq!(metrics.selected_diff_repo_count, 2);
 }
 
@@ -915,7 +915,7 @@ fn repo_switch_twenty_repos_all_hot_tracks_extreme_hot_tab_scale() {
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 20);
     assert_eq!(metrics.hydrated_repo_count, 20);
-    assert_eq!(metrics.selected_commit_repo_count, 20);
+    assert_eq!(metrics.selected_commit_repo_count, 19);
     assert_eq!(metrics.selected_diff_repo_count, 20);
 }
 
@@ -930,7 +930,7 @@ fn repo_switch_selected_diff_file_triggers_diff_reload_with_loaded_content() {
     assert_eq!(metrics.persist_session_effect_count, 1);
     assert_eq!(metrics.repo_count, 2);
     assert_eq!(metrics.hydrated_repo_count, 2);
-    assert_eq!(metrics.selected_commit_repo_count, 2);
+    assert_eq!(metrics.selected_commit_repo_count, 1);
     assert_eq!(metrics.selected_diff_repo_count, 2);
 }
 

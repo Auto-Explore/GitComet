@@ -460,6 +460,114 @@ fn a_new_branch_recolours_the_selected_lane(cx: &mut gpui::TestAppContext) {
 }
 
 #[gpui::test]
+fn switching_same_graph_workspaces_highlights_the_new_heads_lane(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = crate::test_support::lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(BlockingBackend));
+    let (view, cx) =
+        cx.add_window_view(|window, cx| GitCometView::new(store, events, None, window, cx));
+
+    let page = Arc::new(log_page(
+        vec![
+            commit("main-tip", &["base"], "main tip"),
+            commit("feature-tip", &["base"], "feature tip"),
+            commit("base", &[], "base"),
+        ],
+        None,
+    ));
+    let make_repo = |repo_id: RepoId, path: &str, head_branch: &str| {
+        let mut repo = RepoState::new_opening(
+            repo_id,
+            RepoSpec {
+                workdir: PathBuf::from(path),
+            },
+        );
+        repo.history_state.history_scope = LogScope::AllBranches;
+        repo.head_branch = Loadable::Ready(head_branch.to_string());
+        repo.head_branch_rev = 1;
+        repo.branches = Loadable::Ready(Arc::new(vec![
+            branch("main", "main-tip"),
+            branch("feature", "feature-tip"),
+        ]));
+        repo.branches_rev = 1;
+        repo.remote_branches = Loadable::Ready(Arc::new(Vec::new()));
+        repo.remote_branches_rev = 1;
+        repo.log = Loadable::Ready(Arc::clone(&page));
+        repo.log_rev = 1;
+        repo.history_state.log = Loadable::Ready(Arc::clone(&page));
+        repo.history_state.log_rev = 1;
+        repo
+    };
+    let main_repo = make_repo(RepoId(1), "/tmp/history-main-workspace", "main");
+    let feature_repo = make_repo(RepoId(2), "/tmp/history-feature-workspace", "feature");
+    let state_for = |active_repo| {
+        Arc::new(AppState {
+            repos: vec![main_repo.clone(), feature_repo.clone()],
+            active_repo: Some(active_repo),
+            ..Default::default()
+        })
+    };
+
+    cx.update(|window, app| {
+        let _ = window.draw(app);
+    });
+    ensure_history_cache_for_tests(cx, &view, state_for(RepoId(1)));
+
+    cx.update(|_window, app| {
+        let history_view = view.read(app).main_pane.read(app).history_view.clone();
+        history_view.update(app, |history, _cx| {
+            history
+                .history_selected_lane(false)
+                .expect("clean main workspace should highlight HEAD")
+        })
+    });
+
+    ensure_history_cache_for_tests(cx, &view, state_for(RepoId(2)));
+    let (feature_lane, expected_feature_lane, cached_repo_id, memo_anchor) =
+        cx.update(|_window, app| {
+            let history_view = view.read(app).main_pane.read(app).history_view.clone();
+            history_view.update(app, |history, _cx| {
+                let feature_lane = history.history_selected_lane(false);
+                let cache = history
+                    .history_cache
+                    .as_ref()
+                    .expect("feature workspace history cache");
+                let anchor_row = *cache
+                    .base
+                    .visible_ix_by_commit
+                    .get(&CommitId("feature-tip".into()))
+                    .expect("feature HEAD should be visible");
+                let row = &cache.base.graph_rows[anchor_row];
+                let expected = crate::view::rows::history_graph_paint::selected_lane_at(
+                    &cache.base.graph_rows,
+                    anchor_row,
+                    row.node_color_ix,
+                );
+                let memo_anchor = history
+                    .history_selected_lane_color_cache
+                    .as_ref()
+                    .map(|memo| memo.anchor.clone());
+                (
+                    feature_lane,
+                    expected,
+                    cache.base.request.repo_id,
+                    memo_anchor,
+                )
+            })
+        });
+
+    assert_eq!(cached_repo_id, RepoId(2));
+    assert_eq!(
+        memo_anchor,
+        Some(HistoryLaneAnchor::Commit(CommitId("feature-tip".into()))),
+        "the lane memo must be anchored to the newly active workspace's HEAD"
+    );
+    assert_eq!(
+        feature_lane, expected_feature_lane,
+        "the sibling workspace must not reuse the previous tab's lane"
+    );
+}
+
+#[gpui::test]
 fn date_time_changes_reuse_history_cache_and_rows_still_render(cx: &mut gpui::TestAppContext) {
     let _visual_guard = crate::test_support::lock_visual_test();
     let (store, events) = AppStore::new(Arc::new(BlockingBackend));

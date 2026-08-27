@@ -795,6 +795,44 @@ fn fill_set_active_repo_inline_impl(
 
     let repo_state = &mut state.repos[repo_ix];
 
+    // Capture the retained diff's reload shape before resetting the history
+    // selection below. Commit file metadata distinguishes submodules and
+    // added/deleted preview-only files, but the selection reset deliberately
+    // clears that metadata from the details pane.
+    let selected_diff_reload = if changed && matches!(repo_state.open, Loadable::Ready(())) {
+        repo_state.diff_state.diff_target.as_ref().map(|target| {
+            if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
+                match conflict_target {
+                    SelectedConflictTarget::Current => SelectedDiffReload::ConflictCurrent,
+                    SelectedConflictTarget::Path(path) => {
+                        SelectedDiffReload::Conflict(path.to_path_buf())
+                    }
+                }
+            } else {
+                SelectedDiffReload::Diff(selected_diff_load_plan(repo_state, target))
+            }
+        })
+    } else {
+        None
+    };
+
+    if changed {
+        // A repository tab is a workspace context, not a suspended history
+        // selection. Enter it at that workspace's live tip: the history view
+        // interprets no explicit commit as the uncommitted row when it exists,
+        // and as HEAD when the worktree is clean. `set_selected_commit` also
+        // retires multi/range and linked-worktree selections.
+        repo_state.set_selected_commit(None);
+        repo_state.set_commit_details(Loadable::NotLoaded);
+
+        // Activation is not a user navigation step, so replace the snapshot at
+        // the cursor rather than pushing one. This explicit replacement is
+        // required when the tab was parked mid-stack: ordinary non-push
+        // reconciliation intentionally leaves such entries untouched.
+        let snapshot = repo_state.main_view_snapshot();
+        repo_state.nav_history.replace_current(snapshot);
+    }
+
     // Session-restore placeholders and repos still opening do not have a backend handle yet.
     // Defer handle-dependent refreshes until RepoOpenedOk installs the handle and schedules the
     // initial refresh for the active repo.
@@ -811,24 +849,6 @@ fn fill_set_active_repo_inline_impl(
         changed && !repo_switch_can_use_primary_refresh(repo_state, git_log_settings, now);
     repo_state.last_active_at = Some(now);
 
-    // Reload the selected diff when switching repos; steady-state refreshes rely on the
-    // filesystem watcher (`RepoExternallyChanged`) for diff invalidation.
-    let selected_diff_reload = if changed {
-        repo_state.diff_state.diff_target.as_ref().map(|target| {
-            if let Some(conflict_target) = selected_conflict_target(repo_state, target) {
-                match conflict_target {
-                    SelectedConflictTarget::Current => SelectedDiffReload::ConflictCurrent,
-                    SelectedConflictTarget::Path(path) => {
-                        SelectedDiffReload::Conflict(path.to_path_buf())
-                    }
-                }
-            } else {
-                SelectedDiffReload::Diff(selected_diff_load_plan(repo_state, target))
-            }
-        })
-    } else {
-        None
-    };
     let selected_history_reloads = if changed {
         selected_history_reloads_for_activation(repo_state)
     } else {

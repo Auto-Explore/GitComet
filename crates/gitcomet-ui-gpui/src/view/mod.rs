@@ -254,8 +254,8 @@ pub use mod_helpers::{
 use panels::{ActionBarView, BottomStatusBarView, PopoverHost, RepoTabsBarView, action_bar_height};
 pub(crate) use panes::MainPaneView;
 use panes::{
-    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryView, ReflogPaneInit,
-    ReflogPaneView, SidebarPaneView,
+    CollapsedSidebarSection, DetailsPaneInit, DetailsPaneView, HistoryPrimarySelection,
+    HistoryView, ReflogPaneInit, ReflogPaneView, SidebarPaneView, history_primary_selection,
 };
 pub(crate) use settings_window::{SettingsWindowView, open_settings_window};
 use toast_host::ToastHost;

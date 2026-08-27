@@ -76,6 +76,74 @@ fn a_clean_worktree_with_no_resolvable_head_focuses_nothing() {
     );
 }
 
+#[test]
+fn history_default_selection_uses_dirty_changes_then_head() {
+    let mut repo = RepoState::new_opening(
+        RepoId(1),
+        RepoSpec {
+            workdir: PathBuf::from("/tmp/history-default-selection"),
+        },
+    );
+    repo.head_branch = Loadable::Ready("feature".to_string());
+    repo.branches = Loadable::Ready(Arc::new(vec![branch("feature", "feature-tip")]));
+
+    assert_eq!(
+        history_primary_selection(&repo, true),
+        Some(HistoryPrimarySelection::WorkingTree),
+        "a dirty workspace should select its uncommitted row"
+    );
+    let clean_selection = history_primary_selection(&repo, false);
+    assert_eq!(
+        clean_selection,
+        Some(HistoryPrimarySelection::Commit(CommitId(
+            "feature-tip".into()
+        ))),
+        "a clean workspace should select its active HEAD"
+    );
+    let HistoryPrimarySelection::Commit(clean_head) =
+        clean_selection.expect("clean workspace selection")
+    else {
+        panic!("clean workspace should focus a commit");
+    };
+    assert_eq!(
+        peek_history_selected_list_index(
+            None,
+            repo.id,
+            1,
+            1,
+            LogScope::AllBranches,
+            &HistoryListPlan::new(false, Vec::new()),
+            HistorySelectionRef {
+                commit: Some(&clean_head),
+                worktree_selected: false,
+            },
+            &HistoryVisibleIndices::all(2),
+            &[
+                commit("feature-tip", &["base"], "feature tip"),
+                commit("base", &[], "base"),
+            ],
+        ),
+        Some(0),
+        "keyboard navigation should start at the implicit HEAD row"
+    );
+
+    repo.history_state.selected_commit = Some(CommitId("older".into()));
+    assert_eq!(
+        history_primary_selection(&repo, false),
+        Some(HistoryPrimarySelection::Commit(CommitId("older".into()))),
+        "an explicit selection made in the active tab should win"
+    );
+
+    repo.history_state.worktree_selection = Some(PathBuf::from("/tmp/linked"));
+    assert_eq!(
+        history_primary_selection(&repo, false),
+        Some(HistoryPrimarySelection::Worktree(PathBuf::from(
+            "/tmp/linked"
+        ))),
+        "a linked-worktree row selection should remain distinct from HEAD"
+    );
+}
+
 /// Selecting a worktree row also leaves the commit selection empty, which is
 /// the state the working-tree row uses to decide it is selected. Claiming
 /// index 0 here is what made both rows light up at once.

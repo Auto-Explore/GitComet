@@ -19,6 +19,8 @@ on:
     secrets:
       AZURE_CREDENTIALS:
         required: false
+      AZURE_STORAGE_ACCOUNT_KEY:
+        required: false
       MACOS_SIGNING_IDENTITY:
         required: false
       MACOS_SIGNING_CERT_BASE64:
@@ -64,6 +66,7 @@ env:
   WIXTOOLSET_VERSION: 3.14.1.20250415
   CARGO_WIX_VERSION: 0.3.9
   APPIMAGETOOL_VERSION: 1.9.1
+  DUMP_SYMS_VERSION: 2.3.9
 
 jobs:
   prepare:
@@ -142,12 +145,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # No aarch64-pc-windows-msvc dump_syms build is published, so both
+          # legs use the x64 asset; the ARM runner executes it under emulation.
           - target_platform: x86_64-windows
             artifact_arch: x86_64
             runs_on: windows-latest
+            dump_syms_sha256: bdf48486220708808a3e00aec78856ee1cce096189d47a1e2cb1c635f93bacc7
           - target_platform: aarch64-windows
             artifact_arch: arm64
             runs_on: windows-11-arm
+            dump_syms_sha256: bdf48486220708808a3e00aec78856ee1cce096189d47a1e2cb1c635f93bacc7
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -157,6 +164,7 @@ jobs:
       WINDOWS_SIGNING_ACCOUNT_NAME: ${{ vars.WINDOWS_SIGNING_ACCOUNT_NAME }}
       WINDOWS_SIGNING_PROFILE_NAME: ${{ needs.prepare.outputs.release_id != '' && 'gitcomet-windows-release' || 'gitcomet-windows-test' }}
       WINDOWS_SIGNING_TIMESTAMP_RFC3161: http://timestamp.acs.microsoft.com/
+      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -224,10 +232,87 @@ jobs:
 
           "SIGNTOOL_PATH=$signTool" >> $env:GITHUB_ENV
 
-      - name: Build release binary
+      # No aarch64-pc-windows-msvc build is published; the ARM runner executes
+      # the x64 binary under emulation. dump_syms parses the .pdb as a file
+      # format, so the host architecture does not have to match the target.
+      - name: Install dump_syms
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+
+          $asset = "dump_syms-x86_64-pc-windows-msvc.zip"
+          $expected = "${env:DUMP_SYMS_SHA256}"
+          $archive = Join-Path $env:RUNNER_TEMP $asset
+          $binDir = Join-Path $env:RUNNER_TEMP "dump-syms-bin"
+
+          $url = "https://github.com/mozilla/dump_syms/releases/download/v${env:DUMP_SYMS_VERSION}/$asset"
+          Write-Host "Downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile $archive
+
+          $actual = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
+          if ($actual -ne $expected) {
+            throw "SHA-256 mismatch for $asset`n  expected: $expected`n  actual:   $actual"
+          }
+
+          New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+          Expand-Archive -Path $archive -DestinationPath $binDir -Force
+          $exe = Get-ChildItem -Path $binDir -Recurse -Filter dump_syms.exe |
+            Select-Object -First 1 -ExpandProperty FullName
+          if ([string]::IsNullOrWhiteSpace($exe)) {
+            throw "Extracted archive did not contain dump_syms.exe."
+          }
+
+          & $exe --version
+          Split-Path $exe -Parent >> $env:GITHUB_PATH
+
+      - name: Build release binary
+        shell: pwsh
+        env:
+          # MSVC keeps debug info in the .pdb, and this is what makes the linker
+          # emit one: `strip` is ignored entirely on MSVC (rustc's MsvcLinker
+          # passes /DEBUG unconditionally), so it is not the knob here.
+          # Step-scoped so `cargo install cargo-wix` below does not rebuild its
+          # dependency tree with debug info nobody will read.
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
+        run: |
           cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
+
+      # Runs under bash so all three platforms share one guard against
+      # silently-empty symbols; Git for Windows provides it on the runner.
+      - name: Emit Breakpad symbols
+        shell: bash
+        run: |
+          scripts/emit-breakpad-symbols.sh \
+            --input target/release/gitcomet.pdb \
+            --store dist/symbols
+
+      # Release-only: `publish_symbols` is the sole consumer and needs a
+      # release_id too. Symbols are still generated above, which is what
+      # exercises the pipeline.
+      - name: Upload Windows Breakpad symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: symbols-${{ matrix.target_platform }}
+          path: dist/symbols
+          if-no-files-found: error
+          retention-days: 7
+
+      # Uploaded before packaging so a later failure in this job still leaves
+      # symbols for the binary that was built.
+      - name: Upload Windows debug symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          # Deliberately not named `windows-release-artifacts-*`:
+          # `publish_release_assets` globs that prefix into the published
+          # release, and these symbols are for triaging crash dumps rather than
+          # for users. The `gitcomet.pdb` file name is kept so a debugger can
+          # resolve it from the binary's debug directory.
+          name: windows-debug-symbols-${{ matrix.target_platform }}
+          path: target/release/gitcomet.pdb
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Sign Windows release binary
         uses: Azure/artifact-signing-action@v2
@@ -360,6 +445,8 @@ jobs:
             appimagetool_asset: appimagetool-x86_64.AppImage
             appimagetool_sha256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
             appimage_arch: x86_64
+            dump_syms_asset: dump_syms-x86_64-unknown-linux-gnu.tar.xz
+            dump_syms_sha256: 0fc852a86b00337407d9d423cc388a24c3b489ccaaedcf92623cad57af5ca8ad
           - target_platform: aarch64-linux
             artifact_arch: arm64
             deb_arch: arm64
@@ -368,6 +455,8 @@ jobs:
             appimagetool_asset: appimagetool-aarch64.AppImage
             appimagetool_sha256: f0837e7448a0c1e4e650a93bb3e85802546e60654ef287576f46c71c126a9158
             appimage_arch: aarch64
+            dump_syms_asset: dump_syms-aarch64-unknown-linux-gnu.tar.xz
+            dump_syms_sha256: 1b8d6ab436fbfeb9820d4a21413cc77c50c6a4221cff25a830f5d53ba0aaa732
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
@@ -377,6 +466,8 @@ jobs:
       APPIMAGETOOL_ASSET: ${{ matrix.appimagetool_asset }}
       APPIMAGETOOL_SHA256: ${{ matrix.appimagetool_sha256 }}
       APPIMAGE_ARCH: ${{ matrix.appimage_arch }}
+      DUMP_SYMS_ASSET: ${{ matrix.dump_syms_asset }}
+      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -400,8 +491,50 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install dump_syms
+        run: |
+          set -euo pipefail
+          bin_dir="$(scripts/install-dump-syms.sh \
+            --version "${DUMP_SYMS_VERSION}" \
+            --asset "${DUMP_SYMS_ASSET}" \
+            --sha256 "${DUMP_SYMS_SHA256}")"
+          echo "$bin_dir" >> "$GITHUB_PATH"
+
       - name: Build release binary
+        env:
+          # Build with the DWARF intact so symbols can be extracted, then strip
+          # back down to the manifest's `debuginfo` level before packaging.
+          # Step-scoped so no other cargo invocation in this job inherits it.
+          CARGO_PROFILE_RELEASE_STRIP: none
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: cargo build -p gitcomet --release --locked --features ui-gpui,gix --bin gitcomet
+
+      - name: Emit Breakpad symbols
+        run: |
+          set -euo pipefail
+          scripts/emit-breakpad-symbols.sh \
+            --input target/release/gitcomet \
+            --store dist/symbols
+
+      # Release-only; see the Breakpad symbol upload above.
+      - name: Upload Linux Breakpad symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: symbols-${{ matrix.target_platform }}
+          path: dist/symbols
+          if-no-files-found: error
+          retention-days: 7
+
+      # Every packaging step below installs from target/release/gitcomet, so
+      # stripping once here covers the tar.gz, .deb and AppImage alike. The raw
+      # DWARF is deliberately not archived: it is ~203 MiB per build and the
+      # .sym above already covers minidump-stackwalk.
+      - name: Strip release binary
+        run: |
+          set -euo pipefail
+          strip --strip-debug target/release/gitcomet
+          ls -l target/release/gitcomet
 
       - name: Normalize desktop entry metadata
         run: |
@@ -548,13 +681,19 @@ jobs:
           - target_platform: aarch64-darwin
             arch: arm64
             runs_on: macos-latest
+            dump_syms_asset: dump_syms-aarch64-apple-darwin.tar.xz
+            dump_syms_sha256: 4945b7e5de0d7ad403822635f0fb912b69990fc412741ff2b7b512e168c40a32
           - target_platform: x86_64-darwin
             arch: x86_64
             runs_on: macos-15-intel
+            dump_syms_asset: dump_syms-x86_64-apple-darwin.tar.xz
+            dump_syms_sha256: e255caf99e403b31613c756babcead8463f6e600c1a9e1e5531fbe27a7e29cf2
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       VERSION: ${{ needs.prepare.outputs.version }}
       ARCH: ${{ matrix.arch }}
+      DUMP_SYMS_ASSET: ${{ matrix.dump_syms_asset }}
+      DUMP_SYMS_SHA256: ${{ matrix.dump_syms_sha256 }}
       MACOS_SIGNING_IDENTITY: ${{ secrets.MACOS_SIGNING_IDENTITY }}
       MACOS_SIGNING_CERT_BASE64: ${{ secrets.MACOS_SIGNING_CERT_BASE64 }}
       MACOS_SIGNING_CERT_PASSWORD: ${{ secrets.MACOS_SIGNING_CERT_PASSWORD }}
@@ -574,6 +713,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           cache-targets: false
+
+      - name: Install dump_syms
+        run: |
+          set -euo pipefail
+          bin_dir="$(scripts/install-dump-syms.sh \
+            --version "${DUMP_SYMS_VERSION}" \
+            --asset "${DUMP_SYMS_ASSET}" \
+            --sha256 "${DUMP_SYMS_SHA256}")"
+          echo "$bin_dir" >> "$GITHUB_PATH"
 
       - name: Determine macOS signing mode
         id: macos_signing_mode
@@ -666,6 +814,12 @@ jobs:
       - name: Package macOS release assets
         env:
           GITCOMET_MACOS_PACKAGE_CLEAN_TARGET: "1"
+          # This step runs the build via package-macos.sh. Mach-O keeps debug
+          # info outside the binary, so dsymutil must run to produce the .dSYM;
+          # the manifest's `strip = "debuginfo"` needs no override because
+          # stripping the binary does not touch the bundle.
+          CARGO_PROFILE_RELEASE_SPLIT_DEBUGINFO: packed
+          CARGO_PROFILE_RELEASE_DEBUG: line-tables-only
         run: |
           set -euo pipefail
           package_args=(
@@ -673,6 +827,7 @@ jobs:
             --arch "${ARCH}"
             --release
             --out-dir dist
+            --symbols-out dist/symbols
           )
 
           if [ "${{ steps.macos_signing_mode.outputs.enabled }}" = "true" ]; then
@@ -685,6 +840,56 @@ jobs:
           fi
 
           scripts/package-macos.sh "${package_args[@]}"
+
+      # Release-only; see the Breakpad symbol upload above.
+      - name: Upload macOS Breakpad symbols
+        if: ${{ needs.prepare.outputs.release_id != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: symbols-${{ matrix.target_platform }}
+          path: dist/symbols
+          if-no-files-found: error
+          retention-days: 7
+
+      # Kept for lldb, which cannot read Breakpad .sym.
+      #
+      # Archived first because upload-artifact roots the artifact at the least
+      # common ancestor of the matched files: pointing it at the bundle
+      # directory would produce a download containing a bare `Contents/` tree,
+      # with the `.dSYM` wrapper lost and the bundle no longer loadable. Staged
+      # outside dist/ so it stays out of the artifacts published to the release.
+      - name: Archive macOS dSYM
+        if: ${{ needs.prepare.outputs.release_id != '' }}
+        env:
+          DSYM_DIR: ${{ runner.temp }}/gitcomet-dsym
+        run: |
+          set -euo pipefail
+          dsym="target/release/gitcomet.dSYM"
+
+          # package-macos.sh replaces Cargo's symlink with a real directory; if
+          # that regresses, `tar` would store a dangling link and still exit 0,
+          # sailing past `if-no-files-found` with an empty bundle.
+          if [ -L "$dsym" ] || [ ! -d "$dsym" ]; then
+            echo "::error title=No dSYM to archive::${dsym} is not a directory; the bundle Cargo symlinked to was probably cleaned away."
+            exit 1
+          fi
+          if [ -z "$(find "${dsym}/Contents/Resources/DWARF" -type f -print -quit 2>/dev/null)" ]; then
+            echo "::error title=Empty dSYM::${dsym} carries no DWARF payload."
+            exit 1
+          fi
+
+          mkdir -p "$DSYM_DIR"
+          tar -czhf "${DSYM_DIR}/gitcomet-${ARCH}.dSYM.tar.gz" \
+            -C target/release gitcomet.dSYM
+
+      - name: Upload macOS dSYM
+        if: ${{ needs.prepare.outputs.release_id != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: macos-dsym-${{ matrix.target_platform }}
+          path: ${{ runner.temp }}/gitcomet-dsym/gitcomet-${{ matrix.arch }}.dSYM.tar.gz
+          if-no-files-found: error
+          retention-days: 90
 
       - name: Notarize and verify macOS artifacts
         if: ${{ steps.macos_signing_mode.outputs.enabled == 'true' }}
@@ -720,11 +925,99 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: macos-release-artifacts-${{ matrix.target_platform }}
-          path: |
-            dist/*.tar.gz
-            dist/*.dmg
+          path: dist/*.dmg
           if-no-files-found: error
           retention-days: 7
+
+  publish_symbols:
+    name: Publish Breakpad symbols
+    runs-on: ubuntu-22.04
+    # Six ~239 MiB symbol files are downloaded, merged and re-uploaded here.
+    timeout-minutes: 60
+    # `publish_release_assets` depends on every build matrix and only succeeds
+    # after the complete payload has been attached to the draft release. Keep
+    # production symbols behind that same all-or-nothing release boundary: a
+    # failed target cancels the release, so none of that build's symbols belong
+    # in the store either.
+    needs: [prepare, publish_release_assets]
+    #
+    # `release_id` is empty for test builds, which must not push ~1.4 GiB into
+    # the production store for a release that may never exist — the same
+    # distinction the Windows signing profile makes.
+    if: ${{ needs.prepare.outputs.release_id != '' && needs.publish_release_assets.result == 'success' }}
+    # Symbols are auxiliary triage data. This job lives inside a reusable
+    # workflow whose overall result gates publish_release and every deploy job
+    # in release-manual-main.yml, so a transient Azure error must not strand a
+    # fully-built release as a draft. The job still shows red.
+    continue-on-error: true
+    env:
+      AZURE_STORAGE_ACCOUNT_KEY: ${{ secrets.AZURE_STORAGE_ACCOUNT_KEY }}
+      # Symbols sit alongside the APT repo and the Windows installer in the same
+      # static-website container, so they are served from
+      # https://apt.gitcomet.dev/symbols/ with no extra infrastructure.
+      SYMBOLS_STORAGE_ACCOUNT: ${{ vars.SYMBOLS_STORAGE_ACCOUNT || vars.APT_STORAGE_ACCOUNT }}
+      SYMBOLS_CONTAINER: ${{ vars.APT_STORAGE_CONTAINER }}
+      SYMBOLS_PREFIX: symbols
+    steps:
+      # The job's `if` already established this is a real tagged release, so
+      # missing credentials are a misconfiguration, not a fork. Failing loudly
+      # matches deploy-apt-repo.yml and deploy-windows-installer.yml; silently
+      # skipping would ship releases whose crashes cannot be symbolized and
+      # nobody would notice until the first report arrives.
+      - name: Check symbol store configuration
+        run: |
+          set -euo pipefail
+          if [ -z "${SYMBOLS_STORAGE_ACCOUNT:-}" ]; then
+            echo "::error title=Missing storage account::Set the APT_STORAGE_ACCOUNT (or SYMBOLS_STORAGE_ACCOUNT) repository variable."
+            exit 1
+          fi
+          if [ -z "${SYMBOLS_CONTAINER:-}" ]; then
+            echo "::error title=Missing storage container::Set the APT_STORAGE_CONTAINER repository variable."
+            exit 1
+          fi
+          if [ -z "${AZURE_STORAGE_ACCOUNT_KEY:-}" ]; then
+            echo "::error title=Missing storage credentials::Set the AZURE_STORAGE_ACCOUNT_KEY secret to publish symbols."
+            exit 1
+          fi
+
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: symbols-*
+          path: dist/symbols
+          merge-multiple: true
+
+      - name: Summarize symbol store
+        run: |
+          set -euo pipefail
+          if [ -z "$(find dist/symbols -type f -name '*.sym' -print -quit 2>/dev/null)" ]; then
+            echo "::error title=No symbols::No .sym files were produced by any build job."
+            exit 1
+          fi
+          find dist/symbols -type f -name '*.sym' -exec du -h {} +
+
+      # Paths are keyed by debug ID, so a given path always describes the same
+      # build. Overwriting is therefore a no-op in content and keeps re-runs of
+      # this job green.
+      - name: Upload symbols to the store
+        env:
+          AZURE_CONFIG_DIR: ${{ runner.temp }}/azure-config
+        run: |
+          set -euo pipefail
+          mkdir -p "$AZURE_CONFIG_DIR"
+
+          az storage blob upload-batch \
+            --account-name "${SYMBOLS_STORAGE_ACCOUNT}" \
+            --account-key "${AZURE_STORAGE_ACCOUNT_KEY}" \
+            --destination "${SYMBOLS_CONTAINER}" \
+            --destination-path "${SYMBOLS_PREFIX}" \
+            --source dist/symbols \
+            --overwrite true \
+            --no-progress \
+            --output none
+
+          # Report where the symbols actually went rather than a hardcoded
+          # public URL, which would be wrong the moment the account changes.
+          echo "Symbols published to ${SYMBOLS_STORAGE_ACCOUNT}/${SYMBOLS_CONTAINER}/${SYMBOLS_PREFIX}/"
 
   publish_release_assets:
     name: Attach assets and checksums to GitHub release

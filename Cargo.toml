@@ -285,7 +285,29 @@ split-debuginfo = "packed"
 [profile.release]
 lto = "fat"
 codegen-units = 1
-strip = "symbols"
+# Debug info is deliberately NOT enabled here. Only the release jobs extract
+# symbols, and they turn it on per-job with CARGO_PROFILE_RELEASE_DEBUG next to
+# the CARGO_PROFILE_RELEASE_STRIP / _SPLIT_DEBUGINFO overrides. Setting it in the
+# manifest would also tax every `cargo bench` — [profile.bench] inherits this
+# profile — with fat-LTO debug info that is generated and then discarded.
+# See `docs/crash-symbolication.md`.
+#
+# `debuginfo` drops the DWARF from the shipped binary but keeps the symbol
+# table, so on ELF and Mach-O GitComet's own crash log (`crashlog.rs`,
+# `Backtrace::force_capture`) reports function names instead of `<unknown>`.
+# Measured cost on the x86_64 Linux release binary: 106.8 -> 115.0 MiB raw,
+# 27.5 -> 28.7 MiB compressed. This buys nothing on Windows, where symbols live
+# in the `.pdb` rather than the image and dbghelp needs that file either way —
+# Windows crash logs are resolved from the symbol store instead.
+#
+# The Linux release job overrides this at build time (`strip = "none"`) so the
+# DWARF survives long enough to be extracted, then strips back down to this
+# level before packaging. macOS needs no override because
+# `split-debuginfo = "packed"` puts the DWARF in a `.dSYM` bundle, and Windows
+# needs none because MSVC keeps debug info in the `.pdb` regardless — what
+# produces that file is `CARGO_PROFILE_RELEASE_DEBUG`, not `strip`.
+# See `.github/workflows/build-release-artifacts.yml`.
+strip = "debuginfo"
 
 [profile.release-with-debug]
 inherits = "release"
