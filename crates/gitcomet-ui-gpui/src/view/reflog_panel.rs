@@ -283,22 +283,10 @@ fn bottom_panel_tab_close(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use gitcomet_core::error::{Error, ErrorKind};
-    use gitcomet_core::services::{GitBackend, GitRepository, Result};
+    use crate::view::test_support::NoopBackend as TestBackend;
     use gitcomet_state::model::RepoState;
     use gitcomet_state::store::AppStore;
-    use std::path::Path;
     use std::sync::Arc;
-
-    struct TestBackend;
-
-    impl GitBackend for TestBackend {
-        fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-            Err(Error::new(ErrorKind::Unsupported(
-                "no repositories in this test",
-            )))
-        }
-    }
 
     fn view_with_active_repo(
         cx: &mut gpui::TestAppContext,

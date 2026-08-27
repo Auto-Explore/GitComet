@@ -144,6 +144,60 @@ pub(in crate::view) fn new_fx_lru_cache<K: std::hash::Hash + Eq, V>(
     InstrumentedLruCache::with_hasher(cap, BuildHasherDefault::default())
 }
 
+/// A VecDeque-backed recency queue for caches that keep their own entry maps
+/// and only need the touch/evict-order half of an LRU.
+#[derive(Clone, Debug)]
+pub(in crate::view) struct LruTouchQueue<K> {
+    order: std::collections::VecDeque<K>,
+}
+
+impl<K> Default for LruTouchQueue<K> {
+    fn default() -> Self {
+        Self {
+            order: std::collections::VecDeque::new(),
+        }
+    }
+}
+
+impl<K: Eq> LruTouchQueue<K> {
+    pub(in crate::view) fn touch(&mut self, key: K) {
+        if self.order.back() == Some(&key) {
+            return;
+        }
+        if let Some(pos) = self.order.iter().position(|existing| *existing == key) {
+            self.order.remove(pos);
+        }
+        self.order.push_back(key);
+    }
+
+    pub(in crate::view) fn remove(&mut self, key: &K) -> bool {
+        if let Some(pos) = self.order.iter().position(|existing| existing == key) {
+            self.order.remove(pos);
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(in crate::view) fn back(&self) -> Option<&K> {
+        self.order.back()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
+
+    #[cfg(any(test, feature = "benchmarks"))]
+    pub(in crate::view) fn clear(&mut self) {
+        self.order.clear();
+    }
+
+    pub(in crate::view) fn pop_oldest(&mut self) -> Option<K> {
+        self.order.pop_front()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(in crate::view) struct CommitFileRowPresentation {
     pub(in crate::view) label: SharedString,
@@ -395,6 +449,7 @@ mod blame;
 mod canvas;
 #[cfg(test)]
 mod canvas_tests;
+mod canvas_text;
 mod conflict_canvas;
 mod conflict_resolver;
 mod diff;
@@ -460,7 +515,8 @@ pub(in crate::view) use diff_text::{
     prepared_diff_syntax_occurrences_at_display_offset,
     prepared_diff_syntax_pair_at_display_offset, prepared_diff_syntax_reparse_seed,
     query_highlight_colors, request_syntax_highlights_for_prepared_document_byte_range,
-    resolved_output_line_text, syntax_highlights_for_line, whitespace_visible_line_text,
+    resolved_output_line_text, shared_byte_affix_bounds, syntax_highlights_for_line,
+    whitespace_visible_line_text,
 };
 #[cfg(test)]
 pub(in crate::view) use diff_text::{OCCURRENCE_MAX_TEXT_BYTES, SyntaxPairKind};

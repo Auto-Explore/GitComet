@@ -2,7 +2,7 @@
 //!
 //! Extracted from `actions_impl.rs`: mergetool bootstrap tracing, conflict
 //! navigation, pick/choice application, output editing ops, session
-//! resolution sync, and autosolve dispatch. See UI_DESIGN.md section 30.
+//! resolution sync, and autosolve dispatch.
 
 use super::core_impl::uniform_list_base_handle;
 use super::helpers::*;

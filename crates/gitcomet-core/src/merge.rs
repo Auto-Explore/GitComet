@@ -65,6 +65,47 @@ pub enum DiffAlgorithm {
     Histogram,
 }
 
+/// Where a conflict-style or diff-algorithm value comes from, controlling
+/// which spellings are accepted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ConfigValueSource {
+    /// CLI flags: only the canonical values are accepted.
+    Cli,
+    /// `git config`: historical and alias values are accepted too.
+    GitConfig,
+}
+
+/// Parses a `merge.conflictstyle` value into a [`ConflictStyle`].
+///
+/// Both sources accept the same spellings, so the policy parameter exists for
+/// symmetry with [`parse_diff_algorithm`]; `None` means the value was not
+/// recognized.
+pub fn parse_conflict_style(source: ConfigValueSource, value: &str) -> Option<ConflictStyle> {
+    let _ = source;
+    match value {
+        "merge" => Some(ConflictStyle::Merge),
+        "diff3" => Some(ConflictStyle::Diff3),
+        "zdiff3" => Some(ConflictStyle::Zdiff3),
+        _ => None,
+    }
+}
+
+/// Parses a `diff.algorithm` value into a [`DiffAlgorithm`].
+///
+/// Git config additionally accepts `patience`, `default`, and `minimal`
+/// aliases; the CLI only accepts the canonical spellings.
+pub fn parse_diff_algorithm(source: ConfigValueSource, value: &str) -> Option<DiffAlgorithm> {
+    match value {
+        "myers" => Some(DiffAlgorithm::Myers),
+        "histogram" => Some(DiffAlgorithm::Histogram),
+        "patience" if source == ConfigValueSource::GitConfig => Some(DiffAlgorithm::Histogram),
+        "default" | "minimal" if source == ConfigValueSource::GitConfig => {
+            Some(DiffAlgorithm::Myers)
+        }
+        _ => None,
+    }
+}
+
 /// Labels for the three merge sides.
 #[derive(Clone, Debug, Default)]
 pub struct MergeLabels {

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/cli.sh"
+
 usage() {
   cat <<'EOF'
 Usage: scripts/emit-breakpad-symbols.sh --input PATH --store DIR [--arch ARCH] [--module-name NAME] [--min-bytes N] [--allow-missing-inlines] [--allow-missing-cfi]
@@ -35,15 +38,6 @@ Options:
                        dump_syms reads only one file (unlike Windows, which
                        re-pairs a .pdb with its .exe).
 EOF
-}
-
-# `shift 2` on a flag whose value is missing fails under `set -e`, killing the
-# script before the diagnostics below can run.
-require_value() {
-  if [[ $# -lt 2 ]]; then
-    echo "Option $1 requires a value." >&2
-    exit 2
-  fi
 }
 
 input=""

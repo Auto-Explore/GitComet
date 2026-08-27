@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::test_support::TestBackend;
 use chrome::{cursor_style_for_resize_edge, resize_edge};
 use gitcomet_core::domain::{
     Branch, CommitId, FileEntry, FileEntryKind, Remote, RemoteBranch, RepoSpec, StashEntry,
@@ -13,16 +14,6 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-
-struct TestBackend;
-
-impl GitBackend for TestBackend {
-    fn open(&self, _workdir: &Path) -> Result<Arc<dyn GitRepository>> {
-        Err(Error::new(ErrorKind::Unsupported(
-            "Test backend does not open repositories",
-        )))
-    }
-}
 
 struct RecordingFailingBackend {
     opened: Arc<Mutex<Vec<PathBuf>>>,

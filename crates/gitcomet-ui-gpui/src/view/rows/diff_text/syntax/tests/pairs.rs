@@ -336,20 +336,10 @@ fn powershell_open_side_does_not_claim_a_paren_another_opener_closed() {
 /// silently stop tag matching in any element with a lot of children.
 #[test]
 fn wide_all_named_node_still_pairs_where_delimiters_are_named() {
-    let mut text = String::from("<div>\n");
-    for ix in 0..100 {
-        text.push_str(&format!("<p>item {ix}</p>\n"));
-        if ix == 50 {
-            text.push_str("MARKER\n");
-        }
-    }
-    text.push_str("</div>\n");
+    let text = wide_html_element_with_marker(false);
     let document = prepare_test_document(DiffSyntaxLanguage::Html, &text);
 
-    let marker_line = text[..text.find("MARKER").expect("marker")]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count();
+    let marker_line = marker_line_in(&text);
     let hit = prepared_document_syntax_pair_at_display_offset(document, marker_line, 3)
         .expect("text directly inside a wide element still pairs the element's tags");
     assert_eq!(hit.kind, SyntaxPairKind::Tag);
@@ -423,24 +413,10 @@ fn wide_python_module_without_direct_delimiters_returns_none() {
 /// `start_tag`, content, `end_tag` -- are all named.
 #[test]
 fn wide_html_element_pairs_its_tags_despite_a_parse_error_inside() {
-    let mut text = String::from("<div>\n");
-    for ix in 0..100 {
-        text.push_str(&format!("<p>item {ix}</p>\n"));
-        if ix == 50 {
-            text.push_str("MARKER\n");
-        }
-        if ix == 70 {
-            // A bare `<` in prose: ordinary content, and a parse error.
-            text.push_str("< \n");
-        }
-    }
-    text.push_str("</div>\n");
+    let text = wide_html_element_with_marker(true);
     let document = prepare_test_document(DiffSyntaxLanguage::Html, &text);
 
-    let marker_line = text[..text.find("MARKER").expect("marker")]
-        .bytes()
-        .filter(|byte| *byte == b'\n')
-        .count();
+    let marker_line = marker_line_in(&text);
     let hit = prepared_document_syntax_pair_at_display_offset(document, marker_line, 3)
         .expect("a parse error in a sibling must not unpair the enclosing element");
     assert_eq!(hit.kind, SyntaxPairKind::Tag);
@@ -485,6 +461,34 @@ fn wide_malformed_json_array_pairs_from_inside() {
         .expect("a caret among the values must pair the enclosing array");
     assert_eq!(hit.open[0].display_range, 0..1);
     assert_eq!(hit.close[0].display_range, text.len() - 1..text.len());
+}
+
+/// A wide `<div>` with a hundred `<p>` children and a `MARKER` line at
+/// child fifty, used by the named-delimiter pairing tests. `sibling_error`
+/// adds a bare `<` in prose at child seventy so the subtree carries a parse
+/// error while the div's own boundary tags stay intact.
+fn wide_html_element_with_marker(sibling_error: bool) -> String {
+    let mut text = String::from("<div>\n");
+    for ix in 0..100 {
+        text.push_str(&format!("<p>item {ix}</p>\n"));
+        if ix == 50 {
+            text.push_str("MARKER\n");
+        }
+        if sibling_error && ix == 70 {
+            // A bare `<` in prose: ordinary content, and a parse error.
+            text.push_str("< \n");
+        }
+    }
+    text.push_str("</div>\n");
+    text
+}
+
+/// Zero-based line index of the first `MARKER` line.
+fn marker_line_in(text: &str) -> usize {
+    text[..text.find("MARKER").expect("marker")]
+        .bytes()
+        .filter(|byte| *byte == b'\n')
+        .count()
 }
 
 /// A flat array of `elements` values with a single unparseable one in the

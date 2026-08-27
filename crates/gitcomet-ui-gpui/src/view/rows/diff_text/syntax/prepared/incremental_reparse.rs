@@ -271,21 +271,8 @@ pub(crate) fn compute_incremental_edit_ranges(
         return Vec::new();
     }
 
-    let mut prefix = 0usize;
-    let max_prefix = old.len().min(new.len());
-    while prefix < max_prefix && old[prefix] == new[prefix] {
-        prefix += 1;
-    }
-
-    let mut old_suffix_start = old.len();
-    let mut new_suffix_start = new.len();
-    while old_suffix_start > prefix
-        && new_suffix_start > prefix
-        && old[old_suffix_start - 1] == new[new_suffix_start - 1]
-    {
-        old_suffix_start -= 1;
-        new_suffix_start -= 1;
-    }
+    let (prefix, old_suffix_start, new_suffix_start) =
+        super::super::shared_byte_affix_bounds(old, new);
 
     vec![TreesitterByteEditRange {
         start_byte: prefix,

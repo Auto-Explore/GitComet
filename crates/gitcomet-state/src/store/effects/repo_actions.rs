@@ -1,7 +1,5 @@
 use crate::msg::{Msg, RepoActionKind, RepoPathList};
-use gitcomet_core::auth::{
-    StagedGitAuth, clear_staged_git_auth, stage_git_auth_for_current_thread,
-};
+use gitcomet_core::auth::{ScopedStagedGitAuth, StagedGitAuth};
 use gitcomet_core::error::Error;
 use gitcomet_core::services::GitRepository;
 use std::path::{Path, PathBuf};
@@ -122,10 +120,9 @@ fn run_with_git_auth<R>(
     run: impl FnOnce() -> Result<R, Error>,
 ) -> Result<R, Error> {
     if let Some(auth) = auth {
-        stage_git_auth_for_current_thread(auth);
-        let result = run();
-        clear_staged_git_auth();
-        result
+        // The guard clears the staged auth on success, error, and panic.
+        let _scoped = ScopedStagedGitAuth::stage(auth);
+        run()
     } else {
         run()
     }

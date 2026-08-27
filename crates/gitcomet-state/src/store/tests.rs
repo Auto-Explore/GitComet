@@ -17,6 +17,23 @@ use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+/// The empty workspace snapshot the history-switch tests seed nav histories
+/// with: no diff target, no preview/edit mode, no selection besides the
+/// commit. Kept beside the other store fixtures so tests do not re-write the
+/// same struct literal.
+pub(in crate::store) fn snapshot_with_commit(
+    selected_commit: Option<CommitId>,
+) -> crate::model::MainViewSnapshot {
+    crate::model::MainViewSnapshot {
+        diff_target: None,
+        content_preview: false,
+        edit_mode: false,
+        selected_commit,
+        range_selection: None,
+        worktree_selection: None,
+    }
+}
+
 pub(in crate::store) struct DummyRepo {
     spec: RepoSpec,
 }

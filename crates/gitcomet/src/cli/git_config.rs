@@ -105,28 +105,28 @@ fn resolve_mergetool_repo_root(config: &MergetoolConfig) -> Option<PathBuf> {
 ///
 /// This mirrors `git merge-file` behavior: the tool respects the user's
 /// configured preferences without requiring them to modify the mergetool
-/// command string.
+/// command string. Git config accepts the alias spellings (`patience`,
+/// `default`, `minimal`) that the CLI rejects.
 fn apply_git_config_fallback(
     config: &mut MergetoolConfig,
     had_explicit_style: bool,
     had_explicit_algorithm: bool,
     git_config: &dyn Fn(&str) -> Option<String>,
 ) {
-    if !had_explicit_style && let Some(style) = git_config("merge.conflictstyle") {
-        match style.as_str() {
-            "merge" => config.conflict_style = ConflictStyle::Merge,
-            "diff3" => config.conflict_style = ConflictStyle::Diff3,
-            "zdiff3" => config.conflict_style = ConflictStyle::Zdiff3,
-            _ => {} // ignore unrecognized values, keep default
-        }
+    if !had_explicit_style
+        && let Some(style) = git_config("merge.conflictstyle")
+        && let Some(style) =
+            gitcomet_core::merge::parse_conflict_style(ConfigValueSource::GitConfig, &style)
+    {
+        config.conflict_style = style;
     }
 
-    if !had_explicit_algorithm && let Some(algo) = git_config("diff.algorithm") {
-        match algo.as_str() {
-            "histogram" | "patience" => config.diff_algorithm = DiffAlgorithm::Histogram,
-            "myers" | "default" | "minimal" => config.diff_algorithm = DiffAlgorithm::Myers,
-            _ => {} // ignore unrecognized values, keep default
-        }
+    if !had_explicit_algorithm
+        && let Some(algo) = git_config("diff.algorithm")
+        && let Some(algo) =
+            gitcomet_core::merge::parse_diff_algorithm(ConfigValueSource::GitConfig, &algo)
+    {
+        config.diff_algorithm = algo;
     }
 }
 

@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/lib/cli.sh"
+
 usage() {
   cat <<'EOF'
 Usage: scripts/symbolicate-minidump.sh [--symbols-url URL] [--cache DIR] [--json] MINIDUMP [-- EXTRA_ARGS...]
@@ -22,15 +25,6 @@ Environment:
   GITCOMET_SYMBOLS_URL
     Overrides the symbol store base URL, for a staging store or a local mirror.
 EOF
-}
-
-# `shift 2` on a flag whose value is missing fails under `set -e`, killing the
-# script before the diagnostics below can run.
-require_value() {
-  if [[ $# -lt 2 ]]; then
-    echo "Option $1 requires a value." >&2
-    exit 2
-  fi
 }
 
 # Published by the release workflow into the same static-website container that

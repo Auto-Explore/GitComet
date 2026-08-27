@@ -1236,7 +1236,7 @@ impl RebaseScripts {
 /// Git for Windows' bundled shell — so an unquoted path containing spaces
 /// word-splits, and POSIX single-quote quoting applies on every platform.
 fn shell_quote_path(path: &Path) -> String {
-    format!("'{}'", path.to_string_lossy().replace('\'', r"'\''"))
+    gitcomet_core::text_utils::shell_single_quote(&path.to_string_lossy())
 }
 
 enum PersistedReword {
@@ -1510,7 +1510,7 @@ mod tests {
     fn editor_path_uses_posix_shell_quotes() {
         assert_eq!(
             shell_quote_path(Path::new("/repo with 'quotes'/editor.sh")),
-            r"'/repo with '\''quotes'\''/editor.sh'"
+            "'/repo with '\"'\"'quotes'\"'\"'/editor.sh'"
         );
         assert_eq!(
             shell_quote_path(Path::new(r"C:\repo with spaces\editor.sh")),
