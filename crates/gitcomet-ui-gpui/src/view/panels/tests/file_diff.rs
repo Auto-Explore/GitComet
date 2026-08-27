@@ -9720,6 +9720,18 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
                         kind: gitcomet_core::domain::DiffLineKind::Context,
                         text: " fn main() { let x = 1; }".into(),
                     },
+                    gitcomet_core::domain::DiffLine {
+                        kind: gitcomet_core::domain::DiffLineKind::Header,
+                        text: "diff --git a/page.njk b/page.njk".into(),
+                    },
+                    gitcomet_core::domain::DiffLine {
+                        kind: gitcomet_core::domain::DiffLineKind::Hunk,
+                        text: "@@ -1,1 +1,1 @@".into(),
+                    },
+                    gitcomet_core::domain::DiffLine {
+                        kind: gitcomet_core::domain::DiffLineKind::Context,
+                        text: " <nav class=\"menu\">Home</nav>".into(),
+                    },
                 ],
             };
 
@@ -9752,6 +9764,21 @@ fn patch_view_applies_syntax_highlighting_to_context_lines(cx: &mut gpui::TestAp
         assert!(
             !styled.highlights.is_empty(),
             "expected syntax highlighting highlights for context line"
+        );
+
+        assert_eq!(
+            pane.diff_language_for_src_ix.get(5).copied().flatten(),
+            Some(rows::DiffSyntaxLanguage::Jinja),
+            "the patch should use the same path-based language detection as file content"
+        );
+        let jinja_styled = pane
+            .diff_text_segments_cache
+            .get(5)
+            .and_then(|v| v.as_ref().map(|entry| &entry.styled))
+            .expect("expected Nunjucks context line to be styled and cached");
+        assert!(
+            !jinja_styled.highlights.is_empty(),
+            "the patch should apply Jinja's injected HTML highlighting"
         );
     });
 }

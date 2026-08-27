@@ -2037,6 +2037,12 @@ async fn assert_editor_renders_the_engines_highlights(
             .file_editor_live_syntax
             .as_ref()
             .unwrap_or_else(|| panic!("{label}: the editor must build a tree-sitter document"));
+        assert_eq!(
+            document.language(),
+            rows::diff_syntax_language_for_path(&file_rel)
+                .unwrap_or_else(|| panic!("{label}: the fixture path must resolve a language")),
+            "{label}: the editor must build the grammar selected from the file extension"
+        );
         let expected = document
             .snapshot(pane.theme)
             .highlights_for_byte_range(0..contents.len());
@@ -2122,6 +2128,26 @@ async fn the_editor_renders_shell_highlights_as_the_engine_produced_them(
             "for f in *.txt; do\n",
             "  greet \"$f\"\n",
             "done\n",
+        ),
+    )
+    .await;
+}
+
+#[gpui::test]
+async fn the_editor_renders_nunjucks_with_the_jinja_grammar(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    assert_editor_renders_the_engines_highlights(
+        cx,
+        gitcomet_state::model::RepoId(964),
+        "file_editor_nunjucks_highlights",
+        "index.njk",
+        concat!(
+            "{# navigation #}\n",
+            "<nav class=\"menu\">\n",
+            "  {% for item in items %}\n",
+            "    <a href=\"{{ item.url }}\">{{ item.label | upper }}</a>\n",
+            "  {% endfor %}\n",
+            "</nav>\n",
         ),
     )
     .await;
@@ -2920,6 +2946,51 @@ async fn ctrl_f_and_escape_walk_in_and_out_of_the_editor(cx: &mut gpui::TestAppC
         editor_selected_range(&view, cx),
         matches[0],
         "the caret is left on the match the search was showing"
+    );
+
+    let _ = std::fs::remove_dir_all(&workdir);
+}
+
+#[gpui::test]
+async fn recent_repository_shortcut_does_not_select_the_file_editor(cx: &mut gpui::TestAppContext) {
+    let _visual_guard = lock_visual_test();
+    let (store, events) = AppStore::new(Arc::new(TestBackend));
+    let (view, cx) = cx.add_window_view(|window, cx| {
+        super::super::GitCometView::new(store, events, None, window, cx)
+    });
+
+    let contents = "alpha beta gamma\n";
+    let workdir = seed_editor(&view, cx, 987, "file_editor_recent_repo_shortcut", contents);
+    cx.update(|window, app| {
+        app.clear_key_bindings();
+        crate::app::install_app_shortcuts_for_test(app, Arc::new(TestBackend));
+        crate::app::bind_text_input_keys_for_test(app);
+        view.update(app, |this, cx| {
+            this.main_pane.update(cx, |pane, cx| {
+                pane.file_editor_input.update(cx, |input, cx| {
+                    input.set_selected_range(6..6, false, cx);
+                    let focus = input.focus_handle();
+                    window.focus(&focus, cx);
+                });
+            });
+        });
+        let _ = window.draw(app);
+        window.activate_window();
+    });
+    assert_eq!(editor_selected_range(&view, cx), 6..6);
+
+    cx.simulate_keystrokes("secondary-shift-a");
+    cx.run_until_parked();
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds("app_popover").is_some(),
+        "Ctrl/Cmd+Shift+A must open the recent-repositories picker from the editor"
+    );
+    assert_eq!(
+        editor_selected_range(&view, cx),
+        6..6,
+        "the recent-repositories shortcut must not also select the editor buffer"
     );
 
     let _ = std::fs::remove_dir_all(&workdir);

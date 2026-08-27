@@ -28,6 +28,21 @@ struct RecordingFailingBackend {
     opened: Arc<Mutex<Vec<PathBuf>>>,
 }
 
+#[test]
+fn recent_repository_shortcut_is_not_a_diff_select_all_candidate() {
+    let recent = gpui::Keystroke::parse("secondary-shift-a").expect("valid shortcut");
+    let select_all = gpui::Keystroke::parse("secondary-a").expect("valid shortcut");
+
+    assert!(
+        !is_diff_shortcut_candidate(&recent),
+        "the app-level recent-repositories chord must not reach diff text selection"
+    );
+    assert!(
+        is_diff_shortcut_candidate(&select_all),
+        "unshifted Ctrl/Cmd+A must still reach diff text selection"
+    );
+}
+
 impl GitBackend for RecordingFailingBackend {
     fn open(&self, workdir: &Path) -> Result<Arc<dyn GitRepository>> {
         self.opened
