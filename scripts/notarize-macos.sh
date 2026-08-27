@@ -5,9 +5,8 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/notarize-macos.sh --version VERSION [--arch arm64|x86_64] [--out-dir PATH] [--timeout DURATION] [--keychain PATH] (--keychain-profile PROFILE | --api-key PATH --key-id ID [--issuer UUID])
 
-Submits an already-packaged macOS DMG to Apple's notary service, staples the
-resulting ticket to the staged .app bundle and DMG, and refreshes the macOS
-tarball so the archived app bundle also carries the stapled ticket.
+Submits an already-packaged macOS DMG to Apple's notary service and staples the
+resulting ticket to the staged .app bundle and DMG.
 
 Expected inputs:
   - <out-dir>/gitcomet-v<VERSION>-macos-<ARCH>.dmg
@@ -20,11 +19,6 @@ Authentication:
 
   --api-key PATH --key-id ID [--issuer UUID]
     Use an App Store Connect API key directly. This matches the CI workflow.
-
-Notes:
-  - The macOS tarball is rebuilt after stapling so the bundled .app is up to date.
-  - The standalone gitcomet binary at the tarball root is only code-signed.
-    Apple's notary service does not accept .tar.gz uploads directly.
 
 Defaults:
   --arch matches the host architecture
@@ -147,11 +141,9 @@ stage_root="${out_abs}/stage"
 release_dir="${stage_root}/${release_root}"
 app_path="${release_dir}/GitComet.app"
 app_binary="${app_path}/Contents/MacOS/gitcomet"
-tarball_path="${out_abs}/${release_root}.tar.gz"
 dmg_path="${out_abs}/${release_root}.dmg"
-standalone_binary="${release_dir}/gitcomet"
 
-for tool in xcrun codesign spctl tar; do
+for tool in xcrun codesign spctl; do
   if ! command -v "$tool" >/dev/null 2>&1; then
     echo "Required tool not found: $tool" >&2
     exit 1
@@ -220,17 +212,8 @@ xcrun stapler staple "$dmg_path"
 xcrun stapler validate "$app_path"
 xcrun stapler validate "$dmg_path"
 
-if [[ -f "$tarball_path" ]]; then
-  echo "Refreshing $tarball_path with stapled app bundle"
-  rm -f "$tarball_path"
-  tar -C "$stage_root" -czf "$tarball_path" "$release_root"
-fi
-
 echo "Verifying signed macOS artifacts"
 codesign --verify --deep --strict --verbose=2 "$app_path"
-if [[ -f "$standalone_binary" ]]; then
-  codesign --verify --strict --verbose=2 "$standalone_binary"
-fi
 spctl --assess --type open --context context:primary-signature --verbose=4 "$app_path"
 spctl --assess --type execute --verbose=4 "$app_binary"
 spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg_path"
@@ -238,6 +221,3 @@ spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg
 echo "Notarized macOS artifacts:"
 echo "  $app_path"
 echo "  $dmg_path"
-if [[ -f "$tarball_path" ]]; then
-  echo "  $tarball_path"
-fi

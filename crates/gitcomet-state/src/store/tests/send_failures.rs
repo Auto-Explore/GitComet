@@ -516,35 +516,23 @@ fn executor_increments_failure_counter_when_worker_queue_disconnects() {
         super::send_diagnostics::SendFailureKind::ExecutorQueue,
     );
 
-    let executor = super::executor::TaskExecutor::new(1);
-    let (started_tx, started_rx) = mpsc::channel::<()>();
-    executor.spawn(move || {
-        let _ = started_tx.send(());
-        panic!("intentional panic to drop executor worker");
-    });
+    // A pool with no workers drops the shared receiver as soon as `new` returns,
+    // so the very first send observes a disconnected queue. This used to be
+    // provoked by panicking a task to kill its worker, which no longer works —
+    // `worker_loop` catches the unwind and keeps the thread serving, covered by
+    // `executor::tests::worker_keeps_serving_tasks_after_one_panics`. Going
+    // through an empty pool also removes the sleep-and-retry race this test
+    // needed when it depended on a panic landing first.
+    let executor = super::executor::TaskExecutor::new(0);
+    executor.spawn(|| {});
 
-    started_rx
-        .recv_timeout(Duration::from_secs(1))
-        .expect("worker task did not start");
-
-    let deadline = Instant::now() + Duration::from_secs(1);
-    loop {
-        // The worker panic may race with this test thread; keep attempting to enqueue
-        // until the sender observes the disconnected queue and diagnostics increment.
-        executor.spawn(|| {});
-
-        let after = super::send_diagnostics::send_failure_count(
-            super::send_diagnostics::SendFailureKind::ExecutorQueue,
-        );
-        if after > before {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "expected executor queue send failure count to increase"
-        );
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    let after = super::send_diagnostics::send_failure_count(
+        super::send_diagnostics::SendFailureKind::ExecutorQueue,
+    );
+    assert!(
+        after > before,
+        "expected executor queue send failure count to increase"
+    );
 }
 
 #[test]
