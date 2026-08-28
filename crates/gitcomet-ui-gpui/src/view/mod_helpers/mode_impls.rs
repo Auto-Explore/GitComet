@@ -78,6 +78,14 @@ impl AutosquashMode {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) enum PopoverKind {
+    HookActivity {
+        repo_id: RepoId,
+        operation_id: Option<GitOperationId>,
+    },
+    GitOperationStopConfirm {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+    },
     RepoPicker,
     BranchPicker {
         purpose: BranchPickerPurpose,

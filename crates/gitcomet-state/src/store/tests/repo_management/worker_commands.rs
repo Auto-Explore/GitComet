@@ -1,6 +1,51 @@
 use super::*;
 
 #[test]
+fn worker_command_prioritizes_cancel_git_operation_over_queued_hook_output() {
+    let repo_id = RepoId(7);
+    let operation_id = gitcomet_core::git_operation::GitOperationId(91);
+    let (tx, rx) = std::sync::mpsc::channel();
+
+    for sequence in 0..4 {
+        tx.send(StoreWorkerCommand::Msg(Box::new(Msg::Internal(
+            crate::msg::InternalMsg::GitOperationEvent {
+                repo_id,
+                operation_id,
+                event: gitcomet_core::git_operation::GitOperationEvent::Output {
+                    chunks: vec![gitcomet_core::git_operation::GitOutputChunk {
+                        stream: gitcomet_core::git_operation::GitOutputStream::Stdout,
+                        text: format!("noisy hook output {sequence}\n"),
+                    }],
+                },
+            },
+        ))))
+        .expect("send hook output");
+    }
+    tx.send(StoreWorkerCommand::Msg(Box::new(Msg::CancelGitOperation {
+        repo_id,
+        operation_id,
+    })))
+    .expect("send cancellation");
+
+    let mut deferred = std::collections::VecDeque::new();
+    let command = recv_next_worker_command(&rx, &mut deferred).expect("next command");
+    assert!(
+        matches!(
+            command,
+            StoreWorkerCommand::Msg(msg)
+                if matches!(
+                    *msg,
+                    Msg::CancelGitOperation {
+                        repo_id: got_repo,
+                        operation_id: got_operation,
+                    } if got_repo == repo_id && got_operation == operation_id
+                )
+        ),
+        "Stop must overtake already-queued hook output"
+    );
+}
+
+#[test]
 fn worker_command_prioritizes_close_repo_over_queued_background_result() {
     let repo_id = RepoId(7);
     let (tx, rx) = std::sync::mpsc::channel();

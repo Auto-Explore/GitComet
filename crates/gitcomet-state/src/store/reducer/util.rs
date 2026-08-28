@@ -979,6 +979,7 @@ pub(super) fn push_command_log(
             output.stderr.clone()
         },
         announce_success: command_success_is_worth_announcing(command),
+        hook_operation_id: repo_state.command_log_operation_id,
     });
     if repo_state.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
@@ -1003,6 +1004,7 @@ pub(super) fn push_action_log(
         stdout: String::new(),
         stderr: error.map(format_error_for_user).unwrap_or_default(),
         announce_success: true,
+        hook_operation_id: repo_state.command_log_operation_id,
     });
     if repo_state.command_log.len() > MAX_COMMAND_LOG {
         let extra = repo_state.command_log.len() - MAX_COMMAND_LOG;
@@ -1725,6 +1727,7 @@ mod tests {
             stdout: String::new(),
             stderr: String::new(),
             announce_success: true,
+            hook_operation_id: None,
         }
     }
 

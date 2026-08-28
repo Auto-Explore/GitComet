@@ -1,9 +1,13 @@
 use crate::model::GitLogTagFetchMode;
-use crate::model::{ConflictFileLoadMode, DefaultTagType, RepoId, SidebarDataRequest, SidebarMode};
+use crate::model::{
+    ConflictFileLoadMode, DefaultTagType, GitOperationOuterOutcome, RepoId, SidebarDataRequest,
+    SidebarMode,
+};
 use gitcomet_core::auth::StagedGitAuth;
 use gitcomet_core::conflict_session::ConflictSession;
 use gitcomet_core::domain::*;
 use gitcomet_core::error::Error;
+use gitcomet_core::git_operation::{GitOperationEvent, GitOperationId};
 use gitcomet_core::process::GitRuntimeState;
 use gitcomet_core::services::GitRepository;
 use gitcomet_core::services::{
@@ -13,6 +17,7 @@ use gitcomet_core::services::{
 };
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use super::repo_command_kind::RepoCommandKind;
 use super::repo_external_change::RepoExternalChange;
@@ -41,6 +46,29 @@ pub enum RepoActionKind {
     ApplyStash,
     PopStash,
     DropStash,
+}
+
+impl RepoActionKind {
+    pub(crate) fn hook_activity_label(self) -> &'static str {
+        match self {
+            Self::CheckoutBranch | Self::CheckoutRemoteBranch | Self::CheckoutCommit => "Checkout",
+            Self::CherryPickCommit => "Cherry-pick",
+            Self::RevertCommit => "Revert",
+            Self::CreateBranch => "Create branch",
+            Self::CreateBranchAndCheckout => "Create branch and checkout",
+            Self::RenameBranch => "Rename branch",
+            Self::DeleteBranch | Self::ForceDeleteBranch | Self::DeleteBranches => "Delete branch",
+            Self::StagePath | Self::StagePaths => "Stage",
+            Self::UnstagePath | Self::UnstagePaths => "Unstage",
+            Self::DiscardWorktreeChangesPath | Self::DiscardWorktreeChangesPaths => {
+                "Discard changes"
+            }
+            Self::Stash => "Stash",
+            Self::ApplyStash => "Apply stash",
+            Self::PopStash => "Pop stash",
+            Self::DropStash => "Drop stash",
+        }
+    }
 }
 
 /// How a history-row click mutates the commit selection.
@@ -167,6 +195,10 @@ pub enum Msg {
     DismissBannerError,
     DismissRepoError {
         repo_id: RepoId,
+    },
+    CancelGitOperation {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
     },
     SubmitAuthPrompt {
         username: Option<String>,
@@ -977,6 +1009,27 @@ pub enum Msg {
 }
 
 pub enum InternalMsg {
+    GitOperationStarted {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        label: String,
+        context: Option<String>,
+        time: SystemTime,
+    },
+    GitOperationEvent {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        event: GitOperationEvent,
+    },
+    /// Wraps the operation's ordinary completion so the command log and hook
+    /// activity are reduced atomically and cannot produce duplicate notices.
+    GitOperationFinished {
+        repo_id: RepoId,
+        operation_id: GitOperationId,
+        outer_outcome: GitOperationOuterOutcome,
+        duration: Duration,
+        message: Box<InternalMsg>,
+    },
     SessionPersistFailed {
         repo_id: Option<RepoId>,
         action: &'static str,

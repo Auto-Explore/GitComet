@@ -2293,6 +2293,8 @@ dependencies = [
  "gitcomet-core",
  "gix",
  "rustc-hash 2.1.3",
+ "rustix",
+ "serde_json",
  "syn 3.0.4",
  "tempfile",
 ]

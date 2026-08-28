@@ -1,6 +1,43 @@
 use super::*;
 
 impl GitCometView {
+    fn hook_activity_workflow_repo(kind: &PopoverKind) -> Option<RepoId> {
+        match kind {
+            PopoverKind::HookActivity { repo_id, .. }
+            | PopoverKind::GitOperationStopConfirm { repo_id, .. } => Some(*repo_id),
+            _ => None,
+        }
+    }
+
+    pub(in crate::view) fn set_hook_activity_dialog_repo(
+        &mut self,
+        repo_id: Option<RepoId>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.toast_host.update(cx, |host, cx| {
+            host.set_hook_activity_dialog_repo(repo_id, cx)
+        });
+    }
+
+    pub(in crate::view) fn minimize_hook_activity_chains(
+        &mut self,
+        chains: impl IntoIterator<Item = (RepoId, GitOperationId)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.minimized_hook_activity_chains.extend(chains);
+        self.pending_hook_activity_open = None;
+        self.set_hook_activity_dialog_repo(None, cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn hook_activity_workflow_is_open(&self, cx: &App) -> bool {
+        self.popover_host.read(cx).is_hook_activity_workflow_open()
+    }
+
+    pub(in crate::view) fn hook_activity_workflow_repo_id(&self, cx: &App) -> Option<RepoId> {
+        self.popover_host.read(cx).hook_activity_workflow_repo_id()
+    }
+
     pub(in crate::view) fn open_popover_at(
         &mut self,
         kind: PopoverKind,
@@ -8,6 +45,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
@@ -38,6 +76,12 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if let PopoverKind::HookActivity { repo_id, .. } = &kind {
+            self.pending_hook_activity_open = None;
+            self.minimized_hook_activity_chains
+                .retain(|(suppressed_repo_id, _)| suppressed_repo_id != repo_id);
+        }
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host
@@ -60,6 +104,7 @@ impl GitCometView {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        self.set_hook_activity_dialog_repo(Self::hook_activity_workflow_repo(&kind), cx);
         self.history_refs_hover_host
             .update(cx, |host, cx| host.close(cx));
         self.popover_host.update(cx, |host, cx| {
@@ -915,8 +960,9 @@ impl GitCometView {
                 cx,
             )
         });
-        let bottom_status_bar =
-            cx.new(|_cx| BottomStatusBarView::new(initial_theme, weak_view.clone()));
+        let bottom_status_bar = cx.new(|cx| {
+            BottomStatusBarView::new(initial_theme, ui_model.clone(), weak_view.clone(), cx)
+        });
 
         let sidebar_pane = cx.new(|cx| {
             SidebarPaneView::new(
@@ -1349,6 +1395,8 @@ impl GitCometView {
             pending_force_remove_worktree_prompt: None,
             pending_submodule_trust_prompt: None,
             pending_submodule_trust_check: None,
+            pending_hook_activity_open: None,
+            minimized_hook_activity_chains: FxHashSet::default(),
             pending_worktree_branch_removals: FxHashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]

@@ -3,6 +3,7 @@ mod conflict_interactions;
 mod diff_selection;
 mod effects;
 mod external_and_history;
+mod git_hook_activity;
 mod repo_management;
 mod util;
 
@@ -865,6 +866,23 @@ fn reduce_inner(
             util::clear_banner_error_for_repo(state, repo_id);
             Vec::new()
         }
+        Msg::CancelGitOperation {
+            repo_id,
+            operation_id,
+        } => {
+            let requested = state
+                .repos
+                .iter_mut()
+                .find(|repo| repo.id == repo_id)
+                .is_some_and(|repo| git_hook_activity::request_cancel(repo, operation_id));
+            requested
+                .then_some(Effect::CancelGitOperation {
+                    repo_id,
+                    operation_id,
+                })
+                .into_iter()
+                .collect()
+        }
         Msg::SubmitAuthPrompt { username, secret } => {
             submit_auth_prompt(repos, id_alloc, state, username, secret)
         }
@@ -894,6 +912,91 @@ fn reduce_inner(
             repo_id,
             insert_before,
         } => repo_management::reorder_repo_tabs(state, repo_id, insert_before),
+        Msg::Internal(crate::msg::InternalMsg::GitOperationStarted {
+            repo_id,
+            operation_id,
+            label,
+            context,
+            time,
+        }) => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                git_hook_activity::started(repo, operation_id, label, context, time);
+            }
+            Vec::new()
+        }
+        Msg::Internal(crate::msg::InternalMsg::GitOperationEvent {
+            repo_id,
+            operation_id,
+            event,
+        }) => {
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                git_hook_activity::apply_event(repo, operation_id, event);
+            }
+            Vec::new()
+        }
+        Msg::Internal(crate::msg::InternalMsg::GitOperationFinished {
+            repo_id,
+            operation_id,
+            outer_outcome,
+            duration,
+            message,
+        }) => {
+            let (has_hooks, all_hooks_succeeded) = state
+                .repos
+                .iter()
+                .find(|repo| repo.id == repo_id)
+                .and_then(|repo| {
+                    repo.hook_activity
+                        .iter()
+                        .find(|operation| operation.id == operation_id)
+                })
+                .map(|operation| {
+                    (
+                        operation.has_hooks(),
+                        operation.has_hooks()
+                            && operation.hooks.iter().all(|hook| {
+                                hook.status == crate::model::GitHookRunStatus::Succeeded
+                            }),
+                    )
+                })
+                .unwrap_or_default();
+            let outer_failure_after_successful_hooks = outer_outcome
+                == crate::model::GitOperationOuterOutcome::Failed
+                && all_hooks_succeeded;
+            let suppress_nested_diagnostics = has_hooks
+                && !outer_failure_after_successful_hooks
+                && matches!(
+                    message.as_ref(),
+                    crate::msg::InternalMsg::RepoActionFinished { .. }
+                );
+            let previous_diagnostic_len = suppress_nested_diagnostics
+                .then(|| {
+                    state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == repo_id)
+                        .map(|repo| repo.diagnostics.len())
+                })
+                .flatten();
+            if has_hooks && let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id)
+            {
+                repo.command_log_operation_id = Some(operation_id);
+            }
+
+            let mut effects = reduce(repos, id_alloc, state, Msg::Internal(*message));
+
+            if let Some(repo) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
+                repo.command_log_operation_id = None;
+                if let Some(previous_diagnostic_len) = previous_diagnostic_len {
+                    repo.diagnostics.truncate(previous_diagnostic_len);
+                }
+                git_hook_activity::finished(repo, operation_id, outer_outcome, duration);
+            }
+            if outer_outcome == crate::model::GitOperationOuterOutcome::Cancelled {
+                effects.extend(external_and_history::reload_repo(state, repo_id));
+            }
+            effects
+        }
         Msg::Internal(crate::msg::InternalMsg::SessionPersistFailed {
             repo_id,
             action,

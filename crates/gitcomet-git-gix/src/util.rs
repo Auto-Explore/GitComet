@@ -4,12 +4,17 @@ use gitcomet_core::auth::askpass::{
 };
 use gitcomet_core::domain::{Commit, CommitId, CommitParentIds, LogPage};
 use gitcomet_core::error::{Error, ErrorKind, GitFailure, GitFailureId};
+use gitcomet_core::git_operation::{
+    self, GitOperationContext, GitOperationEvent, GitOutputChunk, GitOutputStream, HookExecutionId,
+};
 use gitcomet_core::process::{configure_background_command, git_command};
 use gitcomet_core::services::{CancellationToken, CommandOutput, Result};
-use std::io::{self, BufRead as _};
+use std::collections::HashMap;
+use std::io::{self, BufRead as _, Read as _};
 use std::path::{Path, PathBuf};
 use std::process::{ChildStdout, Command, Output, Stdio};
-use std::sync::{Arc, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, OnceLock, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -22,6 +27,10 @@ use gitcomet_core::domain::RemoteBranch;
 use std::ffi::OsString;
 
 const GIT_COMMAND_WAIT_POLL_MAX: Duration = Duration::from_millis(5);
+const GIT_ACTIVITY_OUTPUT_FLUSH: Duration = Duration::from_millis(100);
+const GIT_ACTIVITY_OUTPUT_BATCH_BYTES: usize = 16 * 1024;
+const GIT_TRACE2_POLL: Duration = Duration::from_millis(20);
+const GIT_PROCESS_TERMINATE_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct TestGitCommandEnvironment {
@@ -56,14 +65,324 @@ fn git_command_wait_poll(elapsed: Duration, timeout: Duration) -> Option<Duratio
 
 fn spawn_read_pipe(
     pipe: Option<impl std::io::Read + Send + 'static>,
+    activity: Option<(mpsc::Sender<(GitOutputStream, String)>, GitOutputStream)>,
 ) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut buf = Vec::new();
-        if let Some(mut r) = pipe {
-            let _ = r.read_to_end(&mut buf);
+        let mut stream_pending = Vec::new();
+        if let Some(mut reader) = pipe {
+            let mut chunk = [0u8; 8192];
+            loop {
+                match reader.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(read) => {
+                        buf.extend_from_slice(&chunk[..read]);
+                        if let Some((sender, stream)) = activity.as_ref() {
+                            let text =
+                                decode_stream_chunk(&mut stream_pending, &chunk[..read], false);
+                            if !text.is_empty() {
+                                let _ = sender.send((*stream, text));
+                            }
+                        }
+                    }
+                    Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                    Err(_) => break,
+                }
+            }
+            if let Some((sender, stream)) = activity.as_ref() {
+                let text = decode_stream_chunk(&mut stream_pending, &[], true);
+                if !text.is_empty() {
+                    let _ = sender.send((*stream, text));
+                }
+            }
         }
         buf
     })
+}
+
+/// Converts a stream incrementally, retaining an incomplete UTF-8 suffix for
+/// the next read while escaping bytes that are definitively invalid.
+fn decode_stream_chunk(pending: &mut Vec<u8>, bytes: &[u8], eof: bool) -> String {
+    use std::fmt::Write as _;
+
+    pending.extend_from_slice(bytes);
+    let mut out = String::with_capacity(pending.len());
+    let mut cursor = 0usize;
+    while cursor < pending.len() {
+        match std::str::from_utf8(&pending[cursor..]) {
+            Ok(valid) => {
+                out.push_str(valid);
+                cursor = pending.len();
+            }
+            Err(error) => {
+                let valid_len = error.valid_up_to();
+                if valid_len > 0 {
+                    let end = cursor + valid_len;
+                    out.push_str(
+                        std::str::from_utf8(&pending[cursor..end])
+                            .expect("valid_up_to identified valid UTF-8"),
+                    );
+                    cursor = end;
+                }
+                let Some(invalid_len) = error.error_len() else {
+                    if eof {
+                        for byte in &pending[cursor..] {
+                            let _ = write!(out, "\\x{byte:02x}");
+                        }
+                        cursor = pending.len();
+                    }
+                    break;
+                };
+                let end = cursor.saturating_add(invalid_len).min(pending.len());
+                for byte in &pending[cursor..end] {
+                    let _ = write!(out, "\\x{byte:02x}");
+                }
+                cursor = end;
+            }
+        }
+    }
+    if cursor > 0 {
+        pending.drain(..cursor);
+    }
+    out
+}
+
+type ActivityOutputAggregator = (
+    Option<mpsc::Sender<(GitOutputStream, String)>>,
+    Option<thread::JoinHandle<()>>,
+);
+
+fn start_activity_output_aggregator(
+    context: Option<&GitOperationContext>,
+) -> ActivityOutputAggregator {
+    let Some(context) = context.cloned() else {
+        return (None, None);
+    };
+    let (sender, receiver) = mpsc::channel::<(GitOutputStream, String)>();
+    let handle = thread::spawn(move || {
+        let mut chunks = Vec::<GitOutputChunk>::new();
+        let mut bytes = 0usize;
+        loop {
+            match receiver.recv_timeout(GIT_ACTIVITY_OUTPUT_FLUSH) {
+                Ok((stream, text)) => {
+                    bytes = bytes.saturating_add(text.len());
+                    if let Some(last) = chunks.last_mut()
+                        && last.stream == stream
+                    {
+                        last.text.push_str(&text);
+                    } else {
+                        chunks.push(GitOutputChunk { stream, text });
+                    }
+                    if bytes < GIT_ACTIVITY_OUTPUT_BATCH_BYTES {
+                        continue;
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Timeout) if chunks.is_empty() => continue,
+                Err(mpsc::RecvTimeoutError::Timeout) => {}
+                Err(mpsc::RecvTimeoutError::Disconnected) if chunks.is_empty() => break,
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    context.emit(GitOperationEvent::Output {
+                        chunks: std::mem::take(&mut chunks),
+                    });
+                    break;
+                }
+            }
+            context.emit(GitOperationEvent::Output {
+                chunks: std::mem::take(&mut chunks),
+            });
+            bytes = 0;
+        }
+    });
+    (Some(sender), Some(handle))
+}
+
+fn join_activity_output_aggregator(handle: Option<thread::JoinHandle<()>>) {
+    if let Some(handle) = handle {
+        let _ = handle.join();
+    }
+}
+
+struct Trace2Monitor {
+    _path: tempfile::TempPath,
+    done: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl Trace2Monitor {
+    fn start(cmd: &mut Command, context: Option<&GitOperationContext>) -> Option<Self> {
+        let context = context?.clone();
+        let file = tempfile::Builder::new()
+            .prefix("gitcomet-trace2-")
+            .suffix(".json")
+            .tempfile()
+            .ok()?;
+        let path = file.into_temp_path();
+        cmd.env("GIT_TRACE2_EVENT", path.as_os_str());
+
+        let done = Arc::new(AtomicBool::new(false));
+        let thread_done = Arc::clone(&done);
+        let thread_path = path.to_path_buf();
+        let handle = thread::spawn(move || {
+            trace2_tail_loop(&thread_path, &context, &thread_done);
+        });
+        Some(Self {
+            _path: path,
+            done,
+            handle: Some(handle),
+        })
+    }
+
+    fn finish(mut self) {
+        self.done.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for Trace2Monitor {
+    fn drop(&mut self) {
+        self.done.store(true, Ordering::Release);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+struct TracedHook {
+    id: HookExecutionId,
+    name: String,
+    started: Instant,
+}
+
+fn trace2_tail_loop(path: &Path, context: &GitOperationContext, done: &AtomicBool) {
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return;
+    };
+    let mut pending = Vec::<u8>::new();
+    let mut hooks = HashMap::<(String, u64), TracedHook>::new();
+    loop {
+        let before = pending.len();
+        let _ = file.read_to_end(&mut pending);
+        parse_trace2_lines(&mut pending, false, context, &mut hooks);
+        if done.load(Ordering::Acquire) {
+            let _ = file.read_to_end(&mut pending);
+            parse_trace2_lines(&mut pending, true, context, &mut hooks);
+            break;
+        }
+        if pending.len() == before {
+            thread::sleep(GIT_TRACE2_POLL);
+        }
+    }
+}
+
+fn parse_trace2_lines(
+    pending: &mut Vec<u8>,
+    eof: bool,
+    context: &GitOperationContext,
+    hooks: &mut HashMap<(String, u64), TracedHook>,
+) {
+    let consumed = pending
+        .iter()
+        .rposition(|byte| *byte == b'\n')
+        .map_or_else(|| eof.then_some(pending.len()), |index| Some(index + 1));
+    let Some(consumed) = consumed else {
+        return;
+    };
+    let complete = pending.drain(..consumed).collect::<Vec<_>>();
+    for line in complete.split(|byte| *byte == b'\n') {
+        if line.is_empty() {
+            continue;
+        }
+        let Ok(value) = serde_json::from_slice::<serde_json::Value>(line) else {
+            continue;
+        };
+        apply_trace2_event(&value, context, hooks);
+    }
+}
+
+fn trace2_u64(value: &serde_json::Value, key: &str) -> Option<u64> {
+    value
+        .get(key)
+        .and_then(|value| value.as_u64().or_else(|| value.as_str()?.parse().ok()))
+}
+
+fn apply_trace2_event(
+    value: &serde_json::Value,
+    context: &GitOperationContext,
+    hooks: &mut HashMap<(String, u64), TracedHook>,
+) {
+    let event = value.get("event").and_then(serde_json::Value::as_str);
+    let sid = value.get("sid").and_then(serde_json::Value::as_str);
+    let child_id = trace2_u64(value, "child_id");
+    let (Some(event), Some(sid), Some(child_id)) = (event, sid, child_id) else {
+        return;
+    };
+    let key = (sid.to_string(), child_id);
+    match event {
+        "child_start"
+            if value.get("child_class").and_then(serde_json::Value::as_str) == Some("hook") =>
+        {
+            let Some(name) = value
+                .get("hook_name")
+                .and_then(serde_json::Value::as_str)
+                .filter(|name| !name.is_empty())
+            else {
+                return;
+            };
+            let id = HookExecutionId {
+                sid: Arc::<str>::from(sid),
+                child_id,
+            };
+            hooks.insert(
+                key,
+                TracedHook {
+                    id: id.clone(),
+                    name: name.to_string(),
+                    started: Instant::now(),
+                },
+            );
+            context.emit(GitOperationEvent::HookStarted {
+                id,
+                name: name.to_string(),
+            });
+        }
+        "child_exit" => {
+            let Some(hook) = hooks.remove(&key) else {
+                return;
+            };
+            let duration = value
+                .get("t_rel")
+                .and_then(serde_json::Value::as_f64)
+                .filter(|seconds| seconds.is_finite() && *seconds >= 0.0)
+                .map(Duration::from_secs_f64)
+                .unwrap_or_else(|| hook.started.elapsed());
+            let exit_code = value
+                .get("code")
+                .and_then(serde_json::Value::as_i64)
+                .and_then(|code| i32::try_from(code).ok());
+            context.emit(GitOperationEvent::HookFinished {
+                id: hook.id,
+                name: hook.name,
+                exit_code,
+                duration,
+            });
+        }
+        _ => {}
+    }
+}
+
+fn configure_git_process_tree(cmd: &mut Command) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        cmd.process_group(0);
+    }
+
+    #[cfg(not(unix))]
+    {
+        let _ = cmd;
+    }
 }
 
 fn configure_non_interactive_git(cmd: &mut Command) {
@@ -187,6 +506,28 @@ struct ChildWaitOutcome {
     cancelled: bool,
     /// The wait ended because `timeout` elapsed (child killed).
     timed_out: bool,
+    /// Timeout accounting continues until inherited output pipes close, not
+    /// merely until the direct Git child exits.
+    wait_started: Instant,
+}
+
+fn command_cancellation_requested(
+    cancellation: Option<&CancellationToken>,
+    operation_cancellation: Option<&CancellationToken>,
+) -> bool {
+    cancellation.is_some_and(CancellationToken::is_cancelled)
+        || operation_cancellation.is_some_and(CancellationToken::is_cancelled)
+}
+
+fn reject_cancelled_command(
+    cancellation: Option<&CancellationToken>,
+    operation_cancellation: Option<&CancellationToken>,
+) -> Result<()> {
+    if command_cancellation_requested(cancellation, operation_cancellation) {
+        Err(Error::new(ErrorKind::Cancelled))
+    } else {
+        Ok(())
+    }
 }
 
 /// Block until `child` exits, the `cancellation` token is tripped, or `timeout`
@@ -202,6 +543,7 @@ fn wait_for_child_with_timeout(
     child: &mut std::process::Child,
     timeout: Duration,
     cancellation: Option<&CancellationToken>,
+    operation_cancellation: Option<&CancellationToken>,
 ) -> Result<ChildWaitOutcome> {
     let start = Instant::now();
     let mut timed_out = false;
@@ -210,10 +552,9 @@ fn wait_for_child_with_timeout(
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if cancellation.is_some_and(CancellationToken::is_cancelled) {
+                if command_cancellation_requested(cancellation, operation_cancellation) {
                     cancelled = true;
-                    let _ = child.kill();
-                    match child.wait() {
+                    match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
                         Err(e) => return Err(io_err(e)),
                     }
@@ -221,8 +562,7 @@ fn wait_for_child_with_timeout(
                 let elapsed = start.elapsed();
                 if elapsed >= timeout {
                     timed_out = true;
-                    let _ = child.kill();
-                    match child.wait() {
+                    match terminate_process_tree_and_wait(child) {
                         Ok(status) => break status,
                         Err(e) => return Err(io_err(e)),
                     }
@@ -238,7 +578,106 @@ fn wait_for_child_with_timeout(
         status,
         cancelled,
         timed_out,
+        wait_started: start,
     })
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct OutputDrainOutcome {
+    cancelled: bool,
+    timed_out: bool,
+}
+
+/// Keep ownership of the spawned process group until every worker consuming
+/// inherited pipes has finished. A Git leader may exit while a hook descendant
+/// remains alive with stdout/stderr open; Stop and timeout must still terminate
+/// that group instead of blocking forever in `JoinHandle::join`.
+fn wait_for_output_workers(
+    child: &mut std::process::Child,
+    workers_finished: impl Fn() -> bool,
+    wait_started: Instant,
+    timeout: Duration,
+    cancellation: Option<&CancellationToken>,
+    operation_cancellation: Option<&CancellationToken>,
+) -> Result<OutputDrainOutcome> {
+    while !workers_finished() {
+        if command_cancellation_requested(cancellation, operation_cancellation) {
+            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            return Ok(OutputDrainOutcome {
+                cancelled: true,
+                timed_out: false,
+            });
+        }
+        if wait_started.elapsed() >= timeout {
+            terminate_process_tree_and_wait(child).map_err(io_err)?;
+            return Ok(OutputDrainOutcome {
+                cancelled: false,
+                timed_out: true,
+            });
+        }
+        thread::sleep(GIT_COMMAND_WAIT_POLL_MAX);
+    }
+    Ok(OutputDrainOutcome::default())
+}
+
+fn terminate_process_tree_and_wait(
+    child: &mut std::process::Child,
+) -> io::Result<std::process::ExitStatus> {
+    #[cfg(unix)]
+    {
+        use rustix::process::{Pid, Signal, kill_process_group, test_kill_process_group};
+
+        if let Some(pid) = Pid::from_raw(child.id() as i32) {
+            let _ = kill_process_group(pid, Signal::TERM);
+            let deadline = Instant::now() + GIT_PROCESS_TERMINATE_GRACE;
+            let mut leader_status = None;
+            loop {
+                if leader_status.is_none() {
+                    leader_status = child.try_wait()?;
+                }
+                // The process-group leader can exit before a TERM-resistant
+                // hook descendant. Keep managing the group until it is truly
+                // empty instead of using the leader's status as a proxy.
+                if test_kill_process_group(pid).is_err() {
+                    return match leader_status {
+                        Some(status) => Ok(status),
+                        None => child.wait(),
+                    };
+                }
+                if Instant::now() >= deadline {
+                    let _ = kill_process_group(pid, Signal::KILL);
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            if let Some(status) = leader_status {
+                return Ok(status);
+            }
+        } else {
+            let _ = child.kill();
+        }
+        child.wait()
+    }
+
+    #[cfg(windows)]
+    {
+        // Windows has no Unix-style process groups. `taskkill /T` walks the
+        // exact spawned Git process tree so a hook cannot keep running after
+        // the user confirms Stop. Fall back to killing Git itself if the tree
+        // walk races with process exit or is unavailable.
+        let pid = child.id().to_string();
+        let mut tree_kill = Command::new("taskkill");
+        configure_background_command(&mut tree_kill);
+        let _ = tree_kill.args(["/PID", pid.as_str(), "/T", "/F"]).status();
+        let _ = child.kill();
+        child.wait()
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        let _ = child.kill();
+        child.wait()
+    }
 }
 
 fn run_command_with_timeout(
@@ -248,7 +687,14 @@ fn run_command_with_timeout(
     cancellation: Option<&CancellationToken>,
 ) -> Result<Output> {
     configure_background_command(&mut cmd);
+    configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
+    let operation = git_operation::current();
+    reject_cancelled_command(
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+    let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref());
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = take_pending_git_auth();
         let script = create_askpass_script().map_err(io_err)?;
@@ -261,17 +707,50 @@ fn run_command_with_timeout(
 
     let mut child = cmd.spawn().map_err(io_err)?;
 
-    let stdout_handle = spawn_read_pipe(child.stdout.take());
-    let stderr_handle = spawn_read_pipe(child.stderr.take());
+    let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
+    let stdout_handle = spawn_read_pipe(
+        child.stdout.take(),
+        activity_sender
+            .as_ref()
+            .map(|sender| (sender.clone(), GitOutputStream::Stdout)),
+    );
+    let stderr_handle = spawn_read_pipe(
+        child.stderr.take(),
+        activity_sender
+            .as_ref()
+            .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
+    );
+    drop(activity_sender);
 
     let ChildWaitOutcome {
         status,
-        cancelled,
-        timed_out,
-    } = wait_for_child_with_timeout(&mut child, timeout, cancellation)?;
+        mut cancelled,
+        mut timed_out,
+        wait_started,
+    } = wait_for_child_with_timeout(
+        &mut child,
+        timeout,
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+
+    let drain = wait_for_output_workers(
+        &mut child,
+        || stdout_handle.is_finished() && stderr_handle.is_finished(),
+        wait_started,
+        timeout,
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+    cancelled |= drain.cancelled;
+    timed_out |= drain.timed_out;
 
     let stdout = stdout_handle.join().unwrap_or_default();
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    join_activity_output_aggregator(activity_handle);
+    if let Some(trace2) = trace2 {
+        trace2.finish();
+    }
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
@@ -322,6 +801,13 @@ pub(crate) fn run_git_with_stdin_capture(
     use std::io::Write as _;
 
     configure_background_command(&mut cmd);
+    configure_git_process_tree(&mut cmd);
+    let operation = git_operation::current();
+    reject_cancelled_command(
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+    let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref());
     cmd.env("GIT_TERMINAL_PROMPT", "0");
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -336,18 +822,51 @@ pub(crate) fn run_git_with_stdin_capture(
             // Dropping `stdin` here closes the pipe so git sees EOF.
         }
     });
-    let stdout_handle = spawn_read_pipe(child.stdout.take());
-    let stderr_handle = spawn_read_pipe(child.stderr.take());
+    let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
+    let stdout_handle = spawn_read_pipe(
+        child.stdout.take(),
+        activity_sender
+            .as_ref()
+            .map(|sender| (sender.clone(), GitOutputStream::Stdout)),
+    );
+    let stderr_handle = spawn_read_pipe(
+        child.stderr.take(),
+        activity_sender
+            .as_ref()
+            .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
+    );
+    drop(activity_sender);
 
     let ChildWaitOutcome {
         status,
-        cancelled,
-        timed_out,
-    } = wait_for_child_with_timeout(&mut child, timeout, cancellation)?;
+        mut cancelled,
+        mut timed_out,
+        wait_started,
+    } = wait_for_child_with_timeout(
+        &mut child,
+        timeout,
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+
+    let drain = wait_for_output_workers(
+        &mut child,
+        || writer.is_finished() && stdout_handle.is_finished() && stderr_handle.is_finished(),
+        wait_started,
+        timeout,
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+    cancelled |= drain.cancelled;
+    timed_out |= drain.timed_out;
 
     let _ = writer.join();
     let stdout = stdout_handle.join().unwrap_or_default();
     let stderr = stderr_handle.join().unwrap_or_default();
+    join_activity_output_aggregator(activity_handle);
+    if let Some(trace2) = trace2 {
+        trace2.finish();
+    }
 
     if cancelled {
         return Err(Error::new(ErrorKind::Cancelled));
@@ -421,7 +940,14 @@ where
     F: FnOnce(ChildStdout) -> Result<T> + Send + 'static,
 {
     configure_background_command(&mut cmd);
+    configure_git_process_tree(&mut cmd);
     configure_non_interactive_git(&mut cmd);
+    let operation = git_operation::current();
+    reject_cancelled_command(
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+    let trace2 = Trace2Monitor::start(&mut cmd, operation.as_ref());
     let askpass_context = if command_may_require_auth(&cmd) {
         let auth = take_pending_git_auth();
         let script = create_askpass_script().map_err(io_err)?;
@@ -438,20 +964,48 @@ where
             "{label} did not provide piped stdout"
         )))
     })?;
-    let stderr_handle = spawn_read_pipe(child.stderr.take());
+    let (activity_sender, activity_handle) = start_activity_output_aggregator(operation.as_ref());
+    let stderr_handle = spawn_read_pipe(
+        child.stderr.take(),
+        activity_sender
+            .as_ref()
+            .map(|sender| (sender.clone(), GitOutputStream::Stderr)),
+    );
+    drop(activity_sender);
     let stdout_handle = thread::spawn(move || parse_stdout(stdout));
 
     let timeout = git_command_timeout();
     let ChildWaitOutcome {
         status,
-        cancelled,
-        timed_out,
-    } = wait_for_child_with_timeout(&mut child, timeout, cancellation)?;
+        mut cancelled,
+        mut timed_out,
+        wait_started,
+    } = wait_for_child_with_timeout(
+        &mut child,
+        timeout,
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+
+    let drain = wait_for_output_workers(
+        &mut child,
+        || stdout_handle.is_finished() && stderr_handle.is_finished(),
+        wait_started,
+        timeout,
+        cancellation,
+        operation.as_ref().map(GitOperationContext::cancellation),
+    )?;
+    cancelled |= drain.cancelled;
+    timed_out |= drain.timed_out;
 
     let parsed_result = stdout_handle
         .join()
         .unwrap_or_else(|_| Err(Error::new(ErrorKind::Io(io::ErrorKind::Other))));
     let mut stderr = stderr_handle.join().unwrap_or_default();
+    join_activity_output_aggregator(activity_handle);
+    if let Some(trace2) = trace2 {
+        trace2.finish();
+    }
 
     if let Some((askpass_script, _)) = askpass_context.as_ref() {
         append_host_prompt_to_stderr(&mut stderr, askpass_script);
@@ -902,6 +1456,8 @@ mod tests {
         GITCOMET_AUTH_SECRET_ENV, GITCOMET_AUTH_USERNAME_ENV, GitAuthKind, StagedGitAuth,
     };
     use std::process::Command;
+    #[cfg(unix)]
+    use std::sync::Mutex;
 
     const GITPY_FOR_EACH_REF_WITH_PATH_COMPONENT: &[u8] =
         include_bytes!("../tests/fixtures/gitpython/for_each_ref_with_path_component");
@@ -1056,6 +1612,114 @@ mod tests {
     #[cfg(windows)]
     fn sleep_command(seconds: u64) -> Command {
         shell_command(&format!("Start-Sleep -Seconds {seconds}"))
+    }
+
+    #[cfg(unix)]
+    fn run_git_test_setup(workdir: &Path, args: &[&str]) {
+        let mut cmd = git_workdir_cmd_for(workdir);
+        cmd.args(args);
+        let output = cmd.output().expect("test Git command should start");
+        assert!(
+            output.status.success(),
+            "git {} failed: {}",
+            args.join(" "),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[cfg(unix)]
+    fn write_test_hook(workdir: &Path, name: &str, script: &str) {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let hooks = workdir.join(".githooks");
+        std::fs::create_dir_all(&hooks).expect("create test hooks directory");
+        let path = hooks.join(name);
+        std::fs::write(&path, script).expect("write test hook");
+        let mut permissions = std::fs::metadata(&path)
+            .expect("read test hook metadata")
+            .permissions();
+        permissions.set_mode(0o755);
+        std::fs::set_permissions(path, permissions).expect("make test hook executable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn operation_context_reports_real_hooks_output_and_exit_codes() {
+        let repo = tempfile::tempdir().expect("create test repository");
+        run_git_test_setup(repo.path(), &["init", "--quiet"]);
+        run_git_test_setup(repo.path(), &["config", "user.name", "GitComet Test"]);
+        run_git_test_setup(
+            repo.path(),
+            &["config", "user.email", "gitcomet@example.invalid"],
+        );
+        run_git_test_setup(repo.path(), &["config", "commit.gpgsign", "false"]);
+        run_git_test_setup(repo.path(), &["config", "core.hooksPath", ".githooks"]);
+        write_test_hook(
+            repo.path(),
+            "pre-commit",
+            "#!/bin/sh\nprintf 'pre-commit stdout\\n'\nprintf 'pre-commit stderr\\n' >&2\n",
+        );
+        write_test_hook(
+            repo.path(),
+            "post-commit",
+            "#!/bin/sh\nprintf 'post-commit stdout\\n'\nprintf 'post-commit stderr\\n' >&2\nexit 7\n",
+        );
+        std::fs::write(repo.path().join("file.txt"), "content\n").expect("write test file");
+        run_git_test_setup(repo.path(), &["add", "--", "file.txt"]);
+
+        let events = Arc::new(Mutex::new(Vec::<GitOperationEvent>::new()));
+        let captured = Arc::clone(&events);
+        let operation = GitOperationContext::new("Commit", move |_, event| {
+            captured
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .push(event);
+        });
+        let mut cmd = git_workdir_cmd_for(repo.path());
+        cmd.args(["commit", "--quiet", "-m", "exercise hooks"]);
+        {
+            let _scope = git_operation::attach(&operation);
+            run_git_simple(cmd, "git commit")
+                .expect("post-commit failures must not fail the outer commit");
+        }
+
+        let events = events.lock().unwrap_or_else(|error| error.into_inner());
+        let started = events
+            .iter()
+            .filter_map(|event| match event {
+                GitOperationEvent::HookStarted { name, .. } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(started, ["pre-commit", "post-commit"]);
+
+        let finished = events
+            .iter()
+            .filter_map(|event| match event {
+                GitOperationEvent::HookFinished {
+                    name, exit_code, ..
+                } => Some((name.as_str(), *exit_code)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            finished,
+            [("pre-commit", Some(0)), ("post-commit", Some(7))]
+        );
+
+        let output = events
+            .iter()
+            .filter_map(|event| match event {
+                GitOperationEvent::Output { chunks } => Some(chunks),
+                _ => None,
+            })
+            .flatten()
+            .map(|chunk| chunk.text.as_str())
+            .collect::<String>();
+        assert!(output.contains("pre-commit stdout"));
+        assert!(output.contains("pre-commit stderr"));
+        assert!(output.contains("post-commit stdout"));
+        assert!(output.contains("post-commit stderr"));
     }
 
     #[test]
@@ -1728,6 +2392,115 @@ mod tests {
             },
             Ok(_) => panic!("expected cancellation error, but command succeeded"),
         }
+    }
+
+    #[test]
+    fn pre_cancelled_command_returns_cancelled_before_spawn() {
+        let token = CancellationToken::new();
+        token.cancel();
+        let missing_command = Command::new("gitcomet-command-that-must-not-be-spawned");
+
+        let error = run_command_with_timeout(
+            missing_command,
+            "git synthetic",
+            Duration::from_secs(1),
+            Some(&token),
+        )
+        .expect_err("an already-cancelled operation must reject the command");
+
+        assert!(
+            matches!(error.kind(), ErrorKind::Cancelled),
+            "cancellation must win before spawn, got {error:?}"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cancellation_after_leader_exit_stops_pipe_holding_descendant() {
+        let token = CancellationToken::new();
+        let worker_token = token.clone();
+        let handle = thread::spawn(move || {
+            run_command_with_timeout(
+                shell_command("sleep 3 &"),
+                "git synthetic",
+                Duration::from_secs(10),
+                Some(&worker_token),
+            )
+        });
+
+        // The shell leader exits immediately; its background child keeps the
+        // captured stdout/stderr descriptors open.
+        thread::sleep(Duration::from_millis(150));
+        let cancelled_at = Instant::now();
+        token.cancel();
+        let result = handle.join().expect("command thread should not panic");
+
+        assert!(
+            matches!(result, Err(ref error) if matches!(error.kind(), ErrorKind::Cancelled)),
+            "Stop must remain observable while output readers drain, got {result:?}"
+        );
+        assert!(
+            cancelled_at.elapsed() < Duration::from_secs(1),
+            "the pipe-holding descendant was not terminated promptly"
+        );
+    }
+
+    #[test]
+    fn operation_registry_cancellation_stops_the_attached_process() {
+        let operation = GitOperationContext::new("synthetic", |_, _| {});
+        let worker_operation = operation.clone();
+        let handle = thread::spawn(move || {
+            let _scope = git_operation::attach(&worker_operation);
+            run_git_with_stdin_capture(
+                sleep_command(10),
+                vec![],
+                "git synthetic",
+                Duration::from_secs(30),
+                None,
+            )
+        });
+
+        thread::sleep(Duration::from_millis(50));
+        assert!(git_operation::cancel(operation.id()));
+
+        let result = handle.join().expect("thread should not panic");
+        match result {
+            Err(err) => match err.kind() {
+                ErrorKind::Cancelled => {}
+                other => panic!("expected cancellation error, got {other:?}"),
+            },
+            Ok(_) => panic!("expected cancellation error, but command succeeded"),
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn process_tree_termination_keeps_the_group_grace_when_the_leader_exits() {
+        use rustix::process::{Pid, Signal, kill_process_group};
+
+        let mut cmd = shell_command(
+            "trap 'exit 0' TERM; (trap '' TERM; sleep 10) & while :; do sleep 1; done",
+        );
+        configure_git_process_tree(&mut cmd);
+        let mut child = cmd.spawn().expect("synthetic process group should start");
+        let group_id = child.id();
+        thread::sleep(Duration::from_millis(100));
+
+        let started = Instant::now();
+        let result = terminate_process_tree_and_wait(&mut child);
+        let elapsed = started.elapsed();
+
+        // Always clean up the intentionally TERM-resistant descendant when
+        // this regression fails against the old implementation.
+        if let Some(pid) = Pid::from_raw(group_id as i32) {
+            let _ = kill_process_group(pid, Signal::KILL);
+        }
+        result.expect("process-group termination should reap the leader");
+
+        assert!(
+            elapsed >= GIT_PROCESS_TERMINATE_GRACE.saturating_sub(Duration::from_millis(100)),
+            "termination returned after {elapsed:?}, before TERM-resistant descendants received the final KILL"
+        );
     }
 
     #[test]

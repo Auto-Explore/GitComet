@@ -128,7 +128,35 @@ impl PopoverHost {
     ) -> Self {
         let state = Arc::clone(&ui_model.read(cx).state);
         let subscription = cx.observe(&ui_model, |this, model, cx| {
-            this.state = Arc::clone(&model.read(cx).state);
+            let hook_activity_repo_id = match this.popover.as_ref() {
+                Some(PopoverKind::HookActivity { repo_id, .. }) => Some(*repo_id),
+                _ => None,
+            };
+            let previous_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
+                this.state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map(|repo| repo.hook_activity_rev)
+            });
+            let follow_hook_output = hook_activity_repo_id.is_some()
+                && scroll_is_near_bottom(&this.hook_activity_output_scroll, px(24.0));
+
+            let next_state = Arc::clone(&model.read(cx).state);
+            let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
+                next_state
+                    .repos
+                    .iter()
+                    .find(|repo| repo.id == repo_id)
+                    .map(|repo| repo.hook_activity_rev)
+            });
+            this.state = next_state;
+            if follow_hook_output
+                && previous_hook_activity_rev.is_some()
+                && next_hook_activity_rev != previous_hook_activity_rev
+            {
+                this.hook_activity_output_scroll.scroll_to_bottom();
+            }
             this.commit_prompt_message_drafts
                 .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
 
@@ -692,6 +720,9 @@ impl PopoverHost {
             branch_filter_query: String::new(),
             popover: None,
             popover_anchor: None,
+            hook_activity_selected: None,
+            hook_activity_history_scroll: ScrollHandle::new(),
+            hook_activity_output_scroll: ScrollHandle::new(),
             cherry_pick_mainline: None,
             context_menu_focus_handle,
             menu_invoker_focus: None,
@@ -861,6 +892,91 @@ impl PopoverHost {
         self.popover.as_ref() == Some(kind)
     }
 
+    pub(in crate::view) fn hook_activity_workflow_repo_id(&self) -> Option<RepoId> {
+        match self.popover.as_ref() {
+            Some(PopoverKind::HookActivity { repo_id, .. })
+            | Some(PopoverKind::GitOperationStopConfirm { repo_id, .. }) => Some(*repo_id),
+            _ => None,
+        }
+    }
+
+    pub(in crate::view) fn is_hook_activity_workflow_open(&self) -> bool {
+        self.hook_activity_workflow_repo_id().is_some()
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn hook_activity_output_is_near_bottom_for_test(&self) -> bool {
+        scroll_is_near_bottom(&self.hook_activity_output_scroll, px(24.0))
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn scroll_hook_activity_output_to_top_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.hook_activity_output_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn scroll_hook_activity_output_to_bottom_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.hook_activity_output_scroll.scroll_to_bottom();
+        cx.notify();
+    }
+
+    pub(super) fn minimize_hook_activity(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::HookActivity { repo_id, .. }) = self.popover.as_ref() else {
+            return;
+        };
+        let repo_id = *repo_id;
+        let active_chains = self
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .into_iter()
+            .flat_map(|repo| repo.hook_activity.iter())
+            .filter(|operation| operation.has_hooks() && operation.status.is_active())
+            .map(|operation| (repo_id, operation.id))
+            .collect::<Vec<_>>();
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.minimize_hook_activity_chains(active_chains, cx);
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn dismiss_hook_activity_workflow(
+        &mut self,
+        window: &mut Window,
+        cx: &mut gpui::Context<Self>,
+    ) -> bool {
+        match self.popover.clone() {
+            Some(PopoverKind::HookActivity { .. }) => {
+                self.minimize_hook_activity(cx);
+                true
+            }
+            Some(PopoverKind::GitOperationStopConfirm {
+                repo_id,
+                operation_id,
+            }) => {
+                self.open_popover_centered(
+                    PopoverKind::HookActivity {
+                        repo_id,
+                        operation_id: Some(operation_id),
+                    },
+                    window,
+                    cx,
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
     #[cfg(test)]
     pub(in crate::view) fn popover_kind_for_tests(&self) -> Option<PopoverKind> {
         self.popover.clone()
@@ -901,6 +1017,7 @@ impl PopoverHost {
 
     pub(in crate::view) fn close_popover(&mut self, cx: &mut gpui::Context<Self>) {
         let dismissing_unsaved_prompt = self.showing_unsaved_file_edits_prompt();
+        let dismissing_hook_activity = self.is_hook_activity_workflow_open();
         self.save_commit_prompt_draft(cx);
         self.clear_truncated_tooltip(cx);
         crate::view::tooltip::set_tooltips_suppressed_by_overlay(false, cx);
@@ -917,6 +1034,9 @@ impl PopoverHost {
             let _ = root_view.update(cx, |root, cx| {
                 if dismissing_unsaved_prompt {
                     root.clear_pending_unsaved_file_edits_prompt(cx);
+                }
+                if dismissing_hook_activity {
+                    root.set_hook_activity_dialog_repo(None, cx);
                 }
                 root.set_history_refs_hover_item_menu_open(false, cx);
             });
@@ -1203,6 +1323,10 @@ impl PopoverHost {
         window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) {
+        if self.dismiss_hook_activity_workflow(window, cx) {
+            cx.stop_propagation();
+            return;
+        }
         if !self.prompt_tab_navigation_enabled() {
             return;
         }
@@ -2072,6 +2196,35 @@ impl PopoverHost {
             window.focus(&self.context_menu_focus_handle, cx);
         } else {
             match &kind {
+                PopoverKind::HookActivity {
+                    repo_id,
+                    operation_id,
+                } => {
+                    let operations = self
+                        .state
+                        .repos
+                        .iter()
+                        .find(|repo| repo.id == *repo_id)
+                        .map(|repo| repo.hook_activity.as_slice())
+                        .unwrap_or_default();
+                    let selected = operation_id
+                        .filter(|requested| {
+                            operations.iter().any(|operation| {
+                                operation.id == *requested && operation.has_hooks()
+                            })
+                        })
+                        .or_else(|| {
+                            operations
+                                .iter()
+                                .rev()
+                                .find(|operation| operation.has_hooks())
+                                .map(|operation| operation.id)
+                        });
+                    self.hook_activity_selected = selected;
+                    self.hook_activity_history_scroll = ScrollHandle::new();
+                    self.hook_activity_output_scroll = ScrollHandle::new();
+                    self.hook_activity_output_scroll.scroll_to_bottom();
+                }
                 PopoverKind::RepoPicker => {
                     let ui_session = session::load();
                     self.repo_picker_sort = repo_picker::sort_from_session(&ui_session);
