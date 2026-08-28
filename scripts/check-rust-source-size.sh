@@ -15,28 +15,42 @@ for value in "$production_limit" "$test_limit"; do
   fi
 done
 
+# Lines before the file's first top-level `#[cfg(test)]`, i.e. everything that
+# ships. An inline test module is measured against the test limit instead, so a
+# large module is never split just because its tests grew — splitting the tests
+# out is a choice, not something this check forces.
+production_lines() {
+  awk '
+    /^#\[cfg\(test\)\]/ { print NR - 1; found = 1; exit }
+    END { if (!found) print NR }
+  ' "$1"
+}
+
 failed=0
 checked=0
-while IFS= read -r -d '' file; do
+# `git ls-files` rather than `find`: it lists exactly the tracked sources, so a
+# nested `target/` or any other build output can never be measured.
+while IFS= read -r file; do
   checked=$((checked + 1))
-  lines="$(wc -l < "$file")"
   case "$file" in
     */tests/* | */benches/* | */tests.rs | *_tests.rs)
       kind="test/benchmark"
       limit="$test_limit"
+      lines="$(wc -l < "$file")"
       ;;
     *)
       kind="production"
       limit="$production_limit"
+      lines="$(production_lines "$file")"
       ;;
   esac
 
   if ((lines > limit)); then
-    printf '%s has %d lines; %s Rust files are limited to %d.\n' \
-      "$file" "$lines" "$kind" "$limit" >&2
+    printf '%s has %d %s lines; %s Rust files are limited to %d.\n' \
+      "$file" "$lines" "$kind" "$kind" "$limit" >&2
     failed=1
   fi
-done < <(find crates -type f -name '*.rs' -print0)
+done < <(git ls-files -z -- 'crates/**/*.rs' | tr '\0' '\n')
 
 if ((failed)); then
   echo "Split the reported file into cohesive modules before adding more code." >&2

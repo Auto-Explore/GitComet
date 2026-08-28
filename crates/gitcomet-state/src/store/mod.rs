@@ -688,8 +688,9 @@ pub(crate) fn with_select_diff_inline_for_bench<T>(
     target: gitcomet_core::domain::DiffTarget,
     f: impl FnOnce(&AppState, &[crate::msg::Effect]) -> T,
 ) -> T {
+    let repos = FxHashMap::default();
     let mut effects = reducer::SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, false, &mut effects);
+    fill_select_diff_inline(&repos, state, repo_id, target, false, &mut effects);
     f(state, &effects)
 }
 

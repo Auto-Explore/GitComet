@@ -8,6 +8,12 @@ use gitcomet_core::error::{Error, ErrorKind};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// No backends: these tests exercise browse-point bookkeeping, not the HEAD
+/// gitlink classification that `open_file_content` performs behind it.
+fn no_repos() -> FxHashMap<RepoId, Arc<dyn GitRepository>> {
+    FxHashMap::default()
+}
+
 fn backend_error(message: &str) -> Error {
     Error::new(ErrorKind::Backend(message.to_string()))
 }
@@ -51,17 +57,17 @@ fn browse_history_pushes_dedups_and_go_live_clears() {
     let a = CommitId("aaaaaaaa".into());
     let b = CommitId("bbbbbbbb".into());
 
-    browse_repository_at_commit(&mut state, RepoId(1), a.clone());
-    browse_repository_at_commit(&mut state, RepoId(1), b.clone());
+    browse_repository_at_commit(&no_repos(), &mut state, RepoId(1), a.clone());
+    browse_repository_at_commit(&no_repos(), &mut state, RepoId(1), b.clone());
     // Re-browsing an existing point does not duplicate it, just makes it current.
-    browse_repository_at_commit(&mut state, RepoId(1), a.clone());
+    browse_repository_at_commit(&no_repos(), &mut state, RepoId(1), a.clone());
 
     let repo = &state.repos[0];
     assert_eq!(repo.navigation.browse_history, vec![a.clone(), b.clone()]);
     assert_eq!(repo.browsing_commit(), Some(&a));
     assert_eq!(state.sidebar_mode, SidebarMode::Files);
 
-    reset_browse_to_live(&mut state, RepoId(1));
+    reset_browse_to_live(&no_repos(), &mut state, RepoId(1));
     let repo = &state.repos[0];
     assert!(repo.navigation.browse_history.is_empty());
     assert_eq!(repo.browsing_commit(), None);
@@ -2025,7 +2031,7 @@ fn browse_repository_at_commit_reopens_active_file() {
     }
 
     // Browse commit_b — should reopen file at commit_b
-    let effects = browse_repository_at_commit(&mut state, repo_id, commit_b.clone());
+    let effects = browse_repository_at_commit(&no_repos(), &mut state, repo_id, commit_b.clone());
     assert!(
         effects
             .iter()
@@ -2060,7 +2066,7 @@ fn reset_browse_to_live_reopens_active_file() {
         repo.file_browser.source = FileSource::Commit(commit_id);
     }
 
-    let effects = reset_browse_to_live(&mut state, repo_id);
+    let effects = reset_browse_to_live(&no_repos(), &mut state, repo_id);
     assert!(
         effects
             .iter()
@@ -2094,7 +2100,7 @@ fn browse_repository_at_commit_no_reopen_when_content_preview_is_false() {
         });
     }
 
-    let effects = browse_repository_at_commit(&mut state, repo_id, commit_b);
+    let effects = browse_repository_at_commit(&no_repos(), &mut state, repo_id, commit_b);
     // Should not contain LoadSelectedDiff (no file reopen)
     assert!(
         !effects
@@ -2113,6 +2119,7 @@ fn browse_history_evicts_oldest_when_exceeding_cap() {
     const CAP: usize = 32;
     for i in 0..CAP + 3 {
         browse_repository_at_commit(
+            &no_repos(),
             &mut state,
             repo_id,
             CommitId(format!("commit{i:08}").into()),
@@ -2142,11 +2149,11 @@ fn browse_history_rebrowse_does_not_move_to_mru() {
     let b = CommitId("bbbbbbbb".into());
     let c = CommitId("cccccccc".into());
 
-    browse_repository_at_commit(&mut state, repo_id, a.clone());
-    browse_repository_at_commit(&mut state, repo_id, b.clone());
-    browse_repository_at_commit(&mut state, repo_id, c.clone());
+    browse_repository_at_commit(&no_repos(), &mut state, repo_id, a.clone());
+    browse_repository_at_commit(&no_repos(), &mut state, repo_id, b.clone());
+    browse_repository_at_commit(&no_repos(), &mut state, repo_id, c.clone());
     // Re-browse a — should NOT move to end
-    browse_repository_at_commit(&mut state, repo_id, a.clone());
+    browse_repository_at_commit(&no_repos(), &mut state, repo_id, a.clone());
 
     let repo = repo_mut(&mut state, repo_id);
     assert_eq!(repo.navigation.browse_history.len(), 3);
@@ -2207,7 +2214,7 @@ fn browse_repository_at_commit_same_commit_with_file_open_does_not_reopen() {
     }
 
     // Browse the SAME commit — source unchanged, no LoadFileBrowser emitted
-    let effects = browse_repository_at_commit(&mut state, repo_id, commit_id);
+    let effects = browse_repository_at_commit(&no_repos(), &mut state, repo_id, commit_id);
     assert!(
         !effects
             .iter()

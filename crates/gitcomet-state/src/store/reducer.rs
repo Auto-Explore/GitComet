@@ -56,17 +56,40 @@ fn cache_selected_deleted_gitlink(
     let gitcomet_core::domain::DiffTarget::WorkingTree { path, area } = target else {
         return;
     };
-    let is_deleted = state
-        .repos
-        .iter()
-        .find(|repo| repo.id == repo_id)
-        .and_then(|repo| repo.status_entry_for_path(*area, path))
-        .is_some_and(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Deleted);
-    if !is_deleted {
+    if !head_gitlink_lookup_is_worth_it(state, repo_id, *area, path) {
         return;
     }
 
     refresh_head_gitlink_path(repos, state, repo_id, path);
+}
+
+/// Whether classifying `path` against HEAD can still change what is rendered.
+///
+/// `refresh_head_gitlink_path` opens the repository and peels HEAD, so it is
+/// real filesystem work on the store worker while the state write lock is held.
+/// `diff_target_is_submodule` only consults the cache for `Deleted` entries, so
+/// for any other kind the lookup is pure waste — and this runs on every
+/// external git-state event, which arrive in bursts during a fetch or rebase.
+///
+/// An unknown kind still classifies: `reload_repo` blanks the status lane while
+/// deliberately retaining the diff target, and the entry has to be in place
+/// before the fresh status lands.
+fn head_gitlink_lookup_is_worth_it(
+    state: &AppState,
+    repo_id: RepoId,
+    area: gitcomet_core::domain::DiffArea,
+    path: &std::path::Path,
+) -> bool {
+    let Some(repo) = state.repos.iter().find(|repo| repo.id == repo_id) else {
+        return false;
+    };
+    match repo.status_entries_for_area(area) {
+        Some(entries) => entries
+            .iter()
+            .find(|entry| entry.path == path)
+            .is_some_and(|entry| entry.kind == gitcomet_core::domain::FileStatusKind::Deleted),
+        None => true,
+    }
 }
 
 fn refresh_head_gitlink_path(
@@ -96,16 +119,13 @@ fn refresh_selected_head_gitlink(
     state: &mut AppState,
     repo_id: RepoId,
 ) {
-    let selected_path = state
+    let selected = state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
-        .and_then(|repo| match repo.diff_state.diff_target.as_ref() {
-            Some(gitcomet_core::domain::DiffTarget::WorkingTree { path, .. }) => Some(path.clone()),
-            _ => None,
-        });
-    if let Some(path) = selected_path {
-        refresh_head_gitlink_path(repos, state, repo_id, &path);
+        .and_then(|repo| repo.diff_state.diff_target.clone());
+    if let Some(target) = selected {
+        cache_selected_deleted_gitlink(repos, state, repo_id, &target);
     }
 }
 
@@ -674,6 +694,7 @@ pub(crate) fn fill_reorder_repo_tabs_inline(
 // helper in `store/mod.rs` so that the inline reduce path can be measured.
 #[cfg(feature = "benchmarks")]
 pub(crate) fn fill_select_diff_inline(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     target: gitcomet_core::domain::DiffTarget,
@@ -685,7 +706,7 @@ pub(crate) fn fill_select_diff_inline(
     } else {
         diff_selection::ContentViewMode::Diff
     };
-    diff_selection::fill_select_diff_inline(state, repo_id, target, mode, effects)
+    diff_selection::fill_select_diff_inline(repos, state, repo_id, target, mode, effects)
 }
 
 #[inline]
@@ -1065,8 +1086,7 @@ fn reduce_inner(
         } => effects::compare_with_marked(state, repo_id, commit_id, label),
         Msg::ClearComparisonMark { repo_id } => effects::clear_comparison_mark(state, repo_id),
         Msg::SelectDiff { repo_id, target } => {
-            cache_selected_deleted_gitlink(repos, state, repo_id, &target);
-            diff_selection::select_diff(state, repo_id, target)
+            diff_selection::select_diff(repos, state, repo_id, target)
         }
         Msg::OpenInlineSubmoduleDiff {
             repo_id,
@@ -1155,11 +1175,13 @@ fn reduce_inner(
             repo_id,
             source,
             path,
-        } => diff_selection::open_file_content(state, repo_id, source, path),
+        } => diff_selection::open_file_content(repos, state, repo_id, source, path),
         Msg::OpenFileEditor { repo_id, path } => {
-            diff_selection::open_file_editor(state, repo_id, path)
+            diff_selection::open_file_editor(repos, state, repo_id, path)
         }
-        Msg::ExitDiffEditMode { repo_id } => diff_selection::exit_diff_edit_mode(state, repo_id),
+        Msg::ExitDiffEditMode { repo_id } => {
+            diff_selection::exit_diff_edit_mode(repos, state, repo_id)
+        }
         Msg::OpenFileAtCommitParent {
             repo_id,
             commit_id,
@@ -1179,24 +1201,24 @@ fn reduce_inner(
             path,
         }],
         Msg::BrowseRepositoryAtCommit { repo_id, commit_id } => {
-            effects::browse_repository_at_commit(state, repo_id, commit_id)
+            effects::browse_repository_at_commit(repos, state, repo_id, commit_id)
         }
         Msg::RevealCommit { repo_id, reference } => {
             effects::reveal_commit(state, repo_id, reference)
         }
         Msg::FinishCommitReveal { repo_id } => effects::finish_commit_reveal(state, repo_id),
-        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(state, repo_id),
+        Msg::ResetBrowseToLive { repo_id } => effects::reset_browse_to_live(repos, state, repo_id),
         Msg::ViewerNavBack { repo_id } => {
-            diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Back)
+            diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
         }
         Msg::ViewerNavForward { repo_id } => {
-            diff_selection::viewer_nav(state, repo_id, crate::model::ViewNavDir::Forward)
+            diff_selection::viewer_nav(repos, state, repo_id, crate::model::ViewNavDir::Forward)
         }
         Msg::GlobalNavBack { repo_id } => {
-            diff_selection::global_nav(state, repo_id, crate::model::ViewNavDir::Back)
+            diff_selection::global_nav(repos, state, repo_id, crate::model::ViewNavDir::Back)
         }
         Msg::GlobalNavForward { repo_id } => {
-            diff_selection::global_nav(state, repo_id, crate::model::ViewNavDir::Forward)
+            diff_selection::global_nav(repos, state, repo_id, crate::model::ViewNavDir::Forward)
         }
         Msg::SetSidebarMode { mode } => effects::set_sidebar_mode(state, mode),
         Msg::StageHunk { repo_id, patch } => {

@@ -404,6 +404,13 @@ struct CachedIgnoreResult {
 #[derive(Default)]
 struct GitignoreRules {
     workdir: Option<PathBuf>,
+    /// The backend used to rebuild `matcher`. Owned here because `reload` is
+    /// called from event classification, deep in the monitor loop, where the
+    /// backend is not otherwise in scope.
+    ///
+    /// `Option` only so this derives `Default`, which tests use to build rules
+    /// that ignore nothing. `load` always supplies one, so the `None` arm of
+    /// `reload` is unreachable in production.
     backend: Option<Arc<dyn GitBackend>>,
     matcher: Option<Box<dyn WorktreeIgnoreMatcher>>,
     cache: FxHashMap<IgnoreCacheKey, CachedIgnoreResult>,

@@ -20,7 +20,7 @@ use gitcomet_core::domain::{
 };
 use gitcomet_core::error::Error;
 use gitcomet_core::merge::{MergeSource, OrderedSelection};
-use gitcomet_core::services::{InteractiveRebaseAction, InteractiveRebaseEntry};
+use gitcomet_core::services::{GitRepository, InteractiveRebaseAction, InteractiveRebaseEntry};
 use rustc_hash::{FxHashMap, FxHashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -1962,6 +1962,7 @@ pub(super) fn set_sidebar_mode(state: &mut AppState, mode: SidebarMode) -> Vec<E
 }
 
 pub(super) fn browse_repository_at_commit(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
     state: &mut AppState,
     repo_id: RepoId,
     commit_id: CommitId,
@@ -1986,6 +1987,7 @@ pub(super) fn browse_repository_at_commit(
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
     {
         effects.extend(super::diff_selection::open_file_content(
+            repos,
             state,
             repo_id,
             FileSource::Commit(commit_id),
@@ -1995,7 +1997,11 @@ pub(super) fn browse_repository_at_commit(
     effects
 }
 
-pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn reset_browse_to_live(
+    repos: &FxHashMap<RepoId, Arc<dyn GitRepository>>,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
     let reopen_path = browse_open_content_path(state, repo_id);
     if let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) {
         repo_state.navigation.browse_history.clear();
@@ -2007,6 +2013,7 @@ pub(super) fn reset_browse_to_live(state: &mut AppState, repo_id: RepoId) -> Vec
             .any(|e| matches!(e, Effect::LoadFileBrowser { .. }))
     {
         effects.extend(super::diff_selection::open_file_content(
+            repos,
             state,
             repo_id,
             FileSource::WorkingDirectory,

@@ -11,7 +11,7 @@ use gitcomet_core::process::{
     GitExecutablePreference, current_git_executable_preference, install_git_executable_preference,
 };
 use gitcomet_core::services::{CancellationToken, CommandOutput, PullMode, Result};
-use gitcomet_core::test_support::RepositoryDouble;
+use gitcomet_core::test_support::UnconfiguredRepository;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -35,25 +35,10 @@ pub(in crate::store) fn snapshot_with_commit(
     }
 }
 
-pub(in crate::store) struct DummyRepo {
-    spec: RepoSpec,
-}
-
-impl DummyRepo {
-    pub(in crate::store) fn new(path: &str) -> Self {
-        Self {
-            spec: RepoSpec {
-                workdir: PathBuf::from(path),
-            },
-        }
-    }
-}
-
-impl RepositoryDouble for DummyRepo {
-    fn spec(&self) -> &RepoSpec {
-        &self.spec
-    }
-}
+/// A repository that only knows its own workdir. The store keeps a backend per
+/// repo id and reads `spec()` off it; these tests drive the reducer directly and
+/// never call through to Git.
+pub(in crate::store) type DummyRepo = UnconfiguredRepository;
 
 struct FailingBackend;
 

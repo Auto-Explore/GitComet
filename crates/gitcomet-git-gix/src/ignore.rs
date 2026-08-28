@@ -11,7 +11,8 @@ pub(crate) struct GixWorktreeIgnoreMatcher {
 
 impl GixWorktreeIgnoreMatcher {
     pub(crate) fn load(workdir: &Path) -> Result<Self> {
-        let repo = crate::open::open_worktree_repo(workdir).map_err(map_open_error)?;
+        let repo = crate::open::open_worktree_repo(workdir)
+            .map_err(|error| crate::open::map_open_error(error, "gix ignore matcher open"))?;
         let worktree = repo.worktree().ok_or_else(|| {
             Error::new(ErrorKind::Backend(
                 "gix ignore matcher: repository has no worktree".to_string(),
@@ -77,15 +78,5 @@ impl WorktreeIgnoreMatcher for GixWorktreeIgnoreMatcher {
                 )))
             })?;
         Ok(platform.is_excluded())
-    }
-}
-
-fn map_open_error(error: gix::open::Error) -> Error {
-    match error {
-        gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
-        gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
-        error => Error::new(ErrorKind::Backend(format!(
-            "gix ignore matcher open: {error}"
-        ))),
     }
 }

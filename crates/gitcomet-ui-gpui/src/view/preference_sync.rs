@@ -11,7 +11,7 @@ impl GitCometView {
         update: impl FnOnce(&mut UiPreferences) + 'static,
     ) {
         self.ui_model
-            .update(cx, |model, cx| model.update_preferences(update, cx));
+            .update(cx, |model, _cx| model.update_preferences(update));
     }
 
     pub(super) fn sync_cached_pane_widths_from_design(&mut self) {

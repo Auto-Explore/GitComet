@@ -689,7 +689,7 @@ fn build_backend() -> Arc<dyn GitBackend> {
 
     #[cfg(not(feature = "gix"))]
     {
-        Arc::new(gitcomet_core::services::UnavailableGitBackend::default())
+        Arc::new(gitcomet_core::services::UnavailableGitBackend)
     }
 }
 

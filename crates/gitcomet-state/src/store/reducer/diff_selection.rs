@@ -16,8 +16,15 @@ use gitcomet_core::domain::{
     FileDiffText, SubmoduleDiffRange, SubmoduleDiffSummary,
 };
 use gitcomet_core::error::Error;
+use gitcomet_core::services::GitRepository;
+use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 use std::sync::Arc;
+
+/// The backends the reducer holds, keyed by repo. Only needed to classify a
+/// freshly selected working-tree path against HEAD; see
+/// [`super::cache_selected_deleted_gitlink`].
+type Repos = FxHashMap<RepoId, Arc<dyn GitRepository>>;
 
 pub(crate) const SELECT_DIFF_INLINE_EFFECT_CAPACITY: usize = 3;
 pub(crate) type SelectDiffEffects = SmallVec<[Effect; SELECT_DIFF_INLINE_EFFECT_CAPACITY]>;
@@ -194,18 +201,27 @@ impl ContentViewMode {
 }
 
 pub(super) fn select_diff(
+    repos: &Repos,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
 ) -> Vec<Effect> {
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, ContentViewMode::Diff, &mut effects);
+    fill_select_diff_inline(
+        repos,
+        state,
+        repo_id,
+        target,
+        ContentViewMode::Diff,
+        &mut effects,
+    );
     effects.into_vec()
 }
 
 /// Open `source`/`path` as a full-content file preview in the main pane,
 /// reusing the added/removed-file preview renderer (no diff, no green/red).
 pub(super) fn open_file_content(
+    repos: &Repos,
     state: &mut AppState,
     repo_id: RepoId,
     source: gitcomet_core::domain::FileSource,
@@ -222,6 +238,7 @@ pub(super) fn open_file_content(
     }
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(
+        repos,
         state,
         repo_id,
         target,
@@ -238,6 +255,7 @@ pub(super) fn open_file_content(
 /// copy even when the action was invoked from a commit's file list. Returns no
 /// effects for sources that have no working-tree file.
 pub(super) fn open_file_editor(
+    repos: &Repos,
     state: &mut AppState,
     repo_id: RepoId,
     path: std::path::PathBuf,
@@ -269,7 +287,14 @@ pub(super) fn open_file_editor(
         });
     }
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, ContentViewMode::Edit, &mut effects);
+    fill_select_diff_inline(
+        repos,
+        state,
+        repo_id,
+        target,
+        ContentViewMode::Edit,
+        &mut effects,
+    );
     if let Some(repo_state) = state.repos.iter_mut().find(|repo| repo.id == repo_id) {
         repo_state.diff_state.edit_return_view = return_view;
     }
@@ -281,7 +306,11 @@ pub(super) fn open_file_editor(
 /// Restores the diff or read-only content preview that opened the editor. When
 /// there is no recorded origin (for example a restored legacy session), it
 /// falls back to the read-only working-tree preview of the edited file.
-pub(super) fn exit_diff_edit_mode(state: &mut AppState, repo_id: RepoId) -> Vec<Effect> {
+pub(super) fn exit_diff_edit_mode(
+    repos: &Repos,
+    state: &mut AppState,
+    repo_id: RepoId,
+) -> Vec<Effect> {
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return Vec::new();
     };
@@ -320,7 +349,7 @@ pub(super) fn exit_diff_edit_mode(state: &mut AppState, repo_id: RepoId) -> Vec<
     }
 
     let mut effects = SelectDiffEffects::new();
-    fill_select_diff_inline(state, repo_id, target, mode, &mut effects);
+    fill_select_diff_inline(repos, state, repo_id, target, mode, &mut effects);
     effects.into_vec()
 }
 
@@ -371,6 +400,7 @@ fn view_history_entry_for_target(target: &DiffTarget) -> Option<ViewHistoryEntry
 /// Step the viewer's back/forward history and replay the resulting view without
 /// recording it (so navigation doesn't mutate the stack).
 pub(super) fn viewer_nav(
+    repos: &Repos,
     state: &mut AppState,
     repo_id: RepoId,
     dir: crate::model::ViewNavDir,
@@ -389,6 +419,7 @@ pub(super) fn viewer_nav(
     };
     let mut effects = SelectDiffEffects::new();
     fill_select_diff_inline(
+        repos,
         state,
         repo_id,
         target,
@@ -402,6 +433,7 @@ pub(super) fn viewer_nav(
 /// snapshot (diff/file content, history log, and/or commit selection) without
 /// recording it as a new destination.
 pub(super) fn global_nav(
+    repos: &Repos,
     state: &mut AppState,
     repo_id: RepoId,
     dir: crate::model::ViewNavDir,
@@ -530,7 +562,7 @@ pub(super) fn global_nav(
             } else {
                 ContentViewMode::Diff
             };
-            fill_select_diff_inline(state, repo_id, target, mode, &mut inline);
+            fill_select_diff_inline(repos, state, repo_id, target, mode, &mut inline);
             effects.extend(inline.into_vec());
         }
         None => {
@@ -542,12 +574,20 @@ pub(super) fn global_nav(
 }
 
 pub(super) fn fill_select_diff_inline(
+    repos: &Repos,
     state: &mut AppState,
     repo_id: RepoId,
     target: DiffTarget,
     mode: ContentViewMode,
     effects: &mut SelectDiffEffects,
 ) {
+    // Classify before planning, not at the `SelectDiff` message: every route
+    // that puts a working-tree path on screen — plain selection, the file
+    // content/editor views, viewer and global back/forward — lands here, and
+    // `selected_diff_load_plan` below reads the classification for staged
+    // deletions. Filling it anywhere upstream leaves the navigation routes
+    // rendering a removed submodule as an old-side text preview.
+    super::cache_selected_deleted_gitlink(repos, state, repo_id, &target);
     let Some(repo_state) = state.repos.iter_mut().find(|r| r.id == repo_id) else {
         return;
     };

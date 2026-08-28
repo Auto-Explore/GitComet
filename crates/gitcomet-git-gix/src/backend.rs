@@ -34,11 +34,8 @@ impl GixBackend {
             cancellation.check_cancelled()?;
         }
 
-        let repo = crate::open::open_worktree_repo(&workdir).map_err(|e| match e {
-            gix::open::Error::NotARepository { .. } => Error::new(ErrorKind::NotARepository),
-            gix::open::Error::Io(io) => Error::new(ErrorKind::Io(io.kind())),
-            e => Error::new(ErrorKind::Backend(format!("gix open: {e}"))),
-        })?;
+        let repo = crate::open::open_worktree_repo(&workdir)
+            .map_err(|e| crate::open::map_open_error(e, "gix open"))?;
         if let Some(cancellation) = cancellation {
             cancellation.check_cancelled()?;
         }

@@ -4532,3 +4532,102 @@ fn a_scan_with_no_worktree_selected_asks_for_counts_alone() {
         "with no row selected there is no file list worth carrying"
     );
 }
+
+/// The HEAD-gitlink classification is filled where the diff target is set, not
+/// where `SelectDiff` is dispatched, so every route back onto a staged
+/// submodule deletion still renders it as a submodule summary rather than an
+/// old-side text preview.
+#[test]
+fn global_nav_back_to_deleted_gitlink_keeps_submodule_classification() {
+    let (dir, mut repos, mut state, target) = staged_deleted_gitlink_fixture();
+    let id_alloc = AtomicU64::new(2);
+    let submodule_path = PathBuf::from("vendor/submodule");
+
+    // Add a second, ordinary staged file so there is somewhere else to navigate.
+    let other = PathBuf::from("other.txt");
+    std::fs::write(dir.path().join(&other), "hello\n").expect("write other");
+    run_git(dir.path(), &["add", "other.txt"]);
+    state.repos[0].set_status(Loadable::Ready(Arc::new(RepoStatus {
+        staged: vec![
+            FileStatus {
+                path: submodule_path.clone(),
+                kind: FileStatusKind::Deleted,
+                conflict: None,
+            },
+            FileStatus {
+                path: other.clone(),
+                kind: FileStatusKind::Added,
+                conflict: None,
+            },
+        ],
+        unstaged: vec![],
+    })));
+
+    // 1. Select the staged submodule deletion -> classified, cached.
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: target.clone(),
+        },
+    );
+    assert!(state.repos[0].head_gitlink_paths.contains(&submodule_path));
+
+    // 2. Select an ordinary file.
+    let other_target = gitcomet_core::domain::DiffTarget::WorkingTree {
+        path: other.clone(),
+        area: gitcomet_core::domain::DiffArea::Staged,
+    };
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::SelectDiff {
+            repo_id: RepoId(1),
+            target: other_target,
+        },
+    );
+
+    // 3. Any external git-state change clears the cache and only reclassifies
+    //    the *selected* path (the ordinary file).
+    reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::RepoExternallyChanged {
+            repo_id: RepoId(1),
+            change: crate::msg::RepoExternalChange::GitState,
+        },
+    );
+    assert!(
+        !state.repos[0].head_gitlink_paths.contains(&submodule_path),
+        "precondition: the submodule's classification is gone"
+    );
+
+    // 4. Navigate back to the submodule.
+    let effects = reduce(
+        &mut repos,
+        &id_alloc,
+        &mut state,
+        Msg::GlobalNavBack { repo_id: RepoId(1) },
+    );
+
+    assert_eq!(
+        state.repos[0].diff_state.diff_target,
+        Some(target.clone()),
+        "nav-back must land on the submodule target"
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadSelectedDiff {
+                repo_id: RepoId(1),
+                load_submodule_summary: true,
+                ..
+            }
+        )),
+        "nav-back to the staged submodule deletion must plan a submodule summary: {effects:?}"
+    );
+}

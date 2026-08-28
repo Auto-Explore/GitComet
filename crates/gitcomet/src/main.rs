@@ -570,7 +570,7 @@ fn build_backend() -> std::sync::Arc<dyn gitcomet_core::services::GitBackend> {
 
     #[cfg(not(feature = "gix"))]
     {
-        std::sync::Arc::new(gitcomet_core::services::UnavailableGitBackend::default())
+        std::sync::Arc::new(gitcomet_core::services::UnavailableGitBackend)
     }
 }
 
