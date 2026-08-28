@@ -141,6 +141,8 @@ impl PopoverHost {
             });
             let follow_hook_output = hook_activity_repo_id.is_some()
                 && scroll_is_near_bottom(&this.hook_activity_output_scroll, px(24.0));
+            let follow_hook_list = hook_activity_repo_id.is_some()
+                && scroll_is_near_bottom(&this.hook_activity_hooks_scroll, px(24.0));
 
             let next_state = Arc::clone(&model.read(cx).state);
             let next_hook_activity_rev = hook_activity_repo_id.and_then(|repo_id| {
@@ -156,6 +158,12 @@ impl PopoverHost {
                 && next_hook_activity_rev != previous_hook_activity_rev
             {
                 this.hook_activity_output_scroll.scroll_to_bottom();
+            }
+            if follow_hook_list
+                && previous_hook_activity_rev.is_some()
+                && next_hook_activity_rev != previous_hook_activity_rev
+            {
+                this.hook_activity_hooks_scroll.scroll_to_bottom();
             }
             this.commit_prompt_message_drafts
                 .retain(|repo_id, _| this.state.repos.iter().any(|repo| repo.id == *repo_id));
@@ -722,6 +730,7 @@ impl PopoverHost {
             popover_anchor: None,
             hook_activity_selected: None,
             hook_activity_history_scroll: ScrollHandle::new(),
+            hook_activity_hooks_scroll: ScrollHandle::new(),
             hook_activity_output_scroll: ScrollHandle::new(),
             cherry_pick_mainline: None,
             context_menu_focus_handle,
@@ -894,8 +903,7 @@ impl PopoverHost {
 
     pub(in crate::view) fn hook_activity_workflow_repo_id(&self) -> Option<RepoId> {
         match self.popover.as_ref() {
-            Some(PopoverKind::HookActivity { repo_id, .. })
-            | Some(PopoverKind::GitOperationStopConfirm { repo_id, .. }) => Some(*repo_id),
+            Some(PopoverKind::HookActivity { repo_id, .. }) => Some(*repo_id),
             _ => None,
         }
     }
@@ -907,6 +915,21 @@ impl PopoverHost {
     #[cfg(test)]
     pub(in crate::view) fn hook_activity_output_is_near_bottom_for_test(&self) -> bool {
         scroll_is_near_bottom(&self.hook_activity_output_scroll, px(24.0))
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn hook_activity_hooks_are_near_bottom_for_test(&self) -> bool {
+        scroll_is_near_bottom(&self.hook_activity_hooks_scroll, px(24.0))
+    }
+
+    #[cfg(test)]
+    pub(in crate::view) fn scroll_hook_activity_hooks_to_top_for_test(
+        &mut self,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.hook_activity_hooks_scroll
+            .set_offset(point(px(0.0), px(0.0)));
+        cx.notify();
     }
 
     #[cfg(test)]
@@ -944,33 +967,30 @@ impl PopoverHost {
             .map(|operation| (repo_id, operation.id))
             .collect::<Vec<_>>();
         let _ = self.root_view.update(cx, |root, cx| {
-            root.minimize_hook_activity_chains(active_chains, cx);
+            root.minimize_hook_activity_repo(repo_id, active_chains, cx);
+        });
+        self.close_popover(cx);
+    }
+
+    pub(super) fn close_hook_activity(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(PopoverKind::HookActivity { repo_id, .. }) = self.popover.as_ref() else {
+            return;
+        };
+        let repo_id = *repo_id;
+        let _ = self.root_view.update(cx, |root, cx| {
+            root.resume_hook_activity_auto_open(repo_id, cx);
         });
         self.close_popover(cx);
     }
 
     pub(super) fn dismiss_hook_activity_workflow(
         &mut self,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut gpui::Context<Self>,
     ) -> bool {
         match self.popover.clone() {
             Some(PopoverKind::HookActivity { .. }) => {
                 self.minimize_hook_activity(cx);
-                true
-            }
-            Some(PopoverKind::GitOperationStopConfirm {
-                repo_id,
-                operation_id,
-            }) => {
-                self.open_popover_centered(
-                    PopoverKind::HookActivity {
-                        repo_id,
-                        operation_id: Some(operation_id),
-                    },
-                    window,
-                    cx,
-                );
                 true
             }
             _ => false,
@@ -2222,6 +2242,8 @@ impl PopoverHost {
                         });
                     self.hook_activity_selected = selected;
                     self.hook_activity_history_scroll = ScrollHandle::new();
+                    self.hook_activity_hooks_scroll = ScrollHandle::new();
+                    self.hook_activity_hooks_scroll.scroll_to_bottom();
                     self.hook_activity_output_scroll = ScrollHandle::new();
                     self.hook_activity_output_scroll.scroll_to_bottom();
                 }

@@ -24,10 +24,7 @@ impl PopoverHost {
 
         let is_app_menu = matches!(&kind, PopoverKind::AppMenu);
         let is_context_menu = popover_is_context_menu(&kind);
-        let center_hook_workflow = matches!(
-            &kind,
-            PopoverKind::HookActivity { .. } | PopoverKind::GitOperationStopConfirm { .. }
-        );
+        let center_hook_workflow = matches!(&kind, PopoverKind::HookActivity { .. });
         let mut anchor_corner = popover_anchor_corner(&kind);
 
         let anchor_for_corner = |corner: Anchor| match &anchor_source {
@@ -57,10 +54,6 @@ impl PopoverHost {
                 repo_id,
                 operation_id,
             } => hook_activity::panel(self, repo_id, operation_id, window, cx),
-            PopoverKind::GitOperationStopConfirm {
-                repo_id,
-                operation_id,
-            } => git_operation_stop_confirm::panel(self, repo_id, operation_id, cx),
             PopoverKind::RepoPicker => repo_picker::panel(self, cx),
             PopoverKind::BranchPicker { .. } => branch_picker::panel(self, cx),
             PopoverKind::CreateBranchFromRefPrompt {

@@ -30,7 +30,7 @@ pub(super) struct ToastHost {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum ToastViewportCorner {
-    BottomRight,
+    BottomLeft,
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -54,7 +54,7 @@ fn clone_progress_shell_accent_color(theme: AppTheme) -> gpui::Rgba {
 }
 
 fn toast_viewport_corner() -> ToastViewportCorner {
-    ToastViewportCorner::BottomRight
+    ToastViewportCorner::BottomLeft
 }
 
 fn looks_like_code_message(message: &str) -> bool {
@@ -1082,8 +1082,8 @@ impl Render for ToastHost {
                                 _ => 1.0,
                             };
                             let slide_x = match animation_ix {
-                                0 => (1.0 - delta) * TOAST_SLIDE_PX,
-                                2 => delta * TOAST_SLIDE_PX,
+                                0 => -(1.0 - delta) * TOAST_SLIDE_PX,
+                                2 => -delta * TOAST_SLIDE_PX,
                                 _ => 0.0,
                             };
                             toast.opacity(opacity).relative().left(px(slide_x))
@@ -1109,13 +1109,13 @@ impl Render for ToastHost {
                     .occlude()
                     .flex()
                     .flex_col()
-                    .items_end()
+                    .items_start()
                     .gap(px(12.0))
                     .children(children),
             );
 
         match toast_viewport_corner() {
-            ToastViewportCorner::BottomRight => root.justify_end().items_end().into_any_element(),
+            ToastViewportCorner::BottomLeft => root.justify_start().items_end().into_any_element(),
         }
     }
 }
@@ -1520,7 +1520,7 @@ mod tests {
     }
 
     #[test]
-    fn toast_stack_anchor_is_bottom_right() {
-        assert_eq!(toast_viewport_corner(), ToastViewportCorner::BottomRight);
+    fn toast_stack_anchor_is_bottom_left() {
+        assert_eq!(toast_viewport_corner(), ToastViewportCorner::BottomLeft);
     }
 }

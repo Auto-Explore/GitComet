@@ -1,4 +1,5 @@
 use super::*;
+use crate::view::terminal_alacritty::{terminal_default_background, terminal_default_foreground};
 
 const DIALOG_WIDTH_PX: f32 = 900.0;
 const DIALOG_HEIGHT_PX: f32 = 680.0;
@@ -174,6 +175,8 @@ fn history_row(
                 return;
             }
             this.hook_activity_selected = Some(operation_id);
+            this.hook_activity_hooks_scroll = ScrollHandle::new();
+            this.hook_activity_hooks_scroll.scroll_to_bottom();
             this.hook_activity_output_scroll = ScrollHandle::new();
             this.hook_activity_output_scroll.scroll_to_bottom();
             cx.notify();
@@ -286,13 +289,16 @@ fn operation_detail(
     let theme = this.theme;
     let operation_id = operation.id;
     let color = status_color(theme, operation.status);
+    let terminal_background = terminal_default_background(theme);
+    let terminal_foreground = terminal_default_foreground(theme);
     let output = operation.combined_output();
     let copy_output = output.clone();
     let active = operation.status.is_active();
 
-    let hooks = div()
+    let hooks_content = div()
         .w_full()
-        .flex_none()
+        .min_w(px(0.0))
+        .p_1()
         .flex()
         .flex_col()
         .gap_1()
@@ -326,6 +332,34 @@ fn operation_detail(
                         .child(duration_label(hook.duration)),
                 )
         }));
+    let hooks_scroll = this.hook_activity_hooks_scroll.clone();
+    let mut hooks_view = div()
+        .id("hook_activity_hooks_container")
+        .debug_selector(|| "hook_activity_hooks_container".to_string())
+        .relative()
+        .w_full()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .rounded(px(theme.radii.row))
+        .border_1()
+        .border_color(theme.colors.stroke.default)
+        .bg(with_alpha(
+            theme.colors.surface.raised,
+            if theme.is_dark { 0.52 } else { 0.78 },
+        ))
+        .overflow_hidden()
+        .child(visible_scroll_surface(
+            theme,
+            "hook_activity_hooks_scroll_container",
+            "hook_activity_hooks_scroll",
+            "hook_activity_hooks_scrollbar",
+            "hook_activity_hooks_scroll",
+            hooks_scroll,
+            hooks_content,
+        ));
+    hooks_view.style().flex_grow = Some(0.9);
+    hooks_view.style().flex_shrink = Some(1.0);
+    hooks_view.style().flex_basis = Some(relative(0.0).into());
 
     let output_content = div()
         .w_full()
@@ -336,7 +370,7 @@ fn operation_detail(
         .text_color(if output.is_empty() {
             theme.colors.foreground.secondary
         } else {
-            theme.colors.foreground.primary
+            terminal_foreground
         })
         .when(operation.output_truncated, |content| {
             content.child(
@@ -352,31 +386,79 @@ fn operation_detail(
             output
         });
     let output_scroll = this.hook_activity_output_scroll.clone();
-    let output_view = div()
+    let output_surface = visible_scroll_surface(
+        theme,
+        "hook_activity_output_scroll_container",
+        "hook_activity_output_scroll",
+        "hook_activity_output_scrollbar",
+        "hook_activity_output_scroll",
+        output_scroll,
+        output_content,
+    );
+    let terminal_header = div()
+        .debug_selector(|| "hook_activity_output_terminal_header".to_string())
+        .w_full()
+        .flex_none()
+        .px_2()
+        .py_1()
+        .flex()
+        .items_center()
+        .gap_2()
+        .bg(theme.colors.surface.panel)
+        .border_b_1()
+        .border_color(theme.colors.stroke.subtle)
+        .child(svg_icon(
+            "icons/terminal.svg",
+            theme.colors.foreground.secondary,
+            px(12.0),
+        ))
+        .child(
+            div()
+                .font_family(crate::font_preferences::EDITOR_MONOSPACE_FONT_FAMILY)
+                .text_xs()
+                .font_weight(FontWeight::MEDIUM)
+                .text_color(theme.colors.foreground.secondary)
+                .child("Hook output"),
+        );
+    let mut output_view = div()
         .id("hook_activity_output_container")
         .debug_selector(|| "hook_activity_output_container".to_string())
         .relative()
         .w_full()
+        .min_w(px(0.0))
+        .min_h(px(0.0))
+        .flex()
+        .flex_col()
+        .rounded(px(theme.radii.row))
+        .border_1()
+        .border_color(theme.colors.stroke.control)
+        .bg(terminal_background)
+        .overflow_hidden()
+        .child(terminal_header)
+        .child(
+            div()
+                .w_full()
+                .flex_1()
+                .min_w(px(0.0))
+                .min_h(px(0.0))
+                .child(output_surface),
+        );
+    output_view.style().flex_grow = Some(2.1);
+    output_view.style().flex_shrink = Some(1.0);
+    output_view.style().flex_basis = Some(relative(0.0).into());
+
+    let main_area = div()
+        .id("hook_activity_main_area")
+        .debug_selector(|| "hook_activity_main_area".to_string())
+        .w_full()
         .flex_1()
         .min_w(px(0.0))
         .min_h(px(0.0))
-        .rounded(px(theme.radii.row))
-        .border_1()
-        .border_color(theme.colors.stroke.default)
-        .bg(with_alpha(
-            theme.colors.surface.raised,
-            if theme.is_dark { 0.52 } else { 0.78 },
-        ))
-        .overflow_hidden()
-        .child(visible_scroll_surface(
-            theme,
-            "hook_activity_output_scroll_container",
-            "hook_activity_output_scroll",
-            "hook_activity_output_scrollbar",
-            "hook_activity_output_scroll",
-            output_scroll,
-            output_content,
-        ));
+        .flex()
+        .flex_col()
+        .gap_2()
+        .child(hooks_view)
+        .child(output_view);
 
     let actions = div()
         .w_full()
@@ -411,16 +493,13 @@ fn operation_detail(
                 )
                 .style(components::ButtonStyle::Danger)
                 .disabled(operation.status == GitHookOperationStatus::Cancelling)
-                .on_click(theme, cx, move |this, _e, window, cx| {
-                    this.open_popover_centered(
-                        PopoverKind::GitOperationStopConfirm {
-                            repo_id,
-                            operation_id,
-                        },
-                        window,
-                        cx,
-                    );
-                }),
+                .on_click(theme, cx, move |this, _e, _window, _cx| {
+                    this.store.dispatch(Msg::CancelGitOperation {
+                        repo_id,
+                        operation_id,
+                    });
+                })
+                .debug_selector(move || format!("hook_activity_stop_{}", operation_id.0)),
             )
         });
 
@@ -491,16 +570,7 @@ fn operation_detail(
                     )
                 }),
         )
-        .child(hooks)
-        .child(
-            div()
-                .flex_none()
-                .text_xs()
-                .font_weight(FontWeight::BOLD)
-                .text_color(theme.colors.foreground.secondary)
-                .child("OUTPUT"),
-        )
-        .child(output_view)
+        .child(main_area)
         .child(actions)
         .into_any_element()
 }
@@ -521,26 +591,40 @@ pub(super) fn panel(
     let height = scaled_px(DIALOG_HEIGHT_PX).min((window_size.height - margin * 2.0).max(px(0.0)));
     let rail_width = scaled_px(HISTORY_RAIL_WIDTH_PX).min(width * 0.34);
 
-    let operations = this
+    let (repository_name, repository_path, operations) = this
         .state
         .repos
         .iter()
         .find(|repo| repo.id == repo_id)
         .map(|repo| {
-            repo.hook_activity
-                .iter()
-                .filter(|operation| operation.has_hooks())
-                .rev()
-                .cloned()
-                .collect::<Vec<_>>()
+            (
+                crate::view::path_display::repo_path_name(&repo.spec.workdir),
+                crate::view::path_display::path_display_shared(&repo.spec.workdir),
+                repo.hook_activity
+                    .iter()
+                    .filter(|operation| operation.has_hooks())
+                    .rev()
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            )
         })
-        .unwrap_or_default();
+        .unwrap_or_else(|| {
+            (
+                format!("Repository {}", repo_id.0).into(),
+                "Repository is no longer open".into(),
+                Vec::new(),
+            )
+        });
+    let header_title: SharedString =
+        format!("Git hook activity — {}", repository_name.as_ref()).into();
 
     let selected_is_available = this
         .hook_activity_selected
         .is_some_and(|selected| operations.iter().any(|operation| operation.id == selected));
     if !selected_is_available {
         this.hook_activity_selected = operations.first().map(|operation| operation.id);
+        this.hook_activity_hooks_scroll = ScrollHandle::new();
+        this.hook_activity_hooks_scroll.scroll_to_bottom();
         this.hook_activity_output_scroll = ScrollHandle::new();
         this.hook_activity_output_scroll.scroll_to_bottom();
     }
@@ -548,37 +632,77 @@ pub(super) fn panel(
     let selected = this
         .hook_activity_selected
         .and_then(|selected| operations.iter().find(|operation| operation.id == selected));
-    let has_active = operations
-        .iter()
-        .any(|operation| operation.status.is_active());
 
-    let header_action = if has_active {
-        components::Button::new("hook_activity_minimize", "")
-            .start_slot(svg_icon(
-                "icons/generic_minimize.svg",
-                theme.colors.foreground.secondary,
-                scaled_px(14.0),
-            ))
-            .style(components::ButtonStyle::Transparent)
-            .on_click(theme, cx, |this, _e, _window, cx| {
-                this.minimize_hook_activity(cx)
-            })
-            .debug_selector(|| "hook_activity_minimize".to_string())
-            .gitcomet_tooltip(theme, "Minimize hook activity".into())
-            .into_any_element()
-    } else {
-        components::Button::new("hook_activity_close", "")
-            .start_slot(svg_icon(
-                "icons/generic_close.svg",
-                theme.colors.foreground.secondary,
-                scaled_px(14.0),
-            ))
-            .style(components::ButtonStyle::Transparent)
-            .on_click(theme, cx, |this, _e, _window, cx| this.close_popover(cx))
-            .debug_selector(|| "hook_activity_close".to_string())
-            .gitcomet_tooltip(theme, "Close hook activity".into())
-            .into_any_element()
-    };
+    let minimize_tooltip: SharedString =
+        "Minimize to a toast and keep future hook activity minimized".into();
+    let minimize_tooltip_for_move = minimize_tooltip.clone();
+    let minimize_tooltip_host_for_move = this.tooltip_host.clone();
+    let minimize_tooltip_host_for_hover = this.tooltip_host.clone();
+    let minimize_button = components::Button::new("hook_activity_minimize", "")
+        .start_slot(svg_icon(
+            "icons/generic_minimize.svg",
+            theme.colors.foreground.secondary,
+            scaled_px(14.0),
+        ))
+        .style(components::ButtonStyle::Transparent)
+        .on_click(theme, cx, |this, _e, _window, cx| {
+            this.minimize_hook_activity(cx)
+        })
+        .debug_selector(|| "hook_activity_minimize".to_string())
+        .on_mouse_move(
+            cx.listener(move |_this, event: &MouseMoveEvent, _window, cx| {
+                let _ = minimize_tooltip_host_for_move.update(cx, |host, cx| {
+                    host.on_mouse_moved(event.position, cx);
+                    host.set_tooltip_text_if_changed(Some(minimize_tooltip_for_move.clone()), cx);
+                });
+            }),
+        )
+        .on_hover(cx.listener(move |_this, hovering: &bool, _window, cx| {
+            if !*hovering {
+                let _ = minimize_tooltip_host_for_hover.update(cx, |host, cx| {
+                    host.clear_tooltip_if_matches(&minimize_tooltip, cx);
+                });
+            }
+        }));
+
+    let close_tooltip: SharedString =
+        "Close and automatically reopen when new hook activity starts".into();
+    let close_tooltip_for_move = close_tooltip.clone();
+    let close_tooltip_host_for_move = this.tooltip_host.clone();
+    let close_tooltip_host_for_hover = this.tooltip_host.clone();
+    let close_button = components::Button::new("hook_activity_close", "")
+        .start_slot(svg_icon(
+            "icons/generic_close.svg",
+            theme.colors.foreground.secondary,
+            scaled_px(14.0),
+        ))
+        .style(components::ButtonStyle::Transparent)
+        .on_click(theme, cx, |this, _e, _window, cx| {
+            this.close_hook_activity(cx)
+        })
+        .debug_selector(|| "hook_activity_close".to_string())
+        .on_mouse_move(
+            cx.listener(move |_this, event: &MouseMoveEvent, _window, cx| {
+                let _ = close_tooltip_host_for_move.update(cx, |host, cx| {
+                    host.on_mouse_moved(event.position, cx);
+                    host.set_tooltip_text_if_changed(Some(close_tooltip_for_move.clone()), cx);
+                });
+            }),
+        )
+        .on_hover(cx.listener(move |_this, hovering: &bool, _window, cx| {
+            if !*hovering {
+                let _ = close_tooltip_host_for_hover.update(cx, |host, cx| {
+                    host.clear_tooltip_if_matches(&close_tooltip, cx);
+                });
+            }
+        }));
+
+    let header_actions = div()
+        .flex()
+        .items_center()
+        .gap_1()
+        .child(minimize_button)
+        .child(close_button);
 
     let body = if operations.is_empty() {
         div()
@@ -628,6 +752,8 @@ pub(super) fn panel(
                 .bg(theme.colors.surface.chrome)
                 .child(
                     div()
+                        .flex_1()
+                        .min_w(px(0.0))
                         .flex()
                         .items_center()
                         .gap_2()
@@ -638,12 +764,36 @@ pub(super) fn panel(
                         ))
                         .child(
                             div()
-                                .text_sm()
-                                .font_weight(FontWeight::BOLD)
-                                .child("Git hook activity"),
+                                .flex_1()
+                                .min_w(px(0.0))
+                                .flex()
+                                .flex_col()
+                                .child(
+                                    div()
+                                        .debug_selector(|| "hook_activity_title".to_string())
+                                        .text_sm()
+                                        .font_weight(FontWeight::BOLD)
+                                        .line_clamp(1)
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .child(header_title),
+                                )
+                                .child(
+                                    div()
+                                        .debug_selector(move || {
+                                            format!("hook_activity_repository_{}", repo_id.0)
+                                        })
+                                        .text_xs()
+                                        .font_family("monospace")
+                                        .text_color(theme.colors.foreground.secondary)
+                                        .line_clamp(1)
+                                        .whitespace_nowrap()
+                                        .overflow_hidden()
+                                        .child(repository_path),
+                                ),
                         ),
                 )
-                .child(header_action),
+                .child(header_actions),
         )
         .child(dialog_divider(theme))
         .child(body)

@@ -3,8 +3,7 @@ use super::*;
 impl GitCometView {
     fn hook_activity_workflow_repo(kind: &PopoverKind) -> Option<RepoId> {
         match kind {
-            PopoverKind::HookActivity { repo_id, .. }
-            | PopoverKind::GitOperationStopConfirm { repo_id, .. } => Some(*repo_id),
+            PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
             _ => None,
         }
     }
@@ -27,6 +26,27 @@ impl GitCometView {
         self.minimized_hook_activity_chains.extend(chains);
         self.pending_hook_activity_open = None;
         self.set_hook_activity_dialog_repo(None, cx);
+        cx.notify();
+    }
+
+    pub(in crate::view) fn minimize_hook_activity_repo(
+        &mut self,
+        repo_id: RepoId,
+        chains: impl IntoIterator<Item = (RepoId, GitOperationId)>,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.minimized_hook_activity_repos.insert(repo_id);
+        self.minimize_hook_activity_chains(chains, cx);
+    }
+
+    pub(in crate::view) fn resume_hook_activity_auto_open(
+        &mut self,
+        repo_id: RepoId,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.minimized_hook_activity_repos.remove(&repo_id);
+        self.minimized_hook_activity_chains
+            .retain(|(minimized_repo_id, _)| *minimized_repo_id != repo_id);
         cx.notify();
     }
 
@@ -1397,6 +1417,7 @@ impl GitCometView {
             pending_submodule_trust_check: None,
             pending_hook_activity_open: None,
             minimized_hook_activity_chains: FxHashSet::default(),
+            minimized_hook_activity_repos: FxHashSet::default(),
             pending_worktree_branch_removals: FxHashMap::default(),
             startup_crash_report,
             #[cfg(target_os = "macos")]

@@ -201,8 +201,7 @@ fn repo_for_popover<'a>(state: &'a AppState, popover: &PopoverKind) -> Option<&'
         | PopoverKind::HistoryAuthorFilter { repo_id }
         | PopoverKind::CommitShaLinkMenu { repo_id, .. }
         | PopoverKind::ReflogEntryMenu { repo_id, .. }
-        | PopoverKind::HookActivity { repo_id, .. }
-        | PopoverKind::GitOperationStopConfirm { repo_id, .. } => Some(*repo_id),
+        | PopoverKind::HookActivity { repo_id, .. } => Some(*repo_id),
     }?;
 
     state.repos.iter().find(|r| r.id == repo_id)
@@ -361,7 +360,7 @@ fn hash_repo_for_popover<H: Hasher>(repo: &RepoState, popover: &PopoverKind, has
             repo.remote_tags_rev.hash(hasher);
         }
 
-        PopoverKind::HookActivity { .. } | PopoverKind::GitOperationStopConfirm { .. } => {
+        PopoverKind::HookActivity { .. } => {
             repo.hook_activity_rev.hash(hasher);
         }
 
@@ -888,14 +887,6 @@ fn hash_popover_kind<H: Hasher>(kind: &PopoverKind, hasher: &mut H) {
             operation_id,
         } => {
             103u8.hash(hasher);
-            repo_id.hash(hasher);
-            operation_id.hash(hasher);
-        }
-        PopoverKind::GitOperationStopConfirm {
-            repo_id,
-            operation_id,
-        } => {
-            104u8.hash(hasher);
             repo_id.hash(hasher);
             operation_id.hash(hasher);
         }

@@ -262,6 +262,8 @@ impl GitCometView {
             .collect::<FxHashSet<_>>();
         self.minimized_hook_activity_chains
             .retain(|chain| active_hook_chains.contains(chain));
+        self.minimized_hook_activity_repos
+            .retain(|repo_id| next.repos.iter().any(|repo| repo.id == *repo_id));
 
         let newly_started_hook_chains = next_hook_progress
             .iter()
@@ -292,9 +294,10 @@ impl GitCometView {
             } else if let Some((repo_id, operation_id, _)) = newly_started_hook_chains
                 .into_iter()
                 .filter(|(repo_id, operation_id, _)| {
-                    !self
-                        .minimized_hook_activity_chains
-                        .contains(&(*repo_id, *operation_id))
+                    !self.minimized_hook_activity_repos.contains(repo_id)
+                        && !self
+                            .minimized_hook_activity_chains
+                            .contains(&(*repo_id, *operation_id))
                 })
                 .max_by_key(|(_, _, time)| *time)
             {

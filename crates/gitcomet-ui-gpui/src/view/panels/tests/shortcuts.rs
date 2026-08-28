@@ -6365,6 +6365,21 @@ fn hook_activity_dialog_only_hides_progress_for_its_own_repository(cx: &mut gpui
         cx.debug_bounds("hook_progress_toast").is_some(),
         "Activity for one repository must not hide another repository's running hooks"
     );
+
+    let open = cx
+        .debug_bounds("hook_progress_open")
+        .expect("expected the second repository's compact progress Open action");
+    cx.simulate_click(open.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+
+    assert!(
+        cx.debug_bounds("hook_activity_repository_719").is_some(),
+        "Activity opened from another repository's toast must identify that repository in its header"
+    );
+    assert!(
+        cx.debug_bounds("hook_activity_repository_718").is_none(),
+        "the header must not keep identifying the active repository after a cross-repository toast is opened"
+    );
 }
 
 #[gpui::test]
@@ -6481,6 +6496,19 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     repo_with_hook
         .hook_activity
         .push(running_hook_activity(714));
+    let hook_template = repo_with_hook.hook_activity[0].hooks[0].clone();
+    repo_with_hook.hook_activity[0]
+        .hooks
+        .extend((2..=18).map(|child_id| {
+            let mut hook = hook_template.clone();
+            hook.id.child_id = child_id;
+            hook.name = if child_id % 2 == 0 {
+                format!("post-index-change-{child_id:02}")
+            } else {
+                format!("pre-commit-{child_id:02}")
+            };
+            hook
+        }));
     repo_with_hook.hook_activity_rev = 1;
     apply_state(
         cx,
@@ -6557,6 +6585,83 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         cx.debug_bounds("hook_activity_output_scrollbar").is_some(),
         "the output log must render a visible scrollbar"
     );
+    assert!(
+        cx.debug_bounds("hook_activity_hooks_scrollbar").is_some(),
+        "the hook line list must render a visible scrollbar"
+    );
+    let main_area = cx
+        .debug_bounds("hook_activity_main_area")
+        .expect("expected hook Activity main area");
+    let hooks_area = cx
+        .debug_bounds("hook_activity_hooks_container")
+        .expect("expected scrollable hook line list");
+    let output_area = cx
+        .debug_bounds("hook_activity_output_container")
+        .expect("expected output log area");
+    let main_height: f32 = main_area.size.height.into();
+    let hooks_height: f32 = hooks_area.size.height.into();
+    let output_height: f32 = output_area.size.height.into();
+    let section_gap: f32 = (output_area.top() - hooks_area.bottom()).into();
+    assert!(
+        hooks_height <= main_height * 0.34,
+        "hook lines must use no more than one third of the main area (hooks={hooks_height}, main={main_height})"
+    );
+    assert!(
+        output_height >= main_height * 0.66,
+        "the output log must receive at least two thirds of the main area (output={output_height}, main={main_height})"
+    );
+    assert!(
+        section_gap >= scaled(7.0),
+        "the hook lines and terminal output should have visible breathing room (gap={section_gap})"
+    );
+    assert!(
+        cx.debug_bounds("hook_activity_output_terminal_header")
+            .is_some(),
+        "the output log should render terminal-style chrome"
+    );
+
+    let hooks_are_near_bottom = |cx: &mut gpui::VisualTestContext| {
+        cx.update(|_window, app| {
+            view.read(app)
+                .popover_host
+                .read(app)
+                .hook_activity_hooks_are_near_bottom_for_test()
+        })
+    };
+    assert!(
+        hooks_are_near_bottom(cx),
+        "the hook line list should initially follow the newest hook"
+    );
+    cx.update(|_window, app| {
+        let popover_host = view.read(app).popover_host.clone();
+        popover_host.update(app, |host, cx| {
+            host.scroll_hook_activity_hooks_to_top_for_test(cx)
+        });
+    });
+    draw_and_drain_test_window(cx);
+    assert!(
+        !hooks_are_near_bottom(cx),
+        "the hook line list must remain manually scrollable"
+    );
+
+    let minimize = cx
+        .debug_bounds("hook_activity_minimize")
+        .expect("expected hook Activity minimize button");
+    cx.simulate_mouse_move(minimize.center(), None, Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("Minimize to a toast and keep future hook activity minimized".into())
+    );
+    let close = cx
+        .debug_bounds("hook_activity_close")
+        .expect("expected hook Activity close button beside minimize");
+    cx.simulate_mouse_move(close.center(), None, Modifiers::default());
+    crate::view::test_support::wait_for_native_tooltip(cx);
+    assert_eq!(
+        crate::view::test_support::tooltip_text(cx, &view),
+        Some("Close and automatically reopen when new hook activity starts".into())
+    );
 
     let output_is_near_bottom = |cx: &mut gpui::VisualTestContext| {
         cx.update(|_window, app| {
@@ -6614,6 +6719,34 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         "reaching the bottom should resume output following"
     );
 
+    let stop = cx
+        .debug_bounds("hook_activity_stop_714")
+        .expect("expected danger-colored Stop button for the active operation");
+    cx.simulate_click(stop.center(), Modifiers::default());
+    sync_store_snapshot(cx, &view);
+    assert!(
+        cx.debug_bounds("hook_activity_panel").is_some(),
+        "Stop should keep Activity open instead of replacing it with a confirmation dialog"
+    );
+    let status_after_stop = cx.update(|_window, app| {
+        view.read(app)
+            .state
+            .repos
+            .iter()
+            .find(|repo| repo.id == repo_id)
+            .and_then(|repo| {
+                repo.hook_activity
+                    .iter()
+                    .find(|operation| operation.id.0 == 714)
+            })
+            .map(|operation| operation.status)
+    });
+    assert_eq!(
+        status_after_stop,
+        Some(GitHookOperationStatus::Cancelling),
+        "Stop should request cancellation immediately"
+    );
+
     let minimize = cx
         .debug_bounds("hook_activity_minimize")
         .expect("expected hook Activity minimize button");
@@ -6668,44 +6801,15 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
         app_state_with_active_repo(repo_with_hook.clone()),
     );
     draw_and_drain_test_window(cx);
-    cx.debug_bounds("hook_activity_panel")
-        .expect("a separate Git operation should auto-open Activity again");
-    let selected = cx
-        .debug_bounds("hook_activity_selected_run")
-        .expect("expected selected run marker");
-    let run_715 = cx
-        .debug_bounds("hook_activity_run_715")
-        .expect("expected latest active run");
     assert!(
-        run_715.contains(&selected.center()),
-        "the newly auto-opened run should be selected"
+        cx.debug_bounds("hook_activity_panel").is_none(),
+        "explicit minimization must persist across separate Git operations"
+    );
+    assert!(
+        cx.debug_bounds("hook_progress_toast").is_some(),
+        "future operations should remain represented by the compact toast"
     );
 
-    repo_with_hook
-        .hook_activity
-        .push(running_hook_activity(716));
-    repo_with_hook.hook_activity_rev = 6;
-    apply_state(
-        cx,
-        &view,
-        app_state_with_active_repo(repo_with_hook.clone()),
-    );
-    let selected = cx
-        .debug_bounds("hook_activity_selected_run")
-        .expect("expected selected run marker after another run starts");
-    let run_715 = cx
-        .debug_bounds("hook_activity_run_715")
-        .expect("expected previously selected run");
-    assert!(
-        run_715.contains(&selected.center()),
-        "a new run must not replace the user's current selection while Activity is open"
-    );
-
-    let minimize = cx
-        .debug_bounds("hook_activity_minimize")
-        .expect("expected hook Activity minimize button");
-    cx.simulate_click(minimize.center(), Modifiers::default());
-    draw_and_drain_test_window(cx);
     let open = cx
         .debug_bounds("hook_progress_open")
         .expect("expected compact progress Open action");
@@ -6718,12 +6822,71 @@ fn hook_activity_auto_opens_centered_and_minimizes_to_compact_progress(
     let selected = cx
         .debug_bounds("hook_activity_selected_run")
         .expect("expected selected latest run");
-    let run_716 = cx
-        .debug_bounds("hook_activity_run_716")
+    let run_715 = cx
+        .debug_bounds("hook_activity_run_715")
         .expect("expected newest run");
     assert!(
-        run_716.contains(&selected.center()),
+        run_715.contains(&selected.center()),
         "opening Activity should select the latest run by default"
+    );
+
+    let close = cx
+        .debug_bounds("hook_activity_close")
+        .expect("expected X button while a hook is active");
+    cx.simulate_click(close.center(), Modifiers::default());
+    draw_and_drain_test_window(cx);
+    assert!(
+        cx.debug_bounds("hook_activity_panel").is_none(),
+        "X should close the Activity dialog"
+    );
+    assert!(
+        cx.debug_bounds("hook_progress_toast").is_some(),
+        "the active hook should return to compact progress after X closes Activity"
+    );
+
+    repo_with_hook.hook_activity[1].status = GitHookOperationStatus::Succeeded;
+    repo_with_hook.hook_activity[1].duration = Some(Duration::from_secs(1));
+    repo_with_hook.hook_activity[1].hooks[0].status = GitHookRunStatus::Succeeded;
+    repo_with_hook.hook_activity[1].hooks[0].duration = Some(Duration::from_secs(1));
+    repo_with_hook
+        .hook_activity
+        .push(running_hook_activity(716));
+    repo_with_hook.hook_activity_rev = 6;
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(repo_with_hook.clone()),
+    );
+    draw_and_drain_test_window(cx);
+    let selected = cx
+        .debug_bounds("hook_activity_selected_run")
+        .expect("expected selected run marker after X restored auto-open");
+    let run_716 = cx
+        .debug_bounds("hook_activity_run_716")
+        .expect("expected newly auto-opened run");
+    assert!(
+        run_716.contains(&selected.center()),
+        "closing with X should make the next hook activity auto-open and select its run"
+    );
+
+    repo_with_hook
+        .hook_activity
+        .push(running_hook_activity(717));
+    repo_with_hook.hook_activity_rev = 7;
+    apply_state(
+        cx,
+        &view,
+        app_state_with_active_repo(repo_with_hook.clone()),
+    );
+    let selected = cx
+        .debug_bounds("hook_activity_selected_run")
+        .expect("expected selected run marker after another run starts");
+    let run_716 = cx
+        .debug_bounds("hook_activity_run_716")
+        .expect("expected previously selected run");
+    assert!(
+        run_716.contains(&selected.center()),
+        "a new run must not replace the user's current selection while Activity is open"
     );
 }
 

@@ -21,7 +21,6 @@ mod fingerprint;
 mod force_delete_branch_confirm;
 mod force_push_confirm;
 mod force_remove_worktree_confirm;
-mod git_operation_stop_confirm;
 mod hook_activity;
 mod merge_abort_confirm;
 mod merge_commit_confirm;
@@ -203,6 +202,7 @@ pub(in super::super) struct PopoverHost {
     popover_anchor: Option<PopoverAnchor>,
     hook_activity_selected: Option<GitOperationId>,
     hook_activity_history_scroll: ScrollHandle,
+    hook_activity_hooks_scroll: ScrollHandle,
     hook_activity_output_scroll: ScrollHandle,
     /// Explicit 1-based mainline selected for the currently open single
     /// merge-commit cherry-pick confirmation. Reset every time that dialog
@@ -846,7 +846,6 @@ pub(in super::super) fn popover_width_spec(kind: &PopoverKind) -> Option<Popover
         | PopoverKind::CreateTagPrompt { .. }
         | PopoverKind::SquashPrompt { .. } => Some(DIALOG_420_WIDTH),
         PopoverKind::HookActivity { .. } => Some(DIALOG_900_WIDTH),
-        PopoverKind::GitOperationStopConfirm { .. } => Some(DIALOG_460_WIDTH),
         PopoverKind::CreateBranchFromRefPrompt { .. }
         | PopoverKind::RenameBranchPrompt { .. }
         | PopoverKind::CheckoutRemoteBranchPrompt { .. } => Some(DIALOG_540_WIDTH),
